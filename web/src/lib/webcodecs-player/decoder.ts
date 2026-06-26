@@ -148,6 +148,18 @@ export class Decoder {
   private _backpressured = false;
   private _backpressureCallback: ((paused: boolean) => void) | null = null;
   private _decoderEpoch = 0;
+  /**
+   * Annex B parameter sets (H.264: SPS+PPS, H.265: VPS+SPS+PPS), each prefixed
+   * with a start code. Prepended to every keyframe so the decoder runs in
+   * Annex B mode (no `description` passed to configure()).
+   */
+  private _paramSets: Uint8Array = new Uint8Array(0);
+  /**
+   * Drop delta frames until the first keyframe is seen. WebCodecs requires the
+   * first chunk after configure() to be a key frame; feeding deltas first only
+   * produces decode errors (which can spuriously trip the HLS fallback).
+   */
+  private _awaitingKeyframe = true;
 
   /**
    * Configure the VideoDecoder with codec info.
@@ -159,13 +171,17 @@ export class Decoder {
 
     const codec = this.buildCodecString(ci);
 
-    // Check if codec is supported
+    // Cache parameter sets (Annex B) to prepend to keyframes. We run the
+    // decoder in Annex B mode (no `description`), so SPS/PPS/VPS must travel
+    // in-band with the bitstream rather than as an avcC/hvcC config record.
+    this._paramSets = buildDescription(ci);
+
+    // Check if codec is supported (Annex B mode — no description).
     if (typeof VideoDecoder !== 'undefined' && VideoDecoder.isConfigSupported) {
       const config: VideoDecoderConfig = {
         codec,
         codedWidth: DEFAULT_WIDTH,
         codedHeight: DEFAULT_HEIGHT,
-        description: buildDescription(ci),
       };
       const support = await VideoDecoder.isConfigSupported(config);
       if (!support.supported) {
@@ -173,7 +189,6 @@ export class Decoder {
       }
     }
 
-    // Create and configure decoder with epoch tracking for stale-frame detection
     // Create and configure decoder with epoch tracking for stale-frame detection
     this._decoderEpoch++;
     const epoch = this._decoderEpoch;
@@ -185,12 +200,12 @@ export class Decoder {
       codec,
       codedWidth: DEFAULT_WIDTH,
       codedHeight: DEFAULT_HEIGHT,
-      description: buildDescription(ci),
     });
 
     this._configured = true;
     this._lastCodecInfo = ci;
     this._errorCount = 0;
+    this._awaitingKeyframe = true;
   }
 
   /**
@@ -200,6 +215,13 @@ export class Decoder {
    */
   decode(nalus: Uint8Array[], pts: number, isKeyframe: boolean): void {
     if (this._closed || !this._decoder || !this._configured) return;
+
+    // Wait for a keyframe before decoding anything — deltas before the first
+    // key frame are undecodable and only generate errors.
+    if (this._awaitingKeyframe) {
+      if (!isKeyframe) return;
+      this._awaitingKeyframe = false;
+    }
 
     // Backpressure: skip frame if decode queue is full
     if (this._pendingDecodeCount >= BACKPRESSURE_THRESHOLD) {
@@ -213,7 +235,18 @@ export class Decoder {
       return;
     }
 
-    const data = prependAnnexB(nalus);
+    const body = prependAnnexB(nalus);
+    // Prepend parameter sets (VPS/SPS/PPS) in-band to every keyframe so the
+    // decoder can (re)initialize without an avcC/hvcC `description`. Some
+    // sources already embed them in the AU; a duplicate set is harmless.
+    let data: Uint8Array;
+    if (isKeyframe && this._paramSets.byteLength > 0) {
+      data = new Uint8Array(this._paramSets.byteLength + body.byteLength);
+      data.set(this._paramSets, 0);
+      data.set(body, this._paramSets.byteLength);
+    } else {
+      data = body;
+    }
     const chunk = new EncodedVideoChunk({
       type: isKeyframe ? 'key' : 'delta',
       timestamp: pts,
@@ -232,6 +265,7 @@ export class Decoder {
     try {
       this._decoder.reset();
       this._configured = false;
+      this._awaitingKeyframe = true;
     } catch {
       // reset() throws if decoder state is 'closed'
       try { this._decoder.close(); } catch { /* ignore */ }
@@ -404,10 +438,10 @@ export class Decoder {
             codec: this.buildCodecString(ci),
             codedWidth: DEFAULT_WIDTH,
             codedHeight: DEFAULT_HEIGHT,
-            description: buildDescription(ci),
           });
           this._configured = true;
           this._errorCount = 0;
+          this._awaitingKeyframe = true;
         } catch {
           this._decoder = null;
         }

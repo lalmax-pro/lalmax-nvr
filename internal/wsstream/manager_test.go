@@ -401,19 +401,30 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 	_, err = readMessage(t, conn)
 	require.NoError(t, err)
 
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	// Grab the stream entry to observe the drop counter.
+	m.mu.RLock()
+	entry, ok := m.streams["cam1"]
+	m.mu.RUnlock()
+	require.True(t, ok)
 
 	iterations := 200
 	if testing.Short() {
 		iterations = 50
 	}
+	// The viewer never reads past CodecInfo, so its channel (buffer 5) fills.
+	// Broadcasting must remain non-blocking: frames are dropped for the slow
+	// viewer rather than stalling the broadcast. We assert the whole burst
+	// completes promptly and the drop counter advances. Note: a slow-but-alive
+	// viewer is intentionally NOT disconnected under the pong-based keepalive.
+	start := time.Now()
 	for i := 0; i < iterations; i++ {
 		nalu := []byte{0x65, byte(i)}
 		hub.Broadcast(int64(90000*(i+1)), [][]byte{nalu}, false)
 	}
+	require.Less(t, time.Since(start), time.Second, "broadcast blocked on a slow viewer")
 
-	require.Eventually(t, func() bool { return m.ViewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
-
+	require.Eventually(t, func() bool { return entry.dropCount.Load() > 0 }, 2*time.Second, 10*time.Millisecond,
+		"slow viewer should cause non-blocking frame drops")
 }
 func TestFrameDropCounter(t *testing.T) {
 	// Capture log output to verify periodic warnings

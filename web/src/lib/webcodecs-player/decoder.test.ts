@@ -270,27 +270,65 @@ describe('Decoder', () => {
       decoder.close();
     });
 
-    it('should include description (SPS+PPS) for H.264 in config', async () => {
+    it('should NOT pass a description for H.264 (Annex B mode)', async () => {
       const decoder = new Decoder();
       const ci = makeH264CodecInfo();
       await decoder.configure(ci);
 
       const instance = mockDecoderInstances[0];
       const callArgs = instance.configure.mock.calls[0][0] as VideoDecoderConfig;
-      expect(callArgs.description).toBeDefined();
-      expect(callArgs.description).toBeInstanceOf(Uint8Array);
+      // Annex B mode: parameter sets travel in-band with keyframes, not as an
+      // avcC config record. A description would switch the decoder to AVCC mode
+      // and silently fail to decode our start-code-delimited bitstream.
+      expect(callArgs.description).toBeUndefined();
       decoder.close();
     });
 
-    it('should include description (VPS+SPS+PPS) for H.265 in config', async () => {
+    it('should NOT pass a description for H.265 (Annex B mode)', async () => {
       const decoder = new Decoder();
       const ci = makeH265CodecInfo();
       await decoder.configure(ci);
 
       const instance = mockDecoderInstances[0];
       const callArgs = instance.configure.mock.calls[0][0] as VideoDecoderConfig;
-      expect(callArgs.description).toBeDefined();
-      expect(callArgs.description).toBeInstanceOf(Uint8Array);
+      expect(callArgs.description).toBeUndefined();
+      decoder.close();
+    });
+
+    it('should prepend in-band parameter sets to keyframes', async () => {
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+
+      decoder.decode([new Uint8Array([0x65, 0x88])], 0, true);
+
+      const instance = mockDecoderInstances[0];
+      const chunk = instance.decode.mock.calls[0][0];
+      // paramSets = startcode+SPS(10) + startcode+PPS(4) = 22 bytes,
+      // then startcode+IDR(2) = 6 bytes → 28 total, starting with the SPS.
+      const paramSetLen = 4 + H264_SPS.length + 4 + H264_PPS.length;
+      expect(chunk.data.length).toBe(paramSetLen + 4 + 2);
+      expect(Array.from(chunk.data.slice(0, 4))).toEqual([0x00, 0x00, 0x00, 0x01]);
+      expect(chunk.data[4]).toBe(H264_SPS[0]); // SPS first
+      decoder.close();
+    });
+
+    it('should NOT prepend parameter sets to delta frames', async () => {
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+
+      // Prime the keyframe gate, then submit a delta.
+      decoder.decode([new Uint8Array([0x65])], 0, true);
+      const instance = mockDecoderInstances[0];
+      instance.decode.mockClear();
+
+      decoder.decode([new Uint8Array([0x41, 0x9A])], 1000, false);
+
+      const chunk = instance.decode.mock.calls[0][0];
+      // Just startcode(4) + 2 payload bytes, no parameter sets.
+      expect(chunk.data.length).toBe(6);
+      expect(chunk.data[4]).toBe(0x41);
       decoder.close();
     });
 
@@ -313,11 +351,15 @@ describe('Decoder', () => {
       const ci = makeH264CodecInfo();
       await decoder.configure(ci);
 
+      // Prime the keyframe gate, then submit a delta.
+      decoder.decode([new Uint8Array([0x65])], 0, true);
+      const instance = mockDecoderInstances[0];
+      instance.decode.mockClear();
+
       const nalu1 = new Uint8Array([0x65, 0xAA, 0xBB]);
       const nalu2 = new Uint8Array([0x01, 0xCC, 0xDD]);
       decoder.decode([nalu1, nalu2], 3000, false);
 
-      const instance = mockDecoderInstances[0];
       expect(instance.decode).toHaveBeenCalledTimes(1);
       const chunk = instance.decode.mock.calls[0][0];
       expect(chunk).toBeDefined();
@@ -345,10 +387,14 @@ describe('Decoder', () => {
       const ci = makeH264CodecInfo();
       await decoder.configure(ci);
 
+      // Prime the keyframe gate, then submit a delta.
+      decoder.decode([new Uint8Array([0x65])], 0, true);
+      const instance = mockDecoderInstances[0];
+      instance.decode.mockClear();
+
       const nalu = new Uint8Array([0x65, 0x01]);
       decoder.decode([nalu], 1000, false);
 
-      const instance = mockDecoderInstances[0];
       const chunk = instance.decode.mock.calls[0][0];
       // 4 start code bytes + 2 payload bytes
       expect(chunk.data.length).toBe(6);
@@ -401,7 +447,7 @@ describe('Decoder', () => {
       const frameCallback = vi.fn();
       decoder.onFrame(frameCallback);
 
-      decoder.decode([new Uint8Array([0x65])], 1000, false);
+      decoder.decode([new Uint8Array([0x65])], 1000, true);
 
       expect(frameCallback).toHaveBeenCalledTimes(1);
       decoder.close();
@@ -431,7 +477,7 @@ describe('Decoder', () => {
       await decoder.configure(ci);
 
       decoder.onFrame((frame: any) => { frame.close(); });
-      decoder.decode([new Uint8Array([0x65])], 0, false);
+      decoder.decode([new Uint8Array([0x65])], 0, true);
 
       // Frame should be closed after callback
       expect(mockFrame.close).toHaveBeenCalledTimes(1);
@@ -470,7 +516,7 @@ describe('Decoder', () => {
       const errorCallback = vi.fn();
       decoder.onError(errorCallback);
 
-      decoder.decode([new Uint8Array([0x65])], 0, false);
+      decoder.decode([new Uint8Array([0x65])], 0, true);
 
       // Error fires synchronously during decode
       expect(errorCallback).toHaveBeenCalledTimes(1);
@@ -591,37 +637,40 @@ describe('Decoder', () => {
   // ---------------------------------------------------------------------------
   // H.265 description building
   // ---------------------------------------------------------------------------
-  describe('H.265 description (VPS+SPS+PPS)', () => {
-    it('should build description with VPS+SPS+PPS for H.265', async () => {
+  describe('H.265 in-band parameter sets (VPS+SPS+PPS)', () => {
+    it('should prepend VPS+SPS+PPS to keyframes for H.265', async () => {
       const decoder = new Decoder();
       const ci = makeH265CodecInfo();
       await decoder.configure(ci);
 
-      const instance = mockDecoderInstances[0];
-      const callArgs = instance.configure.mock.calls[0][0] as VideoDecoderConfig;
-      const desc = callArgs.description as Uint8Array;
+      const idr = new Uint8Array([0x26, 0x01]); // H.265 IDR_W_RADL
+      decoder.decode([idr], 0, true);
 
-      // VPS (4 start code + 8 VPS) + SPS (4 start code + 21 SPS) + PPS (4 start code + 7 PPS) = 48
-      expect(desc.length).toBe(48);
+      const instance = mockDecoderInstances[0];
+      const chunk = instance.decode.mock.calls[0][0];
+      // VPS (4 + 8) + SPS (4 + 21) + PPS (4 + 7) = 48 param-set bytes,
+      // then start code (4) + IDR (2) = 6.
+      expect(chunk.data.length).toBe(48 + 4 + idr.length);
       decoder.close();
     });
   });
 
   // ---------------------------------------------------------------------------
-  // H.264 description building
+  // H.264 in-band parameter sets
   // ---------------------------------------------------------------------------
-  describe('H.264 description (SPS+PPS)', () => {
-    it('should build description with SPS+PPS for H.264', async () => {
+  describe('H.264 in-band parameter sets (SPS+PPS)', () => {
+    it('should prepend SPS+PPS to keyframes for H.264', async () => {
       const decoder = new Decoder();
       const ci = makeH264CodecInfo();
       await decoder.configure(ci);
 
-      const instance = mockDecoderInstances[0];
-      const callArgs = instance.configure.mock.calls[0][0] as VideoDecoderConfig;
-      const desc = callArgs.description as Uint8Array;
+      const idr = new Uint8Array([0x65, 0x88]);
+      decoder.decode([idr], 0, true);
 
-      // SPS (4 start code + 10 SPS) + PPS (4 start code + 4 PPS) = 22
-      expect(desc.length).toBe(22);
+      const instance = mockDecoderInstances[0];
+      const chunk = instance.decode.mock.calls[0][0];
+      // SPS (4 + 10) + PPS (4 + 4) = 22 param-set bytes, then start code (4) + IDR (2).
+      expect(chunk.data.length).toBe(22 + 4 + idr.length);
       decoder.close();
     });
   });
@@ -656,7 +705,7 @@ describe('Decoder', () => {
       decoder.onFrame((_frame: any) => {
         throw new Error('transfer failed');
       });
-      decoder.decode([new Uint8Array([0x65])], 0, false);
+      decoder.decode([new Uint8Array([0x65])], 0, true);
 
       expect(mockFrame.close).toHaveBeenCalledTimes(1);
       decoder.close();
@@ -783,9 +832,9 @@ describe('Decoder', () => {
       const ci = makeH264CodecInfo();
       await decoder.configure(ci);
 
-      // Decode 4 frames (under threshold of 5)
+      // Decode 4 frames (under threshold of 5); first opens the keyframe gate.
       for (let i = 0; i < 4; i++) {
-        decoder.decode([new Uint8Array([0x65])], i * 1000, false);
+        decoder.decode([new Uint8Array([0x65])], i * 1000, i === 0);
       }
 
       expect(decoder.frameDropCount).toBe(0);
@@ -814,9 +863,9 @@ describe('Decoder', () => {
       const ci = makeH264CodecInfo();
       await decoder.configure(ci);
 
-      // Send 5 frames (fills queue to threshold)
+      // Send 5 frames (fills queue to threshold); first opens the keyframe gate.
       for (let i = 0; i < 5; i++) {
-        decoder.decode([new Uint8Array([0x65])], i * 1000, false);
+        decoder.decode([new Uint8Array([0x65])], i * 1000, i === 0);
       }
       expect(decoder.pendingDecodeCount).toBe(5);
       expect(decoder.frameDropCount).toBe(0);
@@ -855,9 +904,9 @@ describe('Decoder', () => {
       const bpCallback = vi.fn();
       decoder.onBackpressure(bpCallback);
 
-      // Fill queue to threshold
+      // Fill queue to threshold; first frame opens the keyframe gate.
       for (let i = 0; i < 5; i++) {
-        decoder.decode([new Uint8Array([0x65])], i * 1000, false);
+        decoder.decode([new Uint8Array([0x65])], i * 1000, i === 0);
       }
       expect(bpCallback).not.toHaveBeenCalled();
 
@@ -897,9 +946,9 @@ describe('Decoder', () => {
       const bpCallback = vi.fn();
       decoder.onBackpressure(bpCallback);
 
-      // Fill queue to threshold + exceed
+      // Fill queue to threshold + exceed; first frame opens the keyframe gate.
       for (let i = 0; i < 6; i++) {
-        decoder.decode([new Uint8Array([0x65])], i * 1000, false);
+        decoder.decode([new Uint8Array([0x65])], i * 1000, i === 0);
       }
       expect(bpCallback).toHaveBeenCalledWith(true);
 
@@ -934,9 +983,9 @@ describe('Decoder', () => {
       const bpCallback = vi.fn();
       decoder.onBackpressure(bpCallback);
 
-      // Fill and exceed threshold
+      // Fill and exceed threshold; first frame opens the keyframe gate.
       for (let i = 0; i < 6; i++) {
-        decoder.decode([new Uint8Array([0x65])], i * 1000, false);
+        decoder.decode([new Uint8Array([0x65])], i * 1000, i === 0);
       }
       expect(decoder.pendingDecodeCount).toBe(5);
 

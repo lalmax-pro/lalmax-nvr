@@ -180,6 +180,24 @@ func getCodecParams(rec model.Recorder) (codec model.Format, sps, pps, vps []byt
 	return
 }
 
+// getAudioParams extracts the audio codec and muxer config from a recorder.
+// Returns ("", nil) when the recorder exposes no audio track. The codec string
+// is "aac" or "g711"; the config blob is the AudioSpecificConfig (AAC) or the
+// recorder's G.711 descriptor.
+func getAudioParams(rec model.Recorder) (codec string, config []byte) {
+	type audioProvider interface {
+		AudioCodec() string
+		AudioMuxerConfig() []byte
+	}
+	if p, ok := unwrapDelegate(rec).(audioProvider); ok {
+		return p.AudioCodec(), p.AudioMuxerConfig()
+	}
+	if p, ok := rec.(audioProvider); ok {
+		return p.AudioCodec(), p.AudioMuxerConfig()
+	}
+	return "", nil
+}
+
 // getStreamHub extracts the StreamHub from a recorder.
 // Returns nil if the recorder doesn't have a Hub or it's not set.
 func getStreamHub(rec model.Recorder) *model.StreamHub {

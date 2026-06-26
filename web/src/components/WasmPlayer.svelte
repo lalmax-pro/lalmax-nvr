@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onDestroy, getContext } from 'svelte';
   import { t } from '$lib/i18n';
-  import { Maximize, Minimize, AlertCircle, RefreshCw } from 'lucide-svelte';
+  import { Maximize, Minimize, AlertCircle, RefreshCw, Volume2, VolumeX } from 'lucide-svelte';
   import { getAuthHeader } from '$lib/api';
   import type { StreamState } from '$lib/hls-errors';
   import { getPlaybackTier, detectWebCodecs, detectWebGL2 } from '$lib/webcodecs-player/capabilities';
   import { decodeVideoFrame } from '$lib/webcodecs-player/protocol';
+  import { AudioPlayer, audioSupported } from '$lib/webcodecs-player/audio';
   import { ConnectionManager, type ConnectionState } from '$lib/webcodecs-player/connection';
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 import { WebGPURenderer } from '$lib/webgpu-renderer';
@@ -50,6 +51,11 @@ let webgpuRenderer: WebGPURenderer | null = null;
 
   // Web Worker
   let worker: Worker | null = null;
+
+  // Audio playback (optional — only when the stream carries an audio track)
+  let audioPlayer: AudioPlayer | null = null;
+  let audioAvailable = $state(false);
+  let audioMuted = $state(true);
 
   // Freeze frame — prevents black flash during reconnection
   let frozenFrameUrl: string | null = $state(null);
@@ -378,6 +384,17 @@ function handleWebGpuLost() {
           if (import.meta.env.DEV) console.warn('WasmPlayer: failed to decode VideoFrame:', e);
         }
       },
+      onAudioCodecInfo: (aci) => {
+        if (!audioSupported()) return;
+        if (!audioPlayer) audioPlayer = new AudioPlayer();
+        audioPlayer.configure(aci);
+        audioAvailable = audioPlayer.configured;
+        // Keep mute state across reconnects.
+        audioPlayer.setMuted(audioMuted);
+      },
+      onAudioFrame: (af) => {
+        audioPlayer?.decodeFrame(af.pts, af.data);
+      },
       onFreezeFrame: () => {
         captureFreezeFrame();
       },
@@ -406,6 +423,20 @@ function handleWebGpuLost() {
     terminateWorker();
     initWorker();
     initConnection();
+  }
+
+  // Toggle audio. Unmuting must happen inside the click handler so the
+  // AudioContext resume() counts as a user gesture (browser autoplay policy).
+  async function toggleAudio(e: MouseEvent) {
+    e.stopPropagation();
+    if (!audioPlayer) return;
+    if (audioMuted) {
+      audioMuted = false;
+      await audioPlayer.resume();
+    } else {
+      audioMuted = true;
+      audioPlayer.setMuted(true);
+    }
   }
 
 
@@ -534,6 +565,7 @@ onDestroy(() => {
     if (frozenFrameUrl) { URL.revokeObjectURL(frozenFrameUrl); frozenFrameUrl = null; }
     if (webgpuRenderer) { webgpuRenderer.destroy(); webgpuRenderer = null; }
     if (cm) { cm.destroy(); cm = null; }
+    if (audioPlayer) { audioPlayer.close(); audioPlayer = null; }
     if (coordinator) coordinator.cancelRequest(cameraId);
     terminateWorker();
     cleanupWebGL2();
@@ -677,6 +709,20 @@ onDestroy(() => {
     <div class="flex items-center gap-2">
       <span class="text-white text-sm font-medium truncate">{cameraName || cameraId}</span>
       <span class="text-white/50 text-xs">WebCodecs</span>
+      {#if audioAvailable}
+        <button
+          onclick={toggleAudio}
+          class="ml-auto p-1 rounded text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+          title={audioMuted ? 'Unmute' : 'Mute'}
+          aria-label={audioMuted ? 'Unmute audio' : 'Mute audio'}
+        >
+          {#if audioMuted}
+            <VolumeX size={16} />
+          {:else}
+            <Volume2 size={16} />
+          {/if}
+        </button>
+      {/if}
     </div>
   </div>
 

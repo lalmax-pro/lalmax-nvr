@@ -12,8 +12,8 @@
  *   - Clean lifecycle: connect → disconnect → reconnect → destroy
  */
 
-import { MsgType } from './protocol';
-import type { CodecInfo } from './protocol';
+import { MsgType, decodeAudioCodecInfo, decodeAudioFrame } from './protocol';
+import type { CodecInfo, AudioCodecInfo, AudioFrameMsg } from './protocol';
 import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -31,6 +31,10 @@ export interface ConnectionManagerOptions {
   onCodecInfo: (ci: CodecInfo) => void;
   /** Callback for each VideoFrame ArrayBuffer */
   onFrame: (data: ArrayBuffer) => void;
+  /** Optional callback when AudioCodecInfo message received */
+  onAudioCodecInfo?: (aci: AudioCodecInfo) => void;
+  /** Optional callback for each decoded AudioFrame message */
+  onAudioFrame?: (af: AudioFrameMsg) => void;
   /** Callback before reconnect (allows caller to capture freeze frame) */
   onFreezeFrame: () => void;
   /** Optional callback when frames are dropped due to backpressure */
@@ -161,6 +165,20 @@ export class ConnectionManager {
           this._opts.onFrame(data);
           if (this._currentState !== 'playing') {
             this._setState('playing');
+          }
+        } else if (msgType === MsgType.AudioCodecInfo) {
+          try {
+            this._opts.onAudioCodecInfo?.(decodeAudioCodecInfo(data));
+          } catch {
+            // parse error — ignore, audio is non-essential
+          }
+        } else if (msgType === MsgType.AudioFrame) {
+          // Audio is delivered regardless of video backpressure (it is light)
+          // and does not affect video zombie detection.
+          try {
+            this._opts.onAudioFrame?.(decodeAudioFrame(data));
+          } catch {
+            // parse error — ignore
           }
         } else if (msgType === MsgType.EOS) {
           // Camera went offline — notify and set state

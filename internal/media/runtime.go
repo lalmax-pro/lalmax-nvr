@@ -12,6 +12,7 @@ import (
 
 type WS interface {
 	RegisterStream(cameraID string, codec model.Format, sps, pps, vps []byte, hub *model.StreamHub) error
+	SetAudioConfig(cameraID string, aci *wsstream.AudioCodecInfo) error
 	IsActive(cameraID string) bool
 	ServeWS(cameraID string, w http.ResponseWriter, r *http.Request) error
 	StopAll()

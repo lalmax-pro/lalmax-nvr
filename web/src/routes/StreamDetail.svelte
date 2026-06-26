@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
-  import { getStream, unbindCamera, promoteStream, deleteStream, kickPublisher, deleteCamera, getStreamMetricsHistory } from '$lib/api';
+  import { getStream, unbindCamera, promoteStream, deleteStream, kickPublisher, deleteCamera, getStreamMetricsHistory, getStreamingSettings } from '$lib/api';
   import type { StreamInfo, StreamMetricSample, StreamMetricsPeriod } from '$lib/api';
   import { loadChart, createStreamMetricChart, updateStreamMetricChart } from '$lib/charts';
   import { t } from '$lib/i18n';
@@ -53,7 +53,12 @@
   let subsChart: any = null;
 
   // Player state
-  let selectedProtocol = $state<string>('hls');
+  // Empty until resolved from the configured default protocol (Settings page)
+  // or the first available protocol — avoids rendering the wrong player first.
+  let selectedProtocol = $state<string>('');
+  // Default playback protocol from Settings; applied until the user picks one.
+  let configuredDefaultProtocol = $state<string>('wasm');
+  let userPickedProtocol = $state(false);
   const webPlayableProtocols = new Set(['hls', 'll-hls', 'flv', 'ws-flv', 'webrtc', 'fmp4', 'wasm']);
 
   // Dialog states
@@ -220,11 +225,21 @@
     return getPlayURL(protocol);
   }
 
+  // Protocols that imply a browser-decodable H.264/H.265 video transport.
+  // WebCodecs ("wasm") plays these over the generic WebSocket endpoint.
+  const videoTransports = ['hls', 'll-hls', 'flv', 'ws-flv', 'webrtc', 'fmp4'];
+
   function getAvailableProtocols(): string[] {
     if (!stream?.play_urls) return [];
-    return stream.play_urls
+    const backend = stream.play_urls
       .map(p => p.protocol)
       .filter(protocol => webPlayableProtocols.has(protocol));
+    // Offer WebCodecs as the preferred option whenever the stream exposes a
+    // decodable video transport — it needs no backend play_url of its own.
+    if (backend.some(p => videoTransports.includes(p)) && !backend.includes('wasm')) {
+      return ['wasm', ...backend];
+    }
+    return backend;
   }
 
   function protocolLabel(protocol: string): string {
@@ -235,6 +250,7 @@
       case 'ws-flv': return 'WS-FLV';
       case 'webrtc': return 'WebRTC';
       case 'fmp4': return 'fMP4';
+      case 'wasm': return 'WebCodecs';
       case 'rtmp': return 'RTMP';
       case 'rtsp': return 'RTSP';
       default: return protocol.toUpperCase();
@@ -395,7 +411,16 @@
 
   $effect(() => {
     const available = getAvailableProtocols();
-    if (available.length > 0 && !available.includes(selectedProtocol)) {
+    if (available.length === 0) return;
+    // Until the user explicitly picks a protocol, prefer the configured default
+    // (Settings → default playback protocol) when it is available here.
+    if (!userPickedProtocol && available.includes(configuredDefaultProtocol)) {
+      if (selectedProtocol !== configuredDefaultProtocol) {
+        selectedProtocol = configuredDefaultProtocol;
+      }
+      return;
+    }
+    if (!available.includes(selectedProtocol)) {
       selectedProtocol = available[0];
     }
   });
@@ -424,6 +449,12 @@
       return;
     }
     loadStream();
+    // Resolve the configured default playback protocol (Settings page).
+    getStreamingSettings()
+      .then(config => {
+        if (config.default_protocol) configuredDefaultProtocol = config.default_protocol;
+      })
+      .catch(() => { /* keep fallback default */ });
     refreshTimer = window.setInterval(() => {
       void loadStream();
     }, 5000);
@@ -524,6 +555,7 @@
                         protocol,
                         targetURL: getPlayerURL(protocol),
                       });
+                      userPickedProtocol = true;
                       selectedProtocol = protocol;
                     }}
                   >
@@ -536,6 +568,10 @@
 
           {#if canPlay}
               <div class="player-container">
+                {#if !selectedProtocol}
+                  <!-- Resolving the configured default protocol -->
+                  <div class="player-loading"><div class="spinner"></div></div>
+                {:else}
                 {#key selectedProtocol + ':' + getPlayerURL(selectedProtocol)}
                   {#if selectedProtocol === 'webrtc'}
                     <WebRTCPlayer
@@ -557,7 +593,16 @@
                       cameraId={encodedStreamId}
                       cameraName={stream.camera_name || stream.stream_id}
                       expanded={true}
+                      onFallbackNeeded={() => {
+                        const fallback = getAvailableProtocols().find(p => p !== 'wasm');
+                        if (fallback) selectedProtocol = fallback;
+                      }}
                     />
+                  {:else if selectedProtocol === 'wasm'}
+                    <!-- WasmPlayer chunk still loading — avoid falling through to HLS -->
+                    <div class="player-loading">
+                      <div class="spinner"></div>
+                    </div>
                   {:else if selectedProtocol === 'fmp4' && FMP4PlayerComponent}
                     {@const FMP4Player = FMP4PlayerComponent}
                     <FMP4Player
@@ -576,6 +621,7 @@
                     />
                   {/if}
                 {/key}
+                {/if}
               </div>
           {:else}
             <div class="player-inactive">
@@ -1193,6 +1239,15 @@
   .player-inactive .hint {
     font-size: 0.85rem;
     opacity: 0.7;
+  }
+
+  .player-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    aspect-ratio: 16 / 9;
+    background: #000;
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
   }
 
   .info-grid {

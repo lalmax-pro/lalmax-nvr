@@ -947,6 +947,8 @@ function getAffectedCameraCount(protocol: string): number {
             <div>
               <label for="defaultProtocol" class="input-label">{t('settings.streaming.defaultProtocol')}</label>
               <select id="defaultProtocol" class="input" bind:value={streamingDefaultProtocol}>
+                <option value="wasm">WebCodecs</option>
+                <option value="fmp4">fMP4</option>
                 <option value="webrtc">WebRTC</option>
                 <option value="flv">HTTP-FLV</option>
                 <option value="ws-flv">WS-FLV</option>

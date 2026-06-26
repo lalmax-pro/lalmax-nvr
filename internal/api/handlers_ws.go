@@ -61,6 +61,17 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "failed to register WebSocket stream")
 				return
 			}
+		} else {
+			// Fresh registration — attach audio track if the recorder has one.
+			if aCodec, aConfig := getAudioParams(rec); aCodec != "" {
+				if aci, ok := wsstream.BuildAudioCodecInfo(aCodec, aConfig); ok {
+					if err := h.wsMgr.SetAudioConfig(id, aci); err != nil {
+						slog.Warn("WS: failed to attach audio", "camera_id", id, "error", err)
+					}
+				} else {
+					slog.Warn("WS: unusable audio config", "camera_id", id, "codec", aCodec)
+				}
+			}
 		}
 	}
 

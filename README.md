@@ -51,8 +51,8 @@ Camera ──→ lalmax (media engine) ──→ HLS / HTTP-FLV / WebRTC / fMP4 
 - **Media Engine**: lalmax-powered relay — unified ingest, no duplicate camera pulls
 - **Camera Protocols**: RTSP (H.264/H.265/MJPEG), HTTP JPEG, ONVIF discovery & management
 - **GB28181**: Full SIP-based device management, cascade platform support, recording query & playback with timeline, multi-protocol streaming (ws-flv, flv, hls, webrtc, etc.), playback control (pause/resume/speed/seek), batch download, platform event history, voice broadcast/intercom (SIP INVITE, UDP/TCP)
-- **Recording**: Automatic MP4 segments, multi-camera concurrent, per-camera retention, audio capture (AAC + G.711)
-- **Recording Playback**: Visual timeline with 24h overview, hour-level zoom, inline video player, mouse wheel zoom/pan
+- **Recording**: Automatic MP4 segments, multi-camera concurrent, per-camera recording mode (continuous / scheduled / off), per-camera retention, audio capture (AAC + G.711)
+- **Recording Playback**: Visual timeline with 24h overview, hour-level zoom, inline video player, mouse wheel zoom/pan, month calendar marking days with recordings
 - **Live View**: Multi-protocol — WebCodecs, fMP4, WebRTC, HTTP-FLV, HLS, LL-HLS
 - **RTMP/SRT Ingest**: Accept pushed streams from cameras or encoders
 - **Segment Merge**: Auto or manual merge, global + per-camera policies
@@ -60,7 +60,7 @@ Camera ──→ lalmax (media engine) ──→ HLS / HTTP-FLV / WebRTC / fMP4 
 - **Stream Management**: Runtime stream inventory, camera binding, stream promotion
 - **Web UI**: Dark/light theme, responsive, i18n (EN/ZH), Chart.js dashboards
 - **Smart Home**: MQTT trigger-based recording, WebDAV/FTP file access
-- **Health Monitoring**: Multi-layer camera health detection, auto-remediation, quality scoring
+- **Health Monitoring**: Multi-layer camera health detection, auto-remediation, connection quality metrics (uptime, MTBF)
 - **Single Binary**: Zero dependencies, embedded SPA, `CGO_ENABLED=0`
 - **Xiaomi Support**: CS2 P2P protocol, cloud auth (community-driven)
 
@@ -140,39 +140,43 @@ cmd/lalmax-nvr/        # Entry point
 internal/              # Core packages
   ai/                  # AI inference
   api/                 # REST API handlers + stream proxy
+  ban/                 # Stream ban management
   camera/              # Camera lifecycle manager
   cleanup/             # Data cleanup tasks
   config/              # YAML config
   event/               # Event bus
-  flv/                 # HTTP-FLV streaming manager
   ftp/                 # FTP server
+  gb28181/             # GB28181 SIP server (device mgmt, cascade, playback, intercom)
   health/              # Camera health monitoring
-  hls/                 # HLS streaming manager
   media/               # lalmax engine adapter
   merge/               # Segment merge manager
   metrics/             # Prometheus metrics
-  middleware/           # HTTP middleware
+  middleware/          # HTTP middleware
   model/               # Data models
   mqtt/                # MQTT client
   muxer/               # MP4 muxer
-  onvif/               # ONVIF client (discovery, PTZ, imaging)
+  onvif/               # ONVIF client adapter (NVR-side)
   recorder/            # H264/H265/MJPEG/HTTP-JPEG recording engines
-  rtmp/                # RTMP ingest server
-  srt/                 # SRT receiver
   storage/             # SQLite DB + file manager
+  streamhistory/       # Stream history tracking
   ui/                  # Embedded SPA static files
   upload/              # File upload handling
   webdav/              # WebDAV server
-  webrtc/              # WebRTC WHEP manager
   wsstream/            # WebSocket stream manager (WebCodecs)
   xiaomi/              # Xiaomi camera support
-scripts/               # Build and management scripts
+onvif/                 # Standalone ONVIF library (SOAP, discovery, PTZ, imaging, events)
 third/
   lal/                 # Vendored lal media library
   lalmax/              # Vendored lalmax (lal + extensions)
 web/                   # Svelte 5 frontend
+scripts/               # Build and management scripts
+docker/                # Docker build assets
+tests/                 # Integration tests
 docs/                  # Documentation (EN/ZH)
 ```
+
+> Playback protocols (HLS, HTTP-FLV, WebRTC, fMP4) and RTMP/SRT ingest are served
+> by the embedded lalmax engine, not by separate `internal/` packages.
 
 ## Contributing
 

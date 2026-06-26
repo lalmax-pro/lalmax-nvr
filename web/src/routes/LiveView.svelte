@@ -30,6 +30,7 @@
   let streamingProtocol = $state<StreamingProtocol>('hls');
   let switchingProtocol = $state(false);
   let streamPlayURLs = $state<Record<string, string>>({});
+  let availableProtocols = $state<string[]>([]);
 
   // Lazy-loaded WasmPlayer component
   let WasmPlayerComponent = $state<any>(null);
@@ -168,8 +169,15 @@
   }
 
   function handleWasmFallback() {
-    showToast(t('live.wasm.fallbackToHls') || 'WebCodecs unavailable, switching to HLS', 'warning');
-    handleProtocolChange('hls');
+    // Find the best available protocol instead of hardcoded HLS
+    const fallbackOrder: StreamingProtocol[] = ['fmp4', 'webrtc', 'flv', 'ws-flv', 'hls', 'll-hls'];
+    const fallback = fallbackOrder.find(p => availableProtocols.includes(p));
+    if (fallback) {
+      showToast(t('live.wasm.fallbackToHls') || `WebCodecs unavailable, switching to ${fallback.toUpperCase()}`, 'warning');
+      handleProtocolChange(fallback);
+    } else {
+      showToast('WebCodecs unavailable and no other protocols available', 'error');
+    }
   }
 
   interface CameraProtocolDetail {
@@ -182,12 +190,17 @@
 
   function handleProtocolsLoaded(protocols: CameraProtocolDetail[]) {
     const next: Record<string, string> = {};
+    const available: string[] = [];
     for (const protocol of protocols) {
       if (protocol.Available && protocol.PlayURL) {
         next[protocol.Protocol] = protocol.PlayURL;
       }
+      if (protocol.Available) {
+        available.push(protocol.Protocol);
+      }
     }
     streamPlayURLs = next;
+    availableProtocols = available;
   }
 
   function getStreamPlayURL(protocol: StreamingProtocol): string {

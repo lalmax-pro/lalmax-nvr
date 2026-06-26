@@ -2,17 +2,26 @@ package wsstream
 
 // Message types for WebSocket binary protocol.
 const (
-	MsgTypeCodecInfo   byte = 0x01 // codec_info: server→client
-	MsgTypeVideoFrame  byte = 0x02 // video_frame: server→client
-	MsgTypeAudioFrame  byte = 0x03 // audio_frame: reserved, server→client
-	MsgTypeKeyframeReq byte = 0x04 // keyframe_request: client→server
-	MsgTypeEOS       byte = 0xFF // eos: server→client, camera went offline
+	MsgTypeCodecInfo      byte = 0x01 // codec_info: server→client
+	MsgTypeVideoFrame     byte = 0x02 // video_frame: server→client
+	MsgTypeAudioFrame     byte = 0x03 // audio_frame: server→client
+	MsgTypeKeyframeReq    byte = 0x04 // keyframe_request: client→server
+	MsgTypeAudioCodecInfo byte = 0x05 // audio_codec_info: server→client
+	MsgTypeEOS            byte = 0xFF // eos: server→client, camera went offline
 )
 
 // Codec string constants.
 const (
 	CodecH264 = "h264"
 	CodecH265 = "h265"
+)
+
+// Audio codec wire identifiers (AudioCodecInfo.codec byte).
+const (
+	AudioCodecNone  byte = 0 // no audio track
+	AudioCodecAAC   byte = 1 // AAC (raw AU), needs AudioSpecificConfig
+	AudioCodecG711A byte = 2 // G.711 A-law (PCMA)
+	AudioCodecG711U byte = 3 // G.711 µ-law (PCMU)
 )
 
 // CodecInfo contains codec configuration data sent once at stream start.

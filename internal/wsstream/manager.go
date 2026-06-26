@@ -62,6 +62,10 @@ type streamEntry struct {
 	hub        *model.StreamHub
 	hubSubID   string
 	dropCount  atomic.Int64
+
+	// Audio (optional). audioInfo is nil until SetAudioConfig is called.
+	audioInfo     atomic.Pointer[AudioCodecInfo]
+	hubAudioSubID string
 }
 
 // upgrader is the WebSocket upgrader used by ServeWS.
@@ -165,6 +169,61 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 	return nil
 }
 
+// SetAudioConfig attaches an audio track to an already-registered stream and
+// begins forwarding audio frames to viewers. It is safe to call once per
+// stream, immediately after RegisterStream. A nil config is a no-op.
+func (m *Manager) SetAudioConfig(camID string, aci *AudioCodecInfo) error {
+	if aci == nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	entry, ok := m.streams[camID]
+	if !ok {
+		m.mu.Unlock()
+		return ErrStreamNotActive
+	}
+	entry.audioInfo.Store(aci)
+
+	// Subscribe to the hub's audio stream exactly once.
+	subscribe := entry.hub != nil && entry.hubAudioSubID == ""
+	if subscribe {
+		entry.hubAudioSubID = "ws-audio-" + camID
+	}
+	subID := entry.hubAudioSubID
+	hub := entry.hub
+	m.mu.Unlock()
+
+	if subscribe {
+		_ = hub.SubscribeAudio(subID, func(pts int64, _ model.AudioCodec, data []byte) {
+			m.writeAudio(entry, pts, data)
+		})
+		wsLogger.Load().Info("WebSocket audio track attached", "camera_id", camID, "codec", aci.Codec, "sample_rate", aci.SampleRate, "channels", aci.Channels)
+	}
+	return nil
+}
+
+// writeAudio encodes an audio frame and fans it out to all viewers (non-blocking).
+func (m *Manager) writeAudio(entry *streamEntry, pts int64, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	encoded, err := EncodeAudioFrame(&AudioFrame{PTS: pts, Data: data})
+	if err != nil {
+		return
+	}
+	entry.viewerMu.Lock()
+	for _, v := range entry.viewers {
+		select {
+		case v.ch <- encoded:
+		default:
+			// Slow client — drop audio frame (counted with video drops).
+			entry.dropCount.Add(1)
+		}
+	}
+	entry.viewerMu.Unlock()
+}
+
 // UnregisterStream removes a camera stream and disconnects all viewers.
 func (m *Manager) UnregisterStream(camID string) {
 	m.mu.Lock()
@@ -174,6 +233,9 @@ func (m *Manager) UnregisterStream(camID string) {
 		// to prevent race with hub callback accessing entry after removal.
 		if entry.hub != nil && entry.hubSubID != "" {
 			entry.hub.Unsubscribe(entry.hubSubID)
+		}
+		if entry.hub != nil && entry.hubAudioSubID != "" {
+			entry.hub.UnsubscribeAudio(entry.hubAudioSubID)
 		}
 		delete(m.streams, camID)
 	}
@@ -241,18 +303,32 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 		return
 	}
 
+	// Scan every NAL in the access unit for an IDR. A keyframe AU is often led
+	// by SPS/PPS (H.264) or VPS/SPS/PPS (H.265), so inspecting only au[0] would
+	// misclassify keyframes as delta frames and the decoder would never start.
 	isKeyframe := false
-	if len(au) > 0 && len(au[0]) > 0 {
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
 		var naluType int
 		if entry.codec == model.FormatH265 {
 			// H.265: forbidden(1) | nal_unit_type(6) | ...
-			naluType = int((au[0][0] >> 1) & 0x3F)
+			naluType = int((nalu[0] >> 1) & 0x3F)
+			// H.265 IRAP: BLA_W_LP..CRA_NUT = 16..21
+			if naluType >= 16 && naluType <= 21 {
+				isKeyframe = true
+				break
+			}
 		} else {
 			// H.264: forbidden(1) | nal_ref_idc(2) | nal_unit_type(5)
-			naluType = int(au[0][0] & 0x1F)
+			naluType = int(nalu[0] & 0x1F)
+			// H.264 IDR = 5
+			if naluType == 5 {
+				isKeyframe = true
+				break
+			}
 		}
-		// H.264 IDR = 5, H.265 IDR_W_RADL = 19, IDR_N_LP = 20
-		isKeyframe = naluType == 5 || naluType == 19 || naluType == 20
 	}
 
 	// Non-blocking send
@@ -365,6 +441,16 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 
+	// Send AudioCodecInfo next, if this stream has an audio track.
+	if aci := entry.audioInfo.Load(); aci != nil {
+		if aciData, err := EncodeAudioCodecInfo(aci); err == nil {
+			if err := conn.WriteMessage(websocket.BinaryMessage, aciData); err != nil {
+				conn.Close()
+				return err
+			}
+		}
+	}
+
 	// Register viewer
 	viewerCtx, viewerCancel := context.WithCancel(r.Context())
 	viewerID := entry.viewerSeq.Add(1)
@@ -392,7 +478,22 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 		wsLogger.Load().Debug("WebSocket viewer disconnected", "camera_id", camID, "viewer_id", viewerID)
 	}()
 
-	// Start read pump to detect client disconnect.
+	// Set pong handler to reset read deadline on pong frames.
+	// This allows the read pump below to detect truly dead clients
+	// without killing active connections that just don't send data.
+	pongTimeout := m.idleTimeout
+	if pongTimeout < 60*time.Second {
+		pongTimeout = 60 * time.Second
+	}
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongTimeout))
+		return nil
+	})
+	// Set initial read deadline
+	conn.SetReadDeadline(time.Now().Add(pongTimeout))
+
+	// Start read pump to detect client disconnect via read deadline.
+	// The read deadline is extended by the pong handler above.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -405,11 +506,38 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 				return
 			default:
 			}
-			conn.SetReadDeadline(time.Now().Add(time.Second))
+			// ReadMessage blocks until a message arrives or deadline expires.
+			// On pong frames, the pong handler resets the deadline.
+			// On deadline expiry (no pong within timeout), this returns error and cancels.
 			_, _, err := conn.ReadMessage()
 			if err != nil {
 				viewerCancel()
 				return
+			}
+		}
+	}()
+
+	// Start ping sender to keep connection alive and trigger pong responses.
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				wsLogger.Load().Warn("WebSocket ping sender panic recovered", "error", r)
+			}
+		}()
+		pingInterval := pongTimeout / 4
+		if pingInterval < 10*time.Second {
+			pingInterval = 10 * time.Second
+		}
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-viewerCtx.Done():
+				return
+			case <-ticker.C:
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
 			}
 		}
 	}()

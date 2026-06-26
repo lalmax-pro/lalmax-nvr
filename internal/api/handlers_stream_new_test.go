@@ -16,6 +16,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
+	"github.com/lalmax-pro/lalmax-nvr/internal/wsstream"
 	"github.com/stretchr/testify/require"
 )
 
@@ -104,6 +105,9 @@ func (s *stubMediaEngine) DelCustomizePubSession(_ context.Context, _ media.Cust
 }
 
 func (s *stubWSManager) RegisterStream(cameraID string, codec model.Format, sps, pps, vps []byte, hub *model.StreamHub) error {
+	return nil
+}
+func (s *stubWSManager) SetAudioConfig(cameraID string, aci *wsstream.AudioCodecInfo) error {
 	return nil
 }
 func (s *stubWSManager) IsActive(cameraID string) bool { return true }

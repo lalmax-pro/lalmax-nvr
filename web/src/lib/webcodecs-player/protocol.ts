@@ -19,10 +19,73 @@ export const MsgType = {
   VideoFrame: 0x02,
   AudioFrame: 0x03,
   KeyframeReq: 0x04,
+  AudioCodecInfo: 0x05,
   EOS: 0xFF,
 } as const;
 
 export type MsgType = (typeof MsgType)[keyof typeof MsgType];
+
+/** Audio codec wire identifiers matching Go wsstream (AudioCodecInfo.codec byte). */
+export const AudioCodecId = {
+  None: 0,
+  AAC: 1,
+  G711A: 2, // A-law (PCMA)
+  G711U: 3, // µ-law (PCMU)
+} as const;
+
+export type AudioCodecId = (typeof AudioCodecId)[keyof typeof AudioCodecId];
+
+/**
+ * AudioCodecInfo: audio configuration sent once per viewer, right after the
+ * video CodecInfo. Binary wire format:
+ *   {type:1}{codec:1}{sampleRate:4}{channels:1}{config_len:2}{config}
+ * For AAC, config is the AudioSpecificConfig (ASC); for G.711 it is empty.
+ */
+export interface AudioCodecInfo {
+  codec: AudioCodecId;
+  sampleRate: number;
+  channels: number;
+  config?: Uint8Array; // AAC ASC only
+}
+
+/** A single audio frame: {type:1}{pts:8}{data...}. */
+export interface AudioFrameMsg {
+  pts: number;
+  data: Uint8Array;
+}
+
+/** Decode an AudioCodecInfo (0x05) binary message. */
+export function decodeAudioCodecInfo(data: ArrayBuffer): AudioCodecInfo {
+  if (data.byteLength < 9) {
+    throw new Error(`AudioCodecInfo too short: ${data.byteLength} bytes`);
+  }
+  const dv = new DataView(data);
+  if (dv.getUint8(0) !== MsgType.AudioCodecInfo) {
+    throw new Error(`Expected msg type 0x05, got 0x${dv.getUint8(0).toString(16)}`);
+  }
+  const codec = dv.getUint8(1) as AudioCodecId;
+  const sampleRate = dv.getUint32(2);
+  const channels = dv.getUint8(6);
+  const configLen = dv.getUint16(7);
+  if (9 + configLen > data.byteLength) throw new Error('AudioCodecInfo truncated at config');
+  const config = configLen > 0 ? new Uint8Array(data, 9, configLen) : undefined;
+  return { codec, sampleRate, channels, config };
+}
+
+/** Decode an AudioFrame (0x03) binary message. */
+export function decodeAudioFrame(data: ArrayBuffer): AudioFrameMsg {
+  if (data.byteLength < 9) {
+    throw new Error(`AudioFrame too short: ${data.byteLength} bytes`);
+  }
+  const dv = new DataView(data);
+  if (dv.getUint8(0) !== MsgType.AudioFrame) {
+    throw new Error(`Expected msg type 0x03, got 0x${dv.getUint8(0).toString(16)}`);
+  }
+  // pts is int64; audio timestamps fit comfortably in JS safe-integer range.
+  const pts = Number(dv.getBigInt64(1));
+  const data8 = new Uint8Array(data, 9);
+  return { pts, data: data8 };
+}
 
 /** Codec identifier strings matching Go wsstream package. */
 export const CodecId = {

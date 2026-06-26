@@ -217,6 +217,120 @@ func EncodeVideoFrame(vf *VideoFrame) ([]byte, error) {
 	return buf, nil
 }
 
+// ─── AudioCodecInfo encode/decode ────────────────────────────────────
+
+// AudioCodecInfo describes the audio track, sent once per viewer right after
+// the video CodecInfo. For AAC, Config carries the AudioSpecificConfig (ASC)
+// required to construct a WebCodecs AudioDecoder. For G.711 there is no config.
+type AudioCodecInfo struct {
+	Codec      byte   // AudioCodecAAC / AudioCodecG711A / AudioCodecG711U
+	SampleRate uint32 // samples per second (e.g. 8000, 44100, 48000)
+	Channels   byte   // channel count (1 = mono, 2 = stereo)
+	Config     []byte // AAC AudioSpecificConfig; nil for G.711
+}
+
+// EncodeAudioCodecInfo encodes an AudioCodecInfo into binary wire format.
+//
+// Wire format:
+//
+//	{type:1}{codec:1}{sampleRate:4}{channels:1}{config_len:2}{config...}
+func EncodeAudioCodecInfo(aci *AudioCodecInfo) ([]byte, error) {
+	if aci == nil {
+		return nil, errors.New("wsstream: nil AudioCodecInfo")
+	}
+	if len(aci.Config) > 65535 {
+		return nil, fmt.Errorf("wsstream: audio config too long: %d bytes", len(aci.Config))
+	}
+
+	// type(1) + codec(1) + sampleRate(4) + channels(1) + configLen(2) + config
+	size := 1 + 1 + 4 + 1 + 2 + len(aci.Config)
+	buf := make([]byte, size)
+	offset := 0
+
+	buf[offset] = MsgTypeAudioCodecInfo
+	offset++
+	buf[offset] = aci.Codec
+	offset++
+	binary.BigEndian.PutUint32(buf[offset:], aci.SampleRate)
+	offset += 4
+	buf[offset] = aci.Channels
+	offset++
+	binary.BigEndian.PutUint16(buf[offset:], uint16(len(aci.Config)))
+	offset += 2
+	copy(buf[offset:], aci.Config)
+
+	return buf, nil
+}
+
+// DecodeAudioCodecInfo decodes binary wire format into an AudioCodecInfo.
+func DecodeAudioCodecInfo(data []byte) (*AudioCodecInfo, error) {
+	if len(data) < 9 {
+		return nil, fmt.Errorf("wsstream: audio codec info too short: %d bytes", len(data))
+	}
+	if data[0] != MsgTypeAudioCodecInfo {
+		return nil, fmt.Errorf("wsstream: expected message type 0x05, got 0x%02x", data[0])
+	}
+
+	aci := &AudioCodecInfo{
+		Codec:      data[1],
+		SampleRate: binary.BigEndian.Uint32(data[2:6]),
+		Channels:   data[6],
+	}
+	configLen := int(binary.BigEndian.Uint16(data[7:9]))
+	if 9+configLen > len(data) {
+		return nil, fmt.Errorf("wsstream: audio codec info truncated at config")
+	}
+	if configLen > 0 {
+		aci.Config = make([]byte, configLen)
+		copy(aci.Config, data[9:9+configLen])
+	}
+	return aci, nil
+}
+
+// ─── AudioFrame encode/decode ────────────────────────────────────────
+
+// AudioFrame carries a single encoded audio frame (one AAC AU or one G.711
+// packet). PTS is the source RTP timestamp in the audio clock (SampleRate).
+type AudioFrame struct {
+	PTS  int64
+	Data []byte
+}
+
+// EncodeAudioFrame encodes an AudioFrame into binary wire format.
+//
+// Wire format:
+//
+//	{type:1}{pts:8bytes_BE}{data...}
+//
+// The payload occupies the remainder of the message, so no length prefix is
+// needed.
+func EncodeAudioFrame(af *AudioFrame) ([]byte, error) {
+	if af == nil {
+		return nil, errors.New("wsstream: nil AudioFrame")
+	}
+	buf := make([]byte, 1+8+len(af.Data))
+	buf[0] = MsgTypeAudioFrame
+	binary.BigEndian.PutUint64(buf[1:], uint64(af.PTS))
+	copy(buf[9:], af.Data)
+	return buf, nil
+}
+
+// DecodeAudioFrame decodes binary wire format into an AudioFrame.
+func DecodeAudioFrame(data []byte) (*AudioFrame, error) {
+	if len(data) < 9 {
+		return nil, fmt.Errorf("wsstream: audio frame too short: %d bytes", len(data))
+	}
+	if data[0] != MsgTypeAudioFrame {
+		return nil, fmt.Errorf("wsstream: expected message type 0x03, got 0x%02x", data[0])
+	}
+	af := &AudioFrame{PTS: int64(binary.BigEndian.Uint64(data[1:9]))}
+	if len(data) > 9 {
+		af.Data = make([]byte, len(data)-9)
+		copy(af.Data, data[9:])
+	}
+	return af, nil
+}
+
 // DecodeVideoFrame decodes binary wire format into a VideoFrame.
 func DecodeVideoFrame(data []byte) (*VideoFrame, error) {
 	if len(data) < 12 {

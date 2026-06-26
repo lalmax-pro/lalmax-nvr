@@ -140,39 +140,42 @@ cmd/lalmax-nvr/        # 程序入口
 internal/              # 核心模块
   ai/                  # AI 推理
   api/                 # REST API + 流代理
+  ban/                 # 流封禁管理
   camera/              # 摄像头生命周期管理
   cleanup/             # 数据清理任务
   config/              # YAML 配置
   event/               # 事件总线
-  flv/                 # HTTP-FLV 直播管理器
   ftp/                 # FTP 服务
+  gb28181/             # GB28181 SIP 服务（设备管理、级联、回放、对讲）
   health/              # 摄像头健康监控
-  hls/                 # HLS 直播管理器
   media/               # lalmax 引擎适配器
   merge/               # 片段合并管理器
   metrics/             # Prometheus 指标
-  middleware/           # HTTP 中间件
+  middleware/          # HTTP 中间件
   model/               # 数据模型
   mqtt/                # MQTT 客户端
   muxer/               # MP4 封装器
-  onvif/               # ONVIF 客户端（发现、云台、成像）
+  onvif/               # ONVIF 客户端适配器（NVR 侧）
   recorder/            # H264/H265/MJPEG/HTTP-JPEG 录像引擎
-  rtmp/                # RTMP 接入服务器
-  srt/                 # SRT 接收器
   storage/             # SQLite 数据库 + 文件管理
+  streamhistory/       # 流历史记录
   ui/                  # 内嵌 SPA 静态文件
   upload/              # 文件上传处理
   webdav/              # WebDAV 服务
-  webrtc/              # WebRTC WHEP 管理器
   wsstream/            # WebSocket 流管理器（WebCodecs）
   xiaomi/              # 小米摄像头支持
-scripts/               # 构建和管理脚本
+onvif/                 # 独立 ONVIF 库（SOAP、发现、云台、成像、事件）
 third/
   lal/                 # lal 媒体库（vendored）
   lalmax/              # lalmax 扩展（vendored）
 web/                   # Svelte 5 前端
+scripts/               # 构建和管理脚本
+docker/                # Docker 构建资源
+tests/                 # 集成测试
 docs/                  # 文档（中文/英文）
 ```
+
+> HLS、HTTP-FLV、WebRTC、fMP4 等播放协议以及 RTMP/SRT 接入均由内嵌的 lalmax 引擎提供，不单独存在于 `internal/` 包中。
 
 ## 贡献
 
