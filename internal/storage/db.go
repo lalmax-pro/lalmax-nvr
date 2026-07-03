@@ -120,6 +120,13 @@ func (d *DB) Init(ctx context.Context) error {
 	if err := d.createGroupTables(ctx); err != nil {
 		return err
 	}
+	// GB28181 行政区划 / 业务分组 目录表
+	if err := d.createGBRegionTables(ctx); err != nil {
+		return err
+	}
+	if err := d.createGBGroupTables(ctx); err != nil {
+		return err
+	}
 	if err := d.createAITables(ctx); err != nil {
 		return err
 	}

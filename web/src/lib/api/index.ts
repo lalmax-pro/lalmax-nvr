@@ -415,6 +415,35 @@ export type {
   RemoveGroupChannelRequest,
 } from './groups';
 
+// GB28181 国标目录 — 行政区划 / 业务分组
+export {
+  getRegionTree,
+  createRegion,
+  updateRegion,
+  deleteRegion,
+  syncRegions,
+  getCivilCodeCandidates,
+  getCivilCodeDescription,
+  addRegionByCivilCode,
+  getGroupTree,
+  createGroup,
+  updateGroup,
+  deleteGroup,
+  listCatalogChannels,
+  attachChannelsToRegion,
+  detachChannelsFromRegion,
+  attachChannelsToGroup,
+  detachChannelsFromGroup,
+} from './gbCatalog';
+
+export type {
+  GBChannelBrief,
+  RegionTreeNode,
+  GroupTreeNode,
+  ChannelKey,
+  CivilCode,
+} from './gbCatalog';
+
 // Users — user management
 export {
   listUsers,

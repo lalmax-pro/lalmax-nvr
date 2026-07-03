@@ -483,6 +483,27 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/download/batch", h.handleGB28181BatchDownload)
 			r.Post("/download/stop", h.handleGB28181StopDownload)
 			r.Get("/downloads", h.handleGB28181ListDownloads)
+
+			// 国标目录: 行政区划 / 业务分组
+			r.Get("/regions/tree", h.handleGBRegionTree)
+			r.Get("/regions/candidates", h.handleGBCivilCodeCandidates)
+			r.Get("/regions/description", h.handleGBCivilCodeDescription)
+			r.With(middleware.RequireOperatePermission()).Post("/regions", h.handleGBRegionCreate)
+			r.With(middleware.RequireOperatePermission()).Put("/regions/{id}", h.handleGBRegionUpdate)
+			r.With(middleware.RequireOperatePermission()).Delete("/regions/{id}", h.handleGBRegionDelete)
+			r.With(middleware.RequireOperatePermission()).Post("/regions/sync", h.handleGBRegionSync)
+			r.With(middleware.RequireOperatePermission()).Post("/regions/by-civil-code", h.handleGBRegionAddByCivilCode)
+
+			r.Get("/groups/tree", h.handleGBGroupTree)
+			r.With(middleware.RequireOperatePermission()).Post("/groups", h.handleGBGroupCreate)
+			r.With(middleware.RequireOperatePermission()).Put("/groups/{id}", h.handleGBGroupUpdate)
+			r.With(middleware.RequireOperatePermission()).Delete("/groups/{id}", h.handleGBGroupDelete)
+
+			r.Get("/catalog/channels", h.handleGBCatalogChannels)
+			r.With(middleware.RequireOperatePermission()).Post("/channels/region", h.handleGBChannelAttachRegion)
+			r.With(middleware.RequireOperatePermission()).Delete("/channels/region", h.handleGBChannelDetachRegion)
+			r.With(middleware.RequireOperatePermission()).Post("/channels/group", h.handleGBChannelAttachGroup)
+			r.With(middleware.RequireOperatePermission()).Delete("/channels/group", h.handleGBChannelDetachGroup)
 			r.Route("/devices/{deviceID}/channels/{channelID}", func(r chi.Router) {
 				// PTZ控制
 				r.Post("/ptz", h.handleGB28181PTZControl)

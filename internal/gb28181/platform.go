@@ -604,20 +604,24 @@ func (p *Platform) handleCatalogResponse(req *sip.Request, sn int, queryDeviceID
 		Port:   cfg.ServerPort,
 	}
 
-	// If no shared channels, send empty list
-	if len(channels) == 0 {
-		p.sendCatalogMessage(recipient, sn, cfg, nil)
+	// 按行政区划/业务分组树组装带层级的 Catalog 条目
+	items := p.buildCatalogItems(channels)
+
+	// 无共享通道时回空目录
+	if len(items) == 0 {
+		p.sendCatalogItem(recipient, sn, cfg, nil, 0)
 		return
 	}
 
-	// Send one message per channel
-	for _, ch := range channels {
-		p.sendCatalogMessage(recipient, sn, cfg, &ch)
+	// 每条 MESSAGE 携带一个 Item, SumNum 为总数
+	for i := range items {
+		p.sendCatalogItem(recipient, sn, cfg, &items[i], len(items))
 		time.Sleep(50 * time.Millisecond) // rate limit
 	}
 }
 
-func (p *Platform) sendCatalogMessage(recipient sip.Uri, sn int, cfg *PlatformConfig, ch *PlatformChannel) {
+// sendCatalogItem 发送单条 Catalog Item (item 为 nil 时发送空目录)。
+func (p *Platform) sendCatalogItem(recipient sip.Uri, sn int, cfg *PlatformConfig, item *catalogItem, sumNum int) {
 	req := sip.NewRequest(sip.MESSAGE, recipient)
 	req.SetTransport(cfg.Transport)
 
@@ -637,7 +641,7 @@ func (p *Platform) sendCatalogMessage(recipient sip.Uri, sn int, cfg *PlatformCo
 	req.AppendHeader(sip.NewHeader("Content-Type", "Application/MANSCDP+xml"))
 
 	var xmlContent string
-	if ch == nil {
+	if item == nil {
 		xmlContent = fmt.Sprintf(`<?xml version="1.0" encoding="GB2312"?>
 <Response>
 <CmdType>Catalog</CmdType>
@@ -648,33 +652,16 @@ func (p *Platform) sendCatalogMessage(recipient sip.Uri, sn int, cfg *PlatformCo
 </DeviceList>
 </Response>`, sn, cfg.DeviceGBID)
 	} else {
-		channelID := ch.CustomID
-		if channelID == "" {
-			channelID = ch.ChannelID
-		}
-		name := ch.CustomName
-		if name == "" {
-			name = ch.ChannelID
-		}
-		parentID := cfg.DeviceGBID
-
 		xmlContent = fmt.Sprintf(`<?xml version="1.0" encoding="GB2312"?>
 <Response>
 <CmdType>Catalog</CmdType>
 <SN>%d</SN>
 <DeviceID>%s</DeviceID>
-<SumNum>1</SumNum>
+<SumNum>%d</SumNum>
 <DeviceList Num="1">
-<Item>
-<DeviceID>%s</DeviceID>
-<Name>%s</Name>
-<ParentID>%s</ParentID>
-<RegisterWay>1</RegisterWay>
-<Secrecy>0</Secrecy>
-<Status>ON</Status>
-</Item>
+%s
 </DeviceList>
-</Response>`, sn, cfg.DeviceGBID, channelID, name, parentID)
+</Response>`, sn, cfg.DeviceGBID, sumNum, buildCatalogItemXML(*item))
 	}
 
 	req.SetBody([]byte(xmlContent))

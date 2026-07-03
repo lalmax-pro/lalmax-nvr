@@ -17,6 +17,7 @@
 
   import Devices from './routes/Devices.svelte';
   import DeviceGroups from './routes/DeviceGroups.svelte';
+  import GB28181Channels from './routes/GB28181Channels.svelte';
   import Users from './routes/Users.svelte';
   import AIDetection from './routes/AIDetection.svelte';
   import Header from './components/Header';
@@ -143,6 +144,10 @@
       return { route: 'device-groups', params: {} };
     }
 
+    if (segments[0] === 'gb-channels') {
+      return { route: 'gb-channels', params: {} };
+    }
+
 
     if (segments[0] === 'users') {
       return { route: 'users', params: {} };
@@ -254,6 +259,8 @@
         <Dashboard initialTab={params.tab || 'dashboard'} />
       {:else if currentRoute === 'device-groups'}
         <DeviceGroups />
+      {:else if currentRoute === 'gb-channels'}
+        <GB28181Channels />
       {:else if currentRoute === 'users'}
         <Users />
       {:else if currentRoute === 'ai-detection'}
