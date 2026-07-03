@@ -15,6 +15,47 @@ import (
 
 var logger = slog.Default().With("component", "relay")
 
+const (
+	// statsSampleInterval is how often running tasks are sampled.
+	statsSampleInterval = 5 * time.Second
+	// statsRingCap is the per-task ring buffer size: 1 hour at 5s intervals.
+	statsRingCap = 720
+	// statsRingTTL is how long an idle task's history is retained before eviction.
+	statsRingTTL = 1 * time.Hour
+)
+
+// statsRing is a fixed-capacity ring buffer of StatSample for one task.
+type statsRing struct {
+	samples  [statsRingCap]StatSample
+	head     int
+	count    int
+	lastSeen int64
+}
+
+func (r *statsRing) append(s StatSample) {
+	r.samples[r.head] = s
+	r.head = (r.head + 1) % statsRingCap
+	if r.count < statsRingCap {
+		r.count++
+	}
+	r.lastSeen = s.Timestamp.Unix()
+}
+
+func (r *statsRing) since(cutoff time.Time) []StatSample {
+	if r.count == 0 {
+		return []StatSample{}
+	}
+	start := (r.head - r.count + statsRingCap) % statsRingCap
+	result := make([]StatSample, 0, r.count)
+	for i := 0; i < r.count; i++ {
+		pos := (start + i) % statsRingCap
+		if r.samples[pos].Timestamp.After(cutoff) || r.samples[pos].Timestamp.Equal(cutoff) {
+			result = append(result, r.samples[pos])
+		}
+	}
+	return result
+}
+
 // TaskStatus represents the status of a relay task.
 type TaskStatus string
 
@@ -75,6 +116,7 @@ type Manager struct {
 
 	mu       sync.RWMutex
 	tasks    map[string]*activeTask
+	rings    map[string]*statsRing // in-memory ring buffers per task
 	stopOnce sync.Once
 	stopCh   chan struct{}
 }
@@ -91,6 +133,7 @@ func NewManager(db *storage.DB, engine media.Engine) *Manager {
 		db:     db,
 		engine: engine,
 		tasks:  make(map[string]*activeTask),
+		rings:  make(map[string]*statsRing),
 		stopCh: make(chan struct{}),
 	}
 	// Start background stats collector
@@ -107,15 +150,33 @@ func (m *Manager) Stop() {
 
 // collectStatsLoop periodically collects stats for running tasks.
 func (m *Manager) collectStatsLoop() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(statsSampleInterval)
 	defer ticker.Stop()
+
+	cleanupTicker := time.NewTicker(5 * time.Minute)
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
 			m.collectAllStats()
+		case <-cleanupTicker.C:
+			m.evictIdleRings()
 		case <-m.stopCh:
 			return
+		}
+	}
+}
+
+// evictIdleRings removes ring buffers for tasks that haven't been seen recently.
+func (m *Manager) evictIdleRings() {
+	cutoff := time.Now().Add(-statsRingTTL).Unix()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for taskID, ring := range m.rings {
+		if ring.lastSeen < cutoff {
+			delete(m.rings, taskID)
 		}
 	}
 }
@@ -133,33 +194,43 @@ func (m *Manager) collectAllStats() {
 
 	ctx := context.Background()
 	for _, at := range runningTasks {
-		m.collectTaskStats(ctx, at.task)
+		m.collectTaskStats(ctx, at.task, at)
 	}
 }
 
 // collectTaskStats collects and stores stats for a single task.
-func (m *Manager) collectTaskStats(ctx context.Context, task *Task) {
-	streamInfo, err := m.engine.GetStream(ctx, task.StreamID)
-	if err != nil {
-		return
-	}
-
+func (m *Manager) collectTaskStats(ctx context.Context, task *Task, at *activeTask) {
+	now := time.Now()
 	sample := StatSample{
-		Timestamp:    time.Now(),
-		VideoFPS:     streamInfo.InFPS,
-		VideoBitrate: 0,
-		AudioFPS:     0,
-		AudioBitrate: 0,
-		TotalBytes:   0,
+		Timestamp: now,
 	}
 
-	// Get subscriber stats if available
-	if len(streamInfo.Subscribers) > 0 {
-		for _, sub := range streamInfo.Subscribers {
-			sample.VideoBitrate += sub.WriteBitrateKbits * 1000
-		}
+	// Get source stream info for FPS
+	streamInfo, err := m.engine.GetStream(ctx, task.StreamID)
+	if err == nil && streamInfo != nil {
+		sample.VideoFPS = streamInfo.InFPS
+		sample.AudioFPS = 0 // lal doesn't separate audio/video FPS
 	}
 
+	// Get push session stats for bitrate and bytes
+	if at.session != nil {
+		stat := at.session.GetStat()
+		sample.VideoBitrate = stat.WriteBitrateKbits * 1000 // convert to bps
+		sample.AudioBitrate = 0                               // lal doesn't separate audio/video bitrate
+		sample.TotalBytes = int64(stat.WroteBytesSum)
+	}
+
+	// Store in memory ring buffer
+	m.mu.Lock()
+	ring := m.rings[task.ID]
+	if ring == nil {
+		ring = &statsRing{}
+		m.rings[task.ID] = ring
+	}
+	ring.append(sample)
+	m.mu.Unlock()
+
+	// Also persist to database for long-term storage
 	m.saveStatSample(task.ID, sample)
 }
 
@@ -244,6 +315,11 @@ func (m *Manager) ListTasks() ([]*Task, error) {
 func (m *Manager) DeleteTask(taskID string) error {
 	// Stop task if running
 	m.StopTask(taskID)
+
+	// Clean up memory ring buffer
+	m.mu.Lock()
+	delete(m.rings, taskID)
+	m.mu.Unlock()
 
 	// Delete from database
 	return m.deleteTask(taskID)
@@ -427,13 +503,22 @@ func (m *Manager) GetTaskStats(ctx context.Context, taskID string) (*TaskStats, 
 		}
 	}
 
-	// Get stream info for FPS and bitrate
+	// Get real-time stats from push session and stream
 	if task.Status == TaskStatusRunning {
+		// Get source stream info for FPS
 		streamInfo, err := m.engine.GetStream(ctx, task.StreamID)
 		if err == nil && streamInfo != nil {
 			stats.VideoFPS = streamInfo.InFPS
-			// Note: lal doesn't provide per-stream bitrate directly
-			// We could calculate it from frame counts over time
+		}
+
+		// Get push session stats for bitrate and bytes
+		m.mu.RLock()
+		at, ok := m.tasks[taskID]
+		m.mu.RUnlock()
+		if ok && at.session != nil {
+			stat := at.session.GetStat()
+			stats.VideoBitrate = stat.WriteBitrateKbits * 1000
+			stats.TotalBytes = int64(stat.WroteBytesSum)
 		}
 	}
 
@@ -597,6 +682,7 @@ func (m *Manager) saveStatSample(taskID string, sample StatSample) error {
 }
 
 // GetTaskStatsHistory returns historical statistics for a task.
+// It first checks the in-memory ring buffer, then falls back to database.
 func (m *Manager) GetTaskStatsHistory(taskID string, duration time.Duration) (*StatsHistory, error) {
 	// Verify task exists
 	_, err := m.GetTask(taskID)
@@ -605,6 +691,25 @@ func (m *Manager) GetTaskStatsHistory(taskID string, duration time.Duration) (*S
 	}
 
 	since := time.Now().Add(-duration)
+	history := &StatsHistory{
+		TaskID:  taskID,
+		Samples: make([]StatSample, 0),
+	}
+
+	// Try in-memory ring buffer first (faster)
+	m.mu.RLock()
+	ring := m.rings[taskID]
+	m.mu.RUnlock()
+
+	if ring != nil {
+		samples := ring.since(since)
+		if len(samples) > 0 {
+			history.Samples = samples
+			return history, nil
+		}
+	}
+
+	// Fall back to database for historical data
 	query := `SELECT timestamp, video_fps, video_bitrate, audio_fps, audio_bitrate, total_bytes
 		FROM relay_task_stats 
 		WHERE task_id = ? AND timestamp >= ?
@@ -612,14 +717,9 @@ func (m *Manager) GetTaskStatsHistory(taskID string, duration time.Duration) (*S
 	
 	rows, err := m.db.DB().Query(query, taskID, since.UTC().Format("2006-01-02 15:04:05.999999999"))
 	if err != nil {
-		return nil, err
+		return history, nil
 	}
 	defer rows.Close()
-
-	history := &StatsHistory{
-		TaskID:  taskID,
-		Samples: make([]StatSample, 0),
-	}
 
 	for rows.Next() {
 		var sample StatSample
