@@ -51,9 +51,12 @@ services:
       - lalmax-nvr
     environment:
       - NVR_URL=http://lalmax-nvr:9090
-      - NVR_AUTH=  # Base64 encoded auth if needed
-      - YOLO_MODEL=yolov8n.pt
-      - CONFIDENCE=0.5
+      - NVR_AUTH=YWRtaW46YWRtaW4xMjM=
+      - YOLO_MODEL=yolov8s.pt
+      - CONFIDENCE=0.15
+      - MOTION_ONLY=true
+      - MOTION_THRESHOLD=25
+      - MOTION_MIN_AREA=500
       - FRAME_SKIP=5
       - SYNC_INTERVAL=30
       - RTSP_PORT=15544

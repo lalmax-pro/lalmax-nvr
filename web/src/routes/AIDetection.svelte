@@ -28,6 +28,7 @@
   let multimodalCleanup: (() => void) | null = null;
   let selectedCamera = $state<string>('all');
   let activeTab = $state<'detection' | 'analysis'>('detection');
+  let selectedImage = $state<string | null>(null);
 
   // Load AI status
   async function loadAiStatus() {
@@ -343,7 +344,12 @@
                   <td class="px-4 py-3">
                     <div class="flex items-center gap-3">
                       {#if event.image_url}
-                        <img src={event.image_url} alt="" class="h-12 w-16 object-cover rounded border th-border" />
+                        <img 
+                          src={event.image_url} 
+                          alt="" 
+                          class="h-12 w-16 object-cover rounded border th-border cursor-pointer hover:opacity-80 transition-opacity" 
+                          onclick={() => selectedImage = event.image_url}
+                        />
                       {/if}
                       <div class="flex flex-wrap gap-1">
                         {#each event.detections as det}
@@ -475,6 +481,28 @@
           {/each}
         </div>
       {/if}
+    </div>
+  {/if}
+
+  <!-- Image Modal -->
+  {#if selectedImage}
+    <div 
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+      onclick={() => selectedImage = null}
+    >
+      <div class="relative max-w-4xl max-h-[90vh]">
+        <img 
+          src={selectedImage} 
+          alt="Detection" 
+          class="max-w-full max-h-[90vh] object-contain rounded-lg"
+        />
+        <button 
+          class="absolute top-2 right-2 bg-white/90 dark:bg-gray-800/90 rounded-full p-2 hover:bg-white dark:hover:bg-gray-800 transition-colors"
+          onclick={() => selectedImage = null}
+        >
+          <XCircle size={24} />
+        </button>
+      </div>
     </div>
   {/if}
 </main>
