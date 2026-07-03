@@ -22,6 +22,10 @@ const (
 	statsRingCap = 720
 	// statsRingTTL is how long an idle task's history is retained before eviction.
 	statsRingTTL = 1 * time.Hour
+	// statsDBTTL is how long database stats are retained (7 days).
+	statsDBTTL = 7 * 24 * time.Hour
+	// statsCleanupInterval is how often to run database cleanup.
+	statsCleanupInterval = 1 * time.Hour
 )
 
 // statsRing is a fixed-capacity ring buffer of StatSample for one task.
@@ -153,15 +157,20 @@ func (m *Manager) collectStatsLoop() {
 	ticker := time.NewTicker(statsSampleInterval)
 	defer ticker.Stop()
 
-	cleanupTicker := time.NewTicker(5 * time.Minute)
-	defer cleanupTicker.Stop()
+	ringCleanupTicker := time.NewTicker(5 * time.Minute)
+	defer ringCleanupTicker.Stop()
+
+	dbCleanupTicker := time.NewTicker(statsCleanupInterval)
+	defer dbCleanupTicker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
 			m.collectAllStats()
-		case <-cleanupTicker.C:
+		case <-ringCleanupTicker.C:
 			m.evictIdleRings()
+		case <-dbCleanupTicker.C:
+			m.cleanupOldStats()
 		case <-m.stopCh:
 			return
 		}
@@ -742,6 +751,21 @@ func (m *Manager) GetTaskStatsHistory(taskID string, duration time.Duration) (*S
 	}
 
 	return history, nil
+}
+
+// cleanupOldStats removes statistics older than statsDBTTL.
+func (m *Manager) cleanupOldStats() {
+	cutoff := time.Now().Add(-statsDBTTL)
+	query := `DELETE FROM relay_task_stats WHERE timestamp < ?`
+	result, err := m.db.DB().Exec(query, cutoff.UTC().Format("2006-01-02 15:04:05.999999999"))
+	if err != nil {
+		logger.Error("failed to cleanup old relay stats", "error", err)
+		return
+	}
+	rows, _ := result.RowsAffected()
+	if rows > 0 {
+		logger.Info("cleaned up old relay stats", "rows_deleted", rows)
+	}
 }
 
 // CleanupOldStats removes statistics older than the specified duration.
