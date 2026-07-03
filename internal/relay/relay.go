@@ -22,10 +22,6 @@ const (
 	statsRingCap = 720
 	// statsRingTTL is how long an idle task's history is retained before eviction.
 	statsRingTTL = 1 * time.Hour
-	// statsDBTTL is how long database stats are retained (7 days).
-	statsDBTTL = 7 * 24 * time.Hour
-	// statsCleanupInterval is how often to run database cleanup.
-	statsCleanupInterval = 1 * time.Hour
 )
 
 // statsRing is a fixed-capacity ring buffer of StatSample for one task.
@@ -157,20 +153,15 @@ func (m *Manager) collectStatsLoop() {
 	ticker := time.NewTicker(statsSampleInterval)
 	defer ticker.Stop()
 
-	ringCleanupTicker := time.NewTicker(5 * time.Minute)
-	defer ringCleanupTicker.Stop()
-
-	dbCleanupTicker := time.NewTicker(statsCleanupInterval)
-	defer dbCleanupTicker.Stop()
+	cleanupTicker := time.NewTicker(5 * time.Minute)
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
 			m.collectAllStats()
-		case <-ringCleanupTicker.C:
+		case <-cleanupTicker.C:
 			m.evictIdleRings()
-		case <-dbCleanupTicker.C:
-			m.cleanupOldStats()
 		case <-m.stopCh:
 			return
 		}
@@ -229,7 +220,7 @@ func (m *Manager) collectTaskStats(ctx context.Context, task *Task, at *activeTa
 		sample.TotalBytes = int64(stat.WroteBytesSum)
 	}
 
-	// Store in memory ring buffer
+	// Store in memory ring buffer only (no database persistence)
 	m.mu.Lock()
 	ring := m.rings[task.ID]
 	if ring == nil {
@@ -238,9 +229,6 @@ func (m *Manager) collectTaskStats(ctx context.Context, task *Task, at *activeTa
 	}
 	ring.append(sample)
 	m.mu.Unlock()
-
-	// Also persist to database for long-term storage
-	m.saveStatSample(task.ID, sample)
 }
 
 // CreateTask creates a new relay push task.
@@ -673,25 +661,7 @@ func (m *Manager) deleteTask(taskID string) error {
 	return err
 }
 
-// saveStatSample saves a statistics sample to the database.
-func (m *Manager) saveStatSample(taskID string, sample StatSample) error {
-	query := `INSERT INTO relay_task_stats (task_id, timestamp, video_fps, video_bitrate, audio_fps, audio_bitrate, total_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`
-	
-	_, err := m.db.DB().Exec(query,
-		taskID,
-		sample.Timestamp.UTC().Format("2006-01-02 15:04:05.999999999"),
-		sample.VideoFPS,
-		sample.VideoBitrate,
-		sample.AudioFPS,
-		sample.AudioBitrate,
-		sample.TotalBytes,
-	)
-	return err
-}
-
-// GetTaskStatsHistory returns historical statistics for a task.
-// It first checks the in-memory ring buffer, then falls back to database.
+// GetTaskStatsHistory returns historical statistics for a task from memory ring buffer.
 func (m *Manager) GetTaskStatsHistory(taskID string, duration time.Duration) (*StatsHistory, error) {
 	// Verify task exists
 	_, err := m.GetTask(taskID)
@@ -705,75 +675,21 @@ func (m *Manager) GetTaskStatsHistory(taskID string, duration time.Duration) (*S
 		Samples: make([]StatSample, 0),
 	}
 
-	// Try in-memory ring buffer first (faster)
+	// Get from in-memory ring buffer
 	m.mu.RLock()
 	ring := m.rings[taskID]
 	m.mu.RUnlock()
 
 	if ring != nil {
-		samples := ring.since(since)
-		if len(samples) > 0 {
-			history.Samples = samples
-			return history, nil
-		}
-	}
-
-	// Fall back to database for historical data
-	query := `SELECT timestamp, video_fps, video_bitrate, audio_fps, audio_bitrate, total_bytes
-		FROM relay_task_stats 
-		WHERE task_id = ? AND timestamp >= ?
-		ORDER BY timestamp ASC`
-	
-	rows, err := m.db.DB().Query(query, taskID, since.UTC().Format("2006-01-02 15:04:05.999999999"))
-	if err != nil {
-		return history, nil
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var sample StatSample
-		var timestamp string
-		
-		err := rows.Scan(
-			&timestamp,
-			&sample.VideoFPS,
-			&sample.VideoBitrate,
-			&sample.AudioFPS,
-			&sample.AudioBitrate,
-			&sample.TotalBytes,
-		)
-		if err != nil {
-			continue
-		}
-		
-		sample.Timestamp, _ = parseTime(timestamp)
-		history.Samples = append(history.Samples, sample)
+		history.Samples = ring.since(since)
 	}
 
 	return history, nil
 }
 
-// cleanupOldStats removes statistics older than statsDBTTL.
-func (m *Manager) cleanupOldStats() {
-	cutoff := time.Now().Add(-statsDBTTL)
-	query := `DELETE FROM relay_task_stats WHERE timestamp < ?`
-	result, err := m.db.DB().Exec(query, cutoff.UTC().Format("2006-01-02 15:04:05.999999999"))
-	if err != nil {
-		logger.Error("failed to cleanup old relay stats", "error", err)
-		return
-	}
-	rows, _ := result.RowsAffected()
-	if rows > 0 {
-		logger.Info("cleaned up old relay stats", "rows_deleted", rows)
-	}
-}
-
-// CleanupOldStats removes statistics older than the specified duration.
+// CleanupOldStats removes statistics older than the specified duration (no-op, stats are memory-only).
 func (m *Manager) CleanupOldStats(maxAge time.Duration) error {
-	cutoff := time.Now().Add(-maxAge)
-	query := `DELETE FROM relay_task_stats WHERE timestamp < ?`
-	_, err := m.db.DB().Exec(query, cutoff.UTC().Format("2006-01-02 15:04:05.999999999"))
-	return err
+	return nil
 }
 
 // timeToDB converts a time pointer to a SQLite-compatible string pointer.
