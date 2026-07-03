@@ -409,6 +409,24 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='23' WHERE key='schema_version'")
 
+	// Migration v23 → v24: relay_tasks table for relay push tasks
+	relayTasksSQL := `CREATE TABLE IF NOT EXISTS relay_tasks (
+		id TEXT PRIMARY KEY,
+		stream_id TEXT NOT NULL,
+		target_url TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'stopped',
+		error_msg TEXT DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		started_at DATETIME,
+		stopped_at DATETIME
+	);`
+	if _, err := d.db.ExecContext(ctx, relayTasksSQL); err != nil {
+		return err
+	}
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_relay_tasks_stream ON relay_tasks(stream_id)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_relay_tasks_status ON relay_tasks(status)")
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='24' WHERE key='schema_version'")
+
 	return nil
 
 }

@@ -458,3 +458,20 @@ export type {
   CreateUserRequest,
   UpdateUserRequest,
 } from './users';
+
+// Relay — relay push tasks
+export {
+  listRelayTasks,
+  getRelayTask,
+  createRelayTask,
+  deleteRelayTask,
+  startRelayTask,
+  stopRelayTask,
+  getRelayTaskStats,
+} from './relay';
+
+export type {
+  RelayTask,
+  RelayTaskStats,
+  CreateRelayTaskRequest,
+} from './relay';

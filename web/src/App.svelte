@@ -20,6 +20,7 @@
   import GB28181Channels from './routes/GB28181Channels.svelte';
   import Users from './routes/Users.svelte';
   import AIDetection from './routes/AIDetection.svelte';
+  import Relay from './routes/Relay.svelte';
   import Header from './components/Header';
 
   // Network status
@@ -157,6 +158,10 @@
       return { route: 'ai-detection', params: {} };
     }
 
+    if (segments[0] === 'relay') {
+      return { route: 'relay', params: {} };
+    }
+
     // Default to login for unknown routes
     return { route: 'login', params: {} };
   }
@@ -265,6 +270,8 @@
         <Users />
       {:else if currentRoute === 'ai-detection'}
         <AIDetection />
+      {:else if currentRoute === 'relay'}
+        <Relay />
       {/if}
     </main>
   {/if}

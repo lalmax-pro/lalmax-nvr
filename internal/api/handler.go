@@ -25,6 +25,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/onvif"
+	"github.com/lalmax-pro/lalmax-nvr/internal/relay"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
@@ -145,6 +146,7 @@ type Handler struct {
 	gb28181Restarter  GB28181Restarter
 	gb28181Server     *gb28181.Server
 	snapshotMgr       *camera.SnapshotManager
+	relayMgr          *relay.Manager
 	// readyzDiskUsage overrides disk probing for /api/readyz (tests only).
 	readyzDiskUsage func() (total, used int64, err error)
 	// sysMetrics holds the in-memory ring buffer of periodic system metric samples.
@@ -229,6 +231,11 @@ func (h *Handler) SetAIManager(mgr *ai.Manager) {
 	if h.aiManager != nil && h.db != nil {
 		h.aiManager.SetStore(h.db)
 	}
+}
+
+// SetRelayManager sets the Relay Manager on the handler.
+func (h *Handler) SetRelayManager(mgr *relay.Manager) {
+	h.relayMgr = mgr
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -533,6 +540,18 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/info", h.handleGB28181DeviceInfoQuery)
 				r.Get("/status", h.handleGB28181DeviceStatusQuery)
 				r.Get("/config", h.handleGB28181DeviceConfigQuery)
+			})
+		})
+		// Relay push API routes
+		r.Route("/api/relay", func(r chi.Router) {
+			r.Get("/tasks", h.handleListRelayTasks)
+			r.With(middleware.RequireOperatePermission()).Post("/tasks", h.handleCreateRelayTask)
+			r.Route("/tasks/{id}", func(r chi.Router) {
+				r.Get("/", h.handleGetRelayTask)
+				r.With(middleware.RequireOperatePermission()).Delete("/", h.handleDeleteRelayTask)
+				r.With(middleware.RequireOperatePermission()).Post("/start", h.handleStartRelayTask)
+				r.With(middleware.RequireOperatePermission()).Post("/stop", h.handleStopRelayTask)
+				r.Get("/stats", h.handleGetRelayTaskStats)
 			})
 		})
 	})
