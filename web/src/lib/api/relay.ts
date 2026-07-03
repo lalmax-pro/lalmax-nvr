@@ -26,6 +26,20 @@ export interface RelayTaskStats {
   duration: number;
 }
 
+export interface StatSample {
+  timestamp: string;
+  video_fps: number;
+  video_bitrate: number;
+  audio_fps: number;
+  audio_bitrate: number;
+  total_bytes: number;
+}
+
+export interface StatsHistory {
+  task_id: string;
+  samples: StatSample[];
+}
+
 export interface CreateRelayTaskRequest {
   stream_id: string;
   target_url: string;
@@ -66,4 +80,15 @@ export async function stopRelayTask(taskId: string): Promise<{ status: string }>
 
 export async function getRelayTaskStats(taskId: string, signal?: AbortSignal): Promise<RelayTaskStats> {
   return apiRequest<RelayTaskStats>(`/relay/tasks/${encodeURIComponent(taskId)}/stats`, { signal });
+}
+
+export async function getRelayTaskStatsHistory(
+  taskId: string, 
+  durationMinutes: number = 60,
+  signal?: AbortSignal
+): Promise<StatsHistory> {
+  return apiRequest<StatsHistory>(
+    `/relay/tasks/${encodeURIComponent(taskId)}/stats/history?duration=${durationMinutes}`,
+    { signal }
+  );
 }

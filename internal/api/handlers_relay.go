@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -163,4 +165,35 @@ func (h *Handler) handleGetRelayTaskStats(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// handleGetRelayTaskStatsHistory returns historical statistics for a relay push task.
+func (h *Handler) handleGetRelayTaskStatsHistory(w http.ResponseWriter, r *http.Request) {
+	if h.relayMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "relay manager not available")
+		return
+	}
+
+	taskID := chi.URLParam(r, "id")
+	if taskID == "" {
+		writeError(w, http.StatusBadRequest, "task id is required")
+		return
+	}
+
+	// Parse duration parameter (default: 1 hour)
+	durationStr := r.URL.Query().Get("duration")
+	duration := time.Hour
+	if durationStr != "" {
+		if d, err := strconv.Atoi(durationStr); err == nil {
+			duration = time.Duration(d) * time.Minute
+		}
+	}
+
+	history, err := h.relayMgr.GetTaskStatsHistory(taskID, duration)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, history)
 }

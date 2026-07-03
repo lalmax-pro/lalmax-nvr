@@ -552,6 +552,7 @@ func (h *Handler) Routes() http.Handler {
 				r.With(middleware.RequireOperatePermission()).Post("/start", h.handleStartRelayTask)
 				r.With(middleware.RequireOperatePermission()).Post("/stop", h.handleStopRelayTask)
 				r.Get("/stats", h.handleGetRelayTaskStats)
+				r.Get("/stats/history", h.handleGetRelayTaskStatsHistory)
 			})
 		})
 	})

@@ -7,10 +7,14 @@
     startRelayTask, 
     stopRelayTask,
     getRelayTaskStats,
+    getRelayTaskStatsHistory,
     listStreams
   } from '$lib/api';
-  import type { RelayTask, RelayTaskStats, StreamInfo } from '$lib/api';
+  import type { RelayTask, RelayTaskStats, StatsHistory, StreamInfo } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { Chart, registerables } from 'chart.js';
+
+  Chart.register(...registerables);
 
   let loading = $state(true);
   let error = $state('');
@@ -27,6 +31,12 @@
   // Task stats
   let taskStats = $state<Map<string, RelayTaskStats>>(new Map());
   let statsLoading = $state<Map<string, boolean>>(new Map());
+  
+  // Stats history and charts
+  let taskStatsHistory = $state<Map<string, StatsHistory>>(new Map());
+  let statsHistoryLoading = $state<Map<string, boolean>>(new Map());
+  let chartInstances = $state<Map<string, Chart>>(new Map());
+  let selectedDuration = $state<Map<string, number>>(new Map());
 
   async function loadTasks() {
     loading = tasks.length === 0;
@@ -62,6 +72,110 @@
       statsLoading.set(taskId, false);
       statsLoading = new Map(statsLoading);
     }
+  }
+
+  async function loadTaskStatsHistory(taskId: string, durationMinutes: number = 60) {
+    statsHistoryLoading.set(taskId, true);
+    statsHistoryLoading = new Map(statsHistoryLoading);
+    selectedDuration.set(taskId, durationMinutes);
+    selectedDuration = new Map(selectedDuration);
+    
+    try {
+      const history = await getRelayTaskStatsHistory(taskId, durationMinutes);
+      taskStatsHistory.set(taskId, history);
+      taskStatsHistory = new Map(taskStatsHistory);
+      
+      // Create or update chart
+      setTimeout(() => createStatsChart(taskId, history), 100);
+    } catch (e) {
+      console.error('Failed to load task stats history:', e);
+    } finally {
+      statsHistoryLoading.set(taskId, false);
+      statsHistoryLoading = new Map(statsHistoryLoading);
+    }
+  }
+
+  function createStatsChart(taskId: string, history: StatsHistory) {
+    const canvas = document.getElementById(`chart-${taskId}`) as HTMLCanvasElement;
+    if (!canvas) return;
+
+    // Destroy existing chart
+    const existingChart = chartInstances.get(taskId);
+    if (existingChart) {
+      existingChart.destroy();
+    }
+
+    const labels = history.samples.map(s => {
+      const date = new Date(s.timestamp);
+      return date.toLocaleTimeString();
+    });
+
+    const chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Video FPS',
+            data: history.samples.map(s => s.video_fps),
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            yAxisID: 'y',
+            tension: 0.3,
+          },
+          {
+            label: 'Video Bitrate (Kbps)',
+            data: history.samples.map(s => s.video_bitrate / 1000),
+            borderColor: 'rgb(16, 185, 129)',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            yAxisID: 'y1',
+            tension: 0.3,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        interaction: {
+          mode: 'index',
+          intersect: false,
+        },
+        scales: {
+          y: {
+            type: 'linear',
+            display: true,
+            position: 'left',
+            title: {
+              display: true,
+              text: 'FPS',
+            },
+          },
+          y1: {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            title: {
+              display: true,
+              text: 'Kbps',
+            },
+            grid: {
+              drawOnChartArea: false,
+            },
+          },
+        },
+        plugins: {
+          legend: {
+            position: 'top',
+          },
+          title: {
+            display: true,
+            text: 'Stream Statistics History',
+          },
+        },
+      },
+    });
+
+    chartInstances.set(taskId, chart);
+    chartInstances = new Map(chartInstances);
   }
 
   async function handleCreateTask() {
@@ -152,6 +266,8 @@
     if (refreshTimer) {
       clearInterval(refreshTimer);
     }
+    // Destroy all chart instances
+    chartInstances.forEach(chart => chart.destroy());
   });
 </script>
 
@@ -252,7 +368,7 @@
 
             {#if taskStats.has(task.id)}
               {@const stats = taskStats.get(task.id)}
-              <div class="divider">Statistics</div>
+              <div class="divider">Real-time Statistics</div>
               <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                 <div>
                   <span class="text-gray-500">Video FPS</span>
@@ -270,6 +386,59 @@
                   <span class="text-gray-500">Audio Bitrate</span>
                   <p>{stats?.audio_bitrate ? formatBitrate(stats.audio_bitrate) : '-'}</p>
                 </div>
+              </div>
+            {/if}
+
+            <div class="divider">History Statistics</div>
+            <div class="flex gap-2 mb-4">
+              <button 
+                class="btn btn-sm {selectedDuration.get(task.id) === 15 ? 'btn-primary' : 'btn-outline'}"
+                onclick={() => loadTaskStatsHistory(task.id, 15)}
+                disabled={statsHistoryLoading.get(task.id)}
+              >
+                15 min
+              </button>
+              <button 
+                class="btn btn-sm {selectedDuration.get(task.id) === 30 ? 'btn-primary' : 'btn-outline'}"
+                onclick={() => loadTaskStatsHistory(task.id, 30)}
+                disabled={statsHistoryLoading.get(task.id)}
+              >
+                30 min
+              </button>
+              <button 
+                class="btn btn-sm {selectedDuration.get(task.id) === 60 || !selectedDuration.has(task.id) ? 'btn-primary' : 'btn-outline'}"
+                onclick={() => loadTaskStatsHistory(task.id, 60)}
+                disabled={statsHistoryLoading.get(task.id)}
+              >
+                1 hour
+              </button>
+              <button 
+                class="btn btn-sm {selectedDuration.get(task.id) === 180 ? 'btn-primary' : 'btn-outline'}"
+                onclick={() => loadTaskStatsHistory(task.id, 180)}
+                disabled={statsHistoryLoading.get(task.id)}
+              >
+                3 hours
+              </button>
+              <button 
+                class="btn btn-sm {selectedDuration.get(task.id) === 1440 ? 'btn-primary' : 'btn-outline'}"
+                onclick={() => loadTaskStatsHistory(task.id, 1440)}
+                disabled={statsHistoryLoading.get(task.id)}
+              >
+                24 hours
+              </button>
+            </div>
+            
+            {#if statsHistoryLoading.get(task.id)}
+              <div class="flex justify-center items-center h-64">
+                <span class="loading loading-spinner loading-lg"></span>
+              </div>
+            {:else if taskStatsHistory.has(task.id) && taskStatsHistory.get(task.id)?.samples?.length > 0}
+              <div class="h-80">
+                <canvas id="chart-{task.id}"></canvas>
+              </div>
+            {:else}
+              <div class="text-center py-8 text-gray-500">
+                No history data available. Click a time range button to load statistics.
               </div>
             {/if}
           </div>

@@ -468,10 +468,13 @@ export {
   startRelayTask,
   stopRelayTask,
   getRelayTaskStats,
+  getRelayTaskStatsHistory,
 } from './relay';
 
 export type {
   RelayTask,
   RelayTaskStats,
+  StatSample,
+  StatsHistory,
   CreateRelayTaskRequest,
 } from './relay';

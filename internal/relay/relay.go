@@ -52,13 +52,31 @@ type TaskStats struct {
 	Duration     time.Duration `json:"duration"`
 }
 
+// StatSample represents a single statistics sample.
+type StatSample struct {
+	Timestamp    time.Time `json:"timestamp"`
+	VideoFPS     float64   `json:"video_fps"`
+	VideoBitrate int       `json:"video_bitrate"`
+	AudioFPS     float64   `json:"audio_fps"`
+	AudioBitrate int       `json:"audio_bitrate"`
+	TotalBytes   int64     `json:"total_bytes"`
+}
+
+// StatsHistory represents historical statistics for a task.
+type StatsHistory struct {
+	TaskID  string       `json:"task_id"`
+	Samples []StatSample `json:"samples"`
+}
+
 // Manager manages relay push tasks.
 type Manager struct {
 	db     *storage.DB
 	engine media.Engine
 
-	mu    sync.RWMutex
-	tasks map[string]*activeTask
+	mu       sync.RWMutex
+	tasks    map[string]*activeTask
+	stopOnce sync.Once
+	stopCh   chan struct{}
 }
 
 type activeTask struct {
@@ -69,11 +87,80 @@ type activeTask struct {
 
 // NewManager creates a new relay manager.
 func NewManager(db *storage.DB, engine media.Engine) *Manager {
-	return &Manager{
+	m := &Manager{
 		db:     db,
 		engine: engine,
 		tasks:  make(map[string]*activeTask),
+		stopCh: make(chan struct{}),
 	}
+	// Start background stats collector
+	go m.collectStatsLoop()
+	return m
+}
+
+// Stop stops the manager and its background goroutines.
+func (m *Manager) Stop() {
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+	})
+}
+
+// collectStatsLoop periodically collects stats for running tasks.
+func (m *Manager) collectStatsLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.collectAllStats()
+		case <-m.stopCh:
+			return
+		}
+	}
+}
+
+// collectAllStats collects stats for all running tasks.
+func (m *Manager) collectAllStats() {
+	m.mu.RLock()
+	runningTasks := make([]*activeTask, 0)
+	for _, at := range m.tasks {
+		if at.task.Status == TaskStatusRunning {
+			runningTasks = append(runningTasks, at)
+		}
+	}
+	m.mu.RUnlock()
+
+	ctx := context.Background()
+	for _, at := range runningTasks {
+		m.collectTaskStats(ctx, at.task)
+	}
+}
+
+// collectTaskStats collects and stores stats for a single task.
+func (m *Manager) collectTaskStats(ctx context.Context, task *Task) {
+	streamInfo, err := m.engine.GetStream(ctx, task.StreamID)
+	if err != nil {
+		return
+	}
+
+	sample := StatSample{
+		Timestamp:    time.Now(),
+		VideoFPS:     streamInfo.InFPS,
+		VideoBitrate: 0,
+		AudioFPS:     0,
+		AudioBitrate: 0,
+		TotalBytes:   0,
+	}
+
+	// Get subscriber stats if available
+	if len(streamInfo.Subscribers) > 0 {
+		for _, sub := range streamInfo.Subscribers {
+			sample.VideoBitrate += sub.WriteBitrateKbits * 1000
+		}
+	}
+
+	m.saveStatSample(task.ID, sample)
 }
 
 // CreateTask creates a new relay push task.
@@ -489,6 +576,79 @@ func (m *Manager) loadAllTasks() ([]*Task, error) {
 func (m *Manager) deleteTask(taskID string) error {
 	query := `DELETE FROM relay_tasks WHERE id = ?`
 	_, err := m.db.DB().Exec(query, taskID)
+	return err
+}
+
+// saveStatSample saves a statistics sample to the database.
+func (m *Manager) saveStatSample(taskID string, sample StatSample) error {
+	query := `INSERT INTO relay_task_stats (task_id, timestamp, video_fps, video_bitrate, audio_fps, audio_bitrate, total_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`
+	
+	_, err := m.db.DB().Exec(query,
+		taskID,
+		sample.Timestamp.UTC().Format("2006-01-02 15:04:05.999999999"),
+		sample.VideoFPS,
+		sample.VideoBitrate,
+		sample.AudioFPS,
+		sample.AudioBitrate,
+		sample.TotalBytes,
+	)
+	return err
+}
+
+// GetTaskStatsHistory returns historical statistics for a task.
+func (m *Manager) GetTaskStatsHistory(taskID string, duration time.Duration) (*StatsHistory, error) {
+	// Verify task exists
+	_, err := m.GetTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	since := time.Now().Add(-duration)
+	query := `SELECT timestamp, video_fps, video_bitrate, audio_fps, audio_bitrate, total_bytes
+		FROM relay_task_stats 
+		WHERE task_id = ? AND timestamp >= ?
+		ORDER BY timestamp ASC`
+	
+	rows, err := m.db.DB().Query(query, taskID, since.UTC().Format("2006-01-02 15:04:05.999999999"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	history := &StatsHistory{
+		TaskID:  taskID,
+		Samples: make([]StatSample, 0),
+	}
+
+	for rows.Next() {
+		var sample StatSample
+		var timestamp string
+		
+		err := rows.Scan(
+			&timestamp,
+			&sample.VideoFPS,
+			&sample.VideoBitrate,
+			&sample.AudioFPS,
+			&sample.AudioBitrate,
+			&sample.TotalBytes,
+		)
+		if err != nil {
+			continue
+		}
+		
+		sample.Timestamp, _ = parseTime(timestamp)
+		history.Samples = append(history.Samples, sample)
+	}
+
+	return history, nil
+}
+
+// CleanupOldStats removes statistics older than the specified duration.
+func (m *Manager) CleanupOldStats(maxAge time.Duration) error {
+	cutoff := time.Now().Add(-maxAge)
+	query := `DELETE FROM relay_task_stats WHERE timestamp < ?`
+	_, err := m.db.DB().Exec(query, cutoff.UTC().Format("2006-01-02 15:04:05.999999999"))
 	return err
 }
 

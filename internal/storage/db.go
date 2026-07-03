@@ -425,6 +425,24 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_relay_tasks_stream ON relay_tasks(stream_id)")
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_relay_tasks_status ON relay_tasks(status)")
+
+	// relay_task_stats table for historical statistics
+	relayStatsSQL := `CREATE TABLE IF NOT EXISTS relay_task_stats (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id TEXT NOT NULL,
+		timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		video_fps REAL DEFAULT 0,
+		video_bitrate INTEGER DEFAULT 0,
+		audio_fps REAL DEFAULT 0,
+		audio_bitrate INTEGER DEFAULT 0,
+		total_bytes INTEGER DEFAULT 0,
+		FOREIGN KEY (task_id) REFERENCES relay_tasks(id) ON DELETE CASCADE
+	);`
+	if _, err := d.db.ExecContext(ctx, relayStatsSQL); err != nil {
+		return err
+	}
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_relay_stats_task ON relay_task_stats(task_id)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_relay_stats_time ON relay_task_stats(timestamp)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='24' WHERE key='schema_version'")
 
 	return nil
