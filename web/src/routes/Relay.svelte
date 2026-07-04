@@ -44,7 +44,7 @@
     try {
       tasks = await listRelayTasks();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load relay tasks';
+      error = e instanceof Error ? e.message : t('relay.loadFailed');
     } finally {
       loading = false;
     }
@@ -168,7 +168,7 @@
           },
           title: {
             display: true,
-            text: 'Stream Statistics History',
+            text: t('relay.chartTitle'),
           },
         },
       },
@@ -192,20 +192,20 @@
       newTaskTargetURL = '';
       await loadTasks();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to create task';
+      error = e instanceof Error ? e.message : t('relay.createFailed');
     } finally {
       creating = false;
     }
   }
 
   async function handleDeleteTask(taskId: string) {
-    if (!confirm('Are you sure you want to delete this relay task?')) return;
+    if (!confirm(t('relay.deleteConfirm'))) return;
     
     try {
       await deleteRelayTask(taskId);
       await loadTasks();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to delete task';
+      error = e instanceof Error ? e.message : t('relay.deleteFailed');
     }
   }
 
@@ -215,7 +215,7 @@
       await loadTasks();
       await loadTaskStats(taskId);
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to start task';
+      error = e instanceof Error ? e.message : t('relay.startFailed');
     }
   }
 
@@ -225,7 +225,7 @@
       await loadTasks();
       await loadTaskStats(taskId);
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to stop task';
+      error = e instanceof Error ? e.message : t('relay.stopFailed');
     }
   }
 
@@ -273,12 +273,12 @@
 
 <div class="container mx-auto px-4 py-6">
   <div class="flex justify-between items-center mb-6">
-    <h1 class="text-2xl font-bold">Relay Tasks</h1>
+    <h1 class="text-2xl font-bold">{t('relay.title')}</h1>
     <button 
       class="btn btn-primary"
       onclick={() => showCreateDialog = true}
     >
-      Create Task
+      {t('relay.create')}
     </button>
   </div>
 
@@ -294,8 +294,8 @@
     </div>
   {:else if tasks.length === 0}
     <div class="text-center py-12">
-      <p class="text-gray-500 text-lg">No relay tasks found</p>
-      <p class="text-gray-400 mt-2">Create a task to start relaying streams to other platforms</p>
+      <p class="text-gray-500 text-lg">{t('relay.noTasks')}</p>
+      <p class="text-gray-400 mt-2">{t('relay.noTasksHint')}</p>
     </div>
   {:else}
     <div class="grid gap-4">
@@ -310,9 +310,9 @@
                   </span>
                   {task.stream_id}
                 </h2>
-                <p class="text-sm text-gray-500 mt-1">Target: {task.target_url}</p>
+                <p class="text-sm text-gray-500 mt-1">{t('relay.target')}{task.target_url}</p>
                 {#if task.error_msg}
-                  <p class="text-sm text-error mt-1">Error: {task.error_msg}</p>
+                  <p class="text-sm text-error mt-1">{t('relay.errorLabel')}{task.error_msg}</p>
                 {/if}
               </div>
               <div class="flex gap-2">
@@ -321,14 +321,14 @@
                     class="btn btn-sm btn-success"
                     onclick={() => handleStartTask(task.id)}
                   >
-                    Start
+                    {t('relay.start')}
                   </button>
                 {:else if task.status === 'running'}
                   <button 
                     class="btn btn-sm btn-warning"
                     onclick={() => handleStopTask(task.id)}
                   >
-                    Stop
+                    {t('relay.stop')}
                   </button>
                 {/if}
                 <button 
@@ -336,60 +336,60 @@
                   onclick={() => loadTaskStats(task.id)}
                   disabled={statsLoading.get(task.id)}
                 >
-                  {statsLoading.get(task.id) ? 'Loading...' : 'Stats'}
+                  {statsLoading.get(task.id) ? t('common.loading') : t('relay.stats')}
                 </button>
                 <button 
                   class="btn btn-sm btn-error"
                   onclick={() => handleDeleteTask(task.id)}
                 >
-                  Delete
+                  {t('relay.delete')}
                 </button>
               </div>
             </div>
 
             <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4 text-sm">
               <div>
-                <span class="text-gray-500">Created</span>
+                <span class="text-gray-500">{t('relay.created')}</span>
                 <p>{formatDate(task.created_at)}</p>
               </div>
               <div>
-                <span class="text-gray-500">Started</span>
+                <span class="text-gray-500">{t('relay.started')}</span>
                 <p>{formatDate(task.started_at)}</p>
               </div>
               <div>
-                <span class="text-gray-500">Stopped</span>
+                <span class="text-gray-500">{t('relay.stopped')}</span>
                 <p>{formatDate(task.stopped_at)}</p>
               </div>
               <div>
-                <span class="text-gray-500">Duration</span>
+                <span class="text-gray-500">{t('relay.duration')}</span>
                 <p>{task.started_at ? formatDuration((new Date(task.stopped_at || Date.now()).getTime() - new Date(task.started_at).getTime()) / 1000) : '-'}</p>
               </div>
             </div>
 
             {#if taskStats.has(task.id)}
               {@const stats = taskStats.get(task.id)}
-              <div class="divider">Real-time Statistics</div>
+              <div class="divider">{t('relay.realtimeStats')}</div>
               <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                 <div>
-                  <span class="text-gray-500">Video FPS</span>
+                  <span class="text-gray-500">{t('relay.videoFps')}</span>
                   <p>{stats?.video_fps?.toFixed(1) || '-'}</p>
                 </div>
                 <div>
-                  <span class="text-gray-500">Video Bitrate</span>
+                  <span class="text-gray-500">{t('relay.videoBitrate')}</span>
                   <p>{stats?.video_bitrate ? formatBitrate(stats.video_bitrate) : '-'}</p>
                 </div>
                 <div>
-                  <span class="text-gray-500">Audio FPS</span>
+                  <span class="text-gray-500">{t('relay.audioFps')}</span>
                   <p>{stats?.audio_fps?.toFixed(1) || '-'}</p>
                 </div>
                 <div>
-                  <span class="text-gray-500">Audio Bitrate</span>
+                  <span class="text-gray-500">{t('relay.audioBitrate')}</span>
                   <p>{stats?.audio_bitrate ? formatBitrate(stats.audio_bitrate) : '-'}</p>
                 </div>
               </div>
             {/if}
 
-            <div class="divider">History Statistics</div>
+            <div class="divider">{t('relay.historyStats')}</div>
             <div class="flex gap-2 mb-4">
               <button 
                 class="btn btn-sm {selectedDuration.get(task.id) === 15 ? 'btn-primary' : 'btn-outline'}"
@@ -438,7 +438,7 @@
               </div>
             {:else}
               <div class="text-center py-8 text-gray-500">
-                No history data available. Click a time range button to load statistics.
+                {t('relay.historyEmpty')}
               </div>
             {/if}
           </div>
@@ -449,50 +449,48 @@
 </div>
 
 {#if showCreateDialog}
-  <div class="modal modal-open">
-    <div class="modal-box">
-      <h3 class="font-bold text-lg">Create Relay Task</h3>
+  <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" role="dialog">
+    <div class="card max-w-md w-full p-6">
+      <h3 class="text-lg font-semibold th-text-primary mb-4">{t('relay.createTitle')}</h3>
       
-      <div class="form-control w-full mt-4">
-        <label class="label">
-          <span class="label-text">Source Stream</span>
-        </label>
+      <div class="mb-4">
+        <label for="relay-stream" class="input-label">{t('relay.sourceStream')}</label>
         <select 
-          class="select select-bordered w-full"
+          id="relay-stream"
+          class="input mt-1"
           bind:value={newTaskStreamID}
         >
-          <option value="">Select a stream</option>
+          <option value="">{t('relay.selectStream')}</option>
           {#each streams as stream}
             <option value={stream.stream_id}>{stream.stream_id}</option>
           {/each}
         </select>
       </div>
 
-      <div class="form-control w-full mt-4">
-        <label class="label">
-          <span class="label-text">Target RTMP URL</span>
-        </label>
+      <div class="mb-6">
+        <label for="relay-target" class="input-label">{t('relay.targetUrl')}</label>
         <input 
+          id="relay-target"
           type="text" 
-          placeholder="rtmp://live.example.com/stream/key" 
-          class="input input-bordered w-full"
+          placeholder={t('relay.targetPlaceholder')} 
+          class="input mt-1"
           bind:value={newTaskTargetURL}
         />
       </div>
 
-      <div class="modal-action">
+      <div class="flex gap-3 justify-end">
         <button 
-          class="btn"
+          class="btn btn-secondary"
           onclick={() => showCreateDialog = false}
         >
-          Cancel
+          {t('relay.cancel')}
         </button>
         <button 
           class="btn btn-primary"
           onclick={handleCreateTask}
           disabled={creating || !newTaskStreamID || !newTaskTargetURL}
         >
-          {creating ? 'Creating...' : 'Create'}
+          {creating ? t('relay.creating') : t('common.confirm')}
         </button>
       </div>
     </div>

@@ -31,6 +31,8 @@ type CustomizePubSessionContext struct {
 	dumpFile   *base.DumpFile
 
 	disposeFlag nazaatomic.Bool
+
+	sessionStat base.BasicSessionStat
 }
 
 func NewCustomizePubSessionContext(streamName string) *CustomizePubSessionContext {
@@ -39,6 +41,7 @@ func NewCustomizePubSessionContext(streamName string) *CustomizePubSessionContex
 		streamName: streamName,
 		remuxer:    remux.NewAvPacket2RtmpRemuxer(),
 	}
+	s.sessionStat = base.NewBasicSessionStat(base.SessionTypeCustomizePub, "")
 	nazalog.Infof("[%s] NewCustomizePubSessionContext.", s.uniqueKey)
 	return s
 }
@@ -67,9 +70,35 @@ func (ctx *CustomizePubSessionContext) StreamName() string {
 	return ctx.streamName
 }
 
+func (ctx *CustomizePubSessionContext) Url() string {
+	return ""
+}
+
+func (ctx *CustomizePubSessionContext) AppName() string {
+	return ""
+}
+
+func (ctx *CustomizePubSessionContext) RawQuery() string {
+	return ""
+}
+
 func (ctx *CustomizePubSessionContext) Dispose() {
 	nazalog.Infof("[%s] CustomizePubSessionContext::Dispose.", ctx.uniqueKey)
 	ctx.disposeFlag.Store(true)
+}
+
+// ----- ISessionStat -----------------------------------------------------------------------------------------------
+
+func (ctx *CustomizePubSessionContext) UpdateStat(intervalSec uint32) {
+	ctx.sessionStat.UpdateStat(intervalSec)
+}
+
+func (ctx *CustomizePubSessionContext) GetStat() base.StatSession {
+	return ctx.sessionStat.GetStat()
+}
+
+func (ctx *CustomizePubSessionContext) IsAlive() (readAlive, writeAlive bool) {
+	return ctx.sessionStat.IsAlive()
 }
 
 // -----implement of base.IAvPacketStream ------------------------------------------------------------------------------
@@ -87,6 +116,7 @@ func (ctx *CustomizePubSessionContext) FeedAudioSpecificConfig(asc []byte) error
 	if ctx.dumpFile != nil {
 		_ = ctx.dumpFile.WriteWithType(asc, base.DumpTypeCustomizePubAudioSpecificConfigData)
 	}
+	ctx.sessionStat.AddReadBytes(len(asc))
 	ctx.remuxer.InitWithAvConfig(asc, nil, nil, nil)
 	return nil
 }
@@ -100,6 +130,7 @@ func (ctx *CustomizePubSessionContext) FeedAvPacket(packet base.AvPacket) error 
 	if ctx.dumpFile != nil {
 		_ = ctx.dumpFile.WriteAvPacket(packet, base.DumpTypeCustomizePubData)
 	}
+	ctx.sessionStat.AddReadBytes(len(packet.Payload))
 	ctx.remuxer.FeedAvPacket(packet)
 	return nil
 }

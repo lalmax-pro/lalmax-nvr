@@ -114,6 +114,8 @@ type SessionInfo struct {
 	BitrateKbits      int
 	ReadBitrateKbits  int
 	WriteBitrateKbits int
+	ReadBytesSum      uint64
+	WroteBytesSum     uint64
 }
 
 type PlayURLRequest struct {

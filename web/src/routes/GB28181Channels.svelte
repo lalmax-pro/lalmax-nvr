@@ -508,8 +508,8 @@
                         <td class="px-3 py-2 font-mono text-xs th-text-muted">{ch.channel_id}</td>
                         <td class="px-3 py-2">
                           <span class="flex items-center gap-1.5">
-                            <span class="w-1.5 h-1.5 rounded-full {ch.status === 'ON' ? 'bg-green-500' : 'bg-gray-500'}"></span>
-                            <span class="th-text-secondary text-xs">{ch.status === 'ON' ? t('gbCatalog.online') : t('gbCatalog.offline')}</span>
+                            <span class="w-1.5 h-1.5 rounded-full {ch.status === 'ON' || ch.status === 'online' ? 'bg-green-500' : 'bg-gray-500'}"></span>
+                            <span class="th-text-secondary text-xs">{ch.status === 'ON' || ch.status === 'online' ? t('gbCatalog.online') : t('gbCatalog.offline')}</span>
                           </span>
                         </td>
                       </tr>

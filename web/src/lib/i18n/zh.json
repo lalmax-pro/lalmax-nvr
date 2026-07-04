@@ -1371,5 +1371,12 @@
   "relay.createFailed": "创建任务失败",
   "relay.deleteFailed": "删除任务失败",
   "relay.startFailed": "启动任务失败",
-  "relay.stopFailed": "停止任务失败"
+  "relay.stopFailed": "停止任务失败",
+  "relay.createTitle": "创建转推任务",
+  "relay.target": "目标：",
+  "relay.errorLabel": "错误：",
+  "relay.realtimeStats": "实时统计",
+  "relay.historyStats": "历史统计",
+  "relay.historyEmpty": "暂无历史数据，点击时间范围按钮加载统计。",
+  "relay.chartTitle": "流统计历史"
 }

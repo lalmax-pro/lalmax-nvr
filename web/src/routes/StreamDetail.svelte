@@ -109,12 +109,27 @@
     const current = stream as StreamInfo & Record<string, unknown>;
     const incoming = next as StreamInfo & Record<string, unknown>;
 
+    // Preserve play_urls reference if contents are identical to avoid
+    // triggering unnecessary player re-renders via the {#key} block.
+    const currentPlayUrls = current.play_urls;
+    const incomingPlayUrls = incoming.play_urls;
+    delete current.play_urls;
+    delete incoming.play_urls;
+
     for (const key of Object.keys(current)) {
       if (!(key in incoming)) {
         delete current[key];
       }
     }
     Object.assign(current, incoming);
+
+    // Restore play_urls: keep old reference if JSON content is the same.
+    if (currentPlayUrls && incomingPlayUrls &&
+        JSON.stringify(currentPlayUrls) === JSON.stringify(incomingPlayUrls)) {
+      current.play_urls = currentPlayUrls;
+    } else {
+      current.play_urls = incomingPlayUrls;
+    }
   }
 
   async function loadStream() {
@@ -269,8 +284,17 @@
     }
   }
 
+  // Track whether the stream was ever seen as active to prevent the player
+  // from flickering when polling briefly returns active=false (common with
+  // GB28181 streams where the lal engine may not report the pub session).
+  let everActive = $state(false);
+  $effect(() => {
+    if (stream && (stream.active || stream.gb28181_playing)) {
+      everActive = true;
+    }
+  });
   let canPlay = $derived(
-    !!stream && (stream.active || stream.gb28181_playing) && getAvailableProtocols().length > 0
+    !!stream && everActive && getAvailableProtocols().length > 0
   );
 
   function formatTime(value?: string): string {

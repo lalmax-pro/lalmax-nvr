@@ -463,8 +463,11 @@ type sessionPayload struct {
 	BitrateKbits      int    `json:"bitrate_kbits"`
 	ReadBitrateKbits  int    `json:"read_bitrate_kbits"`
 	WriteBitrateKbits int    `json:"write_bitrate_kbits"`
+	ReadBytesSum      uint64 `json:"read_bytes_sum"`
+	WroteBytesSum     uint64 `json:"wrote_bytes_sum"`
 }
 
+// rtpPubPayload is used for the start_rtp_pub API response.
 type rtpPubPayload struct {
 	ID        string `json:"id"`
 	SessionID string `json:"session_id"`
@@ -532,6 +535,8 @@ func sessionInfoFromPayload(payload sessionPayload, fallbackProtocol string) *Se
 		BitrateKbits:      payload.BitrateKbits,
 		ReadBitrateKbits:  payload.ReadBitrateKbits,
 		WriteBitrateKbits: payload.WriteBitrateKbits,
+		ReadBytesSum:      payload.ReadBytesSum,
+		WroteBytesSum:     payload.WroteBytesSum,
 	}
 }
 

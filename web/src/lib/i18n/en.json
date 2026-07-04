@@ -1373,5 +1373,12 @@
   "relay.createFailed": "Failed to create task",
   "relay.deleteFailed": "Failed to delete task",
   "relay.startFailed": "Failed to start task",
-  "relay.stopFailed": "Failed to stop task"
+  "relay.stopFailed": "Failed to stop task",
+  "relay.createTitle": "Create Relay Task",
+  "relay.target": "Target: ",
+  "relay.errorLabel": "Error: ",
+  "relay.realtimeStats": "Real-time Statistics",
+  "relay.historyStats": "History Statistics",
+  "relay.historyEmpty": "No history data available. Click a time range button to load statistics.",
+  "relay.chartTitle": "Stream Statistics History"
 }

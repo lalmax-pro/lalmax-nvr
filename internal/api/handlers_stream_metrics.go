@@ -29,6 +29,12 @@ type streamRing struct {
 	lastSeen int64 // Unix seconds of most recent sample (for TTL eviction)
 }
 
+// prevBytes tracks the previous ReadBytesSum for bitrate calculation.
+type prevBytes struct {
+	read  uint64
+	write uint64
+}
+
 func (r *streamRing) append(s model.StreamMetricSample) {
 	r.samples[r.head] = s
 	r.head = (r.head + 1) % streamMetricCap
@@ -58,10 +64,14 @@ func (r *streamRing) since(cutoff int64) []model.StreamMetricSample {
 type streamMetricsHistory struct {
 	mu      sync.RWMutex
 	streams map[string]*streamRing
+	prevMap map[string]*prevBytes // track previous bytes for bitrate calculation
 }
 
 func newStreamMetricsHistory() *streamMetricsHistory {
-	return &streamMetricsHistory{streams: make(map[string]*streamRing)}
+	return &streamMetricsHistory{
+		streams: make(map[string]*streamRing),
+		prevMap: make(map[string]*prevBytes),
+	}
 }
 
 // record appends a sample for the given stream, creating its ring on first sight.
@@ -130,12 +140,48 @@ func (h *Handler) sampleStreamMetrics(ctx context.Context) {
 
 	now := time.Now().Unix()
 	for _, s := range streams {
-		if !s.Active {
+		isActive := s.Active
+		if !isActive && h.gb28181Svr != nil {
+			isActive = h.gb28181Svr.IsStreamPlaying(s.StreamID)
+		}
+		if !isActive {
 			continue
 		}
 		bitrate := 0
+		totalReadBytes := uint64(0)
 		if s.Publisher != nil {
 			bitrate = s.Publisher.BitrateKbits
+			totalReadBytes = s.Publisher.ReadBytesSum
+			if bitrate == 0 {
+				bitrate = s.Publisher.ReadBitrateKbits
+			}
+		}
+		// Fall back to max subscriber bitrate.
+		if bitrate == 0 {
+			for _, sub := range s.Subscribers {
+				br := sub.ReadBitrateKbits
+				if br == 0 {
+					br = sub.WriteBitrateKbits
+				}
+				if br > bitrate {
+					bitrate = br
+				}
+				if sub.ReadBytesSum > totalReadBytes {
+					totalReadBytes = sub.ReadBytesSum
+				}
+			}
+		}
+		// If lal reports 0 bitrate but we have bytes, calculate from delta.
+		if bitrate == 0 && totalReadBytes > 0 {
+			h.streamMetrics.mu.Lock()
+			prev, ok := h.streamMetrics.prevMap[s.StreamID]
+			if ok && totalReadBytes > prev.read {
+				deltaBytes := totalReadBytes - prev.read
+				// streamMetricInterval is 5s → bitrate in kbps
+				bitrate = int(deltaBytes * 8 / 1024 / uint64(streamMetricInterval/time.Second))
+			}
+			h.streamMetrics.prevMap[s.StreamID] = &prevBytes{read: totalReadBytes}
+			h.streamMetrics.mu.Unlock()
 		}
 		h.streamMetrics.record(s.StreamID, model.StreamMetricSample{
 			Timestamp:    now,

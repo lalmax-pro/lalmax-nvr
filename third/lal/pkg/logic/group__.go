@@ -280,6 +280,8 @@ func (group *Group) GetStat(maxsub int) base.StatGroup {
 		group.stat.StatPub = base.Session2StatPub(group.rtspPubSession)
 	} else if group.psPubSession != nil {
 		group.stat.StatPub = base.Session2StatPub(group.psPubSession)
+	} else if group.customizePubSession != nil {
+		group.stat.StatPub = base.Session2StatPub(group.customizePubSession)
 	} else {
 		group.stat.StatPub = base.StatPub{}
 	}
@@ -512,6 +514,9 @@ func (group *Group) updateAllSessionStat() {
 	}
 	if group.psPubSession != nil {
 		group.psPubSession.UpdateStat(calcSessionStatIntervalSec)
+	}
+	if group.customizePubSession != nil {
+		group.customizePubSession.UpdateStat(calcSessionStatIntervalSec)
 	}
 
 	group.updatePullSessionStat()
