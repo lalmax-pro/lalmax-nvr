@@ -344,12 +344,18 @@
                   <td class="px-4 py-3">
                     <div class="flex items-center gap-3">
                       {#if event.image_url}
-                        <img 
-                          src={event.image_url} 
-                          alt="" 
-                          class="h-12 w-16 object-cover rounded border th-border cursor-pointer hover:opacity-80 transition-opacity" 
+                        <button 
+                          type="button"
+                          class="h-12 w-16 object-cover rounded border th-border cursor-pointer hover:opacity-80 transition-opacity p-0 border-0 bg-transparent"
                           onclick={() => selectedImage = event.image_url}
-                        />
+                          aria-label="查看检测图片"
+                        >
+                          <img 
+                            src={event.image_url} 
+                            alt="AI检测结果图片" 
+                            class="h-full w-full object-cover rounded"
+                          />
+                        </button>
                       {/if}
                       <div class="flex flex-wrap gap-1">
                         {#each event.detections as det}
@@ -486,8 +492,10 @@
 
   <!-- Image Modal -->
   {#if selectedImage}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div 
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+      role="presentation"
       onclick={() => selectedImage = null}
     >
       <div class="relative max-w-4xl max-h-[90vh]">
