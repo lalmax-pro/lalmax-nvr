@@ -130,3 +130,28 @@ jobs:
         with:
           name: lalmax-nvr-${{ matrix.suffix }}
           path: lalmax-nvr-${{ matrix.suffix }}${{ matrix.ext }}
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build-binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          append_body: true
+          files: |
+            artifacts/lalmax-nvr-linux-amd64/lalmax-nvr-linux-amd64
+            artifacts/lalmax-nvr-linux-arm64/lalmax-nvr-linux-arm64
+            artifacts/lalmax-nvr-linux-armv7/lalmax-nvr-linux-armv7
+            artifacts/lalmax-nvr-windows-amd64/lalmax-nvr-windows-amd64.exe
+            artifacts/lalmax-nvr-darwin-amd64/lalmax-nvr-darwin-amd64
+            artifacts/lalmax-nvr-darwin-arm64/lalmax-nvr-darwin-arm64
