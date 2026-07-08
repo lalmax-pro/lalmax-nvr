@@ -1,4 +1,4 @@
-﻿package media
+package media
 
 import (
 	"bufio"
@@ -17,7 +17,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 )
 
-// lal ErrorCodeGroupNotFound 鈥?group not in lalmax yet (e.g. GB28181 RTP port open, no packets).
+// lal ErrorCodeGroupNotFound — group not in lalmax yet (e.g. GB28181 RTP port open, no packets).
 const lalErrorCodeGroupNotFound = 1001
 
 type LalmaxHTTPConfig struct {

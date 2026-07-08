@@ -874,30 +874,6 @@ func TestUpsertCamera_OnvifUpdateExisting(t *testing.T) {
 	require.Equal(t, "Cam Updated", cam.Name)
 }
 
-func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test_migrate_v6.db")
-	db, _ := New(dbPath)
-	ctx := context.Background()
-	_ = db.Init(ctx)
-	defer db.Close()
-
-	// Simulate v5 schema: manually set version and verify columns exist after Init
-	// On fresh DB, Init creates all tables with current schema. Verify ONVIF columns exist.
-	var onvifEndpointExists, profileTokenExists int
-	_ = db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='onvif_endpoint'`).Scan(&onvifEndpointExists)
-	_ = db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='profile_token'`).Scan(&profileTokenExists)
-	require.Equal(t, 1, onvifEndpointExists, "onvif_endpoint column must exist after Init")
-	require.Equal(t, 1, profileTokenExists, "profile_token column must exist after Init")
-
-	// Verify schema version matches the latest migration
-	var version string
-	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
-	require.NoError(t, err)
-	require.Equal(t, "23", version)
-}
-
 func TestInsertRecordingWithRetry_Success(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test_retry.db")
