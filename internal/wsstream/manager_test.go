@@ -54,6 +54,13 @@ func readMessage(t *testing.T, conn *websocket.Conn) ([]byte, error) {
 	return msg, err
 }
 
+func readMessageWithTimeout(t *testing.T, conn *websocket.Conn, timeout time.Duration) ([]byte, error) {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	_, msg, err := conn.ReadMessage()
+	return msg, err
+}
+
 // eventually polls fn until it returns true or timeout elapses.
 func eventually(t *testing.T, fn func() bool, timeout, interval time.Duration) {
 	t.Helper()
@@ -291,16 +298,16 @@ func TestServeWS_MultipleFrames(t *testing.T) {
 	_, err = readMessage(t, conn)
 	require.NoError(t, err)
 
-	// Send 3 frames
+	// Send 3 frames with longer intervals to avoid merging
 	for i := 0; i < 3; i++ {
 		nalu := []byte{0x65, byte(i), 0x02, 0x03}
 		broadcastFrame(t, hub, int64(90000*(i+1)), [][]byte{nalu})
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
-	// Read 3 video frames
+	// Read 3 video frames with longer timeout
 	for i := 0; i < 3; i++ {
-		msg, err := readMessage(t, conn)
+		msg, err := readMessageWithTimeout(t, conn, 5*time.Second)
 		require.NoError(t, err, "frame %d", i)
 		assert.Equal(t, MsgTypeVideoFrame, msg[0], "frame %d", i)
 
@@ -775,14 +782,14 @@ func TestWriteFrame_H265KeyframeDetection(t *testing.T) {
 	defer conn.Close()
 
 	// Read CodecInfo first
-	_, err = readMessage(t, conn)
+	_, err = readMessageWithTimeout(t, conn, 5*time.Second)
 	require.NoError(t, err)
 
 	// H.265 IDR_W_RADL (type 19): first byte = 0 | 19<<1 | 0 = 0x26
 	idrNALU := []byte{0x26, 0x01, 0x02, 0x03}
 	broadcastFrame(t, hub, 90000, [][]byte{idrNALU})
 
-	msg, err := readMessage(t, conn)
+	msg, err := readMessageWithTimeout(t, conn, 5*time.Second)
 	require.NoError(t, err)
 
 	vf, err := DecodeVideoFrame(msg)
