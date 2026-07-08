@@ -23,6 +23,12 @@ func ValidatePath(baseDir, targetPath string) (string, error) {
 		return "", fmt.Errorf("pathutil: failed to resolve base directory %q: %w", baseDir, err)
 	}
 
+	// Resolve symlinks in baseDir first for consistent comparison
+	baseEval, baseErr := filepath.EvalSymlinks(baseDirAbs)
+	if baseErr == nil {
+		baseDirAbs = baseEval
+	}
+
 	// If targetPath is already absolute, use it directly; otherwise join with baseDir.
 	var resolvedPath string
 	if filepath.IsAbs(targetPath) {
@@ -39,10 +45,6 @@ func ValidatePath(baseDir, targetPath string) (string, error) {
 
 	// If EvalSymlinks fails (e.g., path doesn't exist), fall through to
 	// the containment check on the non-resolved path.
-	baseEval, baseErr := filepath.EvalSymlinks(baseDirAbs)
-	if baseErr == nil {
-		baseDirAbs = baseEval
-	}
 	pathEval, pathErr := filepath.EvalSymlinks(absPath)
 	if pathErr == nil {
 		absPath = pathEval

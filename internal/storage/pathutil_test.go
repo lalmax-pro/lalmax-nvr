@@ -11,8 +11,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// resolvePath resolves symlinks in the path for consistent comparison on macOS
+func resolvePath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	return resolved
+}
+
 func TestValidatePath_ValidRelative(t *testing.T) {
 	tmpDir := t.TempDir()
+	tmpDir = resolvePath(t, tmpDir)
 
 	path, err := ValidatePath(tmpDir, "cam01/video.mp4")
 	require.NoError(t, err)
@@ -21,6 +32,7 @@ func TestValidatePath_ValidRelative(t *testing.T) {
 
 func TestValidatePath_ValidAbsolute(t *testing.T) {
 	tmpDir := t.TempDir()
+	tmpDir = resolvePath(t, tmpDir)
 	subDir := filepath.Join(tmpDir, "cam01")
 	require.NoError(t, os.MkdirAll(subDir, 0755))
 
@@ -31,6 +43,7 @@ func TestValidatePath_ValidAbsolute(t *testing.T) {
 
 func TestValidatePath_ValidRoot(t *testing.T) {
 	tmpDir := t.TempDir()
+	tmpDir = resolvePath(t, tmpDir)
 
 	path, err := ValidatePath(tmpDir, ".")
 	require.NoError(t, err)
@@ -39,6 +52,7 @@ func TestValidatePath_ValidRoot(t *testing.T) {
 
 func TestValidatePath_ValidEmptyString(t *testing.T) {
 	tmpDir := t.TempDir()
+	tmpDir = resolvePath(t, tmpDir)
 
 	path, err := ValidatePath(tmpDir, "")
 	require.NoError(t, err)
@@ -95,6 +109,7 @@ func TestValidatePath_TraversalWindowsBackslash(t *testing.T) {
 
 func TestValidatePath_SymlinkNoTraversal(t *testing.T) {
 	tmpDir := t.TempDir()
+	tmpDir = resolvePath(t, tmpDir)
 	realDir := filepath.Join(tmpDir, "real")
 	linkDir := filepath.Join(tmpDir, "link")
 	require.NoError(t, os.MkdirAll(realDir, 0755))
@@ -111,6 +126,7 @@ func TestValidatePath_SymlinkNoTraversal(t *testing.T) {
 // Test that deeply nested valid paths still resolve correctly
 func TestValidatePath_DeepNesting(t *testing.T) {
 	tmpDir := t.TempDir()
+	tmpDir = resolvePath(t, tmpDir)
 	deepDir := filepath.Join(tmpDir, "a", "b", "c", "d")
 	require.NoError(t, os.MkdirAll(deepDir, 0755))
 
@@ -122,6 +138,7 @@ func TestValidatePath_DeepNesting(t *testing.T) {
 // Test that an actual symlink to outside the root is blocked (if the caller resolves it)
 func TestValidatePath_RelativePathWithDotDot(t *testing.T) {
 	tmpDir := t.TempDir()
+	tmpDir = resolvePath(t, tmpDir)
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "sub"), 0755))
 
 	// Valid path that uses .. within bounds
