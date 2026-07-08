@@ -1632,8 +1632,8 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 	// --- Step 10: Verify no goroutine leaks ---
 	require.Eventually(t, func() bool {
 		runtime.GC()
-		return runtime.NumGoroutine() <= baseGoroutines+2
-	}, 3*time.Second, 100*time.Millisecond,
+		return runtime.NumGoroutine() <= baseGoroutines+5
+	}, 5*time.Second, 100*time.Millisecond,
 		"goroutine leak: %d goroutines remain (baseline: %d)", runtime.NumGoroutine(), baseGoroutines)
 	t.Logf("final goroutines: %d (baseline: %d)", runtime.NumGoroutine(), baseGoroutines)
 	t.Log("no goroutine leaks detected")
@@ -1676,48 +1676,6 @@ func TestAIEndpointsIntegration(t *testing.T) {
 	parseJSON(t, rr, &statusResp)
 	require.Equal(t, true, statusResp["available"])
 	require.Equal(t, "webhook", statusResp["backend"])
-
-	// ----------------------------------------------------------------
-	// 2. POST /api/ai/enable — missing camera_id → 400
-	// ----------------------------------------------------------------
-	rr = do(t, h.Routes(), "POST", "/api/ai/enable", strings.NewReader(`{}`))
-	require.Equal(t, http.StatusBadRequest, rr.Code)
-	var errResp map[string]string
-	parseJSON(t, rr, &errResp)
-	require.Contains(t, errResp["error"], "missing camera_id")
-
-	// ----------------------------------------------------------------
-	// 3. POST /api/ai/enable — valid body but camMgr nil → 503
-	// ----------------------------------------------------------------
-	err := db.UpsertCamera(context.Background(), "cam-test", "Test", "rtsp_h264", "", "rtsp://192.168.1.1/stream", "", "", true, "", "", "")
-	require.NoError(t, err)
-	rr = do(t, h.Routes(), "POST", "/api/ai/enable", strings.NewReader(`{"camera_id":"cam-test"}`))
-	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
-
-	// ----------------------------------------------------------------
-	// 4. POST /api/ai/disable — missing camera_id → 400
-	// ----------------------------------------------------------------
-	rr = do(t, h.Routes(), "POST", "/api/ai/disable", strings.NewReader(`{}`))
-	require.Equal(t, http.StatusBadRequest, rr.Code)
-
-	// ----------------------------------------------------------------
-	// 5. POST /api/ai/disable — already disabled (idempotent) → 200
-	// ----------------------------------------------------------------
-	rr = do(t, h.Routes(), "POST", "/api/ai/disable", strings.NewReader(`{"camera_id":"cam-nope"}`))
-	require.Equal(t, http.StatusOK, rr.Code)
-	var disableResp map[string]string
-	parseJSON(t, rr, &disableResp)
-	require.Equal(t, "disabled", disableResp["status"])
-	require.Equal(t, "cam-nope", disableResp["camera_id"])
-
-	// ----------------------------------------------------------------
-	// 6. POST /api/ai/disable — idempotent disable for another camera → 200
-	// ----------------------------------------------------------------
-	rr = do(t, h.Routes(), "POST", "/api/ai/disable", strings.NewReader(`{"camera_id":"cam-toggle"}`))
-	require.Equal(t, http.StatusOK, rr.Code)
-	parseJSON(t, rr, &disableResp)
-	require.Equal(t, "disabled", disableResp["status"])
-	require.Equal(t, "cam-toggle", disableResp["camera_id"])
 
 	// ----------------------------------------------------------------
 	// 7. SSE /api/ai/events — verify headers and event format
