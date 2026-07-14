@@ -143,11 +143,34 @@ jobs:
             -o lalmax-nvr-${{ matrix.suffix }}${{ matrix.ext }} \
             ./cmd/lalmax-nvr/
 
+      - name: Package release (unix)
+        if: matrix.goos != 'windows'
+        run: |
+          mkdir -p lalmax-nvr-${{ matrix.suffix }}
+          cp lalmax-nvr-${{ matrix.suffix }} lalmax-nvr-${{ matrix.suffix }}/
+          cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}/
+          cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}/
+          cp -r scripts/unix lalmax-nvr-${{ matrix.suffix }}/scripts
+          tar czf lalmax-nvr-${{ matrix.suffix }}.tar.gz lalmax-nvr-${{ matrix.suffix }}
+
+      - name: Package release (windows)
+        if: matrix.goos == 'windows'
+        run: |
+          mkdir -p lalmax-nvr-${{ matrix.suffix }}
+          cp lalmax-nvr-${{ matrix.suffix }}.exe lalmax-nvr-${{ matrix.suffix }}/
+          cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}/
+          cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}/
+          cp -r scripts/windows lalmax-nvr-${{ matrix.suffix }}/scripts
+          zip -r lalmax-nvr-${{ matrix.suffix }}.zip lalmax-nvr-${{ matrix.suffix }}
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4.2.0
         with:
           name: lalmax-nvr-${{ matrix.suffix }}
-          path: lalmax-nvr-${{ matrix.suffix }}${{ matrix.ext }}
+          path: |
+            lalmax-nvr-${{ matrix.suffix }}.tar.gz
+            lalmax-nvr-${{ matrix.suffix }}.zip
+            lalmax-nvr-${{ matrix.suffix }}${{ matrix.ext }}
 
   release:
     runs-on: ubuntu-latest
@@ -167,12 +190,12 @@ jobs:
           generate_release_notes: true
           append_body: true
           files: |
-            artifacts/lalmax-nvr-linux-amd64/lalmax-nvr-linux-amd64
-            artifacts/lalmax-nvr-linux-arm64/lalmax-nvr-linux-arm64
-            artifacts/lalmax-nvr-linux-armv7/lalmax-nvr-linux-armv7
-            artifacts/lalmax-nvr-windows-amd64/lalmax-nvr-windows-amd64.exe
-            artifacts/lalmax-nvr-darwin-amd64/lalmax-nvr-darwin-amd64
-            artifacts/lalmax-nvr-darwin-arm64/lalmax-nvr-darwin-arm64
+            artifacts/lalmax-nvr-linux-amd64/lalmax-nvr-linux-amd64.tar.gz
+            artifacts/lalmax-nvr-linux-arm64/lalmax-nvr-linux-arm64.tar.gz
+            artifacts/lalmax-nvr-linux-armv7/lalmax-nvr-linux-armv7.tar.gz
+            artifacts/lalmax-nvr-windows-amd64/lalmax-nvr-windows-amd64.zip
+            artifacts/lalmax-nvr-darwin-amd64/lalmax-nvr-darwin-amd64.tar.gz
+            artifacts/lalmax-nvr-darwin-arm64/lalmax-nvr-darwin-arm64.tar.gz
 
   docker:
     runs-on: ubuntu-latest
