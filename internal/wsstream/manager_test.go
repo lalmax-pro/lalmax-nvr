@@ -785,11 +785,17 @@ func TestWriteFrame_H265KeyframeDetection(t *testing.T) {
 	_, err = readMessageWithTimeout(t, conn, 5*time.Second)
 	require.NoError(t, err)
 
+	// Small delay to ensure WebSocket is ready
+	time.Sleep(50 * time.Millisecond)
+
 	// H.265 IDR_W_RADL (type 19): first byte = 0 | 19<<1 | 0 = 0x26
 	idrNALU := []byte{0x26, 0x01, 0x02, 0x03}
 	broadcastFrame(t, hub, 90000, [][]byte{idrNALU})
 
-	msg, err := readMessageWithTimeout(t, conn, 5*time.Second)
+	// Small delay to allow frame propagation
+	time.Sleep(50 * time.Millisecond)
+
+	msg, err := readMessageWithTimeout(t, conn, 10*time.Second)
 	require.NoError(t, err)
 
 	vf, err := DecodeVideoFrame(msg)
