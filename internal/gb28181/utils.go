@@ -22,6 +22,10 @@ func randInt(min, max int) int {
 	return rand.Intn(max-min+1) + min
 }
 
+func randInt64(min, max int64) int64 {
+	return rand.Int63n(max-min+1) + min
+}
+
 func xmlUnmarshal(data []byte, v interface{}) error {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {

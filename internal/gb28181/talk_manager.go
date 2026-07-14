@@ -71,7 +71,7 @@ func (tm *TalkManager) StartTalk(deviceID, channelID string, mode TransportMode,
 	}
 
 	// 生成 SSRC
-	session.SSRC = fmt.Sprintf("%010d", randInt(1000000000, 9999999999))
+	session.SSRC = fmt.Sprintf("%010d", randInt64(1000000000, 9999999999))
 
 	// 存储会话（原子性检查并插入，防止竞态条件）
 	tm.mu.Lock()
