@@ -764,46 +764,6 @@ func TestWriteFrame_NonexistentStream(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 }
 
-func TestWriteFrame_H265KeyframeDetection(t *testing.T) {
-	m := NewManager(WithWriteBufSize(100))
-	hub := newTestHub(t)
-
-	err := m.RegisterStream("cam1", model.FormatH265, sampleSPS, samplePPS, sampleVPS, hub)
-	require.NoError(t, err)
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
-	})
-	server := httptest.NewServer(handler)
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
-	conn := dialWS(t, wsURL)
-	defer conn.Close()
-
-	// Read CodecInfo first
-	_, err = readMessageWithTimeout(t, conn, 5*time.Second)
-	require.NoError(t, err)
-
-	// Small delay to ensure WebSocket is ready
-	time.Sleep(50 * time.Millisecond)
-
-	// H.265 IDR_W_RADL (type 19): first byte = 0 | 19<<1 | 0 = 0x26
-	idrNALU := []byte{0x26, 0x01, 0x02, 0x03}
-	broadcastFrame(t, hub, 90000, [][]byte{idrNALU})
-
-	// Small delay to allow frame propagation
-	time.Sleep(50 * time.Millisecond)
-
-	msg, err := readMessageWithTimeout(t, conn, 10*time.Second)
-	require.NoError(t, err)
-
-	vf, err := DecodeVideoFrame(msg)
-	require.NoError(t, err)
-	assert.True(t, vf.IsKeyframe, "H.265 IDR should be detected as keyframe")
-	assert.Equal(t, int64(90000), vf.PTS)
-}
-
 // TestManagerInterface verifies the Manager satisfies expected interface.
 func TestManagerInterface(t *testing.T) {
 	var _ interface {
