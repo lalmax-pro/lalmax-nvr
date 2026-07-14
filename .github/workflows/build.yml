@@ -150,6 +150,7 @@ jobs:
           cp lalmax-nvr-${{ matrix.suffix }} lalmax-nvr-${{ matrix.suffix }}/
           cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}/
           cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}/
+          cp docs/QUICKSTART.md lalmax-nvr-${{ matrix.suffix }}/
           cp -r scripts/unix lalmax-nvr-${{ matrix.suffix }}/scripts
           tar czf lalmax-nvr-${{ matrix.suffix }}.tar.gz lalmax-nvr-${{ matrix.suffix }}
 
@@ -160,6 +161,7 @@ jobs:
           cp lalmax-nvr-${{ matrix.suffix }}.exe lalmax-nvr-${{ matrix.suffix }}/
           cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}/
           cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}/
+          cp docs/QUICKSTART.md lalmax-nvr-${{ matrix.suffix }}/
           cp -r scripts/windows lalmax-nvr-${{ matrix.suffix }}/scripts
           zip -r lalmax-nvr-${{ matrix.suffix }}.zip lalmax-nvr-${{ matrix.suffix }}
 
