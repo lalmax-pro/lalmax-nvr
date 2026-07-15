@@ -149,7 +149,7 @@ func TestRunOnce_Integration(t *testing.T) {
 
 	// Insert recordings old enough to pass min_age
 	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
 	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
 
@@ -200,7 +200,7 @@ func TestRunOnce_NotEnoughSegments(t *testing.T) {
 
 	// Only insert 1 recording (below MinSegmentsToMerge=2)
 	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
 
 	cfg := config.MergeConfig{
@@ -231,7 +231,7 @@ func TestRunOnce_DisabledCamera(t *testing.T) {
 	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", false, "", "", ""))
 
 	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
 	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
 
@@ -305,7 +305,7 @@ func TestStatus_AfterRunOnce(t *testing.T) {
 	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
 
 	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
 	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
 
@@ -336,7 +336,7 @@ func TestPendingCounts(t *testing.T) {
 	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
 
 	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
 	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
 
@@ -363,7 +363,7 @@ func TestPendingCounts_MergeDisabled(t *testing.T) {
 	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
 
 	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
 	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
 
@@ -392,7 +392,7 @@ func TestHotReload_PerCameraConfig(t *testing.T) {
 	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
 
 	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
 	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
 
@@ -483,7 +483,7 @@ func TestRunOnce_MJPEGIntegration(t *testing.T) {
 
 	// Insert MJPEG recordings old enough to pass min_age.
 	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	src1 := env.insertMergeableMJPEGRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second), 2, 0)
 	src2 := env.insertMergeableMJPEGRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second), 1, 2)
 
@@ -643,7 +643,7 @@ func TestRunOnce_ParseFailedMarkedAsFailed(t *testing.T) {
 	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
 
 	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	// Insert one valid + one broken (parse will fail).
 	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
 	env.insertBrokenRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
@@ -682,7 +682,7 @@ func TestRunOnce_UndersizedGroupMarkedAsFailed(t *testing.T) {
 	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
 
 	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	// Insert 2 valid H.264 segments with different SPS/PPS.
 	// With MinSegmentsToMerge=2, each SPS/PPS group has only 1 segment → undersized.
 	env.insertMergeableH264WithCustomParams(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second),
