@@ -25,6 +25,9 @@ lalmax-nvr.yaml
 /hls-temp/
 /cam-*/
 
+# Node
+node_modules/
+
 # Frontend
 web/node_modules/
 web/dist/

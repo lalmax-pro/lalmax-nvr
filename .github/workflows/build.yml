@@ -146,24 +146,24 @@ jobs:
       - name: Package release (unix)
         if: matrix.goos != 'windows'
         run: |
-          mkdir -p lalmax-nvr-${{ matrix.suffix }}
-          cp lalmax-nvr-${{ matrix.suffix }} lalmax-nvr-${{ matrix.suffix }}/
-          cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}/
-          cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}/
-          cp docs/QUICKSTART.md lalmax-nvr-${{ matrix.suffix }}/
-          cp -r scripts/unix lalmax-nvr-${{ matrix.suffix }}/scripts
-          tar czf lalmax-nvr-${{ matrix.suffix }}.tar.gz lalmax-nvr-${{ matrix.suffix }}
+          mkdir -p lalmax-nvr-${{ matrix.suffix }}-release
+          cp lalmax-nvr-${{ matrix.suffix }} lalmax-nvr-${{ matrix.suffix }}-release/
+          cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}-release/
+          cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}-release/
+          cp docs/QUICKSTART.md lalmax-nvr-${{ matrix.suffix }}-release/
+          cp -r scripts/unix lalmax-nvr-${{ matrix.suffix }}-release/scripts
+          tar czf lalmax-nvr-${{ matrix.suffix }}.tar.gz lalmax-nvr-${{ matrix.suffix }}-release
 
       - name: Package release (windows)
         if: matrix.goos == 'windows'
         run: |
-          mkdir -p lalmax-nvr-${{ matrix.suffix }}
-          cp lalmax-nvr-${{ matrix.suffix }}.exe lalmax-nvr-${{ matrix.suffix }}/
-          cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}/
-          cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}/
-          cp docs/QUICKSTART.md lalmax-nvr-${{ matrix.suffix }}/
-          cp -r scripts/windows lalmax-nvr-${{ matrix.suffix }}/scripts
-          zip -r lalmax-nvr-${{ matrix.suffix }}.zip lalmax-nvr-${{ matrix.suffix }}
+          mkdir -p lalmax-nvr-${{ matrix.suffix }}-release
+          cp lalmax-nvr-${{ matrix.suffix }}.exe lalmax-nvr-${{ matrix.suffix }}-release/
+          cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}-release/
+          cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}-release/
+          cp docs/QUICKSTART.md lalmax-nvr-${{ matrix.suffix }}-release/
+          cp -r scripts/windows lalmax-nvr-${{ matrix.suffix }}-release/scripts
+          zip -r lalmax-nvr-${{ matrix.suffix }}.zip lalmax-nvr-${{ matrix.suffix }}-release
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4.2.0
