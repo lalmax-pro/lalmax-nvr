@@ -19,6 +19,7 @@
   import DeviceGroups from './routes/DeviceGroups.svelte';
   import GB28181Channels from './routes/GB28181Channels.svelte';
   import Users from './routes/Users.svelte';
+  import OperationLogs from './routes/OperationLogs.svelte';
   import AIDetection from './routes/AIDetection.svelte';
   import Relay from './routes/Relay.svelte';
   import Header from './components/Header';
@@ -154,6 +155,10 @@
       return { route: 'users', params: {} };
     }
 
+    if (segments[0] === 'operation-logs') {
+      return { route: 'operation-logs', params: {} };
+    }
+
     if (segments[0] === 'ai' || segments[0] === 'ai-detection') {
       return { route: 'ai-detection', params: {} };
     }
@@ -268,6 +273,8 @@
         <GB28181Channels />
       {:else if currentRoute === 'users'}
         <Users />
+      {:else if currentRoute === 'operation-logs'}
+        <OperationLogs />
       {:else if currentRoute === 'ai-detection'}
         <AIDetection />
       {:else if currentRoute === 'relay'}

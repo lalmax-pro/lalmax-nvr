@@ -140,6 +140,7 @@ func (h *Handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create user: %v", err))
 		return
 	}
+	h.logOperation(r, "user.create", "user", strconv.FormatInt(u.ID, 10), "success", "user created", map[string]any{"role": u.Role})
 
 	writeJSON(w, http.StatusCreated, toUserResponse(u))
 }
@@ -201,6 +202,7 @@ func (h *Handler) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update user: %v", err))
 		return
 	}
+	h.logOperation(r, "user.update", "user", strconv.FormatInt(u.ID, 10), "success", "user updated", map[string]any{"role": u.Role, "enabled": u.Enabled})
 
 	writeJSON(w, http.StatusOK, toUserResponse(u))
 }
@@ -246,6 +248,7 @@ func (h *Handler) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete user: %v", err))
 		return
 	}
+	h.logOperation(r, "user.delete", "user", strconv.FormatInt(id, 10), "success", "user deleted", map[string]any{"username": u.Username})
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

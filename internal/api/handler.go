@@ -126,6 +126,8 @@ type Handler struct {
 	multiUserMW       func(http.Handler) http.Handler
 	config            *config.Config
 	configWatcher     *config.Watcher
+	restartFunc       func()
+	restartOnce       sync.Once
 	camMgr            *camera.CameraManager
 	mediaEngine       media.Engine
 	wsMgr             media.WS
@@ -171,6 +173,18 @@ type GB28181ServerProvider interface {
 
 func (h *Handler) SetConfigWatcher(w *config.Watcher) {
 	h.configWatcher = w
+}
+
+// SetRestartFunc registers the process restart callback used by first-time
+// setup after it has moved the canonical configuration into the data folder.
+func (h *Handler) SetRestartFunc(fn func()) {
+	h.restartFunc = fn
+}
+
+func (h *Handler) requestRestart() {
+	if h.restartFunc != nil {
+		h.restartOnce.Do(h.restartFunc)
+	}
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
@@ -259,6 +273,7 @@ func (h *Handler) Routes() http.Handler {
 	})
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
+	r.Get("/api/setup/directories", h.handleSetupDirectories)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -285,6 +300,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Post("/ack", h.handleAcknowledgeEvent)
 			})
 		})
+		r.With(middleware.RequireOperatePermission()).Get("/api/operation-logs", h.handleListOperationLogs)
 		r.Route("/api/cameras", func(r chi.Router) {
 			r.Get("/", h.handleListCameras)
 			r.With(middleware.RequireOperatePermission()).Post("/", h.handleCreateCamera)

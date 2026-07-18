@@ -437,20 +437,31 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	// Validate credentials by running through the auth middleware.
-	// If auth is disabled, any request succeeds; otherwise BasicAuth is checked.
+	// Validate credentials by running through the configured auth middleware.
+	// This keeps login behavior consistent with the multi-user protected routes.
 	// Use httptest.ResponseRecorder to capture middleware output without writing to client w.
 	done := make(chan int, 1)
+	var authenticatedRequest *http.Request
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authenticatedRequest = r
 		done <- http.StatusOK
 	})
 	rec := httptest.NewRecorder()
-	h.authMW(inner).ServeHTTP(rec, r)
+	loginMW := h.authMW
+	if h.multiUserMW != nil {
+		loginMW = h.multiUserMW
+	}
+	loginMW(inner).ServeHTTP(rec, r)
 
 	select {
 	case status := <-done:
 		if status == http.StatusOK {
+			logRequest := r
+			if authenticatedRequest != nil {
+				logRequest = authenticatedRequest
+			}
+			h.logOperation(logRequest, "auth.login", "auth", "", "success", "user login succeeded", nil)
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		}
 	default:
@@ -463,6 +474,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(rec.Code)
 		w.Write(rec.Body.Bytes())
+		h.logOperation(r, "auth.login", "auth", "", "failure", fmt.Sprintf("login failed with HTTP %d", rec.Code), nil)
 	}
 }
 
@@ -606,6 +618,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if !h.saveConfig(w) {
 		return
 	}
+	h.logOperation(r, "config.update", "config", "", "success", "settings updated", nil)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -806,6 +819,8 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	h.logOperation(r, "config.update", "config", "streaming", "success", "streaming settings updated", nil)
+
 	// Restart lalmax if RTMP/SRT config changed
 	if needRestart && h.mediaEngine != nil {
 		if restarter, ok := h.mediaEngine.(media.Restarter); ok {
@@ -925,6 +940,8 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 	if !h.saveConfig(w) {
 		return
 	}
+
+	h.logOperation(r, "config.update", "config", "ai", "success", "AI settings updated", nil)
 
 	// Reinitialize AI Manager with new config
 	if h.aiManager != nil {
@@ -1269,6 +1286,8 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	h.logOperation(r, "config.update", "config", "gb28181", "success", "GB28181 settings updated", nil)
+
 	// Restart GB28181 if config changed
 	if needRestart && h.gb28181Restarter != nil {
 		enabled := h.config.GB28181.Enabled != nil && *h.config.GB28181.Enabled
@@ -1475,6 +1494,7 @@ func (h *Handler) handleUpdateHLSSettings(w http.ResponseWriter, r *http.Request
 	if !h.saveConfig(w) {
 		return
 	}
+	h.logOperation(r, "config.update", "config", "hls", "success", "HLS settings updated", nil)
 	if hlsChanged && h.mediaEngine != nil {
 		if applier, ok := h.mediaEngine.(interface {
 			ApplyHLSConfig(config.HLSConfig) error

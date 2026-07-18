@@ -20,6 +20,7 @@ export {
   apiRequestBlob,
   ApiRequestError,
   setupApi,
+  browseSetupDirectories,
   getSystemMetricsHistory,
   getHourlyStats,
   getCameraUptimeStats,
@@ -33,6 +34,8 @@ export type {
   HealthResponse,
   SystemStats,
   SetupResponse,
+  SetupDirectoryEntry,
+  SetupDirectoriesResponse,
   NetworkInterface,
   SystemMetricSample,
   HourlyStats,
@@ -192,6 +195,10 @@ export {
   acknowledgeEvent,
   deleteEvent,
 } from './events';
+
+// Operation logs — user and system audit trail
+export { listOperationLogs } from './operation-logs';
+export type { OperationLog, OperationLogsResponse, OperationLogsParams } from './operation-logs';
 
 export type {
   NvrEvent,

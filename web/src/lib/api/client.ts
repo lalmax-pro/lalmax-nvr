@@ -275,6 +275,9 @@ export async function getCameraUptimeStats(days: number, signal?: AbortSignal): 
 export interface SetupResponse {
   status: string;
   token: string;
+  data_dir?: string;
+  config_path?: string;
+  restart_required?: boolean;
 }
 
 // First-time setup endpoint (no auth required)
@@ -282,9 +285,11 @@ export async function setupApi(
   username: string,
   password: string,
   language?: string,
+  dataDir?: string,
 ): Promise<SetupResponse> {
   const body: Record<string, string> = { username, password };
   if (language) body.language = language;
+  if (dataDir) body.data_dir = dataDir;
 
   const response = await fetch('/api/setup', {
     method: 'POST',
@@ -298,4 +303,20 @@ export async function setupApi(
   }
 
   return response.json();
+}
+
+export interface SetupDirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface SetupDirectoriesResponse {
+  path: string;
+  parent: string;
+  entries: SetupDirectoryEntry[];
+}
+
+export async function browseSetupDirectories(path?: string): Promise<SetupDirectoriesResponse> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : '';
+  return apiRequest<SetupDirectoriesResponse>(`/setup/directories${query}`);
 }

@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
+	"github.com/stretchr/testify/require"
 )
 
 // --- cameraRowForAPI tests ---
@@ -405,6 +405,30 @@ func TestCameraList_EmptyList(t *testing.T) {
 	var cameras []interface{}
 	parseJSON(t, rr, &cameras)
 	require.Equal(t, 0, len(cameras))
+}
+
+func TestCameraList_IncludeArchivedForRecordings(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertCamera(ctx, "archived-cam", "Archived Camera", "rtsp", "h264", "rtsp://example/live", "", "", true, "", "", ""))
+	require.NoError(t, db.ArchiveCameraDB(ctx, "archived-cam"))
+
+	activeRR := doRequest(t, h.Routes(), "GET", "/api/cameras", nil, "", "")
+	require.Equal(t, http.StatusOK, activeRR.Code)
+	var active []storage.CameraRow
+	parseJSON(t, activeRR, &active)
+	require.Empty(t, active)
+
+	allRR := doRequest(t, h.Routes(), "GET", "/api/cameras?include_archived=true", nil, "", "")
+	require.Equal(t, http.StatusOK, allRR.Code)
+	var all []storage.CameraRow
+	parseJSON(t, allRR, &all)
+	require.Len(t, all, 1)
+	require.Equal(t, "archived-cam", all[0].ID)
+	require.True(t, all[0].Archived)
 }
 
 // --- handleGetCamera tests ---

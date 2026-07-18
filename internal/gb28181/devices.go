@@ -2,12 +2,14 @@ package gb28181
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/emiago/sipgo/sip"
+	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
@@ -298,6 +300,30 @@ func (s *DeviceStore) UpdateDeviceRegistration(deviceID string, address string) 
 func (s *DeviceStore) UpdateDeviceOnlineStatus(deviceID string, isOnline bool) error {
 	ctx := context.Background()
 	return s.db.UpdateGB28181DeviceOnlineStatus(ctx, deviceID, isOnline)
+}
+
+func (s *DeviceStore) recordOperation(deviceID string, isOnline bool, address string) {
+	if s.db == nil {
+		return
+	}
+	action := "device.offline"
+	message := "GB28181 device went offline"
+	if isOnline {
+		action = "device.online"
+		message = "GB28181 device came online"
+	}
+	metadata, _ := json.Marshal(map[string]any{"address": address, "protocol": "gb28181"})
+	if _, err := s.db.InsertOperationLog(context.Background(), model.OperationLog{
+		ActorType:  "system",
+		Action:     action,
+		Resource:   "device",
+		ResourceID: deviceID,
+		Status:     "success",
+		Message:    message,
+		Metadata:   string(metadata),
+	}); err != nil {
+		slog.Warn("failed to write device operation log", "device_id", deviceID, "action", action, "error", err)
+	}
 }
 
 // SaveChannels persists channels to database using incremental update.

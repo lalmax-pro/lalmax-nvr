@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -316,6 +317,26 @@ func cmdEncryptConfig() {
 		}
 	}
 	os.Exit(0)
+}
+
+// resolveConfigPath follows the setup relocation marker written when the
+// initial setup selected a data directory. The marker lets existing service
+// commands keep using their original -config argument while the canonical
+// config lives beside the database and recordings.
+func resolveConfigPath(path string) string {
+	markerPath := path + ".target"
+	b, err := os.ReadFile(markerPath)
+	if err != nil {
+		return path
+	}
+	target := strings.TrimSpace(string(b))
+	if target == "" {
+		return path
+	}
+	if _, err := os.Stat(target); err != nil {
+		return path
+	}
+	return target
 }
 
 // ---------------------------------------------------------------------------
@@ -694,6 +715,9 @@ func (a *App) buildRouter() http.Handler {
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.configPath, a.mergeMgr, cloudProxy)
 	handler.SetMultiUserAuthMW(a.multiUserMW)
+	handler.SetRestartFunc(func() {
+		go a.restartProcess()
+	})
 
 	// Wire streaming managers
 	handler.SetMediaEngine(a.mediaEngine)
@@ -827,6 +851,23 @@ func (a *App) buildRouter() http.Handler {
 	}))
 
 	return r
+}
+
+// restartProcess performs a graceful in-place process restart. Using exec
+// keeps the PID stable, which is important for scripts/unix/start.sh and
+// systemd-style supervisors that track the service by PID.
+func (a *App) restartProcess() {
+	// Give the setup response time to reach the browser before stopping HTTP.
+	time.Sleep(300 * time.Millisecond)
+	if err := a.Stop(); err != nil {
+		slog.Error("service restart shutdown failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("restarting lalmax-nvr after initial setup")
+	if err := restartProcessInPlace(os.Args[0], os.Args, os.Environ()); err != nil {
+		slog.Error("service restart failed", "error", err)
+		os.Exit(1)
+	}
 }
 
 // Start launches all service goroutines and blocks until a shutdown signal
@@ -1118,16 +1159,18 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Load and validate config
-	cfg, err := config.Load(*configPath)
+	// Load and validate config. A setup relocation marker may point this
+	// process at the canonical config inside the selected data directory.
+	effectiveConfigPath := resolveConfigPath(*configPath)
+	cfg, err := config.Load(effectiveConfigPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			slog.Error("config", "error", err)
 			os.Exit(1)
 		}
 		// Auto-initialize: config file not found, generate defaults
-		slog.Info("config file not found, auto-initializing with defaults", "path", *configPath)
-		cfg = autoInitConfig(*configPath)
+		slog.Info("config file not found, auto-initializing with defaults", "path", effectiveConfigPath)
+		cfg = autoInitConfig(effectiveConfigPath)
 	}
 	// Fix Docker storage path mismatch: if running in Docker but config has
 	// the non-Docker default /var/lib/lalmax-nvr, auto-fix to /data.
@@ -1136,7 +1179,7 @@ func main() {
 			slog.Warn("auto-fixing storage.root_dir for Docker environment",
 				"old", cfg.Storage.RootDir, "new", dockerDir)
 			cfg.Storage.RootDir = dockerDir
-			if err := config.Save(*configPath, cfg); err != nil {
+			if err := config.Save(effectiveConfigPath, cfg); err != nil {
 				slog.Warn("failed to save auto-fixed config", "error", err)
 			}
 		}
@@ -1152,12 +1195,12 @@ func main() {
 	slog.SetDefault(logger)
 
 	// Create config watcher for external change detection and hot-reload
-	watcher, err := config.NewWatcher(cfg, *configPath)
+	watcher, err := config.NewWatcher(cfg, effectiveConfigPath)
 	if err != nil {
 		slog.Warn("failed to create config watcher", "error", err)
 	}
 
-	app, err := NewApp(cfg, *configPath)
+	app, err := NewApp(cfg, effectiveConfigPath)
 	if err != nil {
 		slog.Error("init", "error", err)
 		os.Exit(1)

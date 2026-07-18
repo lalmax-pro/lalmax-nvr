@@ -45,6 +45,7 @@ func (g *GB28181API) handleKeepalive(deviceID, source, status string) {
 	})
 
 	dev, _ := g.store.Load(deviceID)
+	wasOnline := dev != nil && dev.IsOnline
 	isOnline := status == "OK" || status == "ON"
 
 	g.store.Change(deviceID, func(d *Device) {
@@ -55,6 +56,9 @@ func (g *GB28181API) handleKeepalive(deviceID, source, status string) {
 
 	if err := g.store.UpdateDeviceStatus(deviceID, isOnline, source); err != nil {
 		slog.Error("failed to update device status in DB", "device_id", deviceID, "error", err)
+	}
+	if wasOnline != isOnline {
+		g.store.recordOperation(deviceID, isOnline, source)
 	}
 
 	slog.Debug("[SIP] Keepalive processed", "device_id", deviceID, "status", status, "source", source)

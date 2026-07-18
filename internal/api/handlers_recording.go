@@ -1,6 +1,5 @@
 package api
 
-
 import (
 	"encoding/json"
 	"fmt"
@@ -12,9 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
-	"github.com/go-chi/chi/v5"
 )
 
 // --- Recording endpoints ---
@@ -29,6 +28,11 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("merged"); v != "" {
 		merged := v == "true" || v == "1"
 		filter.Merged = &merged
+	}
+
+	if v := r.URL.Query().Get("archived"); v != "" {
+		archived := v == "true" || v == "1"
+		filter.Archived = &archived
 	}
 
 	if v := r.URL.Query().Get("start"); v != "" {

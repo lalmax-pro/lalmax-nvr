@@ -33,6 +33,7 @@ export interface Camera {
   source_type?: string;
   recording_paused?: boolean;
   recording_mode?: RecordingMode;
+  archived?: boolean;
   created_at?: string; // RFC3339
 }
 
@@ -261,8 +262,9 @@ export const EXCLUDED_ADD_PROTOCOLS = ['gb28181'];
 
 // --- Camera CRUD ---
 
-export async function listCameras(signal?: AbortSignal): Promise<Camera[]> {
-  return apiRequest<Camera[]>('/cameras', { signal });
+export async function listCameras(signal?: AbortSignal, includeArchived = false): Promise<Camera[]> {
+  const endpoint = includeArchived ? '/cameras?include_archived=true' : '/cameras';
+  return apiRequest<Camera[]>(endpoint, { signal });
 }
 
 export async function createCamera(

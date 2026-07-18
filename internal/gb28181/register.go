@@ -108,6 +108,10 @@ func (g *GB28181API) handlerRegister(req *sip.Request, tx sip.ServerTransaction)
 func (g *GB28181API) login(req *sip.Request, deviceID string) {
 	slog.Info("device online", "device_id", deviceID)
 	address := req.Source()
+	wasOnline := false
+	if dev, ok := g.store.Load(deviceID); ok {
+		wasOnline = dev.IsOnline
+	}
 	g.store.Change(deviceID, func(d *Device) {
 		d.IsOnline = true
 		d.LastRegisterAt = time.Now()
@@ -120,12 +124,17 @@ func (g *GB28181API) login(req *sip.Request, deviceID string) {
 			slog.Error("failed to save device registration in DB", "device_id", deviceID, "error", err)
 		}
 	}
+	if !wasOnline {
+		g.store.recordOperation(deviceID, true, address)
+	}
 }
 
 func (g *GB28181API) logout(deviceID string) {
 	slog.Info("device offline", "device_id", deviceID)
+	wasOnline := false
 
 	if dev, ok := g.store.Load(deviceID); ok {
+		wasOnline = dev.IsOnline
 		dev.Channels.Range(func(key, value any) bool {
 			ch := value.(*Channel)
 			streamKey := "play:" + deviceID + ":" + ch.ChannelID
@@ -142,6 +151,9 @@ func (g *GB28181API) logout(deviceID string) {
 	// Persist to database
 	if err := g.store.UpdateDeviceOnlineStatus(deviceID, false); err != nil {
 		slog.Error("failed to update device offline status in DB", "device_id", deviceID, "error", err)
+	}
+	if wasOnline {
+		g.store.recordOperation(deviceID, false, "")
 	}
 }
 

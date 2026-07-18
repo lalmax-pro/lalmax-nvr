@@ -96,6 +96,16 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list cameras")
 		return
 	}
+	// The recordings page can request archived cameras as recording sources.
+	// Normal camera/device management keeps the existing active-only default.
+	if v := r.URL.Query().Get("include_archived"); v == "true" || v == "1" {
+		archived, archiveErr := h.db.ListArchivedCameras(r.Context())
+		if archiveErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list archived cameras")
+			return
+		}
+		cameras = append(cameras, archived...)
+	}
 	if cameras == nil {
 		cameras = []storage.CameraRow{}
 	}
@@ -326,6 +336,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	h.logOperation(r, "camera.create", "camera", id, "success", "camera created", map[string]any{"protocol": proto})
 	// Persist DB-only metadata fields
 	if body.Description != "" || body.Location != "" || body.Brand != "" || body.Model != "" || body.SerialNumber != "" {
 		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, 0); err != nil {
@@ -433,25 +444,25 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	id := getCameraID(r)
 
 	var body struct {
-		Name           *string                         `json:"name"`
-		URL            *string                         `json:"url"`
-		Protocol       *string                         `json:"protocol"`
-		Encoding       *string                         `json:"encoding"`
-		RTSPTransport  *string                         `json:"rtsp_transport"`
-		Username       *string                         `json:"username"`
-		Password       *string                         `json:"password"`
-		Enabled        *bool                           `json:"enabled"`
-		Description    *string                         `json:"description"`
-		Location       *string                         `json:"location"`
-		Brand          *string                         `json:"brand"`
-		Model          *string                         `json:"model"`
-		SerialNumber   *string                         `json:"serial_number"`
-		RetentionDays  *int                            `json:"retention_days"`
-		ONVIFEndpoint  *string                         `json:"onvif_endpoint"`
-		ProfileToken   *string                         `json:"profile_token"`
-		StreamEncoding *string                         `json:"stream_encoding"`
-		AudioEnabled   *bool                           `json:"audio_enabled"`
-		RecordingMode  *string                         `json:"recording_mode"`
+		Name           *string `json:"name"`
+		URL            *string `json:"url"`
+		Protocol       *string `json:"protocol"`
+		Encoding       *string `json:"encoding"`
+		RTSPTransport  *string `json:"rtsp_transport"`
+		Username       *string `json:"username"`
+		Password       *string `json:"password"`
+		Enabled        *bool   `json:"enabled"`
+		Description    *string `json:"description"`
+		Location       *string `json:"location"`
+		Brand          *string `json:"brand"`
+		Model          *string `json:"model"`
+		SerialNumber   *string `json:"serial_number"`
+		RetentionDays  *int    `json:"retention_days"`
+		ONVIFEndpoint  *string `json:"onvif_endpoint"`
+		ProfileToken   *string `json:"profile_token"`
+		StreamEncoding *string `json:"stream_encoding"`
+		AudioEnabled   *bool   `json:"audio_enabled"`
+		RecordingMode  *string `json:"recording_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -529,6 +540,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update camera: %v", err))
 		return
 	}
+	h.logOperation(r, "camera.update", "camera", id, "success", "camera configuration updated", nil)
 	// Return updated CameraRow with status
 	row, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
@@ -715,6 +727,7 @@ func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	h.logOperation(r, "camera.start", "camera", id, "success", "camera started", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
 }
 
@@ -754,6 +767,7 @@ func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	h.logOperation(r, "camera.stop", "camera", id, "success", "camera stopped", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 

@@ -445,6 +445,30 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_relay_stats_time ON relay_task_stats(timestamp)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='24' WHERE key='schema_version'")
 
+	// Migration v24 → v25: operation logs for user and system audit trails.
+	operationLogsSQL := `CREATE TABLE IF NOT EXISTS operation_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER,
+		username TEXT NOT NULL DEFAULT '',
+		actor_type TEXT NOT NULL DEFAULT 'system',
+		action TEXT NOT NULL,
+		resource TEXT NOT NULL DEFAULT '',
+		resource_id TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'success',
+		message TEXT NOT NULL DEFAULT '',
+		metadata TEXT NOT NULL DEFAULT '{}',
+		ip_address TEXT NOT NULL DEFAULT '',
+		user_agent TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);`
+	if _, err := d.db.ExecContext(ctx, operationLogsSQL); err != nil {
+		return err
+	}
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_operation_logs_created_at ON operation_logs(created_at DESC)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_operation_logs_action ON operation_logs(action)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_operation_logs_username ON operation_logs(username)")
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='25' WHERE key='schema_version'")
+
 	return nil
 
 }

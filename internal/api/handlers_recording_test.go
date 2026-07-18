@@ -52,6 +52,32 @@ func TestListRecordings_Search(t *testing.T) {
 	require.Equal(t, "rec-1", resp.Recordings[0].ID)
 }
 
+func TestListRecordings_IncludesArchivedDeviceRecordings(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := makeRecording("archived-rec", "archived-cam", "h264", now, false)
+	seedRecording(t, db, rec)
+	_, err := db.ArchiveAllRecordings(context.Background(), "archived-cam")
+	require.NoError(t, err)
+
+	activeRR := doRequest(t, h.Routes(), "GET", "/api/recordings?camera_id=archived-cam", nil, "", "")
+	require.Equal(t, http.StatusOK, activeRR.Code)
+	var active recordingsResponse
+	parseJSON(t, activeRR, &active)
+	require.Empty(t, active.Recordings)
+
+	archiveRR := doRequest(t, h.Routes(), "GET", "/api/recordings?camera_id=archived-cam&archived=true", nil, "", "")
+	require.Equal(t, http.StatusOK, archiveRR.Code)
+	var archived recordingsResponse
+	parseJSON(t, archiveRR, &archived)
+	require.Len(t, archived.Recordings, 1)
+	require.Equal(t, "archived-rec", archived.Recordings[0].ID)
+}
+
 func TestListRecordings_InvalidLimit(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)

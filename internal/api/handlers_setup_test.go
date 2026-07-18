@@ -12,6 +12,7 @@ import (
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
+	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -120,6 +121,26 @@ func TestHandleSetup_InvalidJSON(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestHandleSetupDirectories_DefaultPath(t *testing.T) {
+	t.Parallel()
+	h, _ := setupTestHandlerForSetup(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/setup/directories", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Path    string `json:"path"`
+		Entries []struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+		} `json:"entries"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.NotEmpty(t, resp.Path)
+}
+
 func TestHandleSetup_UsesExistingStorageRoot(t *testing.T) {
 	t.Parallel()
 	h, cfgPath := setupTestHandlerForSetup(t)
@@ -139,6 +160,47 @@ func TestHandleSetup_UsesExistingStorageRoot(t *testing.T) {
 	saved, err := config.Load(cfgPath)
 	require.NoError(t, err)
 	require.Equal(t, "/tmp/existing-nvr-data", saved.Storage.RootDir)
+}
+
+func TestHandleSetup_SelectedDataDirectory(t *testing.T) {
+	t.Parallel()
+	h, cfgPath := setupTestHandlerForSetup(t)
+	dataDir := t.TempDir()
+
+	body := setupRequest{Username: "admin", Password: "testpassword123", DataDir: dataDir}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handleSetup(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		RestartRequired bool   `json:"restart_required"`
+		ConfigPath      string `json:"config_path"`
+		DataDir         string `json:"data_dir"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.True(t, resp.RestartRequired)
+	require.Equal(t, dataDir, resp.DataDir)
+	require.Equal(t, filepath.Join(dataDir, "lalmax-nvr.yaml"), resp.ConfigPath)
+
+	saved, err := config.Load(resp.ConfigPath)
+	require.NoError(t, err)
+	require.Equal(t, dataDir, saved.Storage.RootDir)
+	require.NotEmpty(t, saved.Auth.PasswordHash)
+
+	marker, err := os.ReadFile(cfgPath + ".target")
+	require.NoError(t, err)
+	require.Equal(t, resp.ConfigPath+"\n", string(marker))
+
+	targetDB, err := storage.New(filepath.Join(dataDir, "lalmax-nvr.db"))
+	require.NoError(t, err)
+	defer targetDB.Close()
+	user, err := targetDB.GetUserByUsername(req.Context(), "admin")
+	require.NoError(t, err)
+	require.NotNil(t, user)
 }
 
 func TestHandleSetup_TokenIsValid(t *testing.T) {

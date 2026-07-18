@@ -23,6 +23,9 @@
   let selectedRecording = $state<Recording | null>(null);
   let deleteConfirm = $state<Recording | null>(null);
 
+  let selectedCamera = $derived(cameras.find(c => c.id === selectedCameraId));
+  let selectedCameraArchived = $derived(selectedCamera?.archived === true);
+
   // Filters for recording list
   let formatFilter = $state('');
   let mergedFilter = $state('');
@@ -66,7 +69,8 @@
   // Data loading
   async function loadCameras() {
     try {
-      cameras = await listCameras();
+      // Archived devices still own recordings and must remain selectable here.
+      cameras = await listCameras(undefined, true);
       if (cameras.length > 0 && !selectedCameraId) {
         selectedCameraId = cameras[0].id;
       }
@@ -92,6 +96,7 @@
 
       const response = await listRecordings({
         camera_id: selectedCameraId,
+        archived: selectedCameraArchived ? true : undefined,
         start: dayStart.toISOString(),
         end: dayEnd.toISOString(),
         limit: 1000,
@@ -162,7 +167,7 @@
 
   // Load data when camera or date changes
   $effect(() => {
-    const _ = [selectedCameraId, selectedDate];
+    const _ = [selectedCameraId, selectedDate, selectedCameraArchived];
     if (selectedCameraId) {
       loadRecordings();
     }
@@ -189,7 +194,9 @@
               <option value="">{t('recordings.page.noCameras')}</option>
             {/if}
             {#each cameras as camera}
-              <option value={camera.id}>{camera.name}</option>
+              <option value={camera.id}>
+                {camera.name}{camera.archived ? ` (${t('recordings.page.archived')})` : ''}
+              </option>
             {/each}
           </select>
         </div>

@@ -1,13 +1,15 @@
 <script lang="ts">
-  import { setupApi, storeCredentials } from '$lib/api';
+  import { browseSetupDirectories, setupApi, storeCredentials } from '$lib/api';
+  import type { SetupDirectoryEntry } from '$lib/api';
   import { setProtocolPreference } from '$lib/preferences';
   import ThemeToggle from '../components/ThemeToggle.svelte';
   import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
-  import { Eye, EyeOff, Check, X } from 'lucide-svelte';
+  import { ArrowUp, Check, Eye, EyeOff, FolderOpen, X } from 'lucide-svelte';
 
   let username = $state('admin');
+  let dataDir = $state('');
   let password = $state('');
   let confirmPassword = $state('');
   let showPassword = $state(false);
@@ -15,8 +17,16 @@
   let language = $state('en');
   let error = $state('');
   let loading = $state(false);
+  let restartRequired = $state(false);
+  let configuredDataDir = $state('');
+  let folderPickerOpen = $state(false);
+  let folderPickerLoading = $state(false);
+  let folderPickerError = $state('');
+  let folderPickerPath = $state('');
+  let folderPickerParent = $state('');
+  let folderEntries = $state<SetupDirectoryEntry[]>([]);
 
-  let errors = $state({ username: '', password: '', confirmPassword: '' });
+  let errors = $state({ dataDir: '', username: '', password: '', confirmPassword: '' });
 
   // Browser capability detection
   let capabilities = $state({
@@ -65,6 +75,14 @@
     }
   }
 
+  function validateDataDir() {
+    if (!dataDir.trim()) {
+      errors.dataDir = t('setup.errors.dataDirRequired');
+    } else {
+      errors.dataDir = '';
+    }
+  }
+
   function validatePassword() {
     if (!password) {
       errors.password = t('setup.errors.passwordRequired');
@@ -87,26 +105,60 @@
     }
   }
 
+  function onDataDirInput() { if (errors.dataDir) errors.dataDir = ''; }
   function onUsernameInput() { if (errors.username) errors.username = ''; }
   function onPasswordInput() { if (errors.password) errors.password = ''; }
   function onConfirmInput() { if (errors.confirmPassword) errors.confirmPassword = ''; }
 
+  async function browseFolder(path?: string) {
+    folderPickerLoading = true;
+    folderPickerError = '';
+    try {
+      const result = await browseSetupDirectories(path);
+      folderPickerPath = result.path;
+      folderPickerParent = result.parent;
+      folderEntries = result.entries || [];
+    } catch (e) {
+      folderPickerError = e instanceof Error ? e.message : t('setup.folderPickerFailed');
+    } finally {
+      folderPickerLoading = false;
+    }
+  }
+
+  async function openFolderPicker() {
+    folderPickerOpen = true;
+    await browseFolder(dataDir.trim() || undefined);
+  }
+
+  function chooseFolder(path: string) {
+    dataDir = path;
+    validateDataDir();
+    folderPickerOpen = false;
+  }
+
   async function handleSubmit() {
+    validateDataDir();
     validateUsername();
     validatePassword();
     validateConfirmPassword();
-    if (errors.username || errors.password || errors.confirmPassword) return;
+    if (errors.dataDir || errors.username || errors.password || errors.confirmPassword) return;
 
     error = '';
     loading = true;
 
     try {
-      const res = await setupApi(username, password, language);
+      const res = await setupApi(username, password, language, dataDir.trim());
 
       // Decode token to get credentials and store them
       const decoded = atob(res.token);
       const [user, pass] = decoded.split(':');
       storeCredentials(user, pass);
+
+      if (res.restart_required) {
+        configuredDataDir = res.data_dir || dataDir.trim();
+        restartRequired = true;
+        return;
+      }
 
       // Store detected protocol preference
       setProtocolPreference(bestProtocol);
@@ -139,7 +191,9 @@
 
   <div class="card w-full max-w-lg p-10 border th-border shadow-2xl">
     <div class="text-center mb-8">
-      <div class="text-sm font-semibold tracking-widest uppercase th-text-tertiary mb-3">lalmax-nvr</div>
+      <div class="setup-logo-wrap" aria-hidden="true">
+        <img class="setup-logo" src="/lalmax-nvr-logo.png" alt="lalmax-nvr" />
+      </div>
       <h1 class="text-3xl font-bold bg-gradient-to-r from-violet-400 to-blue-400 bg-clip-text text-transparent mb-3">{t('setup.title')}</h1>
       <p class="th-text-tertiary text-sm">{t('setup.subtitle')}</p>
     </div>
@@ -150,7 +204,47 @@
       </div>
     {/if}
 
+    {#if restartRequired}
+      <div class="space-y-5 text-center">
+        <div class="p-4 rounded-lg border border-green-500/30 bg-green-500/10 th-text-secondary text-sm">
+          <p class="font-semibold th-text-primary mb-2">{t('setup.restartTitle')}</p>
+          <p>{t('setup.restartMessage')}</p>
+          <p class="mt-3 break-all font-mono text-xs th-text-primary">{configuredDataDir}</p>
+        </div>
+        <p class="text-xs th-text-tertiary">{t('setup.restartHint')}</p>
+        <button type="button" class="btn btn-primary w-full" onclick={() => { window.location.hash = '#/login'; }}>
+          {t('setup.backToLogin')}
+        </button>
+      </div>
+    {:else}
     <form onsubmit={(e) => { e.preventDefault(); handleSubmit(); }} class="space-y-5">
+      <!-- Server data directory -->
+      <div>
+        <label for="setup-data-dir" class="input-label">{t('setup.dataDir')}</label>
+        <div class="flex gap-2">
+          <input
+            id="setup-data-dir"
+            type="text"
+            class="input flex-1 {errors.dataDir ? 'border-red-500' : ''}"
+            bind:value={dataDir}
+            placeholder={t('setup.dataDirPlaceholder')}
+            disabled={loading}
+            onkeydown={handleKeydown}
+            onblur={validateDataDir}
+            oninput={onDataDirInput}
+            autocomplete="off"
+          />
+          <button type="button" class="btn btn-secondary shrink-0" disabled={loading} onclick={openFolderPicker}>
+            <FolderOpen size={16} class="mr-1" />
+            {t('setup.chooseDataDir')}
+          </button>
+        </div>
+        <p class="text-xs th-text-tertiary mt-1">{t('setup.dataDirHint')}</p>
+        {#if errors.dataDir}
+          <p class="th-color-danger text-xs mt-1">{errors.dataDir}</p>
+        {/if}
+      </div>
+
       <!-- Username -->
       <div>
         <label for="setup-username" class="input-label">{t('setup.username')}</label>
@@ -315,9 +409,78 @@
         {/if}
       </button>
     </form>
+    {/if}
 
     <div class="mt-6 text-center text-sm th-text-tertiary">
       <p class="border-t th-border pt-4">{t('setup.secureNote')}</p>
     </div>
   </div>
 </div>
+
+{#if folderPickerOpen}
+  <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4" role="presentation" onclick={() => { if (!folderPickerLoading) folderPickerOpen = false; }}>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
+    <div class="card w-full max-w-xl border th-border p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="folder-picker-title" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+      <div class="flex items-center justify-between mb-4">
+        <h2 id="folder-picker-title" class="text-lg font-semibold th-text-primary">{t('setup.folderPickerTitle')}</h2>
+        <button type="button" class="btn btn-ghost btn-sm" onclick={() => folderPickerOpen = false} aria-label={t('common.close')}>
+          <X size={18} />
+        </button>
+      </div>
+
+      <div class="flex items-center gap-2 mb-3">
+        <button type="button" class="btn btn-secondary btn-sm" disabled={!folderPickerParent || folderPickerLoading} onclick={() => browseFolder(folderPickerParent)}>
+          <ArrowUp size={15} class="mr-1" />
+          {t('setup.folderPickerUp')}
+        </button>
+        <div class="flex-1 min-w-0 rounded-lg border th-border px-3 py-2 text-xs font-mono th-text-secondary truncate" title={folderPickerPath}>
+          {folderPickerPath || t('setup.folderPickerLoading')}
+        </div>
+        <button type="button" class="btn btn-primary btn-sm shrink-0" disabled={!folderPickerPath || folderPickerLoading} onclick={() => chooseFolder(folderPickerPath)}>
+          <Check size={15} class="mr-1" />
+          {t('setup.folderPickerChoose')}
+        </button>
+      </div>
+
+      {#if folderPickerError}
+        <div class="mb-3 rounded-lg border th-border-danger p-3 text-sm th-color-danger">{folderPickerError}</div>
+      {/if}
+
+      <div class="h-64 overflow-y-auto rounded-lg border th-border">
+        {#if folderPickerLoading}
+          <div class="p-8 text-center th-text-tertiary">{t('setup.folderPickerLoading')}</div>
+        {:else if folderEntries.length === 0}
+          <div class="p-8 text-center th-text-tertiary">{t('setup.folderPickerEmpty')}</div>
+        {:else}
+          {#each folderEntries as entry (entry.path)}
+            <button type="button" class="flex w-full items-center gap-3 border-b th-border px-4 py-3 text-left last:border-b-0 hover:th-bg-hover" onclick={() => browseFolder(entry.path)}>
+              <FolderOpen size={17} class="th-text-tertiary shrink-0" />
+              <span class="truncate th-text-primary">{entry.name}</span>
+            </button>
+          {/each}
+        {/if}
+      </div>
+
+      <p class="mt-3 text-xs th-text-tertiary">{t('setup.folderPickerHint')}</p>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .setup-logo-wrap {
+    width: 100%;
+    height: 7rem;
+    overflow: hidden;
+    border-radius: 0.75rem;
+    background: #ffffff;
+    margin-bottom: 1rem;
+  }
+
+  .setup-logo {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+  }
+</style>

@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/go-chi/chi/v5"
+	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 )
 
 // --- Merge settings endpoints ---
@@ -90,6 +90,7 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 	if err := config.Save(h.configPath, h.config); err != nil {
 		logger.Warn("failed to save config", "error", err)
 	}
+	h.logOperation(r, "config.update", "config", "merge", "success", "merge settings updated", nil)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
