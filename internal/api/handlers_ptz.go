@@ -260,6 +260,7 @@ func (h *Handler) handleGB28181PTZMove(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 
+	h.logSuccess(r, "ptz.move", "camera", cameraID, "GB28181 PTZ move command sent", map[string]any{"mode": mode})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -281,6 +282,7 @@ func (h *Handler) handleGB28181PTZStop(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 
+	h.logSuccess(r, "ptz.stop", "camera", cameraID, "GB28181 PTZ stop command sent", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -309,6 +311,7 @@ func (h *Handler) handleONVIFPTZMove(w http.ResponseWriter, r *http.Request, cam
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ command failed: %v", err))
 		return
 	}
+	h.logSuccess(r, "ptz.move", "camera", cameraID, "PTZ move command sent", map[string]any{"mode": mode})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -326,6 +329,7 @@ func (h *Handler) handleONVIFPTZStop(w http.ResponseWriter, r *http.Request, cam
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ stop failed: %v", err))
 		return
 	}
+	h.logSuccess(r, "ptz.stop", "camera", cameraID, "PTZ stop command sent", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
@@ -384,6 +388,7 @@ func (h *Handler) handleONVIFPTZCreatePreset(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create preset failed: %v", err))
 		return
 	}
+	h.logSuccess(r, "ptz.preset.create", "camera", cameraID, "PTZ preset created", map[string]any{"name": req.Name, "token": token})
 	writeJSON(w, http.StatusOK, map[string]string{"token": token, "name": req.Name})
 }
 
@@ -406,6 +411,7 @@ func (h *Handler) handleONVIFPTZGoToPreset(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("goto preset failed: %v", err))
 		return
 	}
+	h.logSuccess(r, "ptz.preset.goto", "camera", cameraID, "PTZ goto preset", map[string]any{"token": token})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -428,6 +434,7 @@ func (h *Handler) handleONVIFPTZDeletePreset(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("delete preset failed: %v", err))
 		return
 	}
+	h.logSuccess(r, "ptz.preset.delete", "camera", cameraID, "PTZ preset deleted", map[string]any{"token": token})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

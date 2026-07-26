@@ -81,6 +81,7 @@ func (h *Handler) handleAcknowledgeEvent(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to acknowledge event")
 		return
 	}
+	h.logSuccess(r, "event.ack", "event", strconv.FormatInt(id, 10), "event acknowledged", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "acknowledged"})
 }
 
@@ -97,6 +98,7 @@ func (h *Handler) handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete event")
 		return
 	}
+	h.logSuccess(r, "event.delete", "event", strconv.FormatInt(id, 10), "event deleted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

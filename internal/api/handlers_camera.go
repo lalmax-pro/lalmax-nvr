@@ -587,6 +587,7 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.logSuccess(r, "camera.delete", "camera", id, "camera archived", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "archived"})
 }
 
@@ -639,6 +640,7 @@ func (h *Handler) handlePermanentDeleteCamera(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	h.logSuccess(r, "camera.permanent_delete", "camera", id, "camera permanently deleted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

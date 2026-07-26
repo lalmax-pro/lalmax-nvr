@@ -94,6 +94,7 @@ func (h *Handler) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	group.ID = id
+	h.logSuccess(r, "group.create", "group", strconv.FormatInt(id, 10), "device group created", map[string]any{"name": group.Name})
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"group":  group,
 		"status": "ok",
@@ -152,6 +153,7 @@ func (h *Handler) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.logSuccess(r, "group.update", "group", strconv.FormatInt(id, 10), "device group updated", map[string]any{"name": group.Name})
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"group":  group,
 		"status": "ok",
@@ -172,6 +174,7 @@ func (h *Handler) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.logSuccess(r, "group.delete", "group", idStr, "device group deleted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -227,6 +230,7 @@ func (h *Handler) handleAddGroupChannel(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	h.logSuccess(r, "group.channel.add", "group", idStr, "channel added to group", map[string]any{"device_id": req.DeviceID, "channel_id": req.ChannelID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -261,6 +265,7 @@ func (h *Handler) handleRemoveGroupChannel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	h.logSuccess(r, "group.channel.remove", "group", idStr, "channel removed from group", map[string]any{"device_id": req.DeviceID, "channel_id": req.ChannelID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

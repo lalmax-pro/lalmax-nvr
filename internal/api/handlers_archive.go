@@ -82,6 +82,7 @@ func (h *Handler) handleRestoreArchiveGroup(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	h.logSuccess(r, "archive.restore", "archive", cameraID, "archived camera restored", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
 }
 
@@ -145,6 +146,7 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	h.logSuccess(r, "archive.delete", "archive", cameraID, "archived camera group permanently deleted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -189,6 +191,7 @@ func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	h.logSuccess(r, "archive.recording.delete", "archive", recordingID, "archived recording deleted", map[string]any{"camera_id": cameraID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -212,5 +215,6 @@ func (h *Handler) handleSetArchiveRetention(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, "archived camera not found")
 		return
 	}
+	h.logSuccess(r, "archive.retention.update", "archive", cameraID, "archive retention updated", map[string]any{"retention_days": body.RetentionDays})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }

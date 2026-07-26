@@ -127,6 +127,7 @@ func (h *Handler) handleDeleteRecording(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	h.logSuccess(r, "recording.delete", "recording", id, "recording deleted", map[string]any{"camera_id": rec.CameraID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -187,6 +188,7 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	} else {
 		result["failed"] = []string{}
 	}
+	h.logSuccess(r, "recording.batch_delete", "recording", "", "recordings batch deleted", map[string]any{"count": len(deleted)})
 	writeJSON(w, http.StatusOK, result)
 }
 

@@ -398,6 +398,7 @@ func (h *Handler) handleXiaomiTalkWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	h.logSuccess(r, "talk.start", "camera", cameraID, "Xiaomi talk session started", nil)
 	logger.Info("Xiaomi talk WebSocket connected", "camera_id", cameraID)
 
 	// Send status

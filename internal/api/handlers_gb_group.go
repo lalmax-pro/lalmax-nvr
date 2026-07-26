@@ -143,6 +143,7 @@ func (h *Handler) handleGBGroupCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create group")
 		return
 	}
+	h.logSuccess(r, "gb28181.group.create", "gb28181", group.DeviceID, "GB28181 group created", map[string]any{"name": group.Name})
 	writeJSON(w, http.StatusOK, map[string]any{"group": group, "status": "ok"})
 }
 
@@ -176,6 +177,7 @@ func (h *Handler) handleGBGroupUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update group")
 		return
 	}
+	h.logSuccess(r, "gb28181.group.update", "gb28181", group.DeviceID, "GB28181 group updated", map[string]any{"name": group.Name})
 	writeJSON(w, http.StatusOK, map[string]any{"group": group, "status": "ok"})
 }
 
@@ -223,6 +225,7 @@ func (h *Handler) handleGBGroupDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete group")
 		return
 	}
+	h.logSuccess(r, "gb28181.group.delete", "gb28181", group.DeviceID, "GB28181 group deleted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -248,6 +251,7 @@ func (h *Handler) handleGBChannelAttachGroup(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to attach channels")
 		return
 	}
+	h.logSuccess(r, "gb28181.channel.attach_group", "gb28181", req.ParentID, "channels attached to group", map[string]any{"count": len(req.Channels), "business_group": req.BusinessGroup})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -266,5 +270,6 @@ func (h *Handler) handleGBChannelDetachGroup(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to detach channels")
 		return
 	}
+	h.logSuccess(r, "gb28181.channel.detach_group", "gb28181", "", "channels detached from group", map[string]any{"count": len(req.Channels)})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

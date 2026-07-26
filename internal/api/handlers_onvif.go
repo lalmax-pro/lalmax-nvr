@@ -344,6 +344,7 @@ func (h *Handler) handleONVIFReboot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("reboot failed: %v", err))
 		return
 	}
+	h.logSuccess(r, "onvif.reboot", "camera", cameraID, "ONVIF camera rebooted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -400,6 +401,7 @@ func (h *Handler) handleONVIFSetNetwork(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("set network interfaces failed: %v", err))
 		return
 	}
+	h.logSuccess(r, "onvif.network.update", "camera", cameraID, "ONVIF network settings updated", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -452,6 +454,7 @@ func (h *Handler) handleONVIFCreateUsers(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("create users failed: %v", err))
 		return
 	}
+	h.logSuccess(r, "onvif.user.create", "camera", cameraID, "ONVIF users created", map[string]any{"count": len(req.Users)})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -481,6 +484,7 @@ func (h *Handler) handleONVIFDeleteUsers(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("delete users failed: %v", err))
 		return
 	}
+	h.logSuccess(r, "onvif.user.delete", "camera", cameraID, "ONVIF users deleted", map[string]any{"usernames": req.Usernames})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -511,6 +515,7 @@ func (h *Handler) handleONVIFSetUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("set user failed: %v", err))
 		return
 	}
+	h.logSuccess(r, "onvif.user.update", "camera", cameraID, "ONVIF user updated", map[string]any{"username": username})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

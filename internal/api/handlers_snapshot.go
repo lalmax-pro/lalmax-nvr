@@ -325,6 +325,7 @@ func (h *Handler) handleTakeSnapshot(w http.ResponseWriter, r *http.Request) {
 		resp, err := client.Get(cam.SnapshotURL)
 		if err == nil && resp.StatusCode == http.StatusOK {
 			defer resp.Body.Close()
+			h.logSuccess(r, "snapshot.take", "camera", cameraID, "snapshot taken", nil)
 			w.Header().Set("Content-Type", "image/jpeg")
 			w.Header().Set("Cache-Control", "no-cache")
 			buf := make([]byte, 32*1024)

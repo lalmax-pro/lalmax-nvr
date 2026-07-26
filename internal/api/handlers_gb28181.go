@@ -64,6 +64,7 @@ func (h *Handler) handleGB28181Play(w http.ResponseWriter, r *http.Request) {
 			"error", err,
 		)
 	}
+	h.logSuccess(r, "gb28181.play", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 live play started", map[string]any{"stream_id": streamID})
 	writeJSON(w, http.StatusOK, map[string]any{"ssrc": ssrc, "stream_id": streamID})
 }
 
@@ -127,6 +128,7 @@ func (h *Handler) handleGB28181StopPlay(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logSuccess(r, "gb28181.stop", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 live play stopped", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -213,6 +215,7 @@ func (h *Handler) handleGB28181Playback(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logSuccess(r, "gb28181.playback", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 playback started", map[string]any{"stream_id": streamID})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ssrc":      ssrc,
 		"stream_id": streamID,
@@ -269,6 +272,7 @@ func (h *Handler) handleGB28181PlaySpeed(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logSuccess(r, "gb28181.playback.speed", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 playback speed changed", map[string]any{"speed": req.Speed})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -294,6 +298,7 @@ func (h *Handler) handleGB28181PlaySeek(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logSuccess(r, "gb28181.playback.seek", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 playback seek", map[string]any{"seek_time": req.SeekTime})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -333,6 +338,13 @@ func (h *Handler) handleGB28181PlayPauseState(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	action := "gb28181.playback.pause"
+	message := "GB28181 playback paused"
+	if resume {
+		action = "gb28181.playback.resume"
+		message = "GB28181 playback resumed"
+	}
+	h.logSuccess(r, action, "gb28181", req.DeviceID+"/"+req.ChannelID, message, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -517,6 +529,7 @@ func (h *Handler) handleGB28181AddPlatform(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logSuccess(r, "gb28181.platform.create", "gb28181", strconv.FormatInt(cfg.ID, 10), "GB28181 platform added", map[string]any{"name": cfg.Name})
 	writeJSON(w, http.StatusOK, map[string]any{"id": cfg.ID, "status": "ok"})
 }
 
@@ -539,6 +552,7 @@ func (h *Handler) handleGB28181DeletePlatform(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logSuccess(r, "gb28181.platform.delete", "gb28181", strconv.FormatInt(id, 10), "GB28181 platform deleted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -565,6 +579,7 @@ func (h *Handler) handleGB28181StartBroadcast(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logSuccess(r, "gb28181.broadcast.start", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 broadcast started", nil)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": bs.DeviceID + "_" + bs.ChannelID,
 		"port":       bs.RTPPort,
@@ -594,6 +609,7 @@ func (h *Handler) handleGB28181StopBroadcast(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logSuccess(r, "gb28181.broadcast.stop", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 broadcast stopped", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -682,6 +698,7 @@ func (h *Handler) handleGB28181StartDownload(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logSuccess(r, "gb28181.download.start", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 download started", map[string]any{"download_id": ds.ID})
 	writeJSON(w, http.StatusOK, map[string]any{"download_id": ds.ID, "file_path": ds.FilePath, "status": ds.Status})
 }
 
@@ -708,6 +725,7 @@ func (h *Handler) handleGB28181StopDownload(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.logSuccess(r, "gb28181.download.stop", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 download stopped", map[string]any{"download_id": req.DownloadID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -763,6 +781,7 @@ func (h *Handler) handleGB28181BatchDownload(w http.ResponseWriter, r *http.Requ
 			"end_time":    seg.EndTime,
 		})
 	}
+	h.logSuccess(r, "gb28181.download.batch", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 batch download started", map[string]any{"count": len(results)})
 	writeJSON(w, http.StatusOK, map[string]any{"downloads": results, "errors": errors, "total": len(results)})
 }
 
@@ -843,6 +862,7 @@ func (h *Handler) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.WriteJSON(map[string]string{"error": "session timeout"})
 		return
 	}
+	h.logSuccess(r, "talk.start", "gb28181", deviceID+"/"+channelID, "GB28181 talk websocket connected", nil)
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
@@ -896,6 +916,7 @@ func (h *Handler) handleGB28181TalkWhipState(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		h.logSuccess(r, "talk.stop", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 talk stopped", nil)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 		return
 	}
@@ -915,6 +936,7 @@ func (h *Handler) handleGB28181TalkWhipState(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	}
+	h.logSuccess(r, "talk.start", "gb28181", req.DeviceID+"/"+req.ChannelID, "GB28181 talk started", nil)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":      "started",
 		"session_id":  req.DeviceID + "_" + req.ChannelID,
@@ -966,6 +988,7 @@ func (h *Handler) handleGB28181PTZControl(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	h.logSuccess(r, "gb28181.ptz.control", "gb28181", deviceID+"/"+channelID, "GB28181 PTZ control", map[string]any{"direction": body.Direction})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1000,6 +1023,7 @@ func (h *Handler) handleGB28181PTZPositionControl(w http.ResponseWriter, r *http
 		return
 	}
 
+	h.logSuccess(r, "gb28181.ptz.position", "gb28181", deviceID+"/"+channelID, "GB28181 PTZ position control", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1053,6 +1077,7 @@ func (h *Handler) handleGB28181PresetSet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	h.logSuccess(r, "gb28181.preset.set", "gb28181", deviceID+"/"+channelID, "GB28181 preset set", map[string]any{"preset_id": presetID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1083,6 +1108,7 @@ func (h *Handler) handleGB28181PresetCall(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	h.logSuccess(r, "gb28181.preset.call", "gb28181", deviceID+"/"+channelID, "GB28181 preset called", map[string]any{"preset_id": presetID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1113,6 +1139,7 @@ func (h *Handler) handleGB28181PresetDelete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	h.logSuccess(r, "gb28181.preset.delete", "gb28181", deviceID+"/"+channelID, "GB28181 preset deleted", map[string]any{"preset_id": presetID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1155,6 +1182,7 @@ func (h *Handler) handleGB28181CruiseAddPoint(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	h.logSuccess(r, "gb28181.cruise.add_point", "gb28181", deviceID+"/"+channelID, "GB28181 cruise point added", map[string]any{"cruise_id": body.CruiseID, "preset_id": body.PresetID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1197,6 +1225,7 @@ func (h *Handler) handleGB28181CruiseDeletePoint(w http.ResponseWriter, r *http.
 		return
 	}
 
+	h.logSuccess(r, "gb28181.cruise.delete_point", "gb28181", deviceID+"/"+channelID, "GB28181 cruise point deleted", map[string]any{"cruise_id": body.CruiseID, "preset_id": body.PresetID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1227,6 +1256,7 @@ func (h *Handler) handleGB28181CruiseStart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	h.logSuccess(r, "gb28181.cruise.start", "gb28181", deviceID+"/"+channelID, "GB28181 cruise started", map[string]any{"cruise_id": cruiseID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1257,6 +1287,7 @@ func (h *Handler) handleGB28181CruiseStop(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	h.logSuccess(r, "gb28181.cruise.stop", "gb28181", deviceID+"/"+channelID, "GB28181 cruise stopped", map[string]any{"cruise_id": cruiseID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1280,6 +1311,7 @@ func (h *Handler) handleGB28181Snapshot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	h.logSuccess(r, "snapshot.take", "gb28181", deviceID+"/"+channelID, "GB28181 snapshot taken", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1303,6 +1335,7 @@ func (h *Handler) handleGB28181DeviceReset(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	h.logSuccess(r, "gb28181.device.reset", "gb28181", deviceID+"/"+channelID, "GB28181 device reset", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1340,6 +1373,7 @@ func (h *Handler) handleGB28181RecordControl(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	h.logSuccess(r, "gb28181.record.control", "gb28181", deviceID+"/"+channelID, "GB28181 record control", map[string]any{"command": body.Command})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1383,6 +1417,7 @@ func (h *Handler) handleGB28181HomePosition(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	h.logSuccess(r, "gb28181.home_position", "gb28181", deviceID+"/"+channelID, "GB28181 home position updated", map[string]any{"enabled": body.Enabled})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

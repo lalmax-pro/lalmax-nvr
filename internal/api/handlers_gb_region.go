@@ -105,6 +105,7 @@ func (h *Handler) handleGBRegionCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create region")
 		return
 	}
+	h.logSuccess(r, "gb28181.region.create", "gb28181", req.DeviceID, "GB28181 region created", map[string]any{"name": req.Name})
 	writeJSON(w, http.StatusOK, map[string]any{"region": region, "status": "ok"})
 }
 
@@ -157,6 +158,7 @@ func (h *Handler) handleGBRegionUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = h.db.AttachChannelsToRegion(ctx, region.DeviceID, keys)
 	}
+	h.logSuccess(r, "gb28181.region.update", "gb28181", region.DeviceID, "GB28181 region updated", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"region": region, "status": "ok"})
 }
 
@@ -192,6 +194,7 @@ func (h *Handler) handleGBRegionDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete region")
 		return
 	}
+	h.logSuccess(r, "gb28181.region.delete", "gb28181", region.DeviceID, "GB28181 region deleted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -202,6 +205,7 @@ func (h *Handler) handleGBRegionSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to sync regions")
 		return
 	}
+	h.logSuccess(r, "gb28181.region.sync", "gb28181", "", "GB28181 regions synced from channels", map[string]any{"created": count})
 	writeJSON(w, http.StatusOK, map[string]any{"created": count, "status": "ok"})
 }
 
@@ -226,6 +230,7 @@ func (h *Handler) handleGBChannelAttachRegion(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "failed to attach channels")
 		return
 	}
+	h.logSuccess(r, "gb28181.channel.attach_region", "gb28181", req.CivilCode, "channels attached to region", map[string]any{"count": len(req.Channels)})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -244,6 +249,7 @@ func (h *Handler) handleGBChannelDetachRegion(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "failed to detach channels")
 		return
 	}
+	h.logSuccess(r, "gb28181.channel.detach_region", "gb28181", "", "channels detached from region", map[string]any{"count": len(req.Channels)})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -304,6 +310,7 @@ func (h *Handler) handleGBRegionAddByCivilCode(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "failed to add region")
 		return
 	}
+	h.logSuccess(r, "gb28181.region.add_by_civil_code", "gb28181", req.CivilCode, "GB28181 region added from civil code", map[string]any{"created": created})
 	writeJSON(w, http.StatusOK, map[string]any{"created": created, "status": "ok"})
 }
 

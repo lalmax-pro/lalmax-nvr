@@ -282,6 +282,7 @@ func (h *Handler) Routes() http.Handler {
 		} else {
 			r.Use(h.authMW)
 		}
+		r.Post("/api/auth/logout", h.handleLogout)
 		r.Route("/api/recordings", func(r chi.Router) {
 			r.Get("/", h.handleListRecordings)
 			r.With(middleware.RequireOperatePermission()).Post("/batch-delete", h.handleBatchDeleteRecordings)

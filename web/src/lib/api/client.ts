@@ -197,8 +197,13 @@ export async function login(
   return data as LoginResponse;
 }
 
-// Logout
-export function logout(): void {
+// Logout — records audit entry then clears client-side credentials.
+export async function logout(): Promise<void> {
+  try {
+    await apiRequest<{ status: string }>('/auth/logout', { method: 'POST' });
+  } catch {
+    // Still log out locally even if the audit request fails.
+  }
   clearCredentials();
   window.location.hash = '#/login';
 }

@@ -45,6 +45,11 @@ func (h *Handler) logOperation(r *http.Request, action, resource, resourceID, st
 	}
 }
 
+// logSuccess records a successful user-initiated operation.
+func (h *Handler) logSuccess(r *http.Request, action, resource, resourceID, message string, metadata any) {
+	h.logOperation(r, action, resource, resourceID, "success", message, metadata)
+}
+
 func requestIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil {

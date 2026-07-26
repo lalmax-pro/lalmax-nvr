@@ -57,6 +57,7 @@ func (h *Handler) handleCreateRelayTask(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	h.logSuccess(r, "relay.create", "relay", task.ID, "relay task created", map[string]any{"stream_id": req.StreamID, "target_url": req.TargetURL})
 	writeJSON(w, http.StatusCreated, task)
 }
 
@@ -100,6 +101,7 @@ func (h *Handler) handleDeleteRelayTask(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	h.logSuccess(r, "relay.delete", "relay", taskID, "relay task deleted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -121,6 +123,7 @@ func (h *Handler) handleStartRelayTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.logSuccess(r, "relay.start", "relay", taskID, "relay task started", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
 }
 
@@ -142,6 +145,7 @@ func (h *Handler) handleStopRelayTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.logSuccess(r, "relay.stop", "relay", taskID, "relay task stopped", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 

@@ -478,6 +478,11 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
+	h.logOperation(r, "auth.logout", "auth", "", "success", "user logout succeeded", nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -1347,6 +1352,7 @@ func (h *Handler) handleReloadConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.config = cfg
+		h.logSuccess(r, "config.reload", "config", "", "config reloaded from disk", nil)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 		return
 	}
@@ -1359,6 +1365,7 @@ func (h *Handler) handleReloadConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.config = h.configWatcher.Config()
+	h.logSuccess(r, "config.reload", "config", "", "config reloaded from disk", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
