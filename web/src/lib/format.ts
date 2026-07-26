@@ -1,11 +1,11 @@
-import { state } from './i18n';
+import { i18nState } from './i18n';
 
 /**
  * Format a date string in a locale-aware manner.
  */
 export function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
-  const lang = state.currentLang === 'zh' ? 'zh-CN' : 'en-US';
+  const lang = i18nState.currentLang === 'zh' ? 'zh-CN' : 'en-US';
   return date.toLocaleString(lang, {
     month: 'short',
     day: 'numeric',
@@ -23,7 +23,7 @@ export function formatDuration(seconds: number): string {
   const hrs = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
-  const isZh = state.currentLang === 'zh';
+  const isZh = i18nState.currentLang === 'zh';
   
   if (hrs > 0) {
     return isZh

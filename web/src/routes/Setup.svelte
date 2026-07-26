@@ -4,7 +4,7 @@
   import { setProtocolPreference } from '$lib/preferences';
   import ThemeToggle from '../components/ThemeToggle.svelte';
   import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
-  import { t } from '$lib/i18n';
+  import { t, i18nState, setLang } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { ArrowUp, Check, Eye, EyeOff, FolderOpen, X } from 'lucide-svelte';
 
@@ -14,7 +14,18 @@
   let confirmPassword = $state('');
   let showPassword = $state(false);
   let showConfirmPassword = $state(false);
-  let language = $state('en');
+  let language = $state(i18nState.currentLang);
+
+  // Keep form dropdown in sync with the header LanguageSwitcher
+  $effect(() => {
+    language = i18nState.currentLang;
+  });
+
+  function handleLanguageChange(e: Event) {
+    const val = (e.target as HTMLSelectElement).value;
+    language = val;
+    setLang(val);
+  }
   let error = $state('');
   let loading = $state(false);
   let restartRequired = $state(false);
@@ -147,6 +158,7 @@
     loading = true;
 
     try {
+      setLang(language);
       const res = await setupApi(username, password, language, dataDir.trim());
 
       // Decode token to get credentials and store them
@@ -183,7 +195,7 @@
   }
 </script>
 
-<div class="min-h-screen flex items-center justify-center th-bg-primary px-4">
+<div class="min-h-screen flex items-center justify-center th-bg-primary px-4" data-lang={i18nState.currentLang}>
   <div class="fixed top-4 right-4 flex items-center gap-2 z-50">
     <ThemeToggle />
     <LanguageSwitcher />
@@ -391,11 +403,12 @@
         <select
           id="setup-language"
           class="input"
-          bind:value={language}
+          value={language}
+          onchange={handleLanguageChange}
           disabled={loading}
         >
-          <option value="en">English</option>
-          <option value="zh">中文</option>
+          <option value="en">{t('lang.en')}</option>
+          <option value="zh">{t('lang.zh')}</option>
         </select>
       </div>
 

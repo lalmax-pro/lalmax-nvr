@@ -2,7 +2,7 @@
   import { login, isAuthenticated } from '$lib/api';
   import ThemeToggle from '../components/ThemeToggle.svelte';
   import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
-  import { t } from '$lib/i18n';
+  import { t, i18nState } from '$lib/i18n';
   import { Eye, EyeOff } from 'lucide-svelte';
 
   let username = $state('');
@@ -11,9 +11,6 @@
   let error = $state('');
   let loginErrors = $state({ username: '', password: '' });
   let loading = $state(false);
-  // Force re-render when language changes
-
-
   // Redirect if already logged in
   if (isAuthenticated()) {
     window.location.hash = '#/dashboard';
@@ -68,7 +65,8 @@
   }
 </script>
 
-<div class="min-h-screen flex items-center justify-center th-bg-primary px-4">
+<!-- i18nState.currentLang keeps this page reactive when LanguageSwitcher changes -->
+<div class="min-h-screen flex items-center justify-center th-bg-primary px-4" data-lang={i18nState.currentLang}>
   <div class="fixed top-4 right-4 flex items-center gap-2 z-50">
     <ThemeToggle />
     <LanguageSwitcher />
