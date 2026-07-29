@@ -49,6 +49,7 @@ e2e-tests/
 test-results/
 tmp/
 package-lock.json
+!site/package-lock.json
 
 # Test screenshots
 /test*.png

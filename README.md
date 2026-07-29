@@ -13,6 +13,8 @@ A lightweight Network Video Recorder built on [lalmax](https://github.com/q19120
 
 This project was inspired by MiBeeNVR, and has since been developed into a dedicated NVR focused on the `lal` / `lalmax` media stack.
 
+[**Product website**](https://lalmax-pro.github.io/lalmax-nvr/)
+
 [**中文**](README.zh.md)
 
 ## Screenshots
