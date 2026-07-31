@@ -517,14 +517,9 @@ HLS 播放与录像拉流相互独立：关闭 `hls.enabled` 或启用按需切�
 
 ## 媒体引擎配置
 
-### `media.enabled`
-- **类型**: boolean
-- **默认**: `false`
-- **描述**: 是否启用 lalmax 媒体引擎
-
 ### `media.mode`
 - **类型**: string
-- **默认**: `"http"`
+- **默认**: `"embedded"`
 - **描述**: lalmax 通信模式
 
 ### `media.lalmax_http_addr`

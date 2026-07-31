@@ -36,7 +36,7 @@ Camera ──→ lalmax (media engine) ──→ HLS / HTTP-FLV / WebRTC / fMP4 
 
 - **lalmax** handles media relay, protocol conversion, and stream distribution
 - **NVR layer** handles camera lifecycle, ONVIF signaling, recording, storage, and web UI
-- When `media.enabled=true`, all H264/H265 streams flow through lalmax — no duplicate pulls
+- With `media.mode: embedded` (or `http`), all H264/H265 streams flow through lalmax — no duplicate pulls
 
 ## Streaming Protocols
 
@@ -108,10 +108,10 @@ Key config section for the media engine:
 
 ```yaml
 media:
-  enabled: true    # Enable lalmax relay (recommended)
+  mode: embedded    # Use lalmax media engine (recommended); "http" for external lalmax
 ```
 
-With `media.enabled=true`:
+With `media.mode: embedded` (or `http`):
 - All H264/H265 RTSP/ONVIF cameras are pulled through lalmax
 - HLS/FLV/WebRTC/fMP4 playback is served by lalmax
 - Recording consumes the unified lalmax stream
@@ -145,12 +145,14 @@ internal/              # Core packages
   ban/                 # Stream ban management
   camera/              # Camera lifecycle manager
   cleanup/             # Data cleanup tasks
+  civilcode/           # GB28181 administrative-division / industry codes
   config/              # YAML config
   event/               # Event bus
   ftp/                 # FTP server
   gb28181/             # GB28181 SIP server (device mgmt, cascade, playback, intercom)
   health/              # Camera health monitoring
   media/               # lalmax engine adapter
+  relay/               # Stream relay
   merge/               # Segment merge manager
   metrics/             # Prometheus metrics
   middleware/          # HTTP middleware

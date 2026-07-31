@@ -517,14 +517,9 @@ HLS playback is independent of recording pulls: disabling `hls.enabled` or using
 
 ## Media Engine Configuration
 
-### `media.enabled`
-- **Type**: boolean
-- **Default**: `false`
-- **Description**: Enable lalmax media engine
-
 ### `media.mode`
 - **Type**: string
-- **Default**: `"http"`
+- **Default**: `"embedded"`
 - **Description**: lalmax communication mode
 
 ### `media.lalmax_http_addr`

@@ -36,7 +36,7 @@ lalmax-nvr 采用两层架构：
 
 - **lalmax** 负责媒体中继、协议转换和流分发
 - **NVR 层** 负责摄像头生命周期、ONVIF 信令、录像、存储和 Web UI
-- `media.enabled=true` 时，所有 H264/H265 流都经过 lalmax——无重复拉流
+- `media.mode: embedded`（或 `http`）时，所有 H264/H265 流都经过 lalmax——无重复拉流
 
 ## 流媒体协议
 
@@ -108,10 +108,10 @@ cd lalmax-nvr
 
 ```yaml
 media:
-  enabled: true    # 启用 lalmax 中继（推荐）
+  mode: embedded    # 启用 lalmax 媒体引擎（推荐）；外部 lalmax 用 "http"
 ```
 
-`media.enabled=true` 时：
+`media.mode: embedded`（或 `http`）时：
 - 所有 H264/H265 RTSP/ONVIF 摄像头通过 lalmax 拉流
 - HLS/FLV/WebRTC/fMP4 播放由 lalmax 提供
 - 录像消费 lalmax 统一流
@@ -145,12 +145,14 @@ internal/              # 核心模块
   ban/                 # 流封禁管理
   camera/              # 摄像头生命周期管理
   cleanup/             # 数据清理任务
+  civilcode/           # GB28181 行政区划/行业代码
   config/              # YAML 配置
   event/               # 事件总线
   ftp/                 # FTP 服务
   gb28181/             # GB28181 SIP 服务（设备管理、级联、回放、对讲）
   health/              # 摄像头健康监控
   media/               # lalmax 引擎适配器
+  relay/               # 流中继
   merge/               # 片段合并管理器
   metrics/             # Prometheus 指标
   middleware/          # HTTP 中间件
