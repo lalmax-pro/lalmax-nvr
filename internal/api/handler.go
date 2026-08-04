@@ -24,6 +24,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/merge"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/lalmax-pro/lalmax-nvr/internal/observability"
 	"github.com/lalmax-pro/lalmax-nvr/internal/onvif"
 	"github.com/lalmax-pro/lalmax-nvr/internal/relay"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
@@ -155,6 +156,8 @@ type Handler struct {
 	sysMetrics *sysMetricsHistory
 	// streamMetrics holds per-stream ring buffers of periodic live metric samples.
 	streamMetrics *streamMetricsHistory
+	// apiObserver records low-cardinality API telemetry for OTel and the local dashboard.
+	apiObserver *observability.HTTPObserver
 }
 
 // GB28181StreamStatus reports active GB28181 play sessions for stream status overlay.
@@ -200,6 +203,7 @@ func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler
 		cloudProxy:       cloudProxy,
 		sysMetrics:       newSysMetricsHistory(),
 		streamMetrics:    newStreamMetricsHistory(),
+		apiObserver:      observability.NewHTTPObserver(observability.NewAggregator()),
 		onvifDiscover:    onvif.Discover,
 		onvifProbeDevice: onvif.ProbeDevice,
 		onvifNewClient: func(endpoint, username, password string) onvifDeviceClient {
@@ -258,6 +262,7 @@ func (h *Handler) Routes() http.Handler {
 	h.startMetricsSampler(context.Background())
 	h.startStreamMetricsSampler(context.Background())
 	r := chi.NewRouter()
+	r.Use(h.apiObserver.Middleware)
 
 	// Public routes with rate limiting on health/readyz
 	r.Group(func(r chi.Router) {
@@ -373,6 +378,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/stats/system/history", h.handleSystemHistory)
 		r.Get("/api/stats/hourly", h.handleHourlyStats)
 		r.Get("/api/stats/camera-uptime", h.handleCameraUptimeStats)
+		r.Get("/api/observability/api", h.handleAPIObservability)
 		r.Get("/api/network", h.handleGetNetworkInterfaces)
 		r.Get("/api/streams", h.handleListStreams)
 		r.Get("/api/streams/{stream_id}", h.handleGetStream)

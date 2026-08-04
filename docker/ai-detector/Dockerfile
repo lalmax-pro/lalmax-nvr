@@ -25,7 +25,7 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && 
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY main.py .
+COPY *.py .
 
 # Download YOLOv8 model (will be cached after first download)
 RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"

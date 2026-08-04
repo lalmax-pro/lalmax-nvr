@@ -34,6 +34,18 @@ services:
       - RTSP_PORT=15544  # lalmax RTSP port
       # Object tracking (supervision library)
       - ENABLE_TRACKING=true
+      # Motion gating (frigate-style): only run inference on motion regions
+      - MOTION_ONLY=true
+      - MOTION_THRESHOLD=30  # Pixel difference threshold, 1-255 (higher = less sensitive)
+      - MOTION_CONTOUR_AREA=10  # Min contour area at the downscaled motion resolution
+      - MOTION_FRAME_HEIGHT=100  # Height frames are downscaled to for motion analysis
+      - MOTION_LIGHTNING_THRESHOLD=0.8  # Recalibrate instead of reporting motion above this frame fraction
+      - IMPROVE_CONTRAST=true
+      # Region-based detection: motion boxes are clustered into square crops
+      - REGION_MIN_SIZE=320  # Min region edge in pixels (small motion is upscaled for the model)
+      - MAX_REGIONS=4  # Above this many regions, fall back to one full-frame pass
+      # Stationary suppression: stop reporting objects that stay put
+      - STATIONARY_THRESHOLD=50  # Processed frames with unchanged position before an object is stationary
       # Health check port
       - PORT=8080
     extra_hosts:

@@ -78,6 +78,14 @@ observability:
   log_level: "info"              # Log level: debug, info, warn, error
   log_format: "text"             # Log format: json or text
   enable_pprof: false            # Enable pprof debug endpoints
+  otlp:
+    enabled: false               # Export to an external OTLP/HTTP collector
+    endpoint: "http://127.0.0.1:4318"
+    service_name: "lalmax-nvr"
+    traces_enabled: true
+    metrics_enabled: true
+    timeout: "10s"
+    metrics_export_interval: "30s"
 version: "1.0"
 ```
 
@@ -515,6 +523,17 @@ HLS playback is independent of recording pulls: disabling `hls.enabled` or using
 - **Description**: Enable pprof debug endpoints for performance profiling
 - **Note**: Use with caution in production
 
+### `observability.otlp`
+
+- **Description**: Optional external OTLP/HTTP export. The application reads this configuration only; `OTEL_*` environment variables are neither required nor read
+- **`enabled`**: Enables external export, default `false`. The frontend observability API continues to work while disabled
+- **`endpoint`**: Collector base URL, default `http://127.0.0.1:4318`. The application appends `/v1/traces` and `/v1/metrics`
+- **`service_name`**: OTel service name, default `lalmax-nvr`
+- **`traces_enabled` / `metrics_enabled`**: Toggle trace and metric export independently; both default to `true`, and at least one must be enabled
+- **`timeout`**: Per-export timeout, default `10s`
+- **`metrics_export_interval`**: Periodic metric export interval, default `30s`
+- **`headers`**: Optional HTTP header map for collector authentication. Protect configuration files containing tokens as sensitive files
+
 ## Media Engine Configuration
 
 ### `media.mode`
@@ -818,4 +837,10 @@ hls:
   max_streams: 4
 observability:
   log_level: "info"
+  otlp:
+    enabled: true
+    endpoint: "http://otel-collector:4318"
+    service_name: "lalmax-nvr"
+    traces_enabled: true
+    metrics_enabled: true
 ```

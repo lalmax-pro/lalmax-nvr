@@ -43,10 +43,17 @@ export async function loadChart() {
   } = await import('chart.js');
 
   Chart.register(
-    CategoryScale, LinearScale,
-    BarController, BarElement,
-    LineController, LineElement,
-    PointElement, Filler, Tooltip, Legend, Title
+    CategoryScale,
+    LinearScale,
+    BarController,
+    BarElement,
+    LineController,
+    LineElement,
+    PointElement,
+    Filler,
+    Tooltip,
+    Legend,
+    Title,
   );
 
   _chartModule = Chart;
@@ -75,25 +82,27 @@ export function createTrendChart(Chart, canvas, trends) {
   if (!canvas) return null;
 
   const { gridColor, textColor, accentColor, accentFill } = getChartThemeColors();
-  const labels = trends.map(d => d.date.slice(5));
-  const rawSizes = trends.map(d => d.total_size);
+  const labels = trends.map((d) => d.date.slice(5));
+  const rawSizes = trends.map((d) => d.total_size);
   const chartUnit = getChartUnit(rawSizes);
-  const sizes = rawSizes.map(s => +(s / chartUnit.divisor).toFixed(1));
+  const sizes = rawSizes.map((s) => +(s / chartUnit.divisor).toFixed(1));
 
   return new Chart(canvas, {
     type: 'line',
     data: {
       labels,
-      datasets: [{
-        label: `Storage (${chartUnit.unit})`,
-        data: sizes,
-        borderColor: accentColor,
-        backgroundColor: accentFill,
-        fill: true,
-        tension: 0.3,
-        pointRadius: 4,
-        pointBackgroundColor: accentColor,
-      }],
+      datasets: [
+        {
+          label: `Storage (${chartUnit.unit})`,
+          data: sizes,
+          borderColor: accentColor,
+          backgroundColor: accentFill,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 4,
+          pointBackgroundColor: accentColor,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -133,21 +142,21 @@ export function createSystemMetricChart(Chart, canvas, samples, metric, label) {
   if (!canvas || !samples || samples.length === 0) return null;
   const { gridColor, textColor, accentColor, accentFill } = getChartThemeColors();
 
-  const labels = samples.map(s => fmtTime(s.ts));
+  const labels = samples.map((s) => fmtTime(s.ts));
   let data;
   let unit = '';
   if (metric === 'cpu') {
-    data = samples.map(s => +s.cpu.toFixed(1));
+    data = samples.map((s) => +s.cpu.toFixed(1));
     unit = '%';
   } else if (metric === 'mem') {
-    data = samples.map(s => +s.mem.toFixed(1));
+    data = samples.map((s) => +s.mem.toFixed(1));
     unit = '%';
   } else if (metric === 'goroutines') {
-    data = samples.map(s => s.goroutines ?? 0);
+    data = samples.map((s) => s.goroutines ?? 0);
   } else {
     // net: show upload + download as two datasets, in KB/s
-    const up = samples.map(s => +(s.net_up / 1024).toFixed(1));
-    const dn = samples.map(s => +(s.net_dn / 1024).toFixed(1));
+    const up = samples.map((s) => +(s.net_up / 1024).toFixed(1));
+    const dn = samples.map((s) => +(s.net_dn / 1024).toFixed(1));
     return new Chart(canvas, {
       type: 'line',
       data: {
@@ -158,14 +167,20 @@ export function createSystemMetricChart(Chart, canvas, samples, metric, label) {
             data: up,
             borderColor: 'rgba(56, 189, 248, 0.8)',
             backgroundColor: 'rgba(56, 189, 248, 0.08)',
-            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 1.5,
           },
           {
             label: '↓ KB/s',
             data: dn,
             borderColor: 'rgba(16, 185, 129, 0.8)',
             backgroundColor: 'rgba(16, 185, 129, 0.08)',
-            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 1.5,
           },
         ],
       },
@@ -177,16 +192,18 @@ export function createSystemMetricChart(Chart, canvas, samples, metric, label) {
     type: 'line',
     data: {
       labels,
-      datasets: [{
-        label: `${label} (${unit})`,
-        data,
-        borderColor: accentColor,
-        backgroundColor: accentFill,
-        fill: true,
-        tension: 0.3,
-        pointRadius: 0,
-        borderWidth: 1.5,
-      }],
+      datasets: [
+        {
+          label: `${label} (${unit})`,
+          data,
+          borderColor: accentColor,
+          backgroundColor: accentFill,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 1.5,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -199,7 +216,7 @@ export function createSystemMetricChart(Chart, canvas, samples, metric, label) {
         x: { grid: { color: gridColor }, ticks: { color: textColor, maxTicksLimit: 6, maxRotation: 0 } },
         y: {
           grid: { color: gridColor },
-          ticks: { color: textColor, callback: v => v + unit },
+          ticks: { color: textColor, callback: (v) => v + unit },
           beginAtZero: true,
           ...(unit === '%' ? { max: 100 } : {}),
         },
@@ -218,7 +235,7 @@ function netChartOptions(gridColor, textColor) {
     },
     scales: {
       x: { grid: { color: gridColor }, ticks: { color: textColor, maxTicksLimit: 6, maxRotation: 0 } },
-      y: { grid: { color: gridColor }, ticks: { color: textColor, callback: v => v + ' KB/s' }, beginAtZero: true },
+      y: { grid: { color: gridColor }, ticks: { color: textColor, callback: (v) => v + ' KB/s' }, beginAtZero: true },
     },
   };
 }
@@ -231,16 +248,16 @@ function netChartOptions(gridColor, textColor) {
  */
 export function updateSystemMetricChart(chart, samples, metric) {
   if (!chart || !samples || samples.length === 0) return;
-  chart.data.labels = samples.map(s => fmtTime(s.ts));
+  chart.data.labels = samples.map((s) => fmtTime(s.ts));
   if (metric === 'net') {
-    chart.data.datasets[0].data = samples.map(s => +(s.net_up / 1024).toFixed(1));
-    chart.data.datasets[1].data = samples.map(s => +(s.net_dn / 1024).toFixed(1));
+    chart.data.datasets[0].data = samples.map((s) => +(s.net_up / 1024).toFixed(1));
+    chart.data.datasets[1].data = samples.map((s) => +(s.net_dn / 1024).toFixed(1));
   } else if (metric === 'cpu') {
-    chart.data.datasets[0].data = samples.map(s => +s.cpu.toFixed(1));
+    chart.data.datasets[0].data = samples.map((s) => +s.cpu.toFixed(1));
   } else if (metric === 'goroutines') {
-    chart.data.datasets[0].data = samples.map(s => s.goroutines ?? 0);
+    chart.data.datasets[0].data = samples.map((s) => s.goroutines ?? 0);
   } else {
-    chart.data.datasets[0].data = samples.map(s => +s.mem.toFixed(1));
+    chart.data.datasets[0].data = samples.map((s) => +s.mem.toFixed(1));
   }
   chart.update('none'); // 'none' = skip animation for live updates
 }
@@ -259,24 +276,24 @@ export function createStreamMetricChart(Chart, canvas, samples, label, unit, col
   if (!canvas) return null;
   const { gridColor, textColor } = getChartThemeColors();
   const borderColor = color ?? 'rgba(56, 189, 248, 0.85)';
-  const fillColor   = color
-    ? color.replace(/[\d.]+\)$/, '0.08)')
-    : 'rgba(56, 189, 248, 0.08)';
+  const fillColor = color ? color.replace(/[\d.]+\)$/, '0.08)') : 'rgba(56, 189, 248, 0.08)';
 
   return new Chart(canvas, {
     type: 'line',
     data: {
-      labels: samples.map(s => fmtTimeSec(s.ts)),
-      datasets: [{
-        label: `${label}${unit ? ' (' + unit + ')' : ''}`,
-        data:   samples.map(s => s.value),
-        borderColor:     borderColor,
-        backgroundColor: fillColor,
-        fill: true,
-        tension: 0.35,
-        pointRadius: 0,
-        borderWidth: 1.5,
-      }],
+      labels: samples.map((s) => fmtTimeSec(s.ts)),
+      datasets: [
+        {
+          label: `${label}${unit ? ' (' + unit + ')' : ''}`,
+          data: samples.map((s) => s.value),
+          borderColor: borderColor,
+          backgroundColor: fillColor,
+          fill: true,
+          tension: 0.35,
+          pointRadius: 0,
+          borderWidth: 1.5,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -287,17 +304,17 @@ export function createStreamMetricChart(Chart, canvas, samples, label, unit, col
         tooltip: {
           mode: 'index',
           intersect: false,
-          callbacks: { label: ctx => `${ctx.parsed.y} ${unit}` },
+          callbacks: { label: (ctx) => `${ctx.parsed.y} ${unit}` },
         },
       },
       scales: {
         x: {
-          grid:  { color: gridColor },
+          grid: { color: gridColor },
           ticks: { color: textColor, maxTicksLimit: 5, maxRotation: 0 },
         },
         y: {
-          grid:      { color: gridColor },
-          ticks:     { color: textColor, callback: v => v + (unit ? ' ' + unit : '') },
+          grid: { color: gridColor },
+          ticks: { color: textColor, callback: (v) => v + (unit ? ' ' + unit : '') },
           beginAtZero: true,
         },
       },
@@ -312,8 +329,8 @@ export function createStreamMetricChart(Chart, canvas, samples, label, unit, col
  */
 export function updateStreamMetricChart(chart, samples) {
   if (!chart || !samples || samples.length === 0) return;
-  chart.data.labels = samples.map(s => fmtTimeSec(s.ts));
-  chart.data.datasets[0].data = samples.map(s => s.value);
+  chart.data.labels = samples.map((s) => fmtTimeSec(s.ts));
+  chart.data.datasets[0].data = samples.map((s) => s.value);
   chart.update('none');
 }
 
@@ -337,23 +354,25 @@ export function createHourlyActivityChart(Chart, canvas, hourly) {
   if (!canvas || !hourly || hourly.length === 0) return null;
   const { gridColor, textColor } = getChartThemeColors();
 
-  const labels = hourly.map(h => {
+  const labels = hourly.map((h) => {
     const d = new Date(h.hour);
     return d.getMonth() + 1 + '/' + d.getDate() + ' ' + d.getHours() + 'h';
   });
-  const data = hourly.map(h => h.recordings);
+  const data = hourly.map((h) => h.recordings);
 
   return new Chart(canvas, {
     type: 'bar',
     data: {
       labels,
-      datasets: [{
-        label: 'Recordings',
-        data,
-        backgroundColor: 'rgba(139, 92, 246, 0.6)',
-        borderRadius: 3,
-        borderSkipped: false,
-      }],
+      datasets: [
+        {
+          label: 'Recordings',
+          data,
+          backgroundColor: 'rgba(139, 92, 246, 0.6)',
+          borderRadius: 3,
+          borderSkipped: false,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -377,7 +396,7 @@ export function createHourlyActivityChart(Chart, canvas, hourly) {
  */
 export function aggregateCameraTotals(trends) {
   const totals = {};
-  trends.forEach(d => {
+  trends.forEach((d) => {
     if (d.cameras) {
       Object.entries(d.cameras).forEach(([cam, count]) => {
         totals[cam] = (totals[cam] || 0) + count;
@@ -400,11 +419,11 @@ export function createCameraChart(Chart, canvas, cameraTotals, allCameraNames, s
   if (!canvas || Object.keys(cameraTotals).length === 0) return null;
 
   const { gridColor, textColor } = getChartThemeColors();
-  const camLabels = Object.keys(cameraTotals).filter(name => selectedCameras.has(name));
-  const camData = camLabels.map(name => cameraTotals[name]);
+  const camLabels = Object.keys(cameraTotals).filter((name) => selectedCameras.has(name));
+  const camData = camLabels.map((name) => cameraTotals[name]);
   if (camLabels.length === 0) return null;
 
-  const camBarColors = camLabels.map(name => {
+  const camBarColors = camLabels.map((name) => {
     const idx = allCameraNames.indexOf(name) % BAR_COLORS.length;
     return BAR_COLORS[idx];
   });
@@ -413,12 +432,14 @@ export function createCameraChart(Chart, canvas, cameraTotals, allCameraNames, s
     type: 'bar',
     data: {
       labels: camLabels,
-      datasets: [{
-        label: 'Recordings',
-        data: camData,
-        backgroundColor: camBarColors,
-        borderRadius: 6,
-      }],
+      datasets: [
+        {
+          label: 'Recordings',
+          data: camData,
+          backgroundColor: camBarColors,
+          borderRadius: 6,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -433,4 +454,118 @@ export function createCameraChart(Chart, canvas, cameraTotals, allCameraNames, s
       },
     },
   });
+}
+
+/** Create the API request-rate and server-error chart. */
+export function createAPIRequestChart(Chart, canvas, samples, rpsLabel, errorsLabel) {
+  if (!canvas || !samples) return null;
+  const { gridColor, textColor } = getChartThemeColors();
+  return new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: samples.map((s) => fmtTimeSec(s.timestamp)),
+      datasets: [
+        {
+          label: rpsLabel,
+          data: samples.map((s) => s.rps),
+          borderColor: 'rgba(56, 189, 248, 0.9)',
+          backgroundColor: 'rgba(56, 189, 248, 0.08)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          yAxisID: 'y',
+        },
+        {
+          label: errorsLabel,
+          data: samples.map((s) => s.status_5xx),
+          borderColor: 'rgba(239, 68, 68, 0.9)',
+          backgroundColor: 'rgba(239, 68, 68, 0.08)',
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          yAxisID: 'errors',
+        },
+      ],
+    },
+    options: apiChartOptions(gridColor, textColor, 'req/s', 'errors'),
+  });
+}
+
+/** Create the API P95 latency and 5xx-rate chart. */
+export function createAPILatencyChart(Chart, canvas, samples, p95Label, errorRateLabel) {
+  if (!canvas || !samples) return null;
+  const { gridColor, textColor } = getChartThemeColors();
+  return new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: samples.map((s) => fmtTimeSec(s.timestamp)),
+      datasets: [
+        {
+          label: p95Label,
+          data: samples.map((s) => s.p95_ms),
+          borderColor: 'rgba(139, 92, 246, 0.9)',
+          backgroundColor: 'rgba(139, 92, 246, 0.08)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          yAxisID: 'y',
+        },
+        {
+          label: errorRateLabel,
+          data: samples.map((s) => +(s.error_rate * 100).toFixed(2)),
+          borderColor: 'rgba(245, 158, 11, 0.9)',
+          backgroundColor: 'rgba(245, 158, 11, 0.08)',
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          yAxisID: 'errors',
+        },
+      ],
+    },
+    options: apiChartOptions(gridColor, textColor, 'ms', '%'),
+  });
+}
+
+/** Update either API chart without recreating its canvas. */
+export function updateAPIChart(chart, samples, kind) {
+  if (!chart || !samples) return;
+  chart.data.labels = samples.map((s) => fmtTimeSec(s.timestamp));
+  if (kind === 'requests') {
+    chart.data.datasets[0].data = samples.map((s) => s.rps);
+    chart.data.datasets[1].data = samples.map((s) => s.status_5xx);
+  } else {
+    chart.data.datasets[0].data = samples.map((s) => s.p95_ms);
+    chart.data.datasets[1].data = samples.map((s) => +(s.error_rate * 100).toFixed(2));
+  }
+  chart.update('none');
+}
+
+function apiChartOptions(gridColor, textColor, primaryUnit, secondaryUnit) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { labels: { color: textColor, boxWidth: 12, font: { size: 11 } } },
+      tooltip: { mode: 'index', intersect: false },
+    },
+    scales: {
+      x: { grid: { color: gridColor }, ticks: { color: textColor, maxTicksLimit: 6, maxRotation: 0 } },
+      y: {
+        position: 'left',
+        beginAtZero: true,
+        grid: { color: gridColor },
+        ticks: { color: textColor, callback: (v) => `${v} ${primaryUnit}` },
+      },
+      errors: {
+        position: 'right',
+        beginAtZero: true,
+        grid: { display: false },
+        ticks: { color: textColor, callback: (v) => `${v} ${secondaryUnit}` },
+      },
+    },
+  };
 }

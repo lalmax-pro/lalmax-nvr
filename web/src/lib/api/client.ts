@@ -21,7 +21,10 @@ export interface ApiError {
 
 // API error with machine-readable code for i18n mapping
 export class ApiRequestError extends Error {
-  constructor(message: string, public code?: string) {
+  constructor(
+    message: string,
+    public code?: string,
+  ) {
     super(message);
     this.name = 'ApiRequestError';
   }
@@ -78,9 +81,10 @@ export function getCredentials(): AuthCredentials | null {
     const decoded = atob(encoded);
     const [username, password] = decoded.split(':');
     return { username, password };
-  } catch (e) { console.warn('Failed to decode credentials:', e);
-return null;
-}
+  } catch (e) {
+    console.warn('Failed to decode credentials:', e);
+    return null;
+  }
 }
 
 // Clear credentials
@@ -114,10 +118,7 @@ export function getAuthToken(): string | null {
 export const API_BASE = '/api';
 
 // Generic API request function
-export async function apiRequest<T>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<T> {
+export async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
 
   const headers: HeadersInit = {
@@ -145,10 +146,7 @@ export async function apiRequest<T>(
 }
 
 // Generic API request for blob responses (e.g. file downloads)
-export async function apiRequestBlob(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<Blob> {
+export async function apiRequestBlob(endpoint: string, options: RequestInit = {}): Promise<Blob> {
   const url = `${API_BASE}${endpoint}`;
 
   const headers: HeadersInit = {};
@@ -165,17 +163,13 @@ export async function apiRequestBlob(
 }
 
 // Login endpoint
-export async function login(
-  username: string,
-  password: string,
-  signal?: AbortSignal
-): Promise<LoginResponse> {
+export async function login(username: string, password: string, signal?: AbortSignal): Promise<LoginResponse> {
   const authHeader = `Basic ${btoa(`${username}:${password}`)}`;
 
   const response = await fetch('/api/auth/login', {
     method: 'POST',
     headers: {
-      'Authorization': authHeader,
+      Authorization: authHeader,
     },
     signal,
   });
@@ -237,11 +231,11 @@ export async function getLocalNetworkInterfaces(signal?: AbortSignal): Promise<{
 
 // System metrics history sample
 export interface SystemMetricSample {
-  ts: number;         // Unix seconds
-  cpu: number;        // 0–100
-  mem: number;        // 0–100
-  net_up: number;     // bytes/sec
-  net_dn: number;     // bytes/sec
+  ts: number; // Unix seconds
+  cpu: number; // 0–100
+  mem: number; // 0–100
+  net_up: number; // bytes/sec
+  net_dn: number; // bytes/sec
   goroutines: number;
 }
 
@@ -252,7 +246,7 @@ export async function getSystemMetricsHistory(period: string, signal?: AbortSign
 
 // Hourly recording activity
 export interface HourlyStats {
-  hour: string;       // RFC3339, e.g. "2024-01-01T14:00:00Z"
+  hour: string; // RFC3339, e.g. "2024-01-01T14:00:00Z"
   recordings: number;
   total_size: number;
 }
@@ -274,6 +268,77 @@ export interface CameraUptimeStat {
 // Get camera stability stats (days: 7, 14, 30)
 export async function getCameraUptimeStats(days: number, signal?: AbortSignal): Promise<CameraUptimeStat[]> {
   return apiRequest<CameraUptimeStat[]>(`/stats/camera-uptime?days=${days}`, { signal });
+}
+
+export interface APILatencySummary {
+  avg_ms: number;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  max_ms: number;
+}
+
+export interface APIObservabilitySummary {
+  requests: number;
+  rps: number;
+  in_flight: number;
+  status_4xx: number;
+  status_5xx: number;
+  client_error_rate: number;
+  error_rate: number;
+  response_bytes: number;
+  latency: APILatencySummary;
+}
+
+export interface APIObservabilitySeriesPoint {
+  timestamp: number;
+  requests: number;
+  rps: number;
+  status_4xx: number;
+  status_5xx: number;
+  error_rate: number;
+  p95_ms: number;
+}
+
+export interface APIObservabilityRoute {
+  method: string;
+  route: string;
+  requests: number;
+  rps: number;
+  status_4xx: number;
+  status_5xx: number;
+  client_error_rate: number;
+  error_rate: number;
+  avg_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  max_ms: number;
+  response_bytes: number;
+}
+
+export interface APIObservabilityError {
+  timestamp: number;
+  method: string;
+  route: string;
+  status: number;
+  duration_ms: number;
+  trace_id?: string;
+}
+
+export interface APIObservabilityResponse {
+  generated_at: number;
+  window_seconds: number;
+  summary: APIObservabilitySummary;
+  series: APIObservabilitySeriesPoint[];
+  routes: APIObservabilityRoute[];
+  recent_errors: APIObservabilityError[];
+}
+
+export async function getAPIObservability(
+  window: '1m' | '5m' | '15m' | '30m' | '1h',
+  signal?: AbortSignal,
+): Promise<APIObservabilityResponse> {
+  return apiRequest<APIObservabilityResponse>(`/observability/api?window=${window}&series=1h&limit=50`, { signal });
 }
 
 // Setup response

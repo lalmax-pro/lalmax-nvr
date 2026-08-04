@@ -38,6 +38,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware/remotelog"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/mqtt"
+	"github.com/lalmax-pro/lalmax-nvr/internal/observability"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/streamhistory"
@@ -401,6 +402,7 @@ type App struct {
 
 	// Remote log handler (nil when disabled)
 	remoteLogHandler *remotelog.Handler
+	otelProvider     *observability.Provider
 
 	// Lifecycle
 	cancel context.CancelFunc
@@ -650,7 +652,26 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		a.ftpServer = ftp.NewServer(ftpAddr, cfg.FTP.PassivePortRange, cfg.Auth.Username, cfg.Auth.Password, store, db)
 	}
 
-	// Step 11: Build HTTP router
+	// Step 11.5: OpenTelemetry providers. The local API dashboard works without
+	// an exporter; external OTLP/HTTP export is configured only through YAML.
+	otlpTimeout, _ := time.ParseDuration(cfg.Observability.OTLP.Timeout)
+	otlpMetricsInterval, _ := time.ParseDuration(cfg.Observability.OTLP.MetricsExportInterval)
+	a.otelProvider, err = observability.NewProvider(context.Background(), appVersion, observability.ProviderConfig{
+		Enabled:               cfg.Observability.OTLP.Enabled,
+		Endpoint:              cfg.Observability.OTLP.Endpoint,
+		ServiceName:           cfg.Observability.OTLP.ServiceName,
+		TracesEnabled:         cfg.Observability.OTLP.ExportTraces(),
+		MetricsEnabled:        cfg.Observability.OTLP.ExportMetrics(),
+		Headers:               cfg.Observability.OTLP.Headers,
+		Timeout:               otlpTimeout,
+		MetricsExportInterval: otlpMetricsInterval,
+	})
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("observability: %w", err)
+	}
+
+	// Step 12: Build HTTP router
 	a.httpServer = &http.Server{
 		Addr:    cfg.Server.Listen,
 		Handler: a.buildRouter(),
@@ -808,7 +829,7 @@ func (a *App) buildRouter() http.Handler {
 	chi.RegisterMethod("MOVE")
 
 	r := chi.NewRouter()
-	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz"))
+	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz", "/api/observability/api"))
 	r.Use(middleware.Recoverer)
 	r.Use(authmw.SecurityHeaders)
 	r.Use(authmw.COOPHeaders)
@@ -1109,6 +1130,13 @@ func (a *App) Stop() error {
 		log.Info("stopping camera manager")
 		if err := a.camMgr.Stop(); err != nil {
 			log.Warn("camera manager stop error", "error", err)
+		}
+
+		if a.otelProvider != nil {
+			log.Info("flushing OpenTelemetry providers")
+			if err := a.otelProvider.Shutdown(shutdownCtx); err != nil {
+				log.Warn("OpenTelemetry shutdown error", "error", err)
+			}
 		}
 
 		// 9. Storage (DB)

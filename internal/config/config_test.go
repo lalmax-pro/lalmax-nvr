@@ -582,6 +582,38 @@ func TestValidateLogFormatValid(t *testing.T) {
 	}
 }
 
+func TestValidateOTLPConfig(t *testing.T) {
+	cfg := &Config{Observability: ObservabilityConfig{OTLP: OTLPConfig{
+		Enabled:  true,
+		Endpoint: "https://otel.example.com/collector",
+		Headers:  map[string]string{"Authorization": "Bearer secret"},
+	}}}
+	cfg.ApplyDefaults()
+	require.NoError(t, Validate(cfg))
+
+	cfg.Observability.OTLP.Endpoint = "collector:4318"
+	require.ErrorContains(t, Validate(cfg), "otlp.endpoint")
+
+	cfg.Observability.OTLP.Endpoint = "https://otel.example.com"
+	*cfg.Observability.OTLP.TracesEnabled = false
+	*cfg.Observability.OTLP.MetricsEnabled = false
+	require.ErrorContains(t, Validate(cfg), "traces_enabled or metrics_enabled")
+}
+
+func TestValidateOTLPDurationsAndHeaders(t *testing.T) {
+	cfg := &Config{Observability: ObservabilityConfig{OTLP: OTLPConfig{Enabled: true}}}
+	cfg.ApplyDefaults()
+
+	cfg.Observability.OTLP.Timeout = "0s"
+	require.ErrorContains(t, Validate(cfg), "otlp.timeout")
+	cfg.Observability.OTLP.Timeout = "10s"
+	cfg.Observability.OTLP.MetricsExportInterval = "invalid"
+	require.ErrorContains(t, Validate(cfg), "metrics_export_interval")
+	cfg.Observability.OTLP.MetricsExportInterval = "30s"
+	cfg.Observability.OTLP.Headers = map[string]string{"Authorization": "secret\r\nInjected: true"}
+	require.ErrorContains(t, Validate(cfg), "invalid header")
+}
+
 func TestValidateMergeEnabledInvalidInterval(t *testing.T) {
 	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "not-a-duration", WindowSize: "1h", BatchLimit: 10, MinSegmentAge: "5m", MinSegmentsToMerge: 3}}
 	cfg.ApplyDefaults()
@@ -695,6 +727,13 @@ func TestApplyDefaultsObservability(t *testing.T) {
 	require.Equal(t, "info", cfg.Observability.LogLevel)
 	require.Equal(t, "text", cfg.Observability.LogFormat)
 	require.Equal(t, false, cfg.Observability.EnablePprof)
+	require.False(t, cfg.Observability.OTLP.Enabled)
+	require.Equal(t, "http://127.0.0.1:4318", cfg.Observability.OTLP.Endpoint)
+	require.Equal(t, "lalmax-nvr", cfg.Observability.OTLP.ServiceName)
+	require.True(t, cfg.Observability.OTLP.ExportTraces())
+	require.True(t, cfg.Observability.OTLP.ExportMetrics())
+	require.Equal(t, "10s", cfg.Observability.OTLP.Timeout)
+	require.Equal(t, "30s", cfg.Observability.OTLP.MetricsExportInterval)
 }
 
 func TestApplyDefaultsVersion(t *testing.T) {

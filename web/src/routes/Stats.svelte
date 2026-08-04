@@ -3,32 +3,34 @@
   import {
     getStats, listCameras, healthCheck, getSystemStats, getMergeStatus, getMergePending,
     getLocalNetworkInterfaces, getStatsTrends,
-    getSystemMetricsHistory, getHourlyStats, getCameraUptimeStats,
+    getSystemMetricsHistory, getHourlyStats, getCameraUptimeStats, getAPIObservability,
   } from '$lib/api';
   import type {
     StorageStats, Camera, HealthResponse, SystemStats, MergeStatus, MergePending,
-    NetworkInterface, SystemMetricSample, HourlyStats, CameraUptimeStat,
+    NetworkInterface, SystemMetricSample, HourlyStats, CameraUptimeStat, APIObservabilityResponse,
   } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize, formatDate } from '$lib/format';
 
   import {
     HardDrive, BarChart3, Video, CameraIcon, Cpu, MemoryStick, Wifi,
-    ChevronDown, ChevronUp, GitMerge, Activity, Clock, Server,
+    ChevronDown, ChevronUp, GitMerge, Activity, Clock, Server, Gauge,
   } from 'lucide-svelte';
   import {
     loadChart, createTrendChart, createCameraChart, aggregateCameraTotals, BAR_COLORS,
     createSystemMetricChart, updateSystemMetricChart, createHourlyActivityChart,
+    createAPIRequestChart, createAPILatencyChart, updateAPIChart,
   } from '$lib/charts';
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
 
-  type StatsTab = 'overview' | 'resources' | 'recordings' | 'cameras' | 'system';
+  type StatsTab = 'overview' | 'resources' | 'api' | 'recordings' | 'cameras' | 'system';
   let activeTab = $state<StatsTab>('overview');
 
   const tabs: { id: StatsTab; labelKey: string; icon: any }[] = [
     { id: 'overview',   labelKey: 'stats.tabOverview',   icon: BarChart3 },
     { id: 'resources',  labelKey: 'stats.tabResources',  icon: Activity },
+    { id: 'api',        labelKey: 'stats.tabAPI',        icon: Gauge },
     { id: 'recordings', labelKey: 'stats.tabRecordings', icon: Video },
     { id: 'cameras',    labelKey: 'stats.tabCameras',    icon: CameraIcon },
     { id: 'system',     labelKey: 'stats.tabSystem',     icon: Server },
@@ -63,6 +65,17 @@
   let netChart: any = null;
   let goroutineChart: any = null;
   let sysChartsMounted = false;
+
+  // ── API observability tab ────────────────────────────────────────────────
+
+  let apiWindow = $state<'1m' | '5m' | '15m' | '30m' | '1h'>('5m');
+  let apiObservability = $state<APIObservabilityResponse | null>(null);
+  let apiLoading = $state(false);
+  let apiError = $state('');
+  let apiRequestChart: any = null;
+  let apiLatencyChart: any = null;
+  let apiAbortController: AbortController | null = null;
+  let apiRefreshInterval: number;
 
   // ── Recordings tab ────────────────────────────────────────────────────────
 
@@ -201,6 +214,27 @@
     finally { sysHistoryLoading = false; }
   }
 
+  async function loadAPIObservability() {
+    apiAbortController?.abort();
+    const controller = new AbortController();
+    apiAbortController = controller;
+    apiLoading = apiObservability === null;
+    apiError = '';
+    try {
+      apiObservability = await getAPIObservability(apiWindow, controller.signal);
+      if (!ChartJs) ChartJs = await loadChart();
+      window.setTimeout(() => buildAPICharts(), 30);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      apiError = e instanceof Error ? e.message : t('stats.apiLoadFailed');
+    } finally {
+      if (apiAbortController === controller) {
+        apiLoading = false;
+        apiAbortController = null;
+      }
+    }
+  }
+
   async function loadHourlyStats() {
     hourlyLoading = true;
     try {
@@ -267,6 +301,51 @@
     if (goroutineChart) { goroutineChart.destroy(); goroutineChart = null; }
   }
 
+  function buildAPICharts() {
+    if (!ChartJs || !apiObservability) return;
+    if (apiRequestChart && apiLatencyChart) {
+      updateAPIChart(apiRequestChart, apiObservability.series, 'requests');
+      updateAPIChart(apiLatencyChart, apiObservability.series, 'latency');
+      return;
+    }
+    destroyAPICharts();
+    const requestCanvas = document.getElementById('apiRequestChart') as HTMLCanvasElement;
+    const latencyCanvas = document.getElementById('apiLatencyChart') as HTMLCanvasElement;
+    if (requestCanvas) {
+      apiRequestChart = createAPIRequestChart(
+        ChartJs, requestCanvas, apiObservability.series,
+        t('stats.apiRPS'), t('stats.apiServerErrors'),
+      );
+    }
+    if (latencyCanvas) {
+      apiLatencyChart = createAPILatencyChart(
+        ChartJs, latencyCanvas, apiObservability.series,
+        t('stats.apiP95'), t('stats.apiErrorRate'),
+      );
+    }
+  }
+
+  function destroyAPICharts() {
+    if (apiRequestChart) { apiRequestChart.destroy(); apiRequestChart = null; }
+    if (apiLatencyChart) { apiLatencyChart.destroy(); apiLatencyChart = null; }
+  }
+
+  function formatRate(rate: number): string {
+    return `${(rate * 100).toFixed(rate > 0 && rate < 0.01 ? 2 : 1)}%`;
+  }
+
+  function formatLatency(ms: number): string {
+    if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
+    return `${ms.toFixed(ms < 10 ? 1 : 0)} ms`;
+  }
+
+  function methodBadgeClass(method: string): string {
+    if (method === 'GET') return 'badge-info';
+    if (method === 'POST') return 'badge-success';
+    if (method === 'DELETE') return 'badge-error';
+    return 'badge-neutral';
+  }
+
   function buildHourlyChart() {
     if (!ChartJs) return;
     if (hourlyChart) { hourlyChart.destroy(); hourlyChart = null; }
@@ -309,6 +388,7 @@
   function switchTab(tab: StatsTab) {
     // Destroy charts of the leaving tab so canvas IDs don't conflict on re-mount
     if (activeTab === 'resources')  destroySysCharts();
+    if (activeTab === 'api') destroyAPICharts();
     if (activeTab === 'recordings') {
       if (trendChart)  { trendChart.destroy();  trendChart  = null; }
       if (cameraChart) { cameraChart.destroy(); cameraChart = null; }
@@ -320,6 +400,7 @@
     // Lazy-load data for the newly activated tab
     window.setTimeout(() => {
       if (tab === 'resources')  loadSystemHistory();
+      if (tab === 'api')        loadAPIObservability();
       if (tab === 'recordings') { loadHourlyStats(); loadTrends(); }
       if (tab === 'cameras')    loadStabilityData();
       if (tab === 'system')     { loadNetworkInterfaces(); loadMergeData(); }
@@ -331,6 +412,11 @@
   $effect(() => {
     const _p = sysHistoryPeriod;
     if (activeTab === 'resources') loadSystemHistory();
+  });
+
+  $effect(() => {
+    const _w = apiWindow;
+    if (activeTab === 'api') loadAPIObservability();
   });
 
   $effect(() => {
@@ -376,9 +462,17 @@
       if (activeTab === 'system')     { loadNetworkInterfaces(); loadMergeData(); }
     }, 30000);
 
+    apiRefreshInterval = window.setInterval(() => {
+      if (activeTab === 'api' && !document.hidden && !apiLoading) loadAPIObservability();
+    }, 5000);
+
     themeObserver = new MutationObserver(() => {
       if (activeTab === 'resources' && sysHistorySamples.length > 0) {
         window.setTimeout(() => buildSysCharts(), 50);
+      }
+      if (activeTab === 'api' && apiObservability) {
+        destroyAPICharts();
+        window.setTimeout(() => buildAPICharts(), 50);
       }
       if (activeTab === 'recordings') {
         if (lastTrends) { window.setTimeout(() => buildTrendCharts(lastTrends), 50); }
@@ -389,12 +483,17 @@
 
     return () => {
       clearInterval(refreshInterval);
+      clearInterval(apiRefreshInterval);
+      apiAbortController?.abort();
       themeObserver?.disconnect();
     };
   });
 
   onDestroy(() => {
     destroySysCharts();
+    destroyAPICharts();
+    clearInterval(apiRefreshInterval);
+    apiAbortController?.abort();
     if (trendChart)  { trendChart.destroy();  trendChart  = null; }
     if (cameraChart) { cameraChart.destroy(); cameraChart = null; }
     if (hourlyChart) { hourlyChart.destroy(); hourlyChart = null; }
@@ -713,6 +812,156 @@
                   {currentSystemStats ? formatFileSize(currentSystemStats.network.bytes_recv) : '--'} 累计
                 </p>
               </div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- ══════════════════════════════════════════════════════════════════ -->
+      <!-- TAB: API observability                                             -->
+      <!-- ══════════════════════════════════════════════════════════════════ -->
+      {#if activeTab === 'api'}
+        <div class="space-y-6">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 class="text-lg font-semibold th-text-primary">{t('stats.apiTitle')}</h3>
+              <p class="text-xs th-text-muted mt-0.5">{t('stats.apiHint')}</p>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-sm th-text-muted">{t('stats.timeRange')}:</span>
+              {#each (['1m', '5m', '15m', '30m', '1h'] as const) as p}
+                <button
+                  class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors {apiWindow === p ? 'bg-[var(--color-primary)] text-white' : 'card border th-border th-text-secondary hover:th-text-primary'}"
+                  onclick={() => { apiWindow = p; }}
+                >
+                  {t(`stats.period${p}`)}
+                </button>
+              {/each}
+              {#if apiLoading}<span class="spinner ml-1"></span>{/if}
+            </div>
+          </div>
+
+          {#if apiError}
+            <div class="p-4 bg-[rgba(239,68,68,0.15)] border th-border-danger rounded-md text-[var(--color-danger)]">
+              {t('stats.apiLoadFailed')}: {apiError}
+            </div>
+          {/if}
+
+          {#if apiObservability}
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div class="card p-5 border th-border">
+                <p class="text-xs th-text-muted mb-2">{t('stats.apiRPS')}</p>
+                <p class="text-2xl font-bold th-text-primary">{apiObservability.summary.rps.toFixed(2)}</p>
+                <p class="text-xs th-text-muted mt-1">{apiObservability.summary.requests.toLocaleString()} {t('stats.apiRequests')}</p>
+              </div>
+              <div class="card p-5 border th-border">
+                <p class="text-xs th-text-muted mb-2">{t('stats.apiP95')}</p>
+                <p class="text-2xl font-bold th-text-primary">{formatLatency(apiObservability.summary.latency.p95_ms)}</p>
+                <p class="text-xs th-text-muted mt-1">P99 {formatLatency(apiObservability.summary.latency.p99_ms)}</p>
+              </div>
+              <div class="card p-5 border th-border">
+                <p class="text-xs th-text-muted mb-2">{t('stats.apiErrorRate')}</p>
+                <p class="text-2xl font-bold {apiObservability.summary.error_rate > 0 ? 'text-[var(--color-danger)]' : 'th-text-primary'}">
+                  {formatRate(apiObservability.summary.error_rate)}
+                </p>
+                <p class="text-xs th-text-muted mt-1">5xx: {apiObservability.summary.status_5xx}</p>
+              </div>
+              <div class="card p-5 border th-border">
+                <p class="text-xs th-text-muted mb-2">{t('stats.apiInFlight')}</p>
+                <p class="text-2xl font-bold th-text-primary">{apiObservability.summary.in_flight}</p>
+                <p class="text-xs th-text-muted mt-1">4xx: {apiObservability.summary.status_4xx}</p>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div class="card p-5 border th-border">
+                <h3 class="text-sm font-semibold th-text-primary mb-3">{t('stats.apiTrafficTrend')}</h3>
+                <div class="h-56"><canvas id="apiRequestChart"></canvas></div>
+              </div>
+              <div class="card p-5 border th-border">
+                <h3 class="text-sm font-semibold th-text-primary mb-3">{t('stats.apiLatencyTrend')}</h3>
+                <div class="h-56"><canvas id="apiLatencyChart"></canvas></div>
+              </div>
+            </div>
+
+            <div class="card border th-border overflow-hidden">
+              <div class="p-5 border-b th-border">
+                <h3 class="text-lg font-semibold th-text-primary">{t('stats.apiRoutes')}</h3>
+                <p class="text-xs th-text-muted mt-0.5">{t('stats.apiRoutesHint')}</p>
+              </div>
+              {#if apiObservability.routes.length === 0}
+                <div class="p-8 text-center th-text-muted">{t('stats.apiNoData')}</div>
+              {:else}
+                <div class="table-container border-0 rounded-none overflow-x-auto">
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th>{t('stats.apiMethod')}</th>
+                        <th>{t('stats.apiRoute')}</th>
+                        <th class="text-right">{t('stats.apiRequests')}</th>
+                        <th class="text-right">RPS</th>
+                        <th class="text-right">4xx</th>
+                        <th class="text-right">5xx</th>
+                        <th class="text-right">P95</th>
+                        <th class="text-right">P99</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each apiObservability.routes as row}
+                        <tr class="transition-all duration-200 hover:th-bg-hover">
+                          <td><span class="badge {methodBadgeClass(row.method)} text-xs">{row.method}</span></td>
+                          <td class="font-mono text-xs th-text-primary whitespace-nowrap">{row.route}</td>
+                          <td class="text-right th-text-secondary">{row.requests.toLocaleString()}</td>
+                          <td class="text-right th-text-secondary">{row.rps.toFixed(2)}</td>
+                          <td class="text-right {row.status_4xx > 0 ? 'text-[var(--color-warning)]' : 'th-text-muted'}">{row.status_4xx}</td>
+                          <td class="text-right {row.status_5xx > 0 ? 'text-[var(--color-danger)] font-semibold' : 'th-text-muted'}">{row.status_5xx}</td>
+                          <td class="text-right th-text-secondary whitespace-nowrap">{formatLatency(row.p95_ms)}</td>
+                          <td class="text-right th-text-secondary whitespace-nowrap">{formatLatency(row.p99_ms)}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+            </div>
+
+            {#if apiObservability.recent_errors.length > 0}
+              <div class="card border th-border overflow-hidden">
+                <div class="p-5 border-b th-border">
+                  <h3 class="text-lg font-semibold text-[var(--color-danger)]">{t('stats.apiRecentErrors')}</h3>
+                </div>
+                <div class="table-container border-0 rounded-none overflow-x-auto">
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th>{t('stats.apiTime')}</th>
+                        <th>{t('stats.apiMethod')}</th>
+                        <th>{t('stats.apiRoute')}</th>
+                        <th>{t('stats.apiStatus')}</th>
+                        <th>{t('stats.apiDuration')}</th>
+                        <th>Trace ID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each apiObservability.recent_errors as item}
+                        <tr>
+                          <td class="text-xs th-text-muted whitespace-nowrap">{new Date(item.timestamp * 1000).toLocaleTimeString()}</td>
+                          <td><span class="badge {methodBadgeClass(item.method)} text-xs">{item.method}</span></td>
+                          <td class="font-mono text-xs th-text-primary whitespace-nowrap">{item.route}</td>
+                          <td><span class="badge badge-error">{item.status}</span></td>
+                          <td class="th-text-secondary whitespace-nowrap">{formatLatency(item.duration_ms)}</td>
+                          <td class="font-mono text-xs th-text-muted" title={item.trace_id || ''}>{item.trace_id ? item.trace_id.slice(0, 16) : '—'}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            {/if}
+          {:else if apiLoading}
+            <div class="card p-12 text-center border th-border">
+              <div class="spinner spinner-lg mx-auto mb-3"></div>
+              <p class="th-text-muted">{t('common.loading')}</p>
             </div>
           {/if}
         </div>

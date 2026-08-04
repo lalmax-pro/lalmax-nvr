@@ -225,9 +225,32 @@ type WebDAVConfig struct {
 
 // ObservabilityConfig defines observability settings
 type ObservabilityConfig struct {
-	LogLevel    string `yaml:"log_level"`    // default "info"
-	LogFormat   string `yaml:"log_format"`   // default "text"
-	EnablePprof bool   `yaml:"enable_pprof"` // default false
+	LogLevel    string     `yaml:"log_level"`    // default "info"
+	LogFormat   string     `yaml:"log_format"`   // default "text"
+	EnablePprof bool       `yaml:"enable_pprof"` // default false
+	OTLP        OTLPConfig `yaml:"otlp"`
+}
+
+// OTLPConfig defines export to an external OTLP/HTTP collector.
+// Pointer booleans preserve an explicitly configured false while allowing
+// traces and metrics to default to enabled.
+type OTLPConfig struct {
+	Enabled               bool              `yaml:"enabled"`
+	Endpoint              string            `yaml:"endpoint"`
+	ServiceName           string            `yaml:"service_name"`
+	TracesEnabled         *bool             `yaml:"traces_enabled"`
+	MetricsEnabled        *bool             `yaml:"metrics_enabled"`
+	Headers               map[string]string `yaml:"headers,omitempty"`
+	Timeout               string            `yaml:"timeout"`
+	MetricsExportInterval string            `yaml:"metrics_export_interval"`
+}
+
+func (c OTLPConfig) ExportTraces() bool {
+	return c.TracesEnabled == nil || *c.TracesEnabled
+}
+
+func (c OTLPConfig) ExportMetrics() bool {
+	return c.MetricsEnabled == nil || *c.MetricsEnabled
 }
 
 type HLSConfig struct {
@@ -616,6 +639,33 @@ func Validate(cfg *Config) error {
 	if cfg.Observability.LogFormat != "json" && cfg.Observability.LogFormat != "text" {
 		return fmt.Errorf("observability.log_format invalid: %s (must be json/text)", cfg.Observability.LogFormat)
 	}
+	if cfg.Observability.OTLP.Enabled {
+		otlp := cfg.Observability.OTLP
+		endpoint, err := url.Parse(otlp.Endpoint)
+		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+			return fmt.Errorf("observability.otlp.endpoint invalid: must be an http or https base URL")
+		}
+		if endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return fmt.Errorf("observability.otlp.endpoint must not contain a query or fragment")
+		}
+		if !otlp.ExportTraces() && !otlp.ExportMetrics() {
+			return fmt.Errorf("observability.otlp requires traces_enabled or metrics_enabled")
+		}
+		if strings.TrimSpace(otlp.ServiceName) == "" {
+			return fmt.Errorf("observability.otlp.service_name is required")
+		}
+		if timeout, err := time.ParseDuration(otlp.Timeout); err != nil || timeout <= 0 {
+			return fmt.Errorf("observability.otlp.timeout must be a positive duration")
+		}
+		if interval, err := time.ParseDuration(otlp.MetricsExportInterval); err != nil || interval <= 0 {
+			return fmt.Errorf("observability.otlp.metrics_export_interval must be a positive duration")
+		}
+		for name, value := range otlp.Headers {
+			if strings.TrimSpace(name) == "" || strings.ContainsAny(name+value, "\r\n") {
+				return fmt.Errorf("observability.otlp.headers contains an invalid header")
+			}
+		}
+	}
 
 	// Validate remote_log
 	if cfg.RemoteLog.Enabled {
@@ -864,6 +914,26 @@ func (cfg *Config) ApplyDefaults() {
 		cfg.Observability.LogFormat = "text"
 	}
 	// EnablePprof defaults to false (zero value)
+	if strings.TrimSpace(cfg.Observability.OTLP.Endpoint) == "" {
+		cfg.Observability.OTLP.Endpoint = "http://127.0.0.1:4318"
+	}
+	if strings.TrimSpace(cfg.Observability.OTLP.ServiceName) == "" {
+		cfg.Observability.OTLP.ServiceName = "lalmax-nvr"
+	}
+	if cfg.Observability.OTLP.TracesEnabled == nil {
+		cfg.Observability.OTLP.TracesEnabled = new(bool)
+		*cfg.Observability.OTLP.TracesEnabled = true
+	}
+	if cfg.Observability.OTLP.MetricsEnabled == nil {
+		cfg.Observability.OTLP.MetricsEnabled = new(bool)
+		*cfg.Observability.OTLP.MetricsEnabled = true
+	}
+	if strings.TrimSpace(cfg.Observability.OTLP.Timeout) == "" {
+		cfg.Observability.OTLP.Timeout = "10s"
+	}
+	if strings.TrimSpace(cfg.Observability.OTLP.MetricsExportInterval) == "" {
+		cfg.Observability.OTLP.MetricsExportInterval = "30s"
+	}
 	// Version
 	// HLS defaults
 	if cfg.HLS.WriteBufferSize <= 0 {

@@ -24,6 +24,7 @@ export {
   getSystemMetricsHistory,
   getHourlyStats,
   getCameraUptimeStats,
+  getAPIObservability,
 } from './client';
 
 export type {
@@ -40,6 +41,12 @@ export type {
   SystemMetricSample,
   HourlyStats,
   CameraUptimeStat,
+  APILatencySummary,
+  APIObservabilitySummary,
+  APIObservabilitySeriesPoint,
+  APIObservabilityRoute,
+  APIObservabilityError,
+  APIObservabilityResponse,
 } from './client';
 
 // Cameras — CRUD, ONVIF, PTZ, protocols
@@ -189,25 +196,13 @@ export type {
 } from './recordings';
 
 // Events — unified event center
-export {
-  listEvents,
-  getEvent,
-  acknowledgeEvent,
-  deleteEvent,
-} from './events';
+export { listEvents, getEvent, acknowledgeEvent, deleteEvent } from './events';
 
 // Operation logs — user and system audit trail
 export { listOperationLogs } from './operation-logs';
 export type { OperationLog, OperationLogsResponse, OperationLogsParams } from './operation-logs';
 
-export type {
-  NvrEvent,
-  EventsResponse,
-  EventsParams,
-  EventSource,
-  EventSeverity,
-  EventStatus,
-} from './events';
+export type { NvrEvent, EventsResponse, EventsParams, EventSource, EventSeverity, EventStatus } from './events';
 
 // Settings — cleanup, webdav, merge, features
 export {
@@ -272,28 +267,12 @@ export type {
 } from './streams';
 
 // Xiaomi — cloud auth, devices, sync
-export {
-  xiaomiAuth,
-  xiaomiDevices,
-  xiaomiCaptcha,
-  xiaomiVerify,
-  xiaomiSync,
-} from './xiaomi';
+export { xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify, xiaomiSync } from './xiaomi';
 
-export type {
-  XiaomiDevice,
-  XiaomiDevicesResponse,
-  XiaomiAuthResponse,
-} from './xiaomi';
+export type { XiaomiDevice, XiaomiDevicesResponse, XiaomiAuthResponse } from './xiaomi';
 
 // Health — camera health status and events
-export {
-  getHealthStatus,
-  getHealthEvents,
-  getCameraHealth,
-  getHealthCameras,
-  getStabilityData,
-} from './health';
+export { getHealthStatus, getHealthEvents, getCameraHealth, getHealthCameras, getStabilityData } from './health';
 export type {
   HealthStatus,
   HealthEventType,
@@ -443,28 +422,12 @@ export {
   detachChannelsFromGroup,
 } from './gbCatalog';
 
-export type {
-  GBChannelBrief,
-  RegionTreeNode,
-  GroupTreeNode,
-  ChannelKey,
-  CivilCode,
-} from './gbCatalog';
+export type { GBChannelBrief, RegionTreeNode, GroupTreeNode, ChannelKey, CivilCode } from './gbCatalog';
 
 // Users — user management
-export {
-  listUsers,
-  getUser,
-  createUser,
-  updateUser,
-  deleteUser,
-} from './users';
+export { listUsers, getUser, createUser, updateUser, deleteUser } from './users';
 
-export type {
-  User,
-  CreateUserRequest,
-  UpdateUserRequest,
-} from './users';
+export type { User, CreateUserRequest, UpdateUserRequest } from './users';
 
 // Relay — relay push tasks
 export {
@@ -478,10 +441,4 @@ export {
   getRelayTaskStatsHistory,
 } from './relay';
 
-export type {
-  RelayTask,
-  RelayTaskStats,
-  StatSample,
-  StatsHistory,
-  CreateRelayTaskRequest,
-} from './relay';
+export type { RelayTask, RelayTaskStats, StatSample, StatsHistory, CreateRelayTaskRequest } from './relay';

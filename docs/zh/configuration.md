@@ -78,6 +78,14 @@ observability:
   log_level: "info"              # 日志级别: debug, info, warn, error
   log_format: "text"             # 日志格式: json 或 text
   enable_pprof: false            # 启用 pprof 调试端点
+  otlp:
+    enabled: false               # 是否导出到外部 OTLP/HTTP Collector
+    endpoint: "http://127.0.0.1:4318"
+    service_name: "lalmax-nvr"
+    traces_enabled: true
+    metrics_enabled: true
+    timeout: "10s"
+    metrics_export_interval: "30s"
 version: "1.0"
 ```
 
@@ -515,6 +523,17 @@ HLS 播放与录像拉流相互独立：关闭 `hls.enabled` 或启用按需切�
 - **描述**: 启用 pprof 调试端点进行性能分析
 - **注意**: 生产环境中请谨慎使用
 
+### `observability.otlp`
+
+- **描述**: 可选的外部 OTLP/HTTP 导出配置。应用仅从本配置读取，不需要也不读取 `OTEL_*` 环境变量
+- **`enabled`**: 是否启用外部导出，默认 `false`；关闭时前端观测 API 仍正常工作
+- **`endpoint`**: Collector 基础 URL，默认 `http://127.0.0.1:4318`。应用会自动追加 `/v1/traces` 和 `/v1/metrics`
+- **`service_name`**: OTel 服务名，默认 `lalmax-nvr`
+- **`traces_enabled` / `metrics_enabled`**: 分别控制链路与指标导出，默认均为 `true`；启用 OTLP 时至少开启一项
+- **`timeout`**: 单次导出超时，默认 `10s`
+- **`metrics_export_interval`**: 指标批量导出周期，默认 `30s`
+- **`headers`**: 可选的 HTTP 请求头映射，可用于 Collector 鉴权。请将包含令牌的配置文件按敏感文件保护
+
 ## 媒体引擎配置
 
 ### `media.mode`
@@ -818,4 +837,10 @@ hls:
   max_streams: 4
 observability:
   log_level: "info"
+  otlp:
+    enabled: true
+    endpoint: "http://otel-collector:4318"
+    service_name: "lalmax-nvr"
+    traces_enabled: true
+    metrics_enabled: true
 ```
