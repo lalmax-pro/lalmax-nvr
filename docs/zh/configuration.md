@@ -1,6 +1,8 @@
 # lalmax-nvr 配置参考文档
 
-lalmax-nvr 使用 YAML 格式的配置文件来控制所有功能模块。以下是所有可用选项的完整参考，包含默认值和使用示例。
+lalmax-nvr 使用 YAML 配置文件控制各模块。分层、端口与数据流见 [架构](architecture.md)；安装见 [快速入门](getting-started.md)。
+
+示例文件：仓库内 [`config/config.example.yaml`](../../config/config.example.yaml)。二进制默认读取 `config/lalmax-nvr.yaml`。
 
 ## 配置文件结构
 
@@ -625,6 +627,17 @@ srt:
 ```
 
 > **推流格式**：SRT 推流应使用 streamid 格式：`#!::h=<camera_id>,m=publish`
+
+## WHIP 推流配置
+
+```yaml
+whip:
+  enabled: true          # 默认 true；关闭只隐藏接入 URL，不影响 WHEP 播放
+  stream_keys:           # camera_id → streamid 映射（可选）
+    cam1: "obs-front"
+```
+
+> **推流地址**：`http://<host>:12090/webrtc/whip?streamid=<camera_id>`（OBS → 设置 → 推流 → WHIP）。ICE 复用端口 **4888/udp**（及 TCP）需对推流端可达。Docker 请映射 `12090` 与 `4888`。`media.lalmax_public_url` 必须是对外 hostname。
 
 ## 健康监控配置
 

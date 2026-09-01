@@ -1048,7 +1048,7 @@ func (h *Handler) protocolPlayURL(ctx context.Context, cameraID, protocol string
 			return "", "", false
 		}
 		return "/api/cameras/" + cameraID + "/stream/ws", "builtin-ws", true
-	case "hls", "ll-hls", "webrtc", "flv", "ws-flv", "fmp4", "rtsp", "rtmp":
+	case "hls", "ll-hls", "webrtc", "flv", "ws-flv", "fmp4", "rtsp", "rtmp", "whip":
 		if h.mediaEngine != nil {
 			playURL, err := h.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
 				StreamID: cameraID,

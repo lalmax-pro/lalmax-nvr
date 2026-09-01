@@ -1,6 +1,8 @@
 # Configuration Reference
 
-lalmax-nvr uses a YAML configuration file to control all aspects of its operation. Below is a comprehensive reference of all available options, their defaults, and usage examples.
+lalmax-nvr uses a YAML file for all modules. Layers, ports, and data paths: [Architecture](architecture.md). Install: [Getting Started](getting-started.md).
+
+Example file: [`config/config.example.yaml`](../../config/config.example.yaml). The binary default is `config/lalmax-nvr.yaml`.
 
 ## Configuration File Structure
 
@@ -625,6 +627,17 @@ srt:
 ```
 
 > **Push format**: SRT pushes should use streamid format: `#!::h=<camera_id>,m=publish`
+
+## WHIP Ingest Configuration
+
+```yaml
+whip:
+  enabled: true          # default true; false only hides ingest URLs, WHEP playback stays on
+  stream_keys:           # optional camera_id → streamid mapping
+    cam1: "obs-front"
+```
+
+> **Push URL**: `http://<host>:12090/webrtc/whip?streamid=<camera_id>` (OBS → Settings → Stream → WHIP). ICE mux port **4888/udp** (and TCP) must be reachable. Docker: map `12090` and `4888`. Set `media.lalmax_public_url` to a public hostname.
 
 ## Health Monitoring Configuration
 

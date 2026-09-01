@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,6 +23,10 @@ type rtmpEventSubscriber interface {
 
 type srtEventSubscriber interface {
 	SubscribeSRTEvents(ctx context.Context) (<-chan SRTEvent, error)
+}
+
+type whipEventSubscriber interface {
+	SubscribeWHIPEvents(ctx context.Context) (<-chan WHIPEvent, error)
 }
 
 type rtmpSubscriber struct {
@@ -76,6 +81,32 @@ func (s srtSubscriber) subscribe(ctx context.Context) (<-chan ingestEvent, error
 	return out, nil
 }
 
+type whipSubscriber struct {
+	upstream whipEventSubscriber
+}
+
+func (s whipSubscriber) protocol() string { return "whip" }
+
+func (s whipSubscriber) subscribe(ctx context.Context) (<-chan ingestEvent, error) {
+	events, err := s.upstream.SubscribeWHIPEvents(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(chan ingestEvent, 64)
+	go func() {
+		defer close(out)
+		for ev := range events {
+			out <- ingestEvent{
+				Protocol: ev.Protocol,
+				StreamID: ev.StreamID,
+				Type:     ev.Type,
+			}
+		}
+	}()
+	return out, nil
+}
+
 type ingestEvent struct {
 	Protocol string
 	StreamID string
@@ -109,6 +140,11 @@ func NewRTMPIngestHandler(subscriber rtmpEventSubscriber, resolv func(string) (s
 // NewSRTIngestHandler creates a handler for SRT push events emitted by lalmax.
 func NewSRTIngestHandler(subscriber srtEventSubscriber, resolv func(string) (string, bool), onStart OnIngestStart, onStop OnIngestStop) *IngestHandler {
 	return newIngestHandler(srtSubscriber{upstream: subscriber}, resolv, onStart, onStop)
+}
+
+// NewWHIPIngestHandler creates a handler for WHIP / customize publish events.
+func NewWHIPIngestHandler(subscriber whipEventSubscriber, resolv func(string) (string, bool), onStart OnIngestStart, onStop OnIngestStop) *IngestHandler {
+	return newIngestHandler(whipSubscriber{upstream: subscriber}, resolv, onStart, onStop)
 }
 
 // newIngestHandler creates a generic protocol ingest handler.
@@ -177,7 +213,7 @@ func (h *IngestHandler) run(ctx context.Context, events <-chan ingestEvent) {
 
 func (h *IngestHandler) handleEvent(ctx context.Context, ev ingestEvent) {
 	protocol := h.subscriber.protocol()
-	if ev.Protocol != "" && ev.Protocol != protocol {
+	if !ingestProtocolMatch(protocol, ev.Protocol) {
 		return
 	}
 
@@ -246,4 +282,22 @@ func BuildReverseMap(streamKeys map[string]string) map[string]string {
 		}
 	}
 	return reverse
+}
+
+func ingestProtocolMatch(want, got string) bool {
+	got = strings.ToLower(strings.TrimSpace(got))
+	if got == "" {
+		return true
+	}
+	switch want {
+	case "whip":
+		switch got {
+		case "whip", "webrtc", "whip_push", "customize":
+			return true
+		default:
+			return false
+		}
+	default:
+		return got == want
+	}
 }

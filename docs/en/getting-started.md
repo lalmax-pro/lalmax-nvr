@@ -2,16 +2,17 @@
 
 ## What is lalmax-nvr
 
-lalmax-nvr is a lightweight Network Video Recorder written in Go. It records video feeds from IP cameras to MP4 segments on disk and provides a web interface for viewing recordings, managing cameras, and accessing recorded footage.
+lalmax-nvr is a business NVR on top of an embedded lal / lalmax media engine. H.264 / H.265 is ingested once: RTSP/ONVIF **pull**, GB28181 **PS/RTP push** after INVITE, and RTMP/SRT/WHIP **publish** share the same live fan-out. The NVR owns devices, recording, storage, and the web UI. Diagrams and ports: [Architecture](architecture.md).
 
 **Key Features:**
 
-- Records RTSP (H.264, H.265, MJPEG), HTTP JPEG, and ONVIF cameras to MP4 segments
-- Web UI with dark/light theme, HLS live view, and Chart.js statistics
-- WebDAV (configurable read-only/read-write) and FTP access to recordings
-- MQTT integration for event-driven recording
-- Segment merging to reduce file count
-- Single static binary with embedded web interface — no dependencies
+- RTSP (H.264, H.265, MJPEG), HTTP JPEG, ONVIF, GB28181, Xiaomi CS2
+- Web UI: multi-protocol live view, 24h timeline, continuous VOD (HLS fMP4)
+- Recording modes: continuous / scheduled / event / adaptive / off; rolling hour merge
+- WebDAV and FTP for recordings; MQTT event-triggered recording
+- Single static binary with embedded web UI — no runtime dependencies
+
+Documentation index: [docs/en/README.md](README.md).
 
 ## Quick Start (5 Minutes)
 
@@ -194,7 +195,7 @@ cameras:
     enabled: true
 ```
 
-After editing the config, restart lalmax-nvr or use the Web UI to add cameras at runtime.
+After editing the config, restart lalmax-nvr or use the Web UI to add cameras at runtime. National-standard devices: [GB28181 Guide](gb28181-guide.md).
 
 ## Accessing lalmax-nvr
 
@@ -202,11 +203,11 @@ After editing the config, restart lalmax-nvr or use the Web UI to add cameras at
 
 Open http://your-server:9090 and log in with your configured credentials. From the Web UI you can:
 
-- View live camera streams (HLS)
-- Play back and download recordings
-- Add, edit, and remove cameras
+- View live camera streams (HLS / FLV / WebRTC / fMP4 / WebCodecs; copyable RTSP)
+- Play back and download recordings (single file or continuous day VOD)
+- Add, edit, and remove cameras; ONVIF discovery and PTZ
 - View storage statistics and trends
-- Configure settings
+- Configure settings (including rolling merge)
 
 ### WebDAV
 

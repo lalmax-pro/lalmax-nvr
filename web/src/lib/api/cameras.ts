@@ -269,6 +269,14 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     addable: false, // Auto-registered when stream is pushed
     capabilities: { hls: false, ptz: false, snapshot: false, discovery: false, auth: false },
   },
+  {
+    id: 'whip',
+    label: 'WHIP Push',
+    encodings: ['h264', 'h265'],
+    builtIn: true,
+    addable: false,
+    capabilities: { hls: false, ptz: false, snapshot: false, discovery: false, auth: false },
+  },
 ];
 
 // Protocols that should NOT appear in the "Add Camera" form

@@ -1,5 +1,7 @@
 # lalmax-nvr API 参考
 
+架构与端口见 [架构](architecture.md)。Web UI 默认走 `:9090` 反代直播；连续回放走下面的 VOD 路径。
+
 ## 目录
 
 - [身份验证](#身份验证)
@@ -11,6 +13,8 @@
   - [ONVIF 摄像头控制](#onvif-摄像头控制)
   - [摄像头合并配置](#摄像头合并配置)
 - [录像 API](#录像-api)
+- [连续 VOD](#连续-vod)
+- [流诊断](#流诊断)
 - [归档 API](#归档-api)
 - [统计与设置 API](#统计与设置-api)
 - [ONVIF API](#onvif-api)
@@ -1142,6 +1146,40 @@ curl -u username:password \
   "status": "reset"
 }
 ```
+
+## 连续 VOD
+
+H.264 / H.265 按时间窗拼成 HLS fMP4。MJPEG 请继续用单文件 `/api/recordings/{id}`。缺口用 `#EXT-X-DISCONTINUITY`。详见 [架构](architecture.md)。
+
+### 时间轴
+
+**端点：** `GET /api/recordings/timeline`
+
+**查询参数：** `camera_id`（必需）、`start`、`end`（RFC3339）。
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/recordings/timeline?camera_id=front-door&start=2026-09-01T00:00:00Z&end=2026-09-02T00:00:00Z"
+```
+
+### 播放列表
+
+**端点：** `GET /api/cameras/{id}/playback/playlist.m3u8?start=&end=`
+
+返回 `application/vnd.apple.mpegurl`。列表内片段指向：
+
+- `GET /api/cameras/{id}/playback/{recId}/init.mp4`
+- `GET /api/cameras/{id}/playback/{recId}/f{first}-{last}.m4s`
+
+## 流诊断
+
+**端点：** `GET /api/cameras/{id}/flow`
+
+返回源、lalmax group、录像状态、子码流、按协议观众数。设置页流树使用此接口。
+
+**端点：** `GET /api/flow/streams`
+
+所有相机的同一结构列表：`{ "cameras": [ ... ] }`。
 
 ## 录像 API
 

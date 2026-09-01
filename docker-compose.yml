@@ -37,6 +37,9 @@ services:
 
     ports:
       - "9090:9090"   # Web UI / API
+      - "12090:12090" # lalmax HTTP (WHIP ingest, LL-HLS / WHEP / fMP4 if not proxied)
+      - "4888:4888/udp" # WebRTC ICE mux (WHIP / WHEP)
+      - "4888:4888/tcp"
       - "15544:15544" # lal RTSP playback (rtsp://host:15544/live/{camera_id})
       # ONVIF WS-Discovery still needs host networking (uncomment network_mode: host above).
       - "5060:5060/tcp" # GB28181 SIP

@@ -305,6 +305,12 @@ func (e *LalmaxHTTP) BuildPlayURL(ctx context.Context, req PlayURLRequest) (*Pla
 		u.Scheme = "rtsp"
 		u.Host = fmt.Sprintf("%s:%d", u.Hostname(), e.rtspPort)
 		u.Path = "/" + pathEscape(app) + "/" + pathEscape(req.StreamID)
+	case "whip":
+		u.Path = "/webrtc/whip"
+		q := u.Query()
+		q.Set("streamid", req.StreamID)
+		u.RawQuery = q.Encode()
+		proto = "whip"
 	default:
 		return nil, fmt.Errorf("unsupported play protocol %q", req.Protocol)
 	}
@@ -710,6 +716,18 @@ func (e *LalmaxHTTP) SubscribeRTMPEvents(ctx context.Context) (<-chan RTMPEvent,
 }
 
 func (e *LalmaxHTTP) SubscribeSRTEvents(ctx context.Context) (<-chan SRTEvent, error) {
+	return subscribeTypedEvents(e, ctx, func(ev Event, typ string) SRTEvent {
+		return SRTEvent{StreamID: ev.StreamID, AppName: ev.AppName, Protocol: ev.Protocol, Type: typ}
+	})
+}
+
+func (e *LalmaxHTTP) SubscribeWHIPEvents(ctx context.Context) (<-chan WHIPEvent, error) {
+	return subscribeTypedEvents(e, ctx, func(ev Event, typ string) WHIPEvent {
+		return WHIPEvent{StreamID: ev.StreamID, AppName: ev.AppName, Protocol: ev.Protocol, Type: typ}
+	})
+}
+
+func subscribeTypedEvents[T any](e *LalmaxHTTP, ctx context.Context, build func(Event, string) T) (<-chan T, error) {
 	events, err := e.SubscribeEvents(ctx, EventFilter{
 		Types: []EventType{
 			EventPublisherStarted,
@@ -722,7 +740,7 @@ func (e *LalmaxHTTP) SubscribeSRTEvents(ctx context.Context) (<-chan SRTEvent, e
 		return nil, err
 	}
 
-	out := make(chan SRTEvent, 64)
+	out := make(chan T, 64)
 	go func() {
 		defer close(out)
 		for ev := range events {
@@ -739,12 +757,7 @@ func (e *LalmaxHTTP) SubscribeSRTEvents(ctx context.Context) (<-chan SRTEvent, e
 			default:
 				continue
 			}
-			out <- SRTEvent{
-				StreamID: ev.StreamID,
-				AppName:  ev.AppName,
-				Protocol: ev.Protocol,
-				Type:     typ,
-			}
+			out <- build(ev, typ)
 		}
 	}()
 	return out, nil

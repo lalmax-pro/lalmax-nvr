@@ -2,16 +2,17 @@
 
 ## lalmax-nvr 是什么
 
-lalmax-nvr 是一个用 Go 语言编写的轻量级网络视频录像机。它将 IP 摄像头的视频流录制为 MP4 片段并保存到磁盘，提供 Web 界面用于查看录像、管理摄像头和访问录制内容。
+lalmax-nvr 是一层业务 NVR，叠在内嵌的 lal / lalmax 媒体引擎上。H.264 / H.265 只进引擎一次：RTSP/ONVIF **拉流**、GB28181 设备 **推** PS/RTP、RTMP/SRT/WHIP **推流** 都进同一套直播分发。NVR 负责设备、录像、存储和 Web UI。分层与端口图见 [架构](architecture.md)。
 
 **主要功能：**
 
-- 支持 RTSP (H.264、H.265、MJPEG)、HTTP JPEG 和 ONVIF 摄像头录制为 MP4 片段
-- Web 管理界面，支持深色/浅色主题、HLS 实时预览和 Chart.js 统计图表
-- WebDAV（可配置只读/读写）和 FTP 访问录像文件
-- MQTT 集成，支持事件触发录制
-- 片段合并，减少文件数量
-- 单一静态二进制文件，内嵌 Web 界面，无外部依赖
+- 支持 RTSP（H.264、H.265、MJPEG）、HTTP JPEG、ONVIF、GB28181、小米 CS2
+- Web 管理界面：多协议直播、24 小时时间轴、连续 VOD（HLS fMP4）
+- 录像模式：连续 / 计划 / 事件 / 自适应 / 关闭；滚动小时合并
+- WebDAV、FTP 访问录像；MQTT 事件触发录制
+- 单一静态二进制，内嵌 Web 界面，无外部运行时依赖
+
+文档目录：[docs/zh/README.md](README.md)。
 
 ## 快速开始（5 分钟）
 
@@ -193,7 +194,7 @@ cameras:
     enabled: true
 ```
 
-编辑配置后重启 lalmax-nvr，或通过 Web UI 在运行时添加摄像头。
+编辑配置后重启 lalmax-nvr，或通过 Web UI 在运行时添加摄像头。国标设备见 [GB28181 指南](gb28181-guide.md)。
 
 ## 访问 lalmax-nvr
 
@@ -201,11 +202,11 @@ cameras:
 
 在浏览器打开 http://你的服务器地址:9090，使用配置的凭据登录。通过 Web UI 可以：
 
-- 查看摄像头实时画面（HLS）
-- 回放和下载录像
-- 添加、编辑和删除摄像头
+- 查看摄像头实时画面（HLS / FLV / WebRTC / fMP4 / WebCodecs，可复制 RTSP）
+- 回放和下载录像（单文件或按天连续 VOD）
+- 添加、编辑和删除摄像头；ONVIF 发现与云台
 - 查看存储统计和趋势
-- 配置系统设置
+- 配置系统设置（含滚动合并）
 
 ### WebDAV
 

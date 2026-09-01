@@ -2,7 +2,117 @@
 
 ## Overview
 
-lalmax-nvr supports the GB/T 28181 national standard protocol, allowing integration with compliant cameras, NVRs, and platforms. Features include device registration, recording query, playback, voice intercom, and platform cascading.
+lalmax-nvr acts as a GB/T 28181 **SIP platform** (上级). Devices **REGISTER** to `:5060`. For live view the platform sends **INVITE**, opens an RTP socket, and the device **pushes PS/RTP to `media_ip`**. That is GB28181 publish, not RTSP pull.
+
+lalmax demuxes PS into `live/{camera_id}`; HLS / FLV / WebRTC / fMP4 / RTSP fan-out is the same as other cameras.
+
+Registration, recording query, playback, talk, and cascade to an upstream platform are supported. Layers: [Architecture](architecture.md).
+
+## Architecture and flows
+
+```mermaid
+flowchart TB
+  subgraph device [GB device / lower NVR]
+    Dev[SIP UA]
+    Enc[PS mux]
+  end
+  subgraph nvr [lalmax-nvr]
+    SIP["SIP :5060 platform"]
+    API[Web / API :9090]
+  end
+  subgraph lal [lalmax]
+    RTP[RTP receive]
+    Group["group live/{id}"]
+    Out[HLS / FLV / WHEP / RTSP]
+  end
+  Dev -->|REGISTER / Keepalive / Catalog| SIP
+  API -->|Play| SIP
+  SIP -->|INVITE SDP: media_ip + RTP port| Dev
+  Enc -->|PS/RTP push| RTP
+  RTP --> Group
+  Group --> Out
+  Out --> API
+```
+
+### Register and catalog
+
+```mermaid
+sequenceDiagram
+  participant Dev as GB device
+  participant SIP as NVR SIP :5060
+  participant Store as Device store
+
+  Dev->>SIP: REGISTER (auth)
+  SIP-->>Dev: 200 OK
+  SIP->>Store: online
+  SIP->>Dev: MESSAGE Catalog
+  Dev-->>SIP: channel list
+  Note over Dev,SIP: Keepalive; timeout → offline
+```
+
+Devices show up under **Devices → GB28181**. You do not write per-camera RTSP URLs in YAML.
+
+### Live view (push after INVITE)
+
+Play **first** opens an RTP receive port on lalmax, then sends SIP INVITE. SDP `c=` / `m=` point at this host's `media_ip` and RTP port. The device **pushes** PS/RTP to that address.
+
+```mermaid
+sequenceDiagram
+  participant UI as Web UI
+  participant API as /api/gb28181/play
+  participant SIP as SIP platform
+  participant Lal as lalmax RTP
+  participant Dev as GB device
+
+  UI->>API: play channel
+  API->>Lal: StartRTPReceive
+  Lal-->>API: RTP port
+  API->>SIP: INVITE (SDP receive address)
+  SIP->>Dev: INVITE
+  Dev-->>SIP: 200 OK / ACK
+  Dev->>Lal: push PS/RTP
+  Lal-->>UI: demux and live fan-out
+```
+
+`media_ip` must be reachable from the device (not `127.0.0.1`). `media_port: 0` allocates a port per session; a positive value is single-port mode.
+
+### Playback and download
+
+Playback is also INVITE, with `Playback` and a time range in SDP; the device still **pushes** historical PS/RTP. Pause / speed / seek use SIP INFO. Download uses a separate INVITE (`Download`).
+
+```mermaid
+sequenceDiagram
+  participant UI as Device recordings
+  participant SIP as SIP
+  participant Dev as Device
+  participant Lal as lalmax
+
+  UI->>SIP: RecordInfo query
+  SIP->>Dev: MESSAGE RecordInfo
+  Dev-->>UI: time ranges
+  UI->>SIP: playback
+  SIP->>Lal: open RTP receive
+  SIP->>Dev: INVITE Playback
+  Dev->>Lal: push historical PS/RTP
+```
+
+### Cascade (this NVR as lower platform)
+
+The NVR **REGISTERs** to an upstream platform and answers Catalog for shared channels. When the upstream INVITEs, this NVR may INVITE the device; the device still pushes RTP here.
+
+```mermaid
+sequenceDiagram
+  participant Up as Upstream platform
+  participant NVR as lalmax-nvr
+  participant Dev as GB device
+
+  NVR->>Up: REGISTER
+  Up->>NVR: MESSAGE Catalog
+  NVR-->>Up: shared channels
+  Up->>NVR: INVITE
+  NVR->>Dev: INVITE (as needed)
+  Dev->>NVR: PS/RTP push
+```
 
 ## Features
 
@@ -23,14 +133,14 @@ Enable GB28181 in the configuration file:
 
 ```yaml
 gb28181:
-  enable: true
-  id: "34020000002000000001"  # Local device ID
-  domain: "3402000000"        # Local domain
-  host: "192.168.1.100"       # Local SIP address
+  enabled: true
+  id: "34020000002000000001"  # 20-digit platform SIP ID
+  host: "192.168.1.100"       # SIP listen (empty = derive from media_ip)
   port: 5060                  # SIP port
-  media_ip: "192.168.1.100"   # Media IP
-  media_port: 30000           # Media port
-  password: "12345678"        # SIP auth password
+  media_ip: "192.168.1.100"   # IP devices push PS/RTP to (must be reachable)
+  media_port: 30000           # RTP port; 0 = per-session random
+  password: "12345678"        # Device REGISTER password
+  standard_version: "2016"    # 2016 or 2022
 ```
 
 ### 2. Add Device
@@ -191,10 +301,19 @@ GET /api/gb28181/alarms             # List alarms
 
 ### Device Cannot Register
 
-1. Check device SIP configuration
-2. Check network connectivity
-3. Check if SIP port is occupied
+1. Check device SIP settings (platform ID, domain, password)
+2. Check network path; UDP/TCP **5060** must be reachable
+3. Check if the SIP port is already in use
 4. Check SIP messages in logs
+
+### Registered but no video
+
+GB28181 is **device push**. If INVITE succeeds but there is no picture, RTP is usually not arriving.
+
+1. `media_ip` must be a NIC IP the device can route to — not `127.0.0.1`
+2. Allow `media_port` (or the ephemeral RTP port) UDP/TCP through the firewall
+3. Map the port in Docker bridge mode; check NAT across subnets
+4. Logs should show RTP receive **then** INVITE; 200 OK without RTP means the media path is blocked
 
 ### Recording Query Failed
 
@@ -228,17 +347,12 @@ GET /api/gb28181/alarms             # List alarms
 
 ```yaml
 gb28181:
-  enable: false                    # Enable GB28181
-  id: ""                           # Local device ID (20 digits)
-  domain: ""                       # Local domain (10 digits)
-  host: ""                         # SIP listen address
+  enabled: false                   # Enable GB28181
+  id: ""                           # Platform SIP ID (20 digits)
+  host: ""                         # SIP listen address (optional)
   port: 5060                       # SIP listen port
-  media_ip: ""                     # Media IP
-  media_port: 30000                # Media port (0 for random)
-  password: ""                     # SIP auth password
-  expires: 3600                    # Registration expiry (seconds)
-  keepalive_interval: 60           # Heartbeat interval (seconds)
-  max_keepalive_count: 3           # Max heartbeat loss count
-  transport: "udp"                 # Transport protocol (udp/tcp)
-  charset: "GB2312"                # Character set
+  media_ip: ""                     # IP devices push PS/RTP to
+  media_port: 30000                # RTP port (0 = per-session random)
+  password: ""                     # Device REGISTER password
+  standard_version: "2016"         # 2016 or 2022
 ```

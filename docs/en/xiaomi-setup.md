@@ -1,6 +1,34 @@
 # Xiaomi Camera Integration
 
-lalmax-nvr provides comprehensive support for Xiaomi cloud cameras through the CS2 P2P protocol. Video and audio frames are distributed through the lal media server, supporting WebRTC, HLS, HTTP-FLV and other playback protocols.
+lalmax-nvr provides comprehensive support for Xiaomi cloud cameras through the CS2 P2P protocol. Video and audio frames are injected into lalmax, then played as WebRTC, HLS, HTTP-FLV, and the rest.
+
+```mermaid
+flowchart LR
+  Cloud[Xiaomi cloud] -->|login / device list / MISS URL| NVR[lalmax-nvr]
+  NVR -->|CS2 P2P| Cam[Xiaomi camera]
+  Cam -->|A/V frames| NVR
+  NVR --> Lal[lalmax group]
+  Lal --> Play[HLS / FLV / WHEP / recording]
+```
+
+```mermaid
+sequenceDiagram
+  participant UI as Web UI
+  participant NVR as NVR
+  participant Cloud as Xiaomi cloud
+  participant Cam as Camera
+  participant Lal as lalmax
+
+  UI->>NVR: account sign-in
+  NVR->>Cloud: auth + device list
+  Cloud-->>NVR: DID / model
+  NVR->>Cloud: resolve MISS URL
+  NVR->>Cam: CS2 connect (UDP preferred)
+  Cam->>NVR: H.264/H.265 + audio
+  NVR->>Lal: inject live/{id}
+```
+
+This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overview: [Architecture](architecture.md).
 
 ## Overview
 

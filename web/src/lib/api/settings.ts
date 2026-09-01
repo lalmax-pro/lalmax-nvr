@@ -54,6 +54,12 @@ export interface SRTConfig {
   streams?: SRTStreamConfig[];
 }
 
+export interface WHIPConfig {
+  enabled: boolean;
+  url?: string;
+  ice_mux_port?: number;
+}
+
 export interface StreamingConfig {
   default_protocol: string; // webrtc | flv | ws-flv | hls | ll-hls
   auto_stop_no_view_sec?: number; // seconds to wait before stopping stream when no viewers (default 300)
@@ -62,6 +68,7 @@ export interface StreamingConfig {
   hls: HLSStreamingConfig;
   rtmp?: RTMPConfig;
   srt?: SRTConfig;
+  whip?: WHIPConfig;
 }
 
 export interface SettingsConfig {

@@ -1,5 +1,7 @@
 # lalmax-nvr API Reference
 
+Layers and ports: [Architecture](architecture.md). The Web UI usually proxies live media on `:9090`. Continuous playback uses the VOD paths below.
+
 ## Table of Contents
 
 - [Authentication](#authentication)
@@ -13,6 +15,8 @@
   - [Camera Merge Configuration](#camera-merge-configuration)
   - [ONVIF API](#onvif-api)
 - [Recordings API](#recordings-api)
+- [Continuous VOD](#continuous-vod)
+- [Flow tree](#flow-tree)
 - [Archive API](#archive-api)
 - [Stats & Settings API](#stats--settings-api)
 - [Xiaomi API](#xiaomi-api)
@@ -1151,6 +1155,40 @@ curl -u username:password \
   "status": "reset"
 }
 ```
+
+## Continuous VOD
+
+H.264 / H.265 recordings in a time window become HLS fMP4. MJPEG stays on the single-file `/api/recordings/{id}` player. Gaps use `#EXT-X-DISCONTINUITY`. See [Architecture](architecture.md).
+
+### Timeline
+
+**Endpoint:** `GET /api/recordings/timeline`
+
+**Query:** `camera_id` (required), `start`, `end` (RFC3339).
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/recordings/timeline?camera_id=front-door&start=2026-09-01T00:00:00Z&end=2026-09-02T00:00:00Z"
+```
+
+### Playlist
+
+**Endpoint:** `GET /api/cameras/{id}/playback/playlist.m3u8?start=&end=`
+
+Returns `application/vnd.apple.mpegurl`. Segments point at:
+
+- `GET /api/cameras/{id}/playback/{recId}/init.mp4`
+- `GET /api/cameras/{id}/playback/{recId}/f{first}-{last}.m4s`
+
+## Flow tree
+
+**Endpoint:** `GET /api/cameras/{id}/flow`
+
+Source, lalmax group, recording, sub-stream, viewers by protocol. Used by the camera flow tree in the UI.
+
+**Endpoint:** `GET /api/flow/streams`
+
+Same payload for every camera: `{ "cameras": [ ... ] }`.
 
 ## Recordings API
 

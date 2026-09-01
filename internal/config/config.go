@@ -21,6 +21,7 @@ const (
 	DefaultLalRTSPPort    = 15544
 	DefaultLalHTTPPort    = 18080
 	DefaultSRTPort        = 19000
+	DefaultRTCIceMuxPort  = 4888
 )
 
 type Config struct {
@@ -40,6 +41,7 @@ type Config struct {
 	Xiaomi        XiaomiConfig        `yaml:"xiaomi"`
 	RTMP          RTMPConfig          `yaml:"rtmp"`
 	SRT           SRTConfig           `yaml:"srt"`
+	WHIP          WHIPConfig          `yaml:"whip"`
 	GB28181       GB28181Config       `yaml:"gb28181"`
 	Health        HealthConfig        `yaml:"health"`
 	RemoteLog     RemoteLogConfig     `yaml:"remote_log"`
@@ -352,7 +354,25 @@ type SRTConfig struct {
 type RTMPConfig struct {
 	Enabled    *bool             `yaml:"enabled"` // default false
 	Port       int               `yaml:"port,omitempty"`
-	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id 鈫?stream_key
+	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id → stream_key
+}
+
+// WHIPConfig configures WebRTC-HTTP ingest (WHIP).
+// Signaling is served by embedded lalmax at /webrtc/whip on the lalmax HTTP port
+// (default 12090). ICE uses UDP/TCP mux on DefaultRTCIceMuxPort (4888).
+// Disabling WHIP only hides ingest URLs and the mapping handler; WHEP playback
+// still needs rtc_config and is not turned off.
+type WHIPConfig struct {
+	Enabled    *bool             `yaml:"enabled"`     // default true
+	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id → streamid
+}
+
+// IsWHIPEnabled reports whether WHIP ingest URLs and mapping should be advertised.
+func (cfg *Config) IsWHIPEnabled() bool {
+	if cfg == nil {
+		return true
+	}
+	return cfg.WHIP.Enabled == nil || *cfg.WHIP.Enabled
 }
 
 // GB28181Config configures the GB28181 SIP signaling server.
@@ -1122,6 +1142,15 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.SRT.Port == 0 {
 		cfg.SRT.Port = DefaultSRTPort
+	}
+
+	// WHIP ingest defaults (RTC is already on for WHEP)
+	if cfg.WHIP.Enabled == nil {
+		cfg.WHIP.Enabled = new(bool)
+		*cfg.WHIP.Enabled = true
+	}
+	if cfg.WHIP.StreamKeys == nil {
+		cfg.WHIP.StreamKeys = make(map[string]string)
 	}
 
 	// GB28181 defaults

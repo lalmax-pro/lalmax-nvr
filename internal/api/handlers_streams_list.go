@@ -549,6 +549,9 @@ func (h *Handler) buildStreamPlayURLs(ctx context.Context, streamID, appName str
 		appName = "live"
 	}
 	protocols := []string{"hls", "ll-hls", "flv", "ws-flv", "webrtc", "fmp4", "rtmp", "rtsp"}
+	if h.config == nil || h.config.IsWHIPEnabled() {
+		protocols = append(protocols, "whip")
+	}
 	urls := make([]streamPlayURL, 0, len(protocols))
 	for _, protocol := range protocols {
 		playURL, err := h.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{

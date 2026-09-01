@@ -42,6 +42,9 @@ type Engine interface {
 	// SubscribeSRTEvents subscribes to SRT-related stream events.
 	// The returned channel emits events for SRT publish start/stop and stream active/stopped.
 	SubscribeSRTEvents(ctx context.Context) (<-chan SRTEvent, error)
+
+	// SubscribeWHIPEvents subscribes to WHIP (customize/WebRTC) publish events.
+	SubscribeWHIPEvents(ctx context.Context) (<-chan WHIPEvent, error)
 }
 
 // Restarter is implemented by engines that support dynamic protocol reconfiguration.
@@ -63,6 +66,14 @@ type SRTEvent struct {
 	AppName  string
 	Protocol string
 	Type     string // "pub_start", "pub_stop", "stream_active", "stream_stopped"
+}
+
+// WHIPEvent represents a WHIP / customize-session ingest event.
+type WHIPEvent struct {
+	StreamID string
+	AppName  string
+	Protocol string
+	Type     string
 }
 
 type StartPullRequest struct {

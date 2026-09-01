@@ -78,6 +78,39 @@ func TestCameraProtocols_IncludesRTSP(t *testing.T) {
 	require.Equal(t, "rtsp://nvr.example:15544/live/cam1", rtsp.PlayURL)
 }
 
+func TestCameraProtocols_IncludesWHIP(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	seedCameraWithEncoding(t, db, "cam1", "h264")
+
+	reg := NewStreamRegistry()
+	reg.Register(&StaticStreamHandler{Protocol: "whip", Codecs: []model.Format{model.FormatH264, model.FormatH265}})
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
+	h.SetStreamRegistry(reg)
+	h.SetMediaEngine(&stubMediaEngine{
+		playURLs: map[string]string{"whip": "http://nvr.example:12090/webrtc/whip?streamid=cam1"},
+	})
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/protocols", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var body struct {
+		Protocols []ProtocolDetail `json:"protocols"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	var whip *ProtocolDetail
+	for i := range body.Protocols {
+		if body.Protocols[i].Protocol == "whip" {
+			whip = &body.Protocols[i]
+			break
+		}
+	}
+	require.NotNil(t, whip)
+	require.True(t, whip.Available)
+	require.Equal(t, "http://nvr.example:12090/webrtc/whip?streamid=cam1", whip.PlayURL)
+}
+
 func TestCameraFlow_NoEngineDegrades(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)

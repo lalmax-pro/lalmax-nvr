@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-This guide helps you diagnose and resolve common issues with lalmax-nvr. If you can't find a solution here, check the [Configuration Reference](configuration.md) or search existing issues on GitHub.
+This guide covers common lalmax-nvr issues. Also see [Configuration](configuration.md), [Architecture](architecture.md), or search existing GitHub issues.
 
 ## Common Issues
 
