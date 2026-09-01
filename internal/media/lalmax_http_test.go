@@ -194,6 +194,25 @@ func TestLalmaxHTTPBuildPlayURL_RTSP(t *testing.T) {
 	require.Equal(t, "rtsp://127.0.0.1:5544/live/cam1", playURL.URL)
 }
 
+func TestLalmaxHTTPBuildPlayURL_RTSPDefaultPort(t *testing.T) {
+	t.Parallel()
+
+	engine, err := NewLalmaxHTTP(LalmaxHTTPConfig{
+		BaseURL:   "http://127.0.0.1:12090",
+		PublicURL: "http://nvr.example.com:12090",
+	})
+	require.NoError(t, err)
+
+	playURL, err := engine.BuildPlayURL(context.Background(), PlayURLRequest{
+		StreamID: "cam1",
+		AppName:  "live",
+		Protocol: "rtsp",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, playURL)
+	require.Equal(t, "rtsp://nvr.example.com:15544/live/cam1", playURL.URL)
+}
+
 func TestLalmaxHTTPBuildPlayURL_FLV(t *testing.T) {
 	t.Parallel()
 

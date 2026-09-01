@@ -134,7 +134,19 @@
             oninput={(e) => updateConfig({ min_segments_to_merge: Number((e.target as HTMLInputElement).value) })}
           />
         </div>
+
+        <div class="flex items-center gap-2">
+          <input
+            id="merge-rolling"
+            type="checkbox"
+            class="accent-[var(--color-accent)]"
+            checked={mergeConfig?.rolling_enabled !== false}
+            onchange={(e) => updateConfig({ rolling_enabled: (e.target as HTMLInputElement).checked })}
+          />
+          <label for="merge-rolling" class="th-text-secondary text-sm">{t('merge.rollingEnabled')}</label>
+        </div>
       </div>
+      <p class="text-xs th-text-muted mt-2">{t('merge.rollingHint')}</p>
 
       <!-- Clear override button -->
       <div class="mt-4 flex justify-end">

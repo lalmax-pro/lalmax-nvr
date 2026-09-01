@@ -22,20 +22,20 @@ storage:
 media:
   mode: "embedded"                         # embedded | http
   lalmax_http_addr: "http://127.0.0.1:12090"
-  lalmax_public_url: "http://127.0.0.1:12090"
+  lalmax_public_url: "http://127.0.0.1:12090"  # Use a public hostname; otherwise RTSP URLs become 127.0.0.1
   # lalmax_config_path is auto-generated at {root_dir}/config/lalmax.conf.json
   # Uncomment to override: lalmax_config_path: "/custom/path/lalmax.conf.json"
   # Lal protocol ports (used for RTMP, RTSP, HTTP-FLV, HLS-TS playback URLs)
   # These are only used when mode=http; embedded mode uses default ports
   # rtmp_port: 1935                       # RTMP port (default: 1935)
-  # rtsp_port: 5544                       # RTSP port (default: 5544)
+  # rtsp_port: 15544                      # RTSP port (embedded default: 15544)
   # http_port: 8080                       # HTTP-FLV and HLS-TS port (default: 8080)
   #
   # Protocol -> Port mapping:
   #   lalmax (port 12090): HLS (fMP4), LL-HLS, WebRTC, fMP4, WS-FLV
   #   lal (port 8080):    HLS (TS), HTTP-FLV
   #   lal (port 1935):    RTMP
-  #   lal (port 5544):    RTSP
+  #   lal (port 15544):   RTSP  (rtsp://{lalmax_public_url host}:15544/live/{camera_id})
 
 # Authentication
 # Option 1: Set password_hash (generate with: lalmax-nvr hash-password <pw>)
@@ -97,8 +97,10 @@ merge:
   check_interval: "1h"             # How often to check for merge candidates
   window_size: "1h"                # Time window for merging segments
   batch_limit: 200                 # Max segments to merge in one batch
-  min_segment_age: "10m"           # Minimum age before a segment can be merged
-  min_segments_to_merge: 3         # Minimum segments required to trigger a merge
+  min_segment_age: "10m"           # Minimum age before a segment can be merged (periodic pass)
+  min_segments_to_merge: 3         # Minimum segments required to trigger a periodic merge
+  rolling_enabled: true            # Merge into the current hour bucket shortly after each segment closes
+  rolling_debounce: "5s"           # Wait this long after the last closed segment before merging
 
 # FTP server — provides file access over FTP protocol
 # Configurable port and passive port range

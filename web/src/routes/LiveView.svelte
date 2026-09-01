@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream, getONVIFProfiles } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
-  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff, Info, Settings, Video } from 'lucide-svelte';
+  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff, Info, Settings, Video, Copy } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
@@ -306,6 +306,23 @@
             onchange={handleProtocolChange}
             onprotocolsloaded={handleProtocolsLoaded}
           />
+          {#if streamPlayURLs['rtsp']}
+            <button
+              class="btn btn-ghost btn-sm flex items-center gap-1"
+              title={t('cameras.copyRtsp')}
+              onclick={async () => {
+                try {
+                  await navigator.clipboard.writeText(streamPlayURLs['rtsp']);
+                  showToast(t('cameras.rtspCopied'), 'success');
+                } catch {
+                  showToast(t('cameras.rtspCopyFailed'), 'error');
+                }
+              }}
+            >
+              <Copy size={16} />
+              RTSP
+            </button>
+          {/if}
           <button onclick={toggleFullscreen} class="btn btn-ghost btn-sm flex items-center gap-1">
             {#if isFullscreen}
               <Minimize size={16} />

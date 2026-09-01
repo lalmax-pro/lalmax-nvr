@@ -47,6 +47,8 @@ merge:
   batch_limit: 200
   min_segment_age: "10m"
   min_segments_to_merge: 3
+  rolling_enabled: true
+  rolling_debounce: "5s"
 ftp:
   enabled: true
   port: 2121
@@ -352,8 +354,18 @@ cameras:
 ### `merge.min_segments_to_merge`
 - **Type**: integer
 - **Default**: 3
-- **Description**: Minimum number of segments required to trigger a merge
+- **Description**: Minimum number of segments required to trigger a periodic merge
 - **Example**: `2`, `3`, `5`
+
+### `merge.rolling_enabled`
+- **Type**: boolean
+- **Default**: `true` (only when `merge.enabled=true`)
+- **Description**: After a segment closes, debounce then append it into the current UTC hour file
+
+### `merge.rolling_debounce`
+- **Type**: string
+- **Default**: `"5s"`
+- **Description**: How long rolling merge waits after the last closed segment
 
 ## FTP Configuration
 
@@ -546,9 +558,14 @@ HLS playback is independent of recording pulls: disabling `hls.enabled` or using
 - **Default**: `"http://127.0.0.1:1290"`
 - **Description**: lalmax HTTP API address
 
+### `media.lalmax_public_url`
+- **Type**: string
+- **Default**: same as `media.lalmax_http_addr`
+- **Description**: Hostname used in playback URLs. Must be reachable by clients; otherwise RTSP URLs will use `127.0.0.1`
+
 ### `media.rtmp_port` / `media.rtsp_port` / `media.http_port`
 - **Type**: integer
-- **Description**: Lal protocol ports (used when mode=http)
+- **Description**: Lal protocol ports (used when mode=http). In embedded mode RTSP defaults to **15544**. Camera protocol APIs return `rtsp://{lalmax_public_url host}:15544/live/{camera_id}`. Set `media.lalmax_public_url` to the public hostname, otherwise the URL will use `127.0.0.1`.
 
 ## Streaming Configuration
 

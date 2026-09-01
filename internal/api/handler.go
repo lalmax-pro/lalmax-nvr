@@ -291,6 +291,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/auth/logout", h.handleLogout)
 		r.Route("/api/recordings", func(r chi.Router) {
 			r.Get("/", h.handleListRecordings)
+			r.Get("/timeline", h.handleRecordingsTimeline)
 			r.With(middleware.RequireOperatePermission()).Post("/batch-delete", h.handleBatchDeleteRecordings)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
@@ -330,6 +331,10 @@ func (h *Handler) Routes() http.Handler {
 				// HTTP-FLV stream
 				r.Get("/stream.flv", h.handleFLVStream)
 				// Per-camera protocols
+				r.Get("/flow", h.handleCameraFlow)
+				r.Get("/playback/playlist.m3u8", h.handleVODPlaylist)
+				r.Get("/playback/{recId}/init.mp4", h.handleVODInit)
+				r.Get("/playback/{recId}/{fragment}", h.handleVODFragment)
 				r.Get("/protocols", h.handleCameraProtocols)
 				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
 				r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
@@ -358,6 +363,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/onvif/recordings/search", h.handleSearchONVIFRecordings)
 				r.Get("/onvif/replay/{token}", h.handleGetONVIFReplayURI)
 				r.Get("/snapshot", h.handleSnapshot)
+				r.Get("/merge-config", h.handleGetCameraMergeConfig)
 				r.With(middleware.RequireOperatePermission()).Put("/merge-config", h.handleUpdateCameraMergeConfig)
 				r.With(middleware.RequireOperatePermission()).Delete("/merge-config", h.handleDeleteCameraMergeConfig)
 				r.Get("/stats", h.handleCameraRecordingStats)
@@ -419,6 +425,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/onvif/discover", h.handleONVIFDiscover)
 		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
 		r.Post("/api/onvif/probe", h.handleONVIFProbe)
+		r.Get("/api/flow/streams", h.handleFlowStreams)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
 		r.Get("/api/protocols", h.handleProtocols)
@@ -1041,7 +1048,7 @@ func (h *Handler) protocolPlayURL(ctx context.Context, cameraID, protocol string
 			return "", "", false
 		}
 		return "/api/cameras/" + cameraID + "/stream/ws", "builtin-ws", true
-	case "hls", "ll-hls", "webrtc", "flv", "ws-flv", "fmp4":
+	case "hls", "ll-hls", "webrtc", "flv", "ws-flv", "fmp4", "rtsp", "rtmp":
 		if h.mediaEngine != nil {
 			playURL, err := h.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
 				StreamID: cameraID,

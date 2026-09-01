@@ -693,8 +693,9 @@ func TestUpsertCameraMerge_RoundTrip(t *testing.T) {
 	batchLimit := 50
 	minSegmentAge := "5m"
 	minSegments := 5
+	rollingDebounce := "5s"
 	err := db.UpsertCameraMerge(ctx, "cam1",
-		&mergeEnabled, &checkInterval, &windowSize, &minSegmentAge, &batchLimit, &minSegments)
+		&mergeEnabled, &checkInterval, &windowSize, &minSegmentAge, &batchLimit, &minSegments, &mergeEnabled, &rollingDebounce)
 	require.NoError(t, err)
 
 	// Read back and verify
@@ -713,6 +714,10 @@ func TestUpsertCameraMerge_RoundTrip(t *testing.T) {
 	require.Equal(t, "5m", *cam.MergeMinSegmentAge)
 	require.NotNil(t, cam.MergeMinSegmentsToMerge)
 	require.Equal(t, 5, *cam.MergeMinSegmentsToMerge)
+	require.NotNil(t, cam.MergeRollingEnabled)
+	require.True(t, *cam.MergeRollingEnabled)
+	require.NotNil(t, cam.MergeRollingDebounce)
+	require.Equal(t, "5s", *cam.MergeRollingDebounce)
 }
 
 func TestUpsertCameraMerge_NilKeepsExisting(t *testing.T) {
@@ -729,11 +734,11 @@ func TestUpsertCameraMerge_NilKeepsExisting(t *testing.T) {
 	// Set merge config
 	mergeEnabled := false
 	checkInterval := "15m"
-	err := db.UpsertCameraMerge(ctx, "cam1", &mergeEnabled, &checkInterval, nil, nil, nil, nil)
+	err := db.UpsertCameraMerge(ctx, "cam1", &mergeEnabled, &checkInterval, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Update with all nil — should keep existing values
-	err = db.UpsertCameraMerge(ctx, "cam1", nil, nil, nil, nil, nil, nil)
+	err = db.UpsertCameraMerge(ctx, "cam1", nil, nil, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	cam, err := db.GetCamera(ctx, "cam1")
@@ -763,7 +768,7 @@ func TestListCameras_WithMergeConfig(t *testing.T) {
 	require.NoError(t, db.UpsertCamera(ctx, "cam2", "With Merge", "rtsp_h264", "", "rtsp://host/stream2", "", "", true, "", "", ""))
 	mergeEnabled := true
 	batchLimit := 100
-	require.NoError(t, db.UpsertCameraMerge(ctx, "cam2", &mergeEnabled, nil, nil, nil, &batchLimit, nil))
+	require.NoError(t, db.UpsertCameraMerge(ctx, "cam2", &mergeEnabled, nil, nil, nil, &batchLimit, nil, nil, nil))
 
 	cameras, err := db.ListCameras(ctx)
 	require.NoError(t, err)
@@ -793,7 +798,7 @@ func TestUpsertCameraMerge_AllFalseValues(t *testing.T) {
 
 	// Set merge_enabled to false — must not be confused with nil
 	mergeEnabled := false
-	err := db.UpsertCameraMerge(ctx, "cam1", &mergeEnabled, nil, nil, nil, nil, nil)
+	err := db.UpsertCameraMerge(ctx, "cam1", &mergeEnabled, nil, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	cam, err := db.GetCamera(ctx, "cam1")

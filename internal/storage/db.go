@@ -472,6 +472,9 @@ func (d *DB) Init(ctx context.Context) error {
 	if err := d.migrateActivationIdentity(ctx); err != nil {
 		return err
 	}
+	if err := d.migrateMergeRolling(ctx); err != nil {
+		return err
+	}
 
 	return nil
 

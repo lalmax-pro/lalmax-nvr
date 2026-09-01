@@ -1,11 +1,12 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import { normalizeProtocol, enableCamera, disableCamera, getSnapshotUrl, activateCamera, rediscoverCamera } from '$lib/api';
+  import { normalizeProtocol, enableCamera, disableCamera, getSnapshotUrl, activateCamera, rediscoverCamera, apiRequest } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
   import type { PTZCapabilitiesDetailed } from '$lib/api/cameras';
-  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home, CalendarClock, CircleOff, KeyRound, Search } from 'lucide-svelte';
+  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home, CalendarClock, CircleOff, KeyRound, Search, Copy, GitBranch } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
+  import CameraFlowTree from '$lib/components/CameraFlowTree.svelte';
 
   interface Props {
     camera: Camera;
@@ -57,6 +58,8 @@
   let activatePass = $state('');
   let activating = $state(false);
   let rediscovering = $state(false);
+  let showFlow = $state(false);
+  let copyingRtsp = $state(false);
 
   let variant = $derived(
     !camera.enabled
@@ -140,6 +143,26 @@
       showToast(e instanceof Error ? e.message : t('cameras.rediscoverFailed'), 'error');
     } finally {
       rediscovering = false;
+    }
+  }
+
+  async function copyRtspUrl() {
+    copyingRtsp = true;
+    try {
+      const res = await apiRequest<{ protocols: { Protocol: string; PlayURL?: string }[] }>(
+        `/cameras/${encodeURIComponent(camera.id)}/protocols`
+      );
+      const rtsp = res.protocols?.find((p) => p.Protocol === 'rtsp' && p.PlayURL);
+      if (!rtsp?.PlayURL) {
+        showToast(t('cameras.rtspUnavailable'), 'info');
+        return;
+      }
+      await navigator.clipboard.writeText(rtsp.PlayURL);
+      showToast(t('cameras.rtspCopied'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('cameras.rtspCopyFailed'), 'error');
+    } finally {
+      copyingRtsp = false;
     }
   }
 
@@ -462,6 +485,22 @@
           </a>
         {/if}
 
+        <button
+          class="btn btn-ghost px-2 py-1 text-sm"
+          onclick={copyRtspUrl}
+          disabled={copyingRtsp}
+          title={t('cameras.copyRtsp')}
+        >
+          <Copy size={14} />
+        </button>
+        <button
+          class="btn btn-ghost px-2 py-1 text-sm"
+          onclick={() => { showFlow = !showFlow; }}
+          title={t('flow.title')}
+        >
+          <GitBranch size={14} />
+        </button>
+
         <!-- More menu -->
         <div class="relative">
           <button
@@ -505,6 +544,9 @@
         </div>
       </div>
     </div>
+    {#if showFlow}
+      <CameraFlowTree cameraId={camera.id} />
+    {/if}
   </div>
 </div>
 

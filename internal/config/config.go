@@ -195,6 +195,26 @@ type MergeConfig struct {
 	BatchLimit         int    `yaml:"batch_limit"`
 	MinSegmentAge      string `yaml:"min_segment_age"`
 	MinSegmentsToMerge int    `yaml:"min_segments_to_merge"`
+	RollingEnabled     *bool  `yaml:"rolling_enabled"`
+	RollingDebounce    string `yaml:"rolling_debounce"`
+}
+
+// IsRollingEnabled reports whether live rolling merge should run.
+// Requires merge.enabled; unset rolling_enabled defaults to on.
+func (c MergeConfig) IsRollingEnabled() bool {
+	if !c.Enabled {
+		return false
+	}
+	return c.RollingEnabled == nil || *c.RollingEnabled
+}
+
+// RollingDebounceDuration is how long to wait after a segment close before merging.
+func (c MergeConfig) RollingDebounceDuration() time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(c.RollingDebounce))
+	if err != nil || d <= 0 {
+		return 5 * time.Second
+	}
+	return d
 }
 
 type CameraTimelapseConfig struct {
@@ -704,6 +724,11 @@ func Validate(cfg *Config) error {
 		if cfg.Merge.MinSegmentsToMerge < 2 {
 			return fmt.Errorf("merge min_segments_to_merge must be at least 2")
 		}
+		if strings.TrimSpace(cfg.Merge.RollingDebounce) != "" {
+			if _, err := time.ParseDuration(cfg.Merge.RollingDebounce); err != nil {
+				return fmt.Errorf("invalid merge rolling_debounce: %w", err)
+			}
+		}
 	}
 
 	// Validate per-camera timelapse configuration
@@ -1065,6 +1090,9 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
 	}
+	if cfg.Merge.RollingDebounce == "" {
+		cfg.Merge.RollingDebounce = "5s"
+	}
 	// RTMP defaults
 	if cfg.RTMP.Enabled == nil {
 		cfg.RTMP.Enabled = new(bool)
@@ -1263,6 +1291,12 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.MinSegmentsToMerge > 0 {
 		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
+	}
+	if perCamera.RollingEnabled != nil {
+		result.RollingEnabled = perCamera.RollingEnabled
+	}
+	if perCamera.RollingDebounce != "" {
+		result.RollingDebounce = perCamera.RollingDebounce
 	}
 	return result
 }

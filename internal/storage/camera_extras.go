@@ -71,7 +71,8 @@ func applyExtrasToCamera(cam *config.CameraConfig, extras cameraExtras) {
 
 func mergeConfigFromRow(row CameraRow) *config.MergeConfig {
 	if row.MergeEnabled == nil && row.MergeCheckInterval == nil && row.MergeWindowSize == nil &&
-		row.MergeBatchLimit == nil && row.MergeMinSegmentAge == nil && row.MergeMinSegmentsToMerge == nil {
+		row.MergeBatchLimit == nil && row.MergeMinSegmentAge == nil && row.MergeMinSegmentsToMerge == nil &&
+		row.MergeRollingEnabled == nil && row.MergeRollingDebounce == nil {
 		return nil
 	}
 	mergeCfg := &config.MergeConfig{}
@@ -92,6 +93,12 @@ func mergeConfigFromRow(row CameraRow) *config.MergeConfig {
 	}
 	if row.MergeMinSegmentsToMerge != nil {
 		mergeCfg.MinSegmentsToMerge = *row.MergeMinSegmentsToMerge
+	}
+	if row.MergeRollingEnabled != nil {
+		mergeCfg.RollingEnabled = row.MergeRollingEnabled
+	}
+	if row.MergeRollingDebounce != nil {
+		mergeCfg.RollingDebounce = *row.MergeRollingDebounce
 	}
 	return mergeCfg
 }
