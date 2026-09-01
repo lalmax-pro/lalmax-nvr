@@ -168,6 +168,30 @@ export async function updateStreamingSettings(
   });
 }
 
+export interface AutoDiscoverSettings {
+  enabled: boolean;
+  listen_for_hello: boolean;
+  scan_interval: string;
+  default_username?: string;
+  has_password?: boolean;
+  network_interface?: string;
+}
+
+export async function getAutoDiscoverSettings(signal?: AbortSignal): Promise<AutoDiscoverSettings> {
+  return apiRequest<AutoDiscoverSettings>('/settings/auto-discover', { signal });
+}
+
+export async function updateAutoDiscoverSettings(
+  config: Partial<AutoDiscoverSettings> & { default_password?: string },
+  signal?: AbortSignal
+): Promise<AutoDiscoverSettings> {
+  return apiRequest<AutoDiscoverSettings>('/settings/auto-discover', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+    signal,
+  });
+}
+
 // --- GB28181 settings ---
 
 export interface GB28181Config {

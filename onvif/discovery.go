@@ -50,7 +50,17 @@ type probeMatchEnvelope struct {
 		ProbeMatches struct {
 			ProbeMatch []probeMatchEntry `xml:"ProbeMatch"`
 		} `xml:"ProbeMatches"`
+		Hello *helloEntry `xml:"Hello"`
 	} `xml:"Body"`
+}
+
+type helloEntry struct {
+	EndpointRef struct {
+		Address string `xml:"Address"`
+	} `xml:"EndpointReference"`
+	Types  string `xml:"Types"`
+	Scopes string `xml:"Scopes"`
+	XAddrs string `xml:"XAddrs"`
 }
 
 type probeMatchEntry struct {
@@ -189,13 +199,25 @@ func parseProbeMatchResponse(data []byte, endpoint string) (*DiscoveredDevice, e
 		return nil, nil
 	}
 
+	if envelope.Body.Hello != nil {
+		return deviceFromHello(*envelope.Body.Hello, endpoint), nil
+	}
+
 	if len(envelope.Body.ProbeMatches.ProbeMatch) == 0 {
 		return nil, nil
 	}
 
 	pm := envelope.Body.ProbeMatches.ProbeMatch[0]
-	scopes := strings.Fields(pm.Scopes)
-	xaddrs := strings.Fields(pm.XAddrs)
+	return deviceFromMatch(pm.EndpointRef.Address, pm.Scopes, pm.XAddrs, endpoint), nil
+}
+
+func deviceFromHello(h helloEntry, fallback string) *DiscoveredDevice {
+	return deviceFromMatch(h.EndpointRef.Address, h.Scopes, h.XAddrs, fallback)
+}
+
+func deviceFromMatch(uuid, scopesRaw, xaddrsRaw, fallback string) *DiscoveredDevice {
+	scopes := strings.Fields(scopesRaw)
+	xaddrs := strings.Fields(xaddrsRaw)
 
 	var name, hardware string
 	for _, scope := range scopes {
@@ -209,19 +231,90 @@ func parseProbeMatchResponse(data []byte, endpoint string) (*DiscoveredDevice, e
 		}
 	}
 
-	deviceEndpoint := endpoint
+	deviceEndpoint := fallback
 	if len(xaddrs) > 0 {
 		deviceEndpoint = xaddrs[0]
 	}
 
 	return &DiscoveredDevice{
-		UUID:     pm.EndpointRef.Address,
+		UUID:     uuid,
 		Name:     name,
 		XAddrs:   xaddrs,
 		Scopes:   scopes,
 		Hardware: hardware,
 		Endpoint: deviceEndpoint,
-	}, nil
+	}
+}
+
+// ListenHello binds UDP 3702 and invokes handler for inbound WS-Discovery Hello messages.
+// The caller should cancel ctx to stop. Bind failures are returned so callers can fall back
+// to active Probe scanning.
+func ListenHello(ctx context.Context, networkInterface string, handler func(*DiscoveredDevice)) error {
+	if handler == nil {
+		return fmt.Errorf("hello handler is required")
+	}
+	var listenAddr *net.UDPAddr
+	if strings.TrimSpace(networkInterface) != "" {
+		ifi, err := net.InterfaceByName(networkInterface)
+		if err != nil {
+			return fmt.Errorf("lookup interface %q: %w", networkInterface, err)
+		}
+		addrs, err := ifi.Addrs()
+		if err != nil {
+			return fmt.Errorf("interface addrs: %w", err)
+		}
+		var ip net.IP
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil {
+				ip = n.IP.To4()
+				break
+			}
+		}
+		if ip == nil {
+			return fmt.Errorf("interface %q has no IPv4 address", networkInterface)
+		}
+		listenAddr = &net.UDPAddr{IP: ip, Port: wsDiscoveryPort}
+	} else {
+		listenAddr = &net.UDPAddr{Port: wsDiscoveryPort}
+	}
+
+	conn, err := net.ListenUDP("udp4", listenAddr)
+	if err != nil {
+		return fmt.Errorf("listen hello on :3702: %w", err)
+	}
+
+	go func() {
+		defer conn.Close()
+		buf := make([]byte, 65535)
+		for {
+			select {
+			case <-ctx.Done():
+				_ = conn.SetDeadline(time.Now())
+				return
+			default:
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			n, remote, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				continue
+			}
+			if n == 0 {
+				continue
+			}
+			device, err := parseProbeMatchResponse(buf[:n], remote.String())
+			if err != nil || device == nil {
+				continue
+			}
+			if len(device.XAddrs) > 0 {
+				device.Endpoint = device.XAddrs[0]
+			}
+			handler(device)
+		}
+	}()
+	return nil
 }
 
 func generateProbeUUID() string {

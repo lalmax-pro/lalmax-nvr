@@ -70,7 +70,10 @@
   let formRetentionDays = $state(0);
   let formStreamEncoding = $state('');
   let formAudioEnabled = $state(false);
-  let formRecordingMode = $state<'continuous' | 'scheduled' | 'off'>('continuous');
+  let formRecordingMode = $state<'continuous' | 'scheduled' | 'off' | 'event' | 'adaptive'>('continuous');
+  let formSubStreamURL = $state('');
+  let formSubnetHints = $state('');
+  let formAdaptiveInterval = $state('30s');
   let validationErrors = $state<Record<string, string>>({});
 
   // Test connection state
@@ -147,6 +150,9 @@
     formStreamEncoding = '';
     formAudioEnabled = false;
     formRecordingMode = 'continuous';
+    formSubStreamURL = '';
+    formSubnetHints = '';
+    formAdaptiveInterval = '30s';
     formProfileToken = '';
     selectedProfile = null;
     onvifProfiles = [];
@@ -177,6 +183,9 @@
     formStreamEncoding = camera.stream_encoding || '';
     formAudioEnabled = camera.audio_enabled ?? false;
     formRecordingMode = camera.recording_mode ?? 'continuous';
+    formSubStreamURL = camera.sub_stream_url || '';
+    formSubnetHints = (camera.subnet_hints || []).join(', ');
+    formAdaptiveInterval = camera.adaptive?.timelapse_interval || '30s';
     formProfileToken = camera.profile_token || '';
     selectedProfile = null;
     validationErrors = {};
@@ -312,6 +321,9 @@
           profile_name: formProtocol === 'onvif' ? (selectedProfile?.name || undefined) : undefined,
           audio_enabled: supportsAudioRecording() ? formAudioEnabled : false,
           recording_mode: formRecordingMode,
+          sub_stream_url: formSubStreamURL || undefined,
+          subnet_hints: formSubnetHints.split(',').map(s => s.trim()).filter(Boolean),
+          adaptive: formRecordingMode === 'adaptive' ? { timelapse_interval: formAdaptiveInterval || '30s' } : undefined,
         };
         if (formUsername && formUsername !== editingCamera.username) {
           data.username = formUsername;
@@ -348,6 +360,10 @@
           profile_token: formProtocol === 'onvif' ? (formProfileToken || undefined) : undefined,
           profile_name: formProtocol === 'onvif' ? (selectedProfile?.name || undefined) : undefined,
           audio_enabled: supportsAudioRecording() ? formAudioEnabled : false,
+          recording_mode: formRecordingMode,
+          sub_stream_url: formSubStreamURL || undefined,
+          subnet_hints: formSubnetHints.split(',').map(s => s.trim()).filter(Boolean),
+          adaptive: formRecordingMode === 'adaptive' ? { timelapse_interval: formAdaptiveInterval || '30s' } : undefined,
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -632,7 +648,7 @@
         <p class="th-text-muted text-xs mt-1">{t('cameras.recordingMode.hint')}</p>
       </div>
       <div class="flex flex-wrap gap-2">
-        {#each (['continuous', 'scheduled', 'off'] as const) as mode}
+        {#each (['continuous', 'scheduled', 'event', 'adaptive', 'off'] as const) as mode}
           <button
             type="button"
             class="btn px-3 py-1.5 text-sm {formRecordingMode === mode ? 'btn-primary' : 'btn-ghost'}"
@@ -645,8 +661,30 @@
       {#if formRecordingMode === 'scheduled'}
         <RecordingScheduleEditor cameraId={editingCamera.id} />
       {/if}
+      {#if formRecordingMode === 'adaptive'}
+        <div class="mt-3">
+          <label for="cam-adaptive-interval" class="input-label">{t('cameras.adaptive.interval')}</label>
+          <input id="cam-adaptive-interval" type="text" class="input" bind:value={formAdaptiveInterval} placeholder="30s" />
+          <p class="th-text-muted text-xs mt-1">{t('cameras.adaptive.intervalHint')}</p>
+        </div>
+      {/if}
     </div>
   {/if}
+
+  <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div class="md:col-span-2">
+      <label for="cam-sub-url" class="input-label">{t('cameras.subStreamUrl')}</label>
+      <input id="cam-sub-url" type="text" class="input" bind:value={formSubStreamURL} placeholder="rtsp://192.168.1.100:554/stream2" />
+      <p class="th-text-muted text-xs mt-1">{t('cameras.subStreamUrlHint')}</p>
+    </div>
+    {#if formProtocol === 'onvif'}
+      <div class="md:col-span-2">
+        <label for="cam-subnet-hints" class="input-label">{t('cameras.subnetHints')}</label>
+        <input id="cam-subnet-hints" type="text" class="input" bind:value={formSubnetHints} placeholder="192.168.10.0/24" />
+        <p class="th-text-muted text-xs mt-1">{t('cameras.subnetHintsHint')}</p>
+      </div>
+    {/if}
+  </div>
 
   <!-- Merge Config (edit mode only) -->
   {#if editingCamera}

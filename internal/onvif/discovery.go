@@ -96,6 +96,16 @@ func MapDiscoveredDevice(d *onviflib.DiscoveredDevice) DiscoveredDevice {
 	}
 }
 
+// ListenHello starts a WS-Discovery Hello listener. Bind failures are returned to the caller.
+func ListenHello(ctx context.Context, networkInterface string, handler func(DiscoveredDevice)) error {
+	return onviflib.ListenHello(ctx, networkInterface, func(d *onviflib.DiscoveredDevice) {
+		if d == nil {
+			return
+		}
+		handler(MapDiscoveredDevice(d))
+	})
+}
+
 // MapDiscoveredDevices converts a slice of standalone library DiscoveredDevice.
 func MapDiscoveredDevices(devices []*onviflib.DiscoveredDevice) []DiscoveredDevice {
 	result := make([]DiscoveredDevice, 0, len(devices))

@@ -14,6 +14,8 @@ import (
 // It accepts an SDP offer and returns an SDP answer with a session URL.
 func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request) {
 	id := getCameraID(r)
+	streamID, quality := h.resolvePlayStreamID(r, id)
+	w.Header().Set("X-Stream-Quality", quality)
 
 	if h.mediaEngine == nil {
 		writeError(w, http.StatusServiceUnavailable, "WebRTC not available: media engine not enabled")
@@ -43,7 +45,7 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	upstream, err := h.mediaPlayURL(r.Context(), id, "webrtc")
+	upstream, err := h.mediaPlayURL(r.Context(), streamID, "webrtc")
 	if err != nil || upstream == nil {
 		writeError(w, http.StatusServiceUnavailable, "WebRTC not available")
 		return

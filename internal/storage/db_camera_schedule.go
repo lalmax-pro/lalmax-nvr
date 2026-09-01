@@ -10,7 +10,8 @@ const (
 	RecordingModeContinuous = "continuous" // record 24/7 (default)
 	RecordingModeScheduled  = "scheduled"  // record only within the weekly schedule
 	RecordingModeOff        = "off"        // live preview only, no recording
-	RecordingModeEvent      = "event"      // reserved for phase 2 (event-triggered)
+	RecordingModeEvent    = "event"    // record on MQTT / ONVIF motion trigger
+	RecordingModeAdaptive = "adaptive" // sparse IDR when calm, full speed on activity
 )
 
 // CameraScheduleRange is one weekly time window for a camera's recording schedule.
@@ -130,7 +131,7 @@ func (d *DB) GetDesiredRecordingState(ctx context.Context) (map[string]bool, err
 			desired[c.id] = false
 		case RecordingModeScheduled:
 			desired[c.id] = activeScheduled[c.id]
-		default: // continuous or unknown → record
+		default: // continuous, adaptive, or unknown → record (adaptive gate handles density)
 			desired[c.id] = true
 		}
 	}

@@ -117,6 +117,30 @@ mqtt:
   username: ""                     # MQTT broker authentication (optional)
   password: ""                     # MQTT broker password (optional, auto-encrypted if encryption key is set)
 
+# ONVIF plug-and-play (default off)
+# auto_discover:
+#   enabled: false
+#   listen_for_hello: true
+#   scan_interval: 60s
+#   default_username: ""
+#   default_password: ""
+
+# Event / adaptive recording windows
+# event:
+#   post_roll: 30s
+#   max_duration: 5m
+
+# Health IP self-healing (default on)
+# health:
+#   rediscovery:
+#     enabled: true
+#     max_parallel: 16
+#     probe_timeout: 2s
+
+# Sub-stream preview idle stop (seconds, default 60)
+# streaming:
+#   preview_auto_stop_sec: 60
+
 # WebDAV server — file access over WebDAV protocol
 # Shares recordings directory over HTTP
 webdav:

@@ -23,6 +23,7 @@ import (
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
 	"github.com/lalmax-pro/lalmax-nvr/internal/api"
+	"github.com/lalmax-pro/lalmax-nvr/internal/autodiscover"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ban"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/cleanup"
@@ -385,6 +386,9 @@ type App struct {
 	eventBus     *event.EventBus
 	eventArchive *event.Archiver
 	recSched     *recorder.RecordingScheduler
+	eventMgr     *recorder.EventManager
+	autoDiscover *autodiscover.Service
+	startCtx     context.Context
 
 	// Optional network services (nil when disabled)
 	mqttClient *mqtt.Client
@@ -551,11 +555,22 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	// Wire auto-remediation into health manager
 	if a.healthMgr != nil && a.camMgr != nil {
 		a.healthMgr.SetRestarter(a.camMgr.RestartRecorder)
+		a.healthMgr.SetRediscoverer(a.camMgr.RediscoverAndReconnect)
 		a.healthMgr.SetCameraEnabledFn(func(cameraID string) bool {
 			cam := a.camMgr.GetCameraConfig(cameraID)
 			return cam != nil && cam.Enabled
 		})
 	}
+
+	a.eventMgr = recorder.NewEventManager(
+		cfg.Event.PostRollDuration(),
+		cfg.Event.MaxDurationValue(),
+		a.camMgr.ResumeRecording,
+		a.camMgr.PauseRecording,
+		a.camMgr.IsEventRecordingCamera,
+	)
+	a.camMgr.SetEventManager(a.eventMgr)
+	a.autoDiscover = autodiscover.New(cfg.AutoDiscover, a.camMgr, db, a.eventBus, nil)
 
 	// Step 7: media runtime
 	a.media = media.NewRuntime(cfg, a.metrics)
@@ -638,7 +653,16 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	// Step 9: Optional MQTT client
 	if cfg.MQTT.Enabled {
-		a.mqttClient = mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, cfg.MQTT.Username, cfg.MQTT.Password, nil)
+		a.mqttClient = mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, cfg.MQTT.Username, cfg.MQTT.Password, func(cameraID, action string) {
+			switch strings.ToLower(strings.TrimSpace(action)) {
+			case "end", "stop", "off":
+				if a.eventMgr != nil {
+					a.eventMgr.End(cameraID, "mqtt")
+				}
+			default:
+				a.camMgr.HandleActivity(cameraID, "mqtt")
+			}
+		})
 	}
 
 	// Wire MQTT client into health manager for event publishing
@@ -750,6 +774,16 @@ func (a *App) buildRouter() http.Handler {
 	handler.SetWSManager(a.media.WS())
 	handler.SetHealthManager(a.healthMgr)
 	handler.SetStabilityProvider(a.healthMgr)
+	handler.SetAutoDiscoverApply(func(cfg config.AutoDiscoverConfig) {
+		if a.autoDiscover == nil {
+			return
+		}
+		parent := a.startCtx
+		if parent == nil {
+			parent = context.Background()
+		}
+		a.autoDiscover.Apply(parent, cfg)
+	})
 	if a.banMgr != nil {
 		handler.SetBanManager(a.banMgr)
 	}
@@ -896,6 +930,7 @@ func (a *App) restartProcess() {
 func (a *App) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
+	a.startCtx = ctx
 
 	// Start camera manager
 	go func() {
@@ -906,7 +941,18 @@ func (a *App) Start() error {
 
 	// Start recording scheduler (recording plans)
 	a.recSched = recorder.NewRecordingScheduler(a.db)
+	a.recSched.SetKeepRecording(func(cameraID string) bool {
+		return a.eventMgr != nil && a.eventMgr.IsActive(cameraID)
+	})
 	a.recSched.Start(ctx, a.camMgr.PauseRecording, a.camMgr.ResumeRecording)
+
+	if a.autoDiscover != nil {
+		go func() {
+			if err := a.autoDiscover.Start(ctx); err != nil {
+				slog.Error("auto-discover", "error", err)
+			}
+		}()
+	}
 
 	// Start health manager (optional, after camera manager)
 	if a.healthMgr != nil {
@@ -1119,6 +1165,15 @@ func (a *App) Stop() error {
 		if a.healthMgr != nil {
 			log.Info("stopping health manager")
 			a.healthMgr.Stop()
+		}
+
+		if a.eventMgr != nil {
+			log.Info("stopping event recording manager")
+			a.eventMgr.Stop()
+		}
+		if a.autoDiscover != nil {
+			log.Info("stopping auto-discover")
+			a.autoDiscover.Stop()
 		}
 
 		// 7.9. Recording scheduler

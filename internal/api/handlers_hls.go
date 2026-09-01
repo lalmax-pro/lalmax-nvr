@@ -10,6 +10,8 @@ import (
 
 func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	id := getCameraID(r)
+	streamID, quality := h.resolvePlayStreamID(r, id)
+	w.Header().Set("X-Stream-Quality", quality)
 	if h.config != nil && !h.config.IsHLSEnabled() {
 		writeError(w, http.StatusServiceUnavailable, "HLS is disabled")
 		return
@@ -19,7 +21,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tail := chi.URLParam(r, "*")
-	upstream, err := h.mediaHLSResourceURL(r.Context(), id, tail, r.URL.RawQuery)
+	upstream, err := h.mediaHLSResourceURL(r.Context(), streamID, tail, r.URL.RawQuery)
 	if err != nil || upstream == nil {
 		writeError(w, http.StatusBadGateway, "failed to build HLS URL")
 		return

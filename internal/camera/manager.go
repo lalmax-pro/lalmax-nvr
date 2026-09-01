@@ -28,25 +28,31 @@ var logger = slog.Default().With("component", "camera-manager")
 // CameraUpdate holds optional fields for updating a camera.
 // Only non-nil fields will be applied.
 type CameraUpdate struct {
-	Name           *string
-	URL            *string
-	Protocol       *string
-	Encoding       *string
-	RTSPTransport  *string
-	Username       *string
-	Password       *string
-	Enabled        *bool
-	Description    *string
-	Location       *string
-	Brand          *string
-	Model          *string
-	SerialNumber   *string
-	RetentionDays  *int
-	ONVIFEndpoint  *string
-	ProfileToken   *string
-	StreamEncoding *string
-	AudioEnabled   *bool
-	RecordingMode  *string
+	Name            *string
+	URL             *string
+	Protocol        *string
+	Encoding        *string
+	RTSPTransport   *string
+	Username        *string
+	Password        *string
+	Enabled         *bool
+	Description     *string
+	Location        *string
+	Brand           *string
+	Model           *string
+	SerialNumber    *string
+	RetentionDays   *int
+	ONVIFEndpoint   *string
+	ProfileToken    *string
+	StreamEncoding  *string
+	AudioEnabled    *bool
+	RecordingMode   *string
+	ActivationState *string
+	SubStreamURL    *string
+	SubProfileToken *string
+	SubnetHints     *[]string
+	StableID        *string
+	Adaptive        *config.CameraAdaptiveConfig
 }
 
 type CameraManager struct {
@@ -69,6 +75,7 @@ type CameraManager struct {
 	eventSubscribers     map[string]onvif.EventSubscriber    // camera_id → event subscriber
 	frameSampleCounter   uint64                              // atomic: 1/100 sampling for frame processing duration
 	pausedRecorders      map[string]bool                     // camera IDs with paused recording
+	eventMgr             *recorder.EventManager
 }
 
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
@@ -130,6 +137,10 @@ func (cm *CameraManager) SetMediaEngine(engine media.Engine) {
 	cm.mediaEngine = engine
 }
 
+func (cm *CameraManager) SetEventManager(m *recorder.EventManager) {
+	cm.eventMgr = m
+}
+
 // createRecorder creates a recorder for the given camera config.
 // Returns nil for unknown protocols.
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
@@ -187,7 +198,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h264Cfg.FrameWatchdogTimeout = d
 			}
-			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+			rec = cm.newH264Recorder(cam, h264Cfg)
 		case string(model.FormatH265):
 			h265Cfg := recorder.H265Config{
 				CameraID:      cam.ID,
@@ -203,7 +214,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h265Cfg.FrameWatchdogTimeout = d
 			}
-			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
+			rec = cm.newH265Recorder(cam, h265Cfg)
 		default:
 			logger.Warn("unsupported encoding for GB28181 recording", "camera_id", cam.ID, "encoding", cam.Encoding)
 			return nil
@@ -246,7 +257,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h264Cfg.FrameWatchdogTimeout = d
 			}
-			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+			rec = cm.newH264Recorder(cam, h264Cfg)
 		case string(model.FormatH265):
 			if recordingSourceURL != "" {
 				logger.Info("recording via lalmax relay", "camera_id", cam.ID, "source_url", recordingSourceURL)
@@ -267,7 +278,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h265Cfg.FrameWatchdogTimeout = d
 			}
-			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
+			rec = cm.newH265Recorder(cam, h265Cfg)
 		case string(model.FormatMJPEG):
 			logger.Warn("MJPEG recording uses direct camera pull (lalmax does not relay MJPEG)",
 				"camera_id", cam.ID)
@@ -326,7 +337,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 					h264Cfg.FrameWatchdogTimeout = d
 				}
-				rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+				rec = cm.newH264Recorder(cam, h264Cfg)
 				break
 			case string(model.FormatH265):
 				h265Cfg := recorder.H265Config{
@@ -341,7 +352,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 					h265Cfg.FrameWatchdogTimeout = d
 				}
-				rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
+				rec = cm.newH265Recorder(cam, h265Cfg)
 				break
 			}
 			if rec != nil {
@@ -424,7 +435,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h264Cfg.FrameWatchdogTimeout = d
 			}
-			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+			rec = cm.newH264Recorder(cam, h264Cfg)
 		case string(model.FormatH265):
 			h265Cfg := recorder.H265Config{
 				CameraID:      cam.ID,
@@ -438,7 +449,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h265Cfg.FrameWatchdogTimeout = d
 			}
-			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
+			rec = cm.newH265Recorder(cam, h265Cfg)
 		default:
 			logger.Warn("unsupported encoding for relay pull recording", "camera_id", cam.ID, "encoding", cam.Encoding)
 			return nil
@@ -561,7 +572,7 @@ func (cm *CameraManager) probeONVIFEncodingAndBuildURL(ctx context.Context, cam 
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			h264Cfg.FrameWatchdogTimeout = d
 		}
-		return recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics), playURL.URL
+		return cm.newH264Recorder(cam, h264Cfg), playURL.URL
 	case string(model.FormatH265):
 		h265Cfg := recorder.H265Config{
 			CameraID:     cam.ID,
@@ -574,7 +585,7 @@ func (cm *CameraManager) probeONVIFEncodingAndBuildURL(ctx context.Context, cam 
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			h265Cfg.FrameWatchdogTimeout = d
 		}
-		return recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics), playURL.URL
+		return cm.newH265Recorder(cam, h265Cfg), playURL.URL
 	}
 	return nil, ""
 }
@@ -910,10 +921,18 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			continue
 		}
 
+		if cam.ActivationState == config.ActivationPending {
+			logger.Info("camera pending activation, skipping recorder", "camera_id", cam.ID)
+			continue
+		}
+
 		if err := cm.startRecorder(ctx, cam, segDur); err != nil {
 			logger.Error("failed to start recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "error", err)
 		} else {
 			logger.Info("started recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "encoding", cam.Encoding)
+			cm.maybePauseOnStart(ctx, cam.ID)
+			go cm.ensureStableID(ctx, cam)
+			cm.subscribeMotionIfNeeded(ctx, cam.ID)
 		}
 	}
 	return nil
@@ -1019,7 +1038,11 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	cam.RTSPTransport = cameraRTSPTransport(cam)
 
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	unlocked := make(chan struct{})
+	defer func() {
+		cm.mu.Unlock()
+		close(unlocked)
+	}()
 
 	// Check for duplicate ID
 	for _, existing := range cm.cfg.Cameras {
@@ -1055,14 +1078,26 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	}
 
 	// Start recorder if enabled and protocol supports it
-	if cam.Enabled {
+	if cam.Enabled && cam.ActivationState != config.ActivationPending {
 		segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
 		if err != nil {
 			segDur = recorder.DefaultSegmentDur
 		}
 		if err := cm.startRecorder(ctx, cam, segDur); err != nil {
 			logger.Error("failed to start recorder", "error", err)
+		} else {
+			cm.afterRecorderStartLocked(cam, unlocked)
 		}
+	}
+
+	if cam.ActivationState != "" && cm.db != nil {
+		_ = cm.db.UpdateCameraActivation(ctx, cam.ID, cam.ActivationState)
+	}
+	if cam.StableID != "" && cm.db != nil {
+		_ = cm.db.UpdateCameraStableID(ctx, cam.ID, cam.StableID)
+	}
+	if cam.RecordingMode != "" && cm.db != nil {
+		_ = cm.db.UpdateCameraRecordingMode(ctx, cam.ID, cam.RecordingMode)
 	}
 
 	return cam.ID, nil
@@ -1275,7 +1310,11 @@ func (cm *CameraManager) RestoreArchivedCamera(ctx context.Context, row *storage
 // Returns the updated CameraConfig.
 func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, updates CameraUpdate) (*config.CameraConfig, error) {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	unlocked := make(chan struct{})
+	defer func() {
+		cm.mu.Unlock()
+		close(unlocked)
+	}()
 
 	// Find camera
 	idx := -1
@@ -1306,6 +1345,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		needsRestart = true
 	}
 	if updates.Password != nil && *updates.Password != cam.Password {
+		needsRestart = true
+	}
+	if updates.ONVIFEndpoint != nil && *updates.ONVIFEndpoint != cam.ONVIFEndpoint {
 		needsRestart = true
 	}
 
@@ -1350,6 +1392,24 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		needsRestart = true
 		cam.AudioEnabled = *updates.AudioEnabled
 	}
+	if updates.SubStreamURL != nil {
+		cam.SubStreamURL = *updates.SubStreamURL
+	}
+	if updates.SubProfileToken != nil {
+		cam.SubProfileToken = *updates.SubProfileToken
+	}
+	if updates.SubnetHints != nil {
+		cam.SubnetHints = *updates.SubnetHints
+	}
+	if updates.StableID != nil {
+		cam.StableID = *updates.StableID
+	}
+	if updates.ActivationState != nil {
+		cam.ActivationState = *updates.ActivationState
+	}
+	if updates.Adaptive != nil {
+		cam.Adaptive = updates.Adaptive
+	}
 
 	// Handle enabled state changes
 	enabledChanged := updates.Enabled != nil && *updates.Enabled != cam.Enabled
@@ -1381,6 +1441,13 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			if err := cm.db.UpdateCameraRecordingMode(ctx, cam.ID, *updates.RecordingMode); err != nil {
 				logger.Error("failed to update recording mode", "camera_id", cam.ID, "error", err)
 			}
+			cam.RecordingMode = *updates.RecordingMode
+		}
+		if updates.ActivationState != nil {
+			_ = cm.db.UpdateCameraActivation(ctx, cam.ID, *updates.ActivationState)
+		}
+		if updates.StableID != nil {
+			_ = cm.db.UpdateCameraStableID(ctx, cam.ID, *updates.StableID)
 		}
 	}
 
@@ -1406,8 +1473,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		if needsRestart || enabledChanged {
 			// Only start if we don't already have a recorder (needsRestart cleared it, or was never running)
 			if _, exists := cm.recorders[cam.ID]; !exists {
-				if err := cm.startRecorder(ctx, *cam, segDur); err != nil {
+				if cam.ActivationState == config.ActivationPending {
+					logger.Info("camera pending activation, skipping recorder", "camera_id", cam.ID)
+				} else if err := cm.startRecorder(ctx, *cam, segDur); err != nil {
 					logger.Error("failed to start recorder", "error", err)
+				} else {
+					cm.afterRecorderStartLocked(*cam, unlocked)
 				}
 			}
 		}
@@ -1492,6 +1563,9 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 	}
 	if !cam.Enabled {
 		return &model.CameraDisabledError{CameraID: cameraID}
+	}
+	if cam.ActivationState == config.ActivationPending {
+		return fmt.Errorf("camera %q is pending activation", cameraID)
 	}
 
 	// Check if already running — stale recorders (error/stopped) can be restarted
@@ -2129,6 +2203,11 @@ func (cm *CameraManager) MonitorStreamEvents(ctx context.Context) {
 }
 
 func (cm *CameraManager) handleStreamEvent(ctx context.Context, ev media.Event) {
+	// Sub-stream idle stops must not tear down the main camera recorder.
+	if media.IsSubStreamID(ev.StreamID) {
+		return
+	}
+
 	// Only care about cameras that exist in our config
 	cm.mu.RLock()
 	cam := cm.getCameraConfigByID(ev.StreamID)

@@ -47,6 +47,8 @@ type Config struct {
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
 	Snapshot      SnapshotConfig      `yaml:"snapshot"`
+	AutoDiscover  AutoDiscoverConfig  `yaml:"auto_discover"`
+	Event         EventConfig         `yaml:"event"`
 	Version       string              `yaml:"version"`
 }
 
@@ -110,6 +112,13 @@ type CameraConfig struct {
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
 	Vendor string `yaml:"vendor,omitempty"` // Transport vendor: "cs2" (default)
+
+	ActivationState string                `yaml:"activation_state,omitempty" json:"activation_state,omitempty"`
+	StableID        string                `yaml:"stable_id,omitempty" json:"stable_id,omitempty"`
+	SubProfileToken string                `yaml:"sub_profile_token,omitempty" json:"sub_profile_token,omitempty"`
+	SubnetHints     []string              `yaml:"subnet_hints,omitempty" json:"subnet_hints,omitempty"`
+	RecordingMode   string                `yaml:"recording_mode,omitempty" json:"recording_mode,omitempty"`
+	Adaptive        *CameraAdaptiveConfig `yaml:"adaptive,omitempty" json:"adaptive,omitempty"`
 }
 
 // HealthOverrides allows per-camera health monitoring threshold overrides.
@@ -284,6 +293,8 @@ type StreamingConfig struct {
 	// AutoStopNoViewSec is the seconds to wait before stopping a stream pull when no viewers.
 	// Default: 300 (5 minutes). Set to 0 to disable auto-stop.
 	AutoStopNoViewSec int `yaml:"auto_stop_no_view_sec,omitempty"`
+	// PreviewAutoStopSec is the idle timeout for on-demand sub-stream pulls (default 60).
+	PreviewAutoStopSec int `yaml:"preview_auto_stop_sec,omitempty"`
 }
 
 // WebRTCConfig configures WebRTC WHEP streaming
@@ -345,6 +356,7 @@ type HealthConfig struct {
 	Layer2          HealthLayer2Config          `yaml:"layer2"`
 	Layer2_5        HealthLayer2_5Config        `yaml:"layer2_5"`
 	AutoRemediation HealthAutoRemediationConfig `yaml:"auto_remediation"`
+	Rediscovery     RediscoveryConfig           `yaml:"rediscovery"`
 }
 
 type HealthAlertsConfig struct {
@@ -813,6 +825,9 @@ func Validate(cfg *Config) error {
 			}
 		}
 	}
+	if err := validateP0(cfg); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1023,6 +1038,7 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.Streaming.AutoStopNoViewSec == 0 {
 		cfg.Streaming.AutoStopNoViewSec = 300
 	}
+	applyP0Defaults(cfg)
 	// If HLS is disabled, fall back when default protocol is HLS-based.
 	if !cfg.IsHLSEnabled() {
 		switch cfg.Streaming.DefaultProtocol {
