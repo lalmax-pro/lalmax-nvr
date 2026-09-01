@@ -24,6 +24,8 @@ func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request)
 		"batch_limit":           h.config.Merge.BatchLimit,
 		"min_segment_age":       h.config.Merge.MinSegmentAge,
 		"min_segments_to_merge": h.config.Merge.MinSegmentsToMerge,
+		"rolling_enabled":       h.config.Merge.IsRollingEnabled(),
+		"rolling_debounce":      h.config.Merge.RollingDebounce,
 	})
 }
 
@@ -40,6 +42,8 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 		BatchLimit         *int    `json:"batch_limit"`
 		MinSegmentAge      *string `json:"min_segment_age"`
 		MinSegmentsToMerge *int    `json:"min_segments_to_merge"`
+		RollingEnabled     *bool   `json:"rolling_enabled"`
+		RollingDebounce    *string `json:"rolling_debounce"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -85,6 +89,16 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 		}
 		h.config.Merge.MinSegmentsToMerge = *body.MinSegmentsToMerge
 	}
+	if body.RollingEnabled != nil {
+		h.config.Merge.RollingEnabled = body.RollingEnabled
+	}
+	if body.RollingDebounce != nil {
+		if _, err := time.ParseDuration(*body.RollingDebounce); err != nil {
+			writeError(w, http.StatusBadRequest, "rolling_debounce must be a valid duration (e.g., \"5s\", \"15s\")")
+			return
+		}
+		h.config.Merge.RollingDebounce = *body.RollingDebounce
+	}
 
 	// Persist config to disk
 	if err := config.Save(h.configPath, h.config); err != nil {
@@ -93,6 +107,39 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 	h.logOperation(r, "config.update", "config", "merge", "success", "merge settings updated", nil)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *Handler) handleGetCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	cameraID := chi.URLParam(r, "id")
+	cam, err := h.db.GetCamera(r.Context(), cameraID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		return
+	}
+	if cam == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+	if cam.MergeEnabled == nil && cam.MergeCheckInterval == nil && cam.MergeWindowSize == nil &&
+		cam.MergeBatchLimit == nil && cam.MergeMinSegmentAge == nil && cam.MergeMinSegmentsToMerge == nil &&
+		cam.MergeRollingEnabled == nil && cam.MergeRollingDebounce == nil {
+		writeError(w, http.StatusNotFound, "no per-camera merge override")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":               cam.MergeEnabled,
+		"check_interval":        cam.MergeCheckInterval,
+		"window_size":           cam.MergeWindowSize,
+		"batch_limit":           cam.MergeBatchLimit,
+		"min_segment_age":       cam.MergeMinSegmentAge,
+		"min_segments_to_merge": cam.MergeMinSegmentsToMerge,
+		"rolling_enabled":       cam.MergeRollingEnabled,
+		"rolling_debounce":      cam.MergeRollingDebounce,
+	})
 }
 
 func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +161,8 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 		BatchLimit         *int    `json:"batch_limit"`
 		MinSegmentAge      *string `json:"min_segment_age"`
 		MinSegmentsToMerge *int    `json:"min_segments_to_merge"`
+		RollingEnabled     *bool   `json:"rolling_enabled"`
+		RollingDebounce    *string `json:"rolling_debounce"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -122,7 +171,7 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 	}
 
 	// Validate duration fields
-	for _, d := range []*string{body.CheckInterval, body.WindowSize, body.MinSegmentAge} {
+	for _, d := range []*string{body.CheckInterval, body.WindowSize, body.MinSegmentAge, body.RollingDebounce} {
 		if d != nil {
 			if _, err := time.ParseDuration(*d); err != nil {
 				writeError(w, http.StatusBadRequest, "duration fields must be valid (e.g., \"30m\", \"1h\")")
@@ -141,7 +190,7 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 
 	if err := h.db.UpsertCameraMerge(r.Context(), cameraID,
 		body.Enabled, body.CheckInterval, body.WindowSize, body.MinSegmentAge,
-		body.BatchLimit, body.MinSegmentsToMerge); err != nil {
+		body.BatchLimit, body.MinSegmentsToMerge, body.RollingEnabled, body.RollingDebounce); err != nil {
 		logger.Warn("failed to update camera merge config", "error", err, "camera_id", cameraID)
 		writeError(w, http.StatusInternalServerError, "failed to update merge config")
 		return
@@ -164,7 +213,7 @@ func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.R
 
 	// Pass all nil to clear (revert to global defaults)
 	if err := h.db.UpsertCameraMerge(r.Context(), cameraID,
-		nil, nil, nil, nil, nil, nil); err != nil {
+		nil, nil, nil, nil, nil, nil, nil, nil); err != nil {
 		logger.Warn("failed to clear camera merge config", "error", err, "camera_id", cameraID)
 		writeError(w, http.StatusInternalServerError, "failed to clear merge config")
 		return

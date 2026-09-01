@@ -9,6 +9,7 @@
   import Timeline from '$lib/components/Timeline.svelte';
   import InlinePlayer from '$lib/components/InlinePlayer.svelte';
   import RecordingCalendar from '$lib/components/RecordingCalendar.svelte';
+  import VodPlayer from '$lib/components/VodPlayer.svelte';
 
   let { initialCameraId = '' }: { initialCameraId?: string } = $props();
 
@@ -22,9 +23,18 @@
   let error = $state('');
   let selectedRecording = $state<Recording | null>(null);
   let deleteConfirm = $state<Recording | null>(null);
+  let continuousPlay = $state(false);
+  let vodSeekMs = $state(0);
 
   let selectedCamera = $derived(cameras.find(c => c.id === selectedCameraId));
   let selectedCameraArchived = $derived(selectedCamera?.archived === true);
+  let dayRange = $derived.by(() => {
+    const start = new Date(selectedDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(selectedDate);
+    end.setHours(23, 59, 59, 999);
+    return { start: start.toISOString(), end: end.toISOString() };
+  });
 
   // Filters for recording list
   let formatFilter = $state('');
@@ -131,6 +141,25 @@
     selectedRecording = recording;
   }
 
+  function mediaOffsetMs(recording: Recording, offsetSec: number): number {
+    let acc = 0;
+    const vodRecs = recordings.filter(r => r.format === 'h264' || r.format === 'h265' || r.format === 'timelapse');
+    for (const r of vodRecs) {
+      if (r.id === recording.id) {
+        return acc + offsetSec * 1000;
+      }
+      acc += (r.duration || 0) * 1000;
+    }
+    return acc;
+  }
+
+  function handleTimelineSeek(recording: Recording, offsetSec: number) {
+    selectedRecording = recording;
+    if (continuousPlay) {
+      vodSeekMs = mediaOffsetMs(recording, offsetSec);
+    }
+  }
+
   function handleClosePlayer() {
     selectedRecording = null;
   }
@@ -230,6 +259,14 @@
           >
             <Calendar size={18} />
           </button>
+          <button
+            onclick={() => { continuousPlay = !continuousPlay; }}
+            class="btn btn-sm {continuousPlay ? 'btn-primary' : 'btn-ghost'}"
+            title={t('recordings.continuousHint')}
+            aria-pressed={continuousPlay}
+          >
+            {t('recordings.continuousPlay')}
+          </button>
         </div>
 
         <!-- Hour selector -->
@@ -264,12 +301,22 @@
           {selectedHour}
           onSelect={handleTimelineSelect}
           onHourSelect={handleHourSelect}
+          onSeek={handleTimelineSeek}
         />
       </div>
     {/if}
 
-    <!-- Inline Player -->
-    {#if selectedRecording}
+    <!-- Inline / continuous Player -->
+    {#if continuousPlay && selectedCameraId}
+      <div class="mb-6">
+        <VodPlayer
+          cameraId={selectedCameraId}
+          start={dayRange.start}
+          end={dayRange.end}
+          seekToMs={vodSeekMs}
+        />
+      </div>
+    {:else if selectedRecording}
       <div class="mb-6">
         <InlinePlayer
           recording={selectedRecording}

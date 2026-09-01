@@ -176,6 +176,8 @@ export {
   loadFrameBlob,
   loadRecordingVideoBlob,
   getRecordingPlaybackUrl,
+  getRecordingsTimeline,
+  getVodPlaylistUrl,
   getStats,
   getStatsTrends,
   listArchives,
@@ -188,6 +190,7 @@ export {
 
 export type {
   Recording,
+  TimelineEntry,
   FrameInfo,
   FramesResponse,
   RecordingListResponse,
@@ -291,6 +294,9 @@ export type {
   StabilityMetrics,
   StabilityDataResponse,
 } from './health';
+
+export { getCameraFlow, getFlowStreams } from './flow';
+export type { CameraFlow } from './flow';
 
 // AI Detection — localStorage-backed settings + backend API (Webhook mode only)
 export {

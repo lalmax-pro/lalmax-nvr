@@ -30,6 +30,24 @@ func (d *DB) migrateActivationIdentity(ctx context.Context) error {
 	return nil
 }
 
+func (d *DB) migrateMergeRolling(ctx context.Context) error {
+	var col int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='merge_rolling_enabled'`).Scan(&col)
+	if col == 0 {
+		if _, err := d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN merge_rolling_enabled INTEGER`); err != nil {
+			return err
+		}
+	}
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='merge_rolling_debounce'`).Scan(&col)
+	if col == 0 {
+		if _, err := d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN merge_rolling_debounce TEXT`); err != nil {
+			return err
+		}
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='27' WHERE key='schema_version'")
+	return nil
+}
+
 // UpdateCameraActivation persists activation_state for a camera.
 func (d *DB) UpdateCameraActivation(ctx context.Context, id, state string) error {
 	if state == "" {

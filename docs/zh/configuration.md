@@ -47,6 +47,8 @@ merge:
   batch_limit: 200
   min_segment_age: "10m"
   min_segments_to_merge: 3
+  rolling_enabled: true
+  rolling_debounce: "5s"
 ftp:
   enabled: true
   port: 2121
@@ -352,8 +354,18 @@ cameras:
 ### `merge.min_segments_to_merge`
 - **类型**: integer
 - **默认**: 3
-- **描述**: 触发合并所需的最小片段数
+- **描述**: 触发周期合并所需的最小片段数
 - **示例**: `2`, `3`, `5`
+
+### `merge.rolling_enabled`
+- **类型**: boolean
+- **默认**: `true`（仅在 `merge.enabled=true` 时生效）
+- **描述**: 片段关闭后 debounce，把新段合进当前 UTC 小时文件
+
+### `merge.rolling_debounce`
+- **类型**: string
+- **默认**: `"5s"`
+- **描述**: 滚动合并在最后一次片段关闭后再等多久
 
 ## FTP 配置
 
@@ -546,9 +558,14 @@ HLS 播放与录像拉流相互独立：关闭 `hls.enabled` 或启用按需切�
 - **默认**: `"http://127.0.0.1:1290"`
 - **描述**: lalmax HTTP API 地址
 
+### `media.lalmax_public_url`
+- **类型**: string
+- **默认**: 与 `media.lalmax_http_addr` 相同
+- **描述**: 对外播放地址使用的 hostname。必须写成客户端能访问的主机名，否则 `rtsp://` URL 会是 `127.0.0.1`
+
 ### `media.rtmp_port` / `media.rtsp_port` / `media.http_port`
 - **类型**: integer
-- **描述**: lal 协议端口（mode=http 时使用）
+- **描述**: lal 协议端口（mode=http 时使用）。embedded 模式默认 RTSP 为 **15544**。相机协议 API 返回 `rtsp://{lalmax_public_url 主机}:15544/live/{camera_id}`。请把 `media.lalmax_public_url` 设成对外 hostname，否则 URL 会是 `127.0.0.1`。
 
 ## 流媒体配置
 

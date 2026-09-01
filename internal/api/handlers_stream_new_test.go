@@ -43,11 +43,12 @@ func hasUnavailableProtocol(t *testing.T, protocols []ProtocolDetail, name strin
 }
 
 type stubMediaEngine struct {
-	stream   *media.StreamInfo
-	streams  []media.StreamInfo
-	getErr   error
-	listErr  error
-	playURLs map[string]string
+	stream      *media.StreamInfo
+	streams     []media.StreamInfo
+	streamsByID map[string]*media.StreamInfo
+	getErr      error
+	listErr     error
+	playURLs    map[string]string
 }
 
 type stubWSManager struct{}
@@ -70,9 +71,12 @@ func (s *stubMediaEngine) StopRTPReceive(context.Context, string) error {
 func (s *stubMediaEngine) KickSession(context.Context, string) error {
 	return nil
 }
-func (s *stubMediaEngine) GetStream(context.Context, string) (*media.StreamInfo, error) {
+func (s *stubMediaEngine) GetStream(_ context.Context, id string) (*media.StreamInfo, error) {
 	if s.getErr != nil {
 		return nil, s.getErr
+	}
+	if s.streamsByID != nil {
+		return s.streamsByID[id], nil
 	}
 	return s.stream, nil
 }

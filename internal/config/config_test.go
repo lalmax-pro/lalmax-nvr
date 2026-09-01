@@ -719,6 +719,18 @@ func TestApplyDefaultsMergeFields(t *testing.T) {
 	require.Equal(t, "1h", cfg.Merge.WindowSize)
 	require.Equal(t, "10m", cfg.Merge.MinSegmentAge)
 	require.Equal(t, 3, cfg.Merge.MinSegmentsToMerge)
+	require.Equal(t, "5s", cfg.Merge.RollingDebounce)
+}
+
+func TestIsRollingEnabled(t *testing.T) {
+	require.False(t, MergeConfig{Enabled: false}.IsRollingEnabled())
+	require.True(t, MergeConfig{Enabled: true}.IsRollingEnabled())
+	off := false
+	require.False(t, MergeConfig{Enabled: true, RollingEnabled: &off}.IsRollingEnabled())
+	on := true
+	require.True(t, MergeConfig{Enabled: true, RollingEnabled: &on}.IsRollingEnabled())
+	require.Equal(t, 5*time.Second, MergeConfig{}.RollingDebounceDuration())
+	require.Equal(t, 15*time.Second, MergeConfig{RollingDebounce: "15s"}.RollingDebounceDuration())
 }
 
 func TestApplyDefaultsObservability(t *testing.T) {

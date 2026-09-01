@@ -138,6 +138,32 @@ export function getRecordingPlaybackUrl(id: string): string {
   return url;
 }
 
+export interface TimelineEntry {
+  id: string;
+  camera_id: string;
+  started_at: string;
+  ended_at: string;
+  duration: number;
+  format: Recording['format'];
+  merged: boolean;
+}
+
+export async function getRecordingsTimeline(
+  cameraId: string,
+  start: string,
+  end: string,
+  signal?: AbortSignal
+): Promise<TimelineEntry[]> {
+  const q = new URLSearchParams({ camera_id: cameraId, start, end });
+  const res = await apiRequest<{ entries: TimelineEntry[] }>(`/recordings/timeline?${q}`, { signal });
+  return res.entries || [];
+}
+
+export function getVodPlaylistUrl(cameraId: string, start: string, end: string): string {
+  const q = new URLSearchParams({ start, end });
+  return `/api/cameras/${encodeURIComponent(cameraId)}/playback/playlist.m3u8?${q}`;
+}
+
 export async function downloadRecording(
   id: string,
   onProgress?: (loaded: number, total: number) => void

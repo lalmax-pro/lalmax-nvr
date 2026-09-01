@@ -41,6 +41,8 @@ type CameraRow struct {
 	MergeBatchLimit         *int       `json:"merge_batch_limit,omitempty"`
 	MergeMinSegmentAge      *string    `json:"merge_min_segment_age,omitempty"`
 	MergeMinSegmentsToMerge *int       `json:"merge_min_segments_to_merge,omitempty"`
+	MergeRollingEnabled     *bool      `json:"merge_rolling_enabled,omitempty"`
+	MergeRollingDebounce    *string    `json:"merge_rolling_debounce,omitempty"`
 	ONVIFEndpoint           string     `json:"onvif_endpoint"`
 	ProfileToken            string     `json:"profile_token"`
 	ProfileName             string     `json:"profile_name"`
@@ -73,7 +75,7 @@ type CameraRow struct {
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
-		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
+		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge, merge_rolling_enabled, merge_rolling_debounce,
 		onvif_endpoint, profile_token, profile_name, stream_encoding,
 		archived, archived_at, archive_retention_days, COALESCE(recording_mode,'continuous'),
 		COALESCE(activation_state,'active'), COALESCE(stable_id,''), created_at
@@ -85,12 +87,12 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 	var res []CameraRow
 	for rows.Next() {
 		var c CameraRow
-		var mergeEnabled sql.NullBool
-		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
+		var mergeEnabled, mergeRollingEnabled sql.NullBool
+		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge, mergeRollingDebounce sql.NullString
 		var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 		var archivedAtStr, createdAtStr sql.NullString
 		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.RTSPTransport, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
-			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
+			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge, &mergeRollingEnabled, &mergeRollingDebounce,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.ProfileName, &c.StreamEncoding,
 			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays, &c.RecordingMode, &c.ActivationState, &c.StableID, &createdAtStr); err != nil {
 			return nil, err
@@ -101,6 +103,8 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 		c.MergeBatchLimit = nullInt64ToPtr(mergeBatchLimit)
 		c.MergeMinSegmentAge = nullStringToPtr(mergeMinSegmentAge)
 		c.MergeMinSegmentsToMerge = nullInt64ToPtr(mergeMinSegmentsToMerge)
+		c.MergeRollingEnabled = nullBoolToPtr(mergeRollingEnabled)
+		c.MergeRollingDebounce = nullStringToPtr(mergeRollingDebounce)
 		if archivedAtStr.Valid && archivedAtStr.String != "" {
 			t := scanTime(archivedAtStr)
 			c.ArchivedAt = &t
@@ -116,7 +120,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 // ListArchivedCameras returns only cameras marked as archived.
 func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
-		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
+		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge, merge_rolling_enabled, merge_rolling_debounce,
 		onvif_endpoint, profile_token, profile_name, stream_encoding,
 		archived, archived_at, archive_retention_days, COALESCE(recording_mode,'continuous'),
 		COALESCE(activation_state,'active'), COALESCE(stable_id,''), created_at
@@ -128,12 +132,12 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 	var res []CameraRow
 	for rows.Next() {
 		var c CameraRow
-		var mergeEnabled sql.NullBool
-		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
+		var mergeEnabled, mergeRollingEnabled sql.NullBool
+		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge, mergeRollingDebounce sql.NullString
 		var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 		var archivedAtStr, createdAtStr sql.NullString
 		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.RTSPTransport, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
-			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
+			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge, &mergeRollingEnabled, &mergeRollingDebounce,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.ProfileName, &c.StreamEncoding,
 			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays, &c.RecordingMode, &c.ActivationState, &c.StableID, &createdAtStr); err != nil {
 			return nil, err
@@ -144,6 +148,8 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 		c.MergeBatchLimit = nullInt64ToPtr(mergeBatchLimit)
 		c.MergeMinSegmentAge = nullStringToPtr(mergeMinSegmentAge)
 		c.MergeMinSegmentsToMerge = nullInt64ToPtr(mergeMinSegmentsToMerge)
+		c.MergeRollingEnabled = nullBoolToPtr(mergeRollingEnabled)
+		c.MergeRollingDebounce = nullStringToPtr(mergeRollingDebounce)
 		if archivedAtStr.Valid && archivedAtStr.String != "" {
 			t := scanTime(archivedAtStr)
 			c.ArchivedAt = &t
@@ -187,18 +193,18 @@ func (d *DB) UpdateCameraRecordingMode(ctx context.Context, id, mode string) err
 
 func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error) {
 	var c CameraRow
-	var mergeEnabled sql.NullBool
-	var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
+	var mergeEnabled, mergeRollingEnabled sql.NullBool
+	var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge, mergeRollingDebounce sql.NullString
 	var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 	var archivedAtStr, createdAtStr sql.NullString
 	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
-		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
+		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge, merge_rolling_enabled, merge_rolling_debounce,
 		onvif_endpoint, profile_token, profile_name, stream_encoding,
 		archived, archived_at, archive_retention_days, COALESCE(recording_mode,'continuous'),
 		COALESCE(activation_state,'active'), COALESCE(stable_id,''), created_at
 		FROM cameras WHERE id = ?`, cameraID).Scan(
 		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.RTSPTransport, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
-		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
+		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge, &mergeRollingEnabled, &mergeRollingDebounce,
 		&c.ONVIFEndpoint, &c.ProfileToken, &c.ProfileName, &c.StreamEncoding,
 		&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays, &c.RecordingMode, &c.ActivationState, &c.StableID, &createdAtStr)
 	if err != nil {
@@ -213,6 +219,8 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	c.MergeBatchLimit = nullInt64ToPtr(mergeBatchLimit)
 	c.MergeMinSegmentAge = nullStringToPtr(mergeMinSegmentAge)
 	c.MergeMinSegmentsToMerge = nullInt64ToPtr(mergeMinSegmentsToMerge)
+	c.MergeRollingEnabled = nullBoolToPtr(mergeRollingEnabled)
+	c.MergeRollingDebounce = nullStringToPtr(mergeRollingDebounce)
 	if archivedAtStr.Valid && archivedAtStr.String != "" {
 		t := scanTime(archivedAtStr)
 		c.ArchivedAt = &t

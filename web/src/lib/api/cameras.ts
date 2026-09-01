@@ -453,6 +453,8 @@ export interface MergeConfig {
   batch_limit?: number;
   min_segment_age?: string;
   min_segments_to_merge?: number;
+  rolling_enabled?: boolean;
+  rolling_debounce?: string;
 }
 
 export async function getMergeConfig(

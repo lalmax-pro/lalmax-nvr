@@ -31,6 +31,7 @@ let mergeWindowSize = $state('1h');
 let mergeMinSegments = $state(3);
 let mergeMinSegmentAge = $state('10m');
 let mergeBatchLimit = $state(100);
+let mergeRollingEnabled = $state(true);
 
 // Streaming settings state
 let streamingDefaultProtocol = $state('webrtc');
@@ -151,7 +152,7 @@ let isDirty = $derived(() => {
       retentionDays, diskThresholdPercent, checkInterval,
       webdavEnabled, webdavPathPrefix, webdavReadWrite,
       mergeEnabled, mergeCheckInterval, mergeWindowSize,
-      mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
+      mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit, mergeRollingEnabled,
       streamingDefaultProtocol, streamingWebrtcEnabled, streamingWebrtcMaxViewers,
       streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
       streamingRtmpEnabled,
@@ -249,7 +250,7 @@ function getAffectedCameraCount(protocol: string): number {
       retentionDays, diskThresholdPercent, checkInterval,
       webdavEnabled, webdavPathPrefix, webdavReadWrite,
       mergeEnabled, mergeCheckInterval, mergeWindowSize,
-      mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
+      mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit, mergeRollingEnabled,
       streamingDefaultProtocol, streamingWebrtcEnabled, streamingWebrtcMaxViewers,
       streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
       streamingRtmpEnabled,
@@ -320,6 +321,7 @@ function getAffectedCameraCount(protocol: string): number {
       mergeMinSegments = mergeSettings.min_segments_to_merge ?? 3;
       mergeMinSegmentAge = mergeSettings.min_segment_age ?? '10m';
       mergeBatchLimit = mergeSettings.batch_limit ?? 100;
+      mergeRollingEnabled = mergeSettings.rolling_enabled ?? true;
 
       // Load GB28181 settings
       try {
@@ -405,6 +407,7 @@ function getAffectedCameraCount(protocol: string): number {
         min_segments_to_merge: mergeMinSegments,
         min_segment_age: mergeMinSegmentAge,
         batch_limit: mergeBatchLimit,
+        rolling_enabled: mergeRollingEnabled,
       });
 
       // Save streaming settings
@@ -1183,6 +1186,24 @@ function getAffectedCameraCount(protocol: string): number {
                 min="10"
                 max="1000"
               />
+            </div>
+
+            <div>
+              <label class="input-label" for="merge-rolling">{t('merge.rollingEnabled')}</label>
+              <div class="flex items-center gap-3 mt-2">
+                <button
+                  id="merge-rolling"
+                  type="button"
+                  class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors {mergeRollingEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                  onclick={() => { mergeRollingEnabled = !mergeRollingEnabled; }}
+                  role="switch"
+                  aria-checked={mergeRollingEnabled}
+                >
+                  <span class="inline-block h-4 w-4 transform rounded-full bg-white {mergeRollingEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                </button>
+                <span class="text-sm th-text-secondary">{mergeRollingEnabled ? t('merge.enabledState') : t('merge.disabledState')}</span>
+              </div>
+              <p class="text-xs th-text-muted mt-1">{t('merge.rollingHint')}</p>
             </div>
           </div>
         </div>

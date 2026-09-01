@@ -91,16 +91,86 @@ func (d *DB) ListCameraMergeWindows(ctx context.Context, cameraID string, minAge
 	return res, nil
 }
 
+// ListHourMergedRecordings returns already-merged recordings whose started_at falls in [hourStart, hourEnd).
+func (d *DB) ListHourMergedRecordings(ctx context.Context, cameraID string, hourStart, hourEnd time.Time) ([]*model.Recording, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE camera_id = ? AND merge_status = 'merged' AND COALESCE(archived,0) = 0 AND ended_at IS NOT NULL AND started_at >= ? AND started_at < ? ORDER BY started_at ASC;`,
+		cameraID, formatTime(hourStart), formatTime(hourEnd))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []*model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
+			return nil, err
+		}
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr, sql.NullString{})
+		res = append(res, &r)
+	}
+	return res, nil
+}
+
+// CountPendingMerges returns how many pending (unmerged) closed segments a camera has.
+func (d *DB) CountPendingMerges(ctx context.Context, cameraID string) (int, error) {
+	var n int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND COALESCE(archived,0) = 0;`,
+		cameraID).Scan(&n)
+	return n, err
+}
+
+// TimelineEntry is a lightweight recording row for the 24h DVR bar.
+type TimelineEntry struct {
+	ID        string        `json:"id"`
+	CameraID  string        `json:"camera_id"`
+	StartedAt time.Time     `json:"started_at"`
+	EndedAt   time.Time     `json:"ended_at"`
+	Duration  float64       `json:"duration"`
+	Format    model.Format  `json:"format"`
+	Merged    bool          `json:"merged"`
+}
+
+// ListRecordingTimeline returns a compact projection of recordings in [start, end], capped at limit.
+func (d *DB) ListRecordingTimeline(ctx context.Context, cameraID string, start, end time.Time, limit int) ([]TimelineEntry, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 10000
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, camera_id, started_at, ended_at, duration, format, merged FROM recordings WHERE camera_id = ? AND COALESCE(archived,0) = 0 AND ended_at IS NOT NULL AND started_at < ? AND ended_at > ? ORDER BY started_at ASC LIMIT ?;`,
+		cameraID, formatTime(end), formatTime(start), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []TimelineEntry
+	for rows.Next() {
+		var e TimelineEntry
+		var startedAtStr, endedAtStr sql.NullString
+		if err := rows.Scan(&e.ID, &e.CameraID, &startedAtStr, &endedAtStr, &e.Duration, &e.Format, &e.Merged); err != nil {
+			return nil, err
+		}
+		e.StartedAt = scanTime(startedAtStr)
+		e.EndedAt = scanTime(endedAtStr)
+		res = append(res, e)
+	}
+	return res, nil
+}
+
 // UpsertCameraMerge writes per-camera merge config columns.
 // Pass nil pointers to leave fields unchanged (keep existing values).
-func (d *DB) UpsertCameraMerge(ctx context.Context, cameraID string, mergeEnabled *bool, mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge *string, mergeBatchLimit, mergeMinSegmentsToMerge *int) error {
+func (d *DB) UpsertCameraMerge(ctx context.Context, cameraID string, mergeEnabled *bool, mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge *string, mergeBatchLimit, mergeMinSegmentsToMerge *int, mergeRollingEnabled *bool, mergeRollingDebounce *string) error {
 	q := `UPDATE cameras SET
 		merge_enabled = COALESCE(?, merge_enabled),
 		merge_check_interval = COALESCE(?, merge_check_interval),
 		merge_window_size = COALESCE(?, merge_window_size),
 		merge_batch_limit = COALESCE(?, merge_batch_limit),
 		merge_min_segment_age = COALESCE(?, merge_min_segment_age),
-		merge_min_segments_to_merge = COALESCE(?, merge_min_segments_to_merge)
+		merge_min_segments_to_merge = COALESCE(?, merge_min_segments_to_merge),
+		merge_rolling_enabled = COALESCE(?, merge_rolling_enabled),
+		merge_rolling_debounce = COALESCE(?, merge_rolling_debounce)
 		WHERE id = ?;`
 	_, err := d.db.ExecContext(ctx, q,
 		ptrToNullBool(mergeEnabled),
@@ -109,6 +179,8 @@ func (d *DB) UpsertCameraMerge(ctx context.Context, cameraID string, mergeEnable
 		ptrToNullInt64(mergeBatchLimit),
 		ptrToNullString(mergeMinSegmentAge),
 		ptrToNullInt64(mergeMinSegmentsToMerge),
+		ptrToNullBool(mergeRollingEnabled),
+		ptrToNullString(mergeRollingDebounce),
 		cameraID)
 	return err
 }

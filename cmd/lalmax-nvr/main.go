@@ -838,6 +838,10 @@ func (a *App) buildRouter() http.Handler {
 			Codecs:   []model.Format{model.FormatH264, model.FormatH265},
 		})
 		// HTTP fMP4 stream handler is available when media engine is enabled
+		reg.Register(&api.StaticStreamHandler{
+			Protocol: "rtsp",
+			Codecs:   []model.Format{model.FormatH264, model.FormatH265},
+		})
 		reg.Register(&api.FMP4StreamHandler{})
 	}
 	// WebSocket stream handler is always available
@@ -970,6 +974,13 @@ func (a *App) Start() error {
 		if a.cfg.Merge.Enabled {
 			a.mergeMgr.Run(ctx)
 			slog.Info("merge-manager stopped")
+		}
+	}()
+	go func() {
+		if a.cfg.Merge.IsRollingEnabled() {
+			coord := merge.NewRollingCoordinator(a.mergeMgr, func() config.MergeConfig { return a.cfg.Merge }, a.eventBus)
+			coord.Start(ctx)
+			slog.Info("rolling-merge stopped")
 		}
 	}()
 

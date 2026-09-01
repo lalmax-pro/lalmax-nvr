@@ -8,9 +8,10 @@
     selectedHour?: number;
     onSelect: (recording: Recording) => void;
     onHourSelect?: (hour: number) => void;
+    onSeek?: (recording: Recording, offsetSec: number) => void;
   }
 
-  let { recordings, selectedRecording, selectedHour = -1, onSelect, onHourSelect }: Props = $props();
+  let { recordings, selectedRecording, selectedHour = -1, onSelect, onHourSelect, onSeek }: Props = $props();
 
   const HOURS = 24;
   
@@ -115,6 +116,7 @@
   let isDragging = $state(false);
   let dragStartX = $state(0);
   let dragStartScrollLeft = $state(0);
+  let dragMoved = $state(false);
 
   function handleWheel(e: WheelEvent) {
     e.preventDefault();
@@ -157,6 +159,7 @@
   function handleMouseDown(e: MouseEvent) {
     if (e.button !== 0) return;
     isDragging = true;
+    dragMoved = false;
     dragStartX = e.clientX;
     if (timelineEl) {
       dragStartScrollLeft = timelineEl.scrollLeft;
@@ -167,6 +170,7 @@
     if (!isDragging || !timelineEl) return;
     
     const dx = e.clientX - dragStartX;
+    if (Math.abs(dx) > 3) dragMoved = true;
     const rect = timelineEl.getBoundingClientRect();
     const range = viewEnd - viewStart;
     const hourPerPixel = range / rect.width;
@@ -180,6 +184,50 @@
 
   function handleMouseUp() {
     isDragging = false;
+  }
+
+  function hourFromClientX(clientX: number): number {
+    const rect = timelineEl?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return viewStart;
+    const pct = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    return viewStart + pct * (viewEnd - viewStart);
+  }
+
+  function snapSeekAtHour(hour: number) {
+    if (!onSeek || recordings.length === 0) return;
+    const dayStart = new Date(recordings[0].started_at);
+    dayStart.setHours(0, 0, 0, 0);
+    const t = dayStart.getTime() + hour * 60 * 60 * 1000;
+    let best = recordings[0];
+    let bestDist = Infinity;
+    let offsetSec = 0;
+    for (const rec of recordings) {
+      const start = new Date(rec.started_at).getTime();
+      const end = new Date(rec.ended_at).getTime();
+      if (t >= start && t <= end) {
+        onSeek(rec, Math.max(0, (t - start) / 1000));
+        return;
+      }
+      const distStart = Math.abs(t - start);
+      const distEnd = Math.abs(t - end);
+      if (distStart < bestDist) {
+        bestDist = distStart;
+        best = rec;
+        offsetSec = 0;
+      }
+      if (distEnd < bestDist) {
+        bestDist = distEnd;
+        best = rec;
+        offsetSec = Math.max(0, (end - start) / 1000);
+      }
+    }
+    onSeek(best, offsetSec);
+  }
+
+  function handleTimelineClick(e: MouseEvent) {
+    if (dragMoved) return;
+    if ((e.target as HTMLElement).closest('button')) return;
+    snapSeekAtHour(hourFromClientX(e.clientX));
   }
 
   function resetZoom() {
@@ -229,6 +277,7 @@
     style="overflow: hidden;"
     onwheel={handleWheel}
     onmousedown={handleMouseDown}
+    onclick={handleTimelineClick}
     tabindex="0"
     role="slider"
     aria-label="Timeline"
@@ -244,7 +293,20 @@
         class:ring-offset-1={selectedRecording?.id === recording.id}
         class:opacity-70={selectedRecording?.id !== recording.id}
         style={getBlockStyle(recording)}
-        onclick={(e) => { e.stopPropagation(); onSelect(recording); }}
+        onclick={(e) => {
+          e.stopPropagation();
+          if (onSeek) {
+            const start = new Date(recording.started_at).getTime();
+            const dayStart = new Date(recording.started_at);
+            dayStart.setHours(0, 0, 0, 0);
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+            const dur = (new Date(recording.ended_at).getTime() - start) / 1000;
+            onSeek(recording, ratio * dur);
+          } else {
+            onSelect(recording);
+          }
+        }}
         onmousemove={(e) => handleMouseMove(e, recording)}
         onmouseleave={handleMouseLeave}
         aria-label="Recording {formatTime(recording.started_at)} - {formatTime(recording.ended_at)}"
