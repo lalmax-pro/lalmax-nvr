@@ -25,7 +25,7 @@ func TestProtocolsEndpoint(t *testing.T) {
 		} `json:"protocols"`
 	}
 	parseJSON(t, rr, &resp)
-	require.Len(t, resp.Protocols, 8)
+	require.Len(t, resp.Protocols, 10)
 	require.Equal(t, "rtsp", resp.Protocols[0].ID)
 	require.True(t, resp.Protocols[0].BuiltIn)
 	require.Contains(t, resp.Protocols[0].Encodings, "h264")
@@ -45,6 +45,10 @@ func TestProtocolsEndpoint(t *testing.T) {
 	require.True(t, resp.Protocols[6].Addable)
 	require.Equal(t, "rtmp", resp.Protocols[7].ID)
 	require.False(t, resp.Protocols[7].Addable)
+	require.Equal(t, "srt", resp.Protocols[8].ID)
+	require.False(t, resp.Protocols[8].Addable)
+	require.Equal(t, "whip", resp.Protocols[9].ID)
+	require.False(t, resp.Protocols[9].Addable)
 }
 
 func TestProtocolsNoAuth(t *testing.T) {

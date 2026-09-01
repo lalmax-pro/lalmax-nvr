@@ -2,7 +2,35 @@
 
 ## 概述
 
-lalmax-nvr 支持通过 CS2 P2P 协议连接小米摄像头。摄像头的视频和音频帧通过 lal 媒体服务器分发，支持 WebRTC、HLS、HTTP-FLV 等多种播放协议。
+lalmax-nvr 支持通过 CS2 P2P 协议连接小米摄像头。摄像头的视频和音频帧注入 lalmax 后，与其它相机一样走 WebRTC、HLS、HTTP-FLV 等播放。
+
+```mermaid
+flowchart LR
+  Cloud[小米云] -->|登录 / 设备列表 / MISS URL| NVR[lalmax-nvr]
+  NVR -->|CS2 P2P| Cam[小米相机]
+  Cam -->|音视频帧| NVR
+  NVR --> Lal[lalmax group]
+  Lal --> Play[HLS / FLV / WHEP / 录像]
+```
+
+```mermaid
+sequenceDiagram
+  participant UI as Web UI
+  participant NVR as NVR
+  participant Cloud as 小米云
+  participant Cam as 相机
+  participant Lal as lalmax
+
+  UI->>NVR: 账户登录
+  NVR->>Cloud: 鉴权 + 设备列表
+  Cloud-->>NVR: DID / 型号
+  NVR->>Cloud: 解析 MISS 地址
+  NVR->>Cam: CS2 建连（优先 UDP）
+  Cam->>NVR: H.264/H.265 + 音频
+  NVR->>Lal: 注入 live/{id}
+```
+
+这是 **P2P 取帧再注入**，不是 RTSP 拉流，也不是 GB28181 推流。总图见 [架构](architecture.md)。
 
 ## 前置要求
 

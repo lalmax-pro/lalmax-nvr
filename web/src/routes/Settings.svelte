@@ -45,6 +45,9 @@ let streamingRtmpEnabled = $state(false);
 let streamingRtmpPort = $state(1935);
 let streamingSrtEnabled = $state(false);
 let streamingSrtPort = $state(9000);
+let streamingWhipEnabled = $state(true);
+let streamingWhipUrl = $state('http://127.0.0.1:12090/webrtc/whip?streamid={streamid}');
+let streamingWhipIcePort = $state(4888);
 let streamingSaving = $state(false);
 
 let autoDiscoverEnabled = $state(false);
@@ -157,6 +160,7 @@ let isDirty = $derived(() => {
       streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
       streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
+      streamingWhipEnabled,
       srtStreams,
       gb28181Enabled, gb28181Host, gb28181Port, gb28181Id, gb28181Password, gb28181MediaIp, gb28181StandardVersion,
       hlsEnabled, hlsOnDemand, hlsIdleTimeout, hlsSegmentCount, hlsLalFragmentDurationMs, hlsLalFragmentNum, hlsLalCleanupMode, hlsLalUseMemory, hlsLalmaxSegmentDuration, hlsLalmaxPartDuration,
@@ -255,6 +259,7 @@ function getAffectedCameraCount(protocol: string): number {
       streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
       streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
+      streamingWhipEnabled,
       srtStreams,
       gb28181Enabled, gb28181Host, gb28181Port, gb28181Id, gb28181Password, gb28181MediaIp, gb28181StandardVersion,
       hlsEnabled, hlsOnDemand, hlsIdleTimeout, hlsSegmentCount, hlsLalFragmentDurationMs, hlsLalFragmentNum, hlsLalCleanupMode, hlsLalUseMemory, hlsLalmaxSegmentDuration, hlsLalmaxPartDuration,
@@ -438,6 +443,9 @@ function getAffectedCameraCount(protocol: string): number {
             address: s.address,
             passphrase: s.passphrase,
           })),
+        },
+        whip: {
+          enabled: streamingWhipEnabled,
         },
       });
 
@@ -641,6 +649,9 @@ function getAffectedCameraCount(protocol: string): number {
       streamingRtmpPort = config.rtmp?.port ?? 1935;
       streamingSrtEnabled = config.srt?.enabled ?? false;
       streamingSrtPort = config.srt?.port ?? 9000;
+      streamingWhipEnabled = config.whip?.enabled ?? true;
+      streamingWhipUrl = config.whip?.url || 'http://127.0.0.1:12090/webrtc/whip?streamid={streamid}';
+      streamingWhipIcePort = config.whip?.ice_mux_port ?? 4888;
       // Load SRT streams
       const srtStreamList = config.srt?.streams;
       srtStreams = srtStreamList
@@ -687,6 +698,9 @@ function getAffectedCameraCount(protocol: string): number {
             address: s.address,
             passphrase: s.passphrase,
           })),
+        },
+        whip: {
+          enabled: streamingWhipEnabled,
         },
       });
       showToast(t('settings.streaming.saved'), 'success');
@@ -1458,6 +1472,35 @@ function getAffectedCameraCount(protocol: string): number {
                 <button type="button" class="mt-3 text-xs font-medium text-blue-500 hover:text-blue-400 transition-colors" onclick={() => { srtStreams = [...srtStreams, { streamId: '', cameraId: '', mode: 'listener', address: '', passphrase: '' }]; }}>+ {t('settings.streaming.srt.addStream')}</button>
               </div>
             {/if}
+          </div>
+
+          <!-- WHIP Ingest -->
+          <div class="mt-6 pt-6 border-t th-border">
+            <h4 class="text-sm font-semibold th-text-primary mb-1">{t('settings.streaming.whip')}</h4>
+            <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.whipDesc')}</p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                <label class="input-label" for="whip-toggle">{t('settings.streaming.whip')}</label>
+                <div class="flex items-center gap-3 mt-2">
+                  <button
+                    id="whip-toggle" aria-label={t('settings.streaming.whip')}
+                    type="button"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingWhipEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                    onclick={() => { streamingWhipEnabled = !streamingWhipEnabled; }}
+                    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingWhipEnabled = !streamingWhipEnabled; } }}
+                    role="switch"
+                    aria-checked={streamingWhipEnabled}
+                  >
+                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {streamingWhipEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                  </button>
+                </div>
+              </div>
+              <div class="md:col-span-2">
+                <label class="input-label" for="whipUrl">{t('settings.streaming.whip.url')}</label>
+                <input id="whipUrl" type="text" class="input font-mono text-sm" readonly value={streamingWhipUrl} />
+                <p class="text-xs th-text-tertiary mt-2">{t('settings.streaming.whip.hint').replace('{port}', String(streamingWhipIcePort))}</p>
+              </div>
+            </div>
           </div>
 
           <!-- HLS Config -->

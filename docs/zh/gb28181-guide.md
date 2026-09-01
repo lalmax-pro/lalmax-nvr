@@ -2,7 +2,117 @@
 
 ## 概述
 
-lalmax-nvr 支持 GB/T 28181 国标协议，可以接入符合国标的摄像头、NVR、平台等设备。支持设备注册、录像查询、录像回放、语音对讲、级联平台等功能。
+lalmax-nvr 作为 GB/T 28181 **SIP 上级平台** 接入国标摄像头、NVR、下级平台。设备向 `:5060` **REGISTER**；点播时平台发 **INVITE** 并打开 RTP 收口，设备把 **PS/RTP 推到 `media_ip`**。这是国标推流，不是 RTSP 拉流。
+
+lalmax 解复用 PS 后写入 `live/{camera_id}`，之后的 HLS / FLV / WebRTC / fMP4 / RTSP 分发与其它相机相同。
+
+支持设备注册、录像查询、录像回放、语音对讲、级联上级平台等。分层总图见 [架构](architecture.md)。
+
+## 架构与流程
+
+```mermaid
+flowchart TB
+  subgraph device [国标设备 / 下级 NVR]
+    Dev[SIP UA]
+    Enc[PS 封装]
+  end
+  subgraph nvr [lalmax-nvr]
+    SIP["SIP :5060 上级平台"]
+    API[Web / API :9090]
+  end
+  subgraph lal [lalmax]
+    RTP[RTP 收口]
+    Group["group live/{id}"]
+    Out[HLS / FLV / WHEP / RTSP]
+  end
+  Dev -->|REGISTER / Keepalive / Catalog| SIP
+  API -->|点播 Play| SIP
+  SIP -->|INVITE SDP: media_ip + RTP 口| Dev
+  Enc -->|PS/RTP 推流| RTP
+  RTP --> Group
+  Group --> Out
+  Out --> API
+```
+
+### 注册与目录
+
+```mermaid
+sequenceDiagram
+  participant Dev as 国标设备
+  participant SIP as NVR SIP :5060
+  participant Store as 设备库
+
+  Dev->>SIP: REGISTER（鉴权）
+  SIP-->>Dev: 200 OK
+  SIP->>Store: 上线
+  SIP->>Dev: MESSAGE Catalog
+  Dev-->>SIP: 通道列表
+  Note over Dev,SIP: Keepalive；超时则离线
+```
+
+设备在 Web **设备管理 → GB28181** 出现，无需在 YAML 里逐台写 RTSP URL。
+
+### 实时预览（INVITE 后推流）
+
+点播时 NVR **先**在 lalmax 打开 RTP 收口，再发 SIP INVITE；SDP 里的 `c=` / `m=` 指向本机 `media_ip` 和 RTP 端口。设备按 SDP **主动推** PS/RTP。
+
+```mermaid
+sequenceDiagram
+  participant UI as Web UI
+  participant API as /api/gb28181/play
+  participant SIP as SIP 上级
+  participant Lal as lalmax RTP
+  participant Dev as 国标设备
+
+  UI->>API: 播放通道
+  API->>Lal: StartRTPReceive
+  Lal-->>API: RTP 端口
+  API->>SIP: INVITE（SDP 收流地址）
+  SIP->>Dev: INVITE
+  Dev-->>SIP: 200 OK / ACK
+  Dev->>Lal: 推送 PS/RTP
+  Lal-->>UI: 解复用后直播分发
+```
+
+`media_ip` 必须是设备能路由到的地址（不要填 `127.0.0.1`）。`media_port: 0` 为多端口随机分配；大于 0 为单端口模式。
+
+### 录像回放与下载
+
+回放同样是 INVITE，SDP 标明 `Playback` 和时间范围；设备仍 **推** 历史 PS/RTP。暂停/倍速/seek 走 SIP INFO。下载走另一路 INVITE（Download）。
+
+```mermaid
+sequenceDiagram
+  participant UI as 设备录像页
+  participant SIP as SIP
+  participant Dev as 设备
+  participant Lal as lalmax
+
+  UI->>SIP: RecordInfo 查询
+  SIP->>Dev: MESSAGE RecordInfo
+  Dev-->>UI: 录像时间段
+  UI->>SIP: playback
+  SIP->>Lal: 打开 RTP 收口
+  SIP->>Dev: INVITE Playback
+  Dev->>Lal: 推历史 PS/RTP
+```
+
+### 级联（本机作为下级）
+
+本机再向 **更上级平台** REGISTER，并按共享通道应答 Catalog。上级点播时对本机 INVITE；实时预览在本机侧仍是对设备 INVITE、设备推 RTP。
+
+```mermaid
+sequenceDiagram
+  participant Up as 上级平台
+  participant NVR as lalmax-nvr
+  participant Dev as 国标设备
+
+  NVR->>Up: REGISTER
+  Up->>NVR: MESSAGE Catalog
+  NVR-->>Up: 共享通道
+  Up->>NVR: INVITE
+  NVR->>Dev: INVITE（按需）
+  Dev->>NVR: PS/RTP 推流
+```
 
 ## 功能特性
 
@@ -23,14 +133,14 @@ lalmax-nvr 支持 GB/T 28181 国标协议，可以接入符合国标的摄像头
 
 ```yaml
 gb28181:
-  enable: true
-  id: "34020000002000000001"  # 本端设备 ID
-  domain: "3402000000"        # 本端域
-  host: "192.168.1.100"       # 本端 SIP 地址
+  enabled: true
+  id: "34020000002000000001"  # 本端平台 20 位 SIP ID
+  host: "192.168.1.100"       # SIP 监听（可空，按 media_ip 推断）
   port: 5060                  # SIP 端口
-  media_ip: "192.168.1.100"   # 媒体 IP
-  media_port: 30000           # 媒体端口
-  password: "12345678"        # SIP 认证密码
+  media_ip: "192.168.1.100"   # 设备推 PS/RTP 的目标 IP（设备必须能访问）
+  media_port: 30000           # RTP 端口；0 表示每路随机
+  password: "12345678"        # 设备 REGISTER 密码
+  standard_version: "2016"    # 2016 或 2022
 ```
 
 ### 2. 添加设备
@@ -191,10 +301,19 @@ GET /api/gb28181/alarms             # 报警列表
 
 ### 设备无法注册
 
-1. 检查设备 SIP 配置是否正确
-2. 检查网络是否通畅
+1. 检查设备 SIP 配置是否正确（上级 ID、域、密码）
+2. 检查网络是否通畅，UDP/TCP **5060** 是否对设备开放
 3. 检查 lalmax-nvr 的 SIP 端口是否被占用
 4. 查看日志中的 SIP 消息
+
+### 已注册但没有画面
+
+国标是 **设备推流**：INVITE 成功后仍无视频，多半是 RTP 回不来。
+
+1. `media_ip` 必须是设备能访问的网卡 IP，不要用 `127.0.0.1`
+2. 防火墙放行 `media_port`（或随机 RTP 口）的 UDP/TCP
+3. Docker bridge 下确认端口已映射；跨网段时检查 NAT
+4. 日志里应先有 RTP 收口，再有 INVITE；只有 200 没有 RTP 就是媒体面不通
 
 ### 录像查询失败
 
@@ -228,17 +347,12 @@ GET /api/gb28181/alarms             # 报警列表
 
 ```yaml
 gb28181:
-  enable: false                    # 是否启用
-  id: ""                           # 本端设备 ID（20 位）
-  domain: ""                       # 本端域（10 位）
-  host: ""                         # SIP 监听地址
+  enabled: false                   # 是否启用
+  id: ""                           # 本端平台 SIP ID（20 位）
+  host: ""                         # SIP 监听地址（可空）
   port: 5060                       # SIP 监听端口
-  media_ip: ""                     # 媒体 IP
-  media_port: 30000                # 媒体端口（0 表示随机）
-  password: ""                     # SIP 认证密码
-  expires: 3600                    # 注册有效期（秒）
-  keepalive_interval: 60           # 心跳间隔（秒）
-  max_keepalive_count: 3           # 最大心跳丢失次数
-  transport: "udp"                 # 传输协议（udp/tcp）
-  charset: "GB2312"                # 字符集
+  media_ip: ""                     # 设备推 PS/RTP 的目标 IP
+  media_port: 30000                # RTP 端口（0 表示每路随机）
+  password: ""                     # 设备 REGISTER 密码
+  standard_version: "2016"         # 2016 或 2022
 ```

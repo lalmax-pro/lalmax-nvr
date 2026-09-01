@@ -395,6 +395,7 @@ type App struct {
 	ftpServer  *ftp.Server
 	rtmpIngest *media.IngestHandler
 	srtIngest  *media.IngestHandler
+	whipIngest *media.IngestHandler
 	gb28181Svr *gb28181.Server
 
 	// Stream management
@@ -842,6 +843,21 @@ func (a *App) buildRouter() http.Handler {
 			Protocol: "rtsp",
 			Codecs:   []model.Format{model.FormatH264, model.FormatH265},
 		})
+		if cfg.IsWHIPEnabled() {
+			reg.Register(&api.StaticStreamHandler{
+				Protocol: "whip",
+				Codecs:   []model.Format{model.FormatH264, model.FormatH265},
+			})
+		} else {
+			reg.Register(&api.ConditionalStaticStreamHandler{
+				StaticStreamHandler: api.StaticStreamHandler{
+					Protocol: "whip",
+					Codecs:   []model.Format{model.FormatH264, model.FormatH265},
+				},
+				Available: false,
+				Reason:    "Enable WHIP ingest in Settings",
+			})
+		}
 		reg.Register(&api.FMP4StreamHandler{})
 	}
 	// WebSocket stream handler is always available
@@ -1065,6 +1081,25 @@ func (a *App) Start() error {
 			}
 		}
 
+		if a.cfg.IsWHIPEnabled() {
+			keyToCamera := media.BuildReverseMap(a.cfg.WHIP.StreamKeys)
+			whipResolver := func(streamName string) (string, bool) {
+				if camID, ok := keyToCamera[streamName]; ok {
+					return camID, true
+				}
+				for _, cam := range a.cfg.Cameras {
+					if cam.ID == streamName {
+						return cam.ID, true
+					}
+				}
+				return "", false
+			}
+			a.whipIngest = media.NewWHIPIngestHandler(a.mediaEngine, whipResolver, nil, nil)
+			if err := a.whipIngest.Start(ctx); err != nil {
+				slog.Warn("whip ingest handler failed to start", "error", err)
+			}
+		}
+
 		// Start stream event monitoring (stops/starts recorders based on lalmax stream status)
 		go a.camMgr.MonitorStreamEvents(ctx)
 	}
@@ -1146,6 +1181,10 @@ func (a *App) Stop() error {
 		if a.srtIngest != nil {
 			log.Info("stopping SRT ingest handler")
 			a.srtIngest.Stop()
+		}
+		if a.whipIngest != nil {
+			log.Info("stopping WHIP ingest handler")
+			a.whipIngest.Stop()
 		}
 		if a.gb28181Svr != nil {
 			log.Info("stopping GB28181 SIP server")

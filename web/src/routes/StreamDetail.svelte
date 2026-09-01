@@ -268,6 +268,7 @@
       case 'wasm': return 'WebCodecs';
       case 'rtmp': return 'RTMP';
       case 'rtsp': return 'RTSP';
+      case 'whip': return 'WHIP';
       default: return protocol.toUpperCase();
     }
   }

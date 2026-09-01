@@ -161,16 +161,24 @@ webdav:
 #     front-door: "my-stream-key"
 
 # SRT ingest — receive MPEG-TS pushed streams from cameras or encoders
-# SRT is served by lalmax on port 9000 (managed by the media engine).
+# SRT is served by lalmax on port 19000 (managed by the media engine).
 # Camera streamid format: #!::h=<camera_id>,m=publish
-# Push URL: srt://<host>:9000 with streamid #!::h=<camera_id>,m=publish
+# Push URL: srt://<host>:19000 with streamid #!::h=<camera_id>,m=publish
 # srt:
 #   enabled: true
 
-# GB28181 SIP signaling — receive streams from GB28181 cameras/NVRs
-# When enabled, the NVR acts as a SIP platform that cameras register to.
-# After registration, cameras are queried for their channel catalog.
-# Streams are pulled via SIP INVITE and received by lalmax as RTP.
+# WHIP ingest — WebRTC-HTTP publish (OBS, WHIP clients)
+# Signaling: http://<host>:12090/webrtc/whip?streamid=<camera_id>
+# ICE mux: UDP/TCP 4888 (must be reachable from the publisher)
+# WHEP playback is separate and stays on even if whip.enabled is false.
+# whip:
+#   enabled: true
+#   stream_keys:
+#     front-door: "my-whip-stream"
+
+# GB28181 SIP signaling — NVR is the SIP platform (上级), not an RTSP puller.
+# Devices REGISTER inbound; after Catalog, the NVR sends INVITE and the device
+# pushes PS/RTP to media_ip (国标推流). lalmax demuxes PS into the live group.
 # gb28181:
 #   enabled: true
 #   port: 5060                          # SIP listen port (default: 5060)

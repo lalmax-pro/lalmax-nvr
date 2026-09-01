@@ -1,6 +1,6 @@
 # Deployment Guide
 
-This guide covers installing, configuring, and maintaining lalmax-nvr in production.
+This guide covers installing, configuring, and maintaining lalmax-nvr in production. Layers and default ports: [Architecture](architecture.md).
 
 ## Installation Methods
 
@@ -67,8 +67,16 @@ services:
     # Port mapping: host_port:container_port
     ports:
       - "9090:9090"               # Web UI and REST API
+      - "12090:12090"             # lalmax HTTP (WHIP ingest)
+      - "4888:4888/udp"           # WebRTC ICE
+      - "4888:4888/tcp"
+      - "15544:15544"             # lal RTSP playback
+      - "5060:5060/tcp"           # GB28181 SIP
+      - "5060:5060/udp"
       - "2121:2121"               # FTP server
       - "2122-2140:2122-2140"     # FTP passive mode ports
+
+    # ONVIF multicast discovery needs network_mode: host (then remove ports)
 
     # Volume mount: map host ./data to container /data
     # Persists config, recordings, and database

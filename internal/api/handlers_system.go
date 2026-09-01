@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -660,6 +661,11 @@ func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Requ
 			"enabled": h.config.SRT.Enabled != nil && *h.config.SRT.Enabled,
 			"port":    h.config.SRT.Port,
 		},
+		"whip": map[string]any{
+			"enabled":      h.config.IsWHIPEnabled(),
+			"url":          h.whipIngestTemplate(),
+			"ice_mux_port": config.DefaultRTCIceMuxPort,
+		},
 		"rtsp_server": map[string]any{
 			"auth_enabled": h.config.Media.RTSPAuthEnable,
 			"auth_method":  h.config.Media.RTSPAuthMethod,
@@ -700,6 +706,9 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 			Enabled *bool `json:"enabled"`
 			Port    *int  `json:"port"`
 		} `json:"srt"`
+		WHIP *struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"whip"`
 		RTSPServer *struct {
 			AuthEnabled *bool   `json:"auth_enabled"`
 			AuthMethod  *int    `json:"auth_method"`
@@ -798,6 +807,13 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 			needRestart = true
 			h.config.SRT.Port = *body.SRT.Port
 		}
+	}
+
+	if body.WHIP != nil && body.WHIP.Enabled != nil {
+		if h.config.WHIP.Enabled == nil {
+			h.config.WHIP.Enabled = new(bool)
+		}
+		*h.config.WHIP.Enabled = *body.WHIP.Enabled
 	}
 
 	if body.RTSPServer != nil {
@@ -1075,6 +1091,22 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Addable:      false, // Auto-registered when stream is pushed
 			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
 		},
+		{
+			ID:           "srt",
+			Label:        "SRT Push",
+			Encodings:    []string{"h264", "h265"},
+			BuiltIn:      true,
+			Addable:      false,
+			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+		},
+		{
+			ID:           "whip",
+			Label:        "WHIP Push",
+			Encodings:    []string{"h264", "h265"},
+			BuiltIn:      true,
+			Addable:      false,
+			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+		},
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -1119,6 +1151,30 @@ func (h *Handler) handleUpdateFeatures(w http.ResponseWriter, r *http.Request) {
 	}
 	// Return updated state
 	h.handleGetFeatures(w, r)
+}
+
+func (h *Handler) whipIngestTemplate() string {
+	scheme := "http"
+	host := "127.0.0.1"
+	port := config.DefaultLalmaxHTTPPort
+	if h.config != nil {
+		raw := strings.TrimSpace(h.config.Media.LalmaxPublicURL)
+		if raw == "" {
+			raw = strings.TrimSpace(h.config.Media.LalmaxHTTPAddr)
+		}
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			host = u.Hostname()
+			if u.Scheme != "" {
+				scheme = u.Scheme
+			}
+			if p := u.Port(); p != "" {
+				if n, err := strconv.Atoi(p); err == nil && n > 0 {
+					port = n
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("%s://%s:%d/webrtc/whip?streamid={streamid}", scheme, host, port)
 }
 
 // formatUptime converts a duration to a human-readable string like "2h 15m 30s".

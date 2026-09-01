@@ -245,6 +245,7 @@ export type {
   RTMPConfig,
   SRTStreamConfig,
   SRTConfig,
+  WHIPConfig,
   GB28181Config,
   HLSConfig,
   AutoDiscoverSettings,

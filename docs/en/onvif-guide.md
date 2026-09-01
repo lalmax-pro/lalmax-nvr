@@ -13,6 +13,60 @@ ONVIF is an open industry standard for network video products, enabling differen
 
 lalmax-nvr primarily supports Profile S capabilities with optional support for device management and event monitoring depending on camera firmware.
 
+## Architecture and flows
+
+ONVIF is **discovery and control**. Video still uses **RTSP pull** into lalmax (once per camera). That is not GB28181: national-standard devices **push** PS/RTP after a SIP INVITE.
+
+```mermaid
+flowchart LR
+  Disc[WS-Discovery / Hello / HTTP probe] --> Cam[Camera]
+  NVR[NVR] -->|GetProfiles / GetStreamUri| Cam
+  Cam -->|rtsp://| Pull[lalmax RTSP pull]
+  Pull --> Group["group live/{id}"]
+  UI[Web UI] -->|PTZ / Imaging SOAP| Cam
+```
+
+```mermaid
+sequenceDiagram
+  participant UI as Web UI / API
+  participant NVR as NVR
+  participant Cam as ONVIF camera
+  participant Lal as lalmax
+
+  alt WS-Discovery
+    NVR->>Cam: UDP Probe 239.255.255.250:3702
+    Cam-->>NVR: ProbeMatches
+  else Hello
+    Cam->>NVR: Hello (device online)
+  else HTTP probe
+    UI->>NVR: POST /api/onvif/probe
+    NVR->>Cam: SOAP Probe (unicast)
+    Cam-->>NVR: device service URL
+  end
+
+  NVR->>Cam: GetCapabilities / GetProfiles
+  NVR->>Cam: GetStreamUri
+  Cam-->>NVR: rtsp://host/stream
+  NVR->>Lal: pull RTSP once
+  Lal-->>UI: HLS / FLV / WebRTC / fMP4 / RTSP
+```
+
+Docker **bridge mode blocks multicast**, so WS-Discovery fails. Use HTTP probe, enter `onvif/device_service` by hand, or set `network_mode: host`.
+
+PTZ and imaging use a separate SOAP path; they do not go through lalmax:
+
+```mermaid
+sequenceDiagram
+  participant UI as Live view
+  participant API as :9090 API
+  participant Cam as Camera PTZ service
+  UI->>API: POST /api/cameras/{id}/ptz/move
+  API->>Cam: ContinuousMove / RelativeMove
+  Cam-->>API: 200
+```
+
+Layers and ports: [Architecture](architecture.md).
+
 ## Supported ONVIF Services
 
 lalmax-nvr provides the following ONVIF service integrations:

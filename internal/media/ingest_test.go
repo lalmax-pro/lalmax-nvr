@@ -240,6 +240,51 @@ func TestSRTIngestHandlerIgnoresNonSRT(t *testing.T) {
 	require.Empty(t, started)
 }
 
+func TestWHIPIngestHandlerResolvesCustomize(t *testing.T) {
+	sub := newMockWHIPSubscriber()
+
+	var started []string
+	handler := NewWHIPIngestHandler(sub, func(name string) (string, bool) {
+		if name == "front-door" {
+			return "front-door", true
+		}
+		return "", false
+	}, func(camID, stream string) {
+		started = append(started, camID)
+	}, nil)
+
+	err := handler.Start(context.Background())
+	require.NoError(t, err)
+
+	sub.send(WHIPEvent{StreamID: "front-door", Protocol: "customize", Type: "pub_start"})
+	sub.close()
+
+	handler.Stop()
+
+	require.Equal(t, []string{"front-door"}, started)
+}
+
+func TestWHIPIngestHandlerIgnoresRTMP(t *testing.T) {
+	sub := newMockWHIPSubscriber()
+
+	var started []string
+	handler := NewWHIPIngestHandler(sub, func(name string) (string, bool) {
+		return "cam-1", true
+	}, func(camID, stream string) {
+		started = append(started, camID)
+	}, nil)
+
+	err := handler.Start(context.Background())
+	require.NoError(t, err)
+
+	sub.send(WHIPEvent{StreamID: "mystream", Protocol: "rtmp", Type: "pub_start"})
+	sub.close()
+
+	handler.Stop()
+
+	require.Empty(t, started)
+}
+
 type mockRTMPSubscriber struct {
 	events    chan RTMPEvent
 	closeOnce sync.Once
@@ -287,5 +332,30 @@ func (m *mockSRTSubscriber) send(ev SRTEvent) {
 }
 
 func (m *mockSRTSubscriber) close() {
+	m.closeOnce.Do(func() { close(m.events) })
+}
+
+type mockWHIPSubscriber struct {
+	events    chan WHIPEvent
+	closeOnce sync.Once
+}
+
+func newMockWHIPSubscriber() *mockWHIPSubscriber {
+	return &mockWHIPSubscriber{events: make(chan WHIPEvent, 16)}
+}
+
+func (m *mockWHIPSubscriber) SubscribeWHIPEvents(ctx context.Context) (<-chan WHIPEvent, error) {
+	go func() {
+		<-ctx.Done()
+		m.close()
+	}()
+	return m.events, nil
+}
+
+func (m *mockWHIPSubscriber) send(ev WHIPEvent) {
+	m.events <- ev
+}
+
+func (m *mockWHIPSubscriber) close() {
 	m.closeOnce.Do(func() { close(m.events) })
 }

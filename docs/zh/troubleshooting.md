@@ -1,6 +1,6 @@
 # 故障排除指南
 
-本指南帮助您诊断和解决 lalmax-nvr 的常见问题。如果在这里找不到解决方案，请查阅 [配置参考](configuration.md)或在 GitHub 上搜索现有问题。
+本指南帮助诊断 lalmax-nvr 常见问题。也可查阅 [配置参考](configuration.md)、[架构](architecture.md)，或在 GitHub 上搜索已有 issue。
 
 ## 常见问题
 

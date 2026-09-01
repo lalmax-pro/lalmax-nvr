@@ -6,10 +6,9 @@
 [![Svelte](https://img.shields.io/badge/Svelte-FF3E00?style=flat&logo=svelte&logoColor=white)](https://svelte.dev/)
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
-[![Raspberry Pi](https://img.shields.io/badge/Raspberry_Pi-A22846?style=flat&logo=raspberrypi&logoColor=white)](https://www.raspberrypi.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
 
-A lightweight Network Video Recorder built on [lalmax](https://github.com/q191201771/lal) media engine. Single binary, zero dependencies — designed for Raspberry Pi and low-power devices.
+A lightweight Network Video Recorder built on [lalmax](https://github.com/q191201771/lal) media engine. Single binary, zero dependencies.
 
 This project was inspired by MiBeeNVR, and has since been developed into a dedicated NVR focused on the `lal` / `lalmax` media stack.
 
@@ -26,17 +25,25 @@ This project was inspired by MiBeeNVR, and has since been developed into a dedic
 
 ## Architecture
 
-lalmax-nvr uses a two-layer architecture:
+lalmax-nvr is a business NVR on top of an embedded [lalmax](https://github.com/q191201771/lal) engine. Each camera is ingested **once**.
 
-```
-Camera ──→ lalmax (media engine) ──→ HLS / HTTP-FLV / WebRTC / fMP4 playback
-                │
-                └──→ Recording (H264/H265 MP4 segments)
+```mermaid
+flowchart LR
+  Cam[Camera RTSP / ONVIF] -->|pull| Lalmax[lalmax / lal]
+  GB[GB28181] -->|RTP push after INVITE| Lalmax
+  Push[RTMP / SRT / WHIP publish] --> Lalmax
+  Lalmax --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
+  Lalmax --> Rec[Recorder]
+  Rec --> Disk[(MP4 + SQLite)]
+  Disk --> VOD[Continuous VOD]
 ```
 
-- **lalmax** handles media relay, protocol conversion, and stream distribution
-- **NVR layer** handles camera lifecycle, ONVIF signaling, recording, storage, and web UI
-- With `media.mode: embedded` (or `http`), all H264/H265 streams flow through lalmax — no duplicate pulls
+- **lalmax** — ingest, protocol conversion, live fan-out (including `rtsp://host:15544/live/{id}`)
+- **NVR** — cameras, ONVIF/GB28181, recording modes, rolling hour merge, health, Web UI
+- **`media.mode: embedded`** — engine in-process; `http` talks to an external lalmax
+- MJPEG / HTTP JPEG still pull directly (lalmax limitation)
+
+Full diagrams, ports, and module map: **[Architecture](docs/en/architecture.md)**. Documentation index: **[docs/en](docs/en/README.md)**.
 
 ## Streaming Protocols
 
@@ -47,18 +54,19 @@ Camera ──→ lalmax (media engine) ──→ HLS / HTTP-FLV / WebRTC / fMP4 
 | **WebRTC** (WHEP) | ~300ms | lalmax | H.264 |
 | **HTTP-FLV** | ~500ms | lalmax | H.264, H.265 |
 | **HLS** / **LL-HLS** | 1-3s | lalmax | H.264, H.265 |
+| **RTSP** | ~1 GOP | lal (`:15544`) | H.264, H.265 |
 
 ## Core Features
 
 - **Media Engine**: lalmax-powered relay — unified ingest, no duplicate camera pulls
 - **Camera Protocols**: RTSP (H.264/H.265/MJPEG), HTTP JPEG, ONVIF discovery & management
-- **GB28181**: Full SIP-based device management, cascade platform support, recording query & playback with timeline, multi-protocol streaming (ws-flv, flv, hls, webrtc, etc.), playback control (pause/resume/speed/seek), batch download, platform event history, voice broadcast/intercom (SIP INVITE, UDP/TCP)
-- **Recording**: Automatic MP4 segments, multi-camera concurrent, per-camera recording mode (continuous / scheduled / off), per-camera retention, audio capture (AAC + G.711)
-- **Recording Playback**: Visual timeline with 24h overview, hour-level zoom, inline video player, mouse wheel zoom/pan, month calendar marking days with recordings
-- **Live View**: Multi-protocol — WebCodecs, fMP4, WebRTC, HTTP-FLV, HLS, LL-HLS
-- **RTMP/SRT Ingest**: Accept pushed streams from cameras or encoders
-- **Segment Merge**: Auto or manual merge, global + per-camera policies
-- **ONVIF**: Device discovery, PTZ control, imaging settings, stream URI resolution, encoding auto-detection
+- **GB28181**: SIP platform (上级); devices REGISTER then **push PS/RTP** after INVITE; cascade, recording query & playback with timeline, multi-protocol streaming (ws-flv, flv, hls, webrtc, etc.), playback control (pause/resume/speed/seek), batch download, platform event history, voice broadcast/intercom (SIP INVITE, UDP/TCP)
+- **Recording**: MP4 segments, concurrent cameras, modes (continuous / scheduled / event / adaptive / off), retention, AAC + G.711 audio
+- **Recording Playback**: 24h timeline, hour zoom, single-file player, or **continuous VOD** (HLS fMP4 across a day, seek across gaps)
+- **Live View**: WebCodecs, fMP4, WebRTC, HTTP-FLV, HLS, LL-HLS, copyable **RTSP** (`:15544`)
+- **RTMP / SRT / WHIP Ingest**: Accept pushed streams from cameras or encoders (WHIP: `http://host:12090/webrtc/whip?streamid={id}`)
+- **Segment Merge**: Periodic backfill plus **rolling merge** into the current UTC hour file
+- **ONVIF**: WS-Discovery / Hello, PTZ, imaging, stream URI, encoding detect, IP self-heal, optional sub-stream
 - **Stream Management**: Runtime stream inventory, camera binding, stream promotion
 - **Web UI**: Dark/light theme, responsive, i18n (EN/ZH), Chart.js dashboards
 - **Smart Home**: MQTT trigger-based recording, WebDAV/FTP file access
@@ -112,28 +120,31 @@ media:
 ```
 
 With `media.mode: embedded` (or `http`):
-- All H264/H265 RTSP/ONVIF cameras are pulled through lalmax
+- H.264/H.265 RTSP/ONVIF cameras are pulled through lalmax
+- GB28181 devices **push** PS/RTP after SIP INVITE (the NVR is the SIP platform, not an RTSP client)
 - HLS/FLV/WebRTC/fMP4 playback is served by lalmax
 - Recording consumes the unified lalmax stream
+- Set `media.lalmax_public_url` to a hostname clients can reach (RTSP URLs otherwise show `127.0.0.1`)
 - MJPEG and HTTP/JPEG cameras still pull directly (lalmax limitation)
 
 See [Configuration](docs/en/configuration.md) for full reference.
 
 ## Documentation
 
+Full catalog: **[docs/en/README.md](docs/en/README.md)**.
+
 | Document | Description |
 |----------|-------------|
-| [Getting Started](docs/en/getting-started.md) | Installation, first camera setup |
-| [Configuration](docs/en/configuration.md) | Full config reference |
-| [API Reference](docs/en/api-reference.md) | REST API documentation |
-| [GB28181 Guide](docs/en/gb28181-guide.md) | GB28181 device setup, recording, playback, intercom |
-| [ONVIF Guide](docs/en/onvif-guide.md) | ONVIF camera setup, PTZ, troubleshooting |
-| [Camera Guide](docs/en/camera-guide.md) | Camera protocol setup |
-| [Stream Management](docs/en/stream-management-design.md) | Runtime stream inventory and binding |
+| [Architecture](docs/en/architecture.md) | Layers, ingest (pull vs GB push), VOD, ports, modules |
+| [Getting Started](docs/en/getting-started.md) | Install, first camera |
+| [Configuration](docs/en/configuration.md) | YAML reference |
+| [API Reference](docs/en/api-reference.md) | REST API |
+| [GB28181](docs/en/gb28181-guide.md) | National-standard devices, playback, talk |
+| [ONVIF](docs/en/onvif-guide.md) | Discovery, PTZ |
+| [Camera Guide](docs/en/camera-guide.md) | RTSP / HTTP setup |
 | [Deployment](docs/en/deployment.md) | Reverse proxy, cross-compile |
-| [MQTT Integration](docs/en/mqtt-integration.md) | MQTT trigger recording |
-| [WebDAV Integration](docs/en/webdav-integration.md) | WebDAV file access |
-| [Troubleshooting](docs/en/troubleshooting.md) | Common issues and fixes |
+| [MQTT](docs/en/mqtt-integration.md) · [WebDAV](docs/en/webdav-integration.md) · [FTP](docs/en/ftp-integration.md) | Integrations |
+| [Troubleshooting](docs/en/troubleshooting.md) | Common issues |
 
 ## Project Structure
 
@@ -142,6 +153,7 @@ cmd/lalmax-nvr/        # Entry point
 internal/              # Core packages
   ai/                  # AI inference
   api/                 # REST API handlers + stream proxy
+  autodiscover/        # ONVIF WS-Discovery / Hello
   ban/                 # Stream ban management
   camera/              # Camera lifecycle manager
   cleanup/             # Data cleanup tasks
@@ -153,7 +165,7 @@ internal/              # Core packages
   health/              # Camera health monitoring
   media/               # lalmax engine adapter
   relay/               # Stream relay
-  merge/               # Segment merge manager
+  merge/               # Periodic + rolling segment merge
   metrics/             # Prometheus metrics
   middleware/          # HTTP middleware
   model/               # Data models
@@ -165,6 +177,7 @@ internal/              # Core packages
   streamhistory/       # Stream history tracking
   ui/                  # Embedded SPA static files
   upload/              # File upload handling
+  vod/                 # Continuous VOD (HLS fMP4)
   webdav/              # WebDAV server
   wsstream/            # WebSocket stream manager (WebCodecs)
   xiaomi/              # Xiaomi camera support
@@ -173,6 +186,7 @@ third/
   lal/                 # Vendored lal media library
   lalmax/              # Vendored lalmax (lal + extensions)
 web/                   # Svelte 5 frontend
+config/                # config.example.yaml (copy to lalmax-nvr.yaml)
 scripts/               # Build and management scripts
 docker/                # Docker build assets
 tests/                 # Integration tests

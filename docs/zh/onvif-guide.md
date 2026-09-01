@@ -13,6 +13,60 @@ ONVIF 是网络视频产品的开放行业标准，使不同制造商的 IP 摄�
 
 lalmax-nvr 主要支持 Profile S 功能，设备管理和事件监控取决于摄像头固件。
 
+## 架构与流程
+
+ONVIF 负责 **发现和控制**；真正的视频仍走 **RTSP 拉流**（一次拉进 lalmax）。这和 GB28181 不同：国标是 SIP 点播后设备 **推** PS/RTP。
+
+```mermaid
+flowchart LR
+  Disc[WS-Discovery / Hello / HTTP 探测] --> Cam[相机]
+  NVR[NVR] -->|GetProfiles / GetStreamUri| Cam
+  Cam -->|rtsp://| Pull[lalmax RTSP 拉流]
+  Pull --> Group["group live/{id}"]
+  UI[Web UI] -->|PTZ / Imaging SOAP| Cam
+```
+
+```mermaid
+sequenceDiagram
+  participant UI as Web UI / API
+  participant NVR as NVR
+  participant Cam as ONVIF 相机
+  participant Lal as lalmax
+
+  alt WS-Discovery
+    NVR->>Cam: UDP Probe 239.255.255.250:3702
+    Cam-->>NVR: ProbeMatches
+  else Hello
+    Cam->>NVR: Hello（设备上线）
+  else HTTP 探测
+    UI->>NVR: POST /api/onvif/probe
+    NVR->>Cam: SOAP Probe（单播）
+    Cam-->>NVR: 设备服务 URL
+  end
+
+  NVR->>Cam: GetCapabilities / GetProfiles
+  NVR->>Cam: GetStreamUri
+  Cam-->>NVR: rtsp://host/stream
+  NVR->>Lal: 按 URI 拉流一次
+  Lal-->>UI: HLS / FLV / WebRTC / fMP4 / RTSP
+```
+
+Docker **bridge 网络拦组播**，WS-Discovery 会失败；用 HTTP 探测、手动填 `onvif/device_service`，或 `network_mode: host`。
+
+PTZ / 成像走另一条 SOAP 通道，不经过 lalmax：
+
+```mermaid
+sequenceDiagram
+  participant UI as 直播页
+  participant API as :9090 API
+  participant Cam as 相机 PTZ 服务
+  UI->>API: POST /api/cameras/{id}/ptz/move
+  API->>Cam: ContinuousMove / RelativeMove
+  Cam-->>API: 200
+```
+
+总分层与端口见 [架构](architecture.md)。
+
 ## 支持的 ONVIF 服务
 
 lalmax-nvr 提供以下 ONVIF 服务集成：

@@ -96,7 +96,7 @@ func (g *GB28181API) handlerBye(req *sip.Request, tx sip.ServerTransaction) {
 	slog.Info("[SIP] BYE response sent", "device_id", deviceID)
 }
 
-// Play initiates a GB28181 INVITE to pull media from a device.
+// Play sends a GB28181 INVITE so the device can push PS/RTP to the platform.
 func (g *GB28181API) Play(in *PlayInput) (string, error) {
 	log := slog.With("device_id", in.DeviceID, "channel_id", in.ChannelID)
 	log.Info("starting play")
