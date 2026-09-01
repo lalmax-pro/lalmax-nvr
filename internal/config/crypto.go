@@ -172,6 +172,9 @@ func decryptConfig(cfg *Config, key []byte) {
 	if v, err := Decrypt(cfg.MetricsAuth.Password, key); err == nil {
 		cfg.MetricsAuth.Password = v
 	}
+	if v, err := Decrypt(cfg.AutoDiscover.DefaultPassword, key); err == nil {
+		cfg.AutoDiscover.DefaultPassword = v
+	}
 }
 
 // encryptConfig encrypts all sensitive fields in the config in place.
@@ -230,6 +233,12 @@ func encryptConfig(cfg *Config, key []byte) []string {
 			encrypted = append(encrypted, "metrics_auth.password")
 		}
 	}
+	if cfg.AutoDiscover.DefaultPassword != "" && !IsEncrypted(cfg.AutoDiscover.DefaultPassword) {
+		if v, err := Encrypt(cfg.AutoDiscover.DefaultPassword, key); err == nil {
+			cfg.AutoDiscover.DefaultPassword = v
+			encrypted = append(encrypted, "auto_discover.default_password")
+		}
+	}
 
 	return encrypted
 }
@@ -259,6 +268,9 @@ func SensitiveFieldPaths(cfg *Config) []string {
 	if cfg.MetricsAuth.Password != "" && !IsEncrypted(cfg.MetricsAuth.Password) {
 		fields = append(fields, "metrics_auth.password")
 	}
+	if cfg.AutoDiscover.DefaultPassword != "" && !IsEncrypted(cfg.AutoDiscover.DefaultPassword) {
+		fields = append(fields, "auto_discover.default_password")
+	}
 
 	return fields
 }
@@ -270,8 +282,9 @@ type sensitiveSnapshot struct {
 	MQTTPassword    string
 	XiaomiUserID    string
 	XiaomiToken     string
-	CameraPasswords    []string
-	MetricsAuthPassword string
+	CameraPasswords         []string
+	MetricsAuthPassword     string
+	AutoDiscoverPassword    string
 }
 
 func snapshotSensitive(cfg *Config) sensitiveSnapshot {
@@ -280,8 +293,9 @@ func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 		MQTTPassword:    cfg.MQTT.Password,
 		XiaomiUserID:    cfg.Xiaomi.UserID,
 		XiaomiToken:     cfg.Xiaomi.Token,
-		CameraPasswords:    make([]string, len(cfg.Cameras)),
-		MetricsAuthPassword: cfg.MetricsAuth.Password,
+		CameraPasswords:      make([]string, len(cfg.Cameras)),
+		MetricsAuthPassword:  cfg.MetricsAuth.Password,
+		AutoDiscoverPassword: cfg.AutoDiscover.DefaultPassword,
 	}
 	for i := range cfg.Cameras {
 		s.CameraPasswords[i] = cfg.Cameras[i].Password
@@ -298,6 +312,7 @@ func (s sensitiveSnapshot) restore(cfg *Config) {
 		if i < len(s.CameraPasswords) {
 			cfg.Cameras[i].Password = s.CameraPasswords[i]
 		}
-	cfg.MetricsAuth.Password = s.MetricsAuthPassword
 	}
+	cfg.MetricsAuth.Password = s.MetricsAuthPassword
+	cfg.AutoDiscover.DefaultPassword = s.AutoDiscoverPassword
 }

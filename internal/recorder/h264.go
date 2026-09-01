@@ -67,6 +67,7 @@ type H264Config struct {
 	AudioEnabled         bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
 	EventBus             *event.EventBus
+	Adaptive             *AdaptiveGate
 }
 
 // H264Recorder records H.264 video from an RTSP source.
@@ -245,6 +246,11 @@ func (r *H264Recorder) Resume() {
 	r.paused.Store(false)
 	r.setStatus(model.StatusRecording)
 	h264Logger.Info("recording resumed", "camera_id", r.cfg.CameraID)
+}
+
+// TriggerAdaptive promotes sparse recording to full-speed for hold.
+func (r *H264Recorder) TriggerAdaptive(hold time.Duration) {
+	r.cfg.Adaptive.Trigger(hold)
 }
 
 // IsPaused returns true if recording is paused.
@@ -633,6 +639,12 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 		}
 		// Only write video frames (IDR=5, non-IDR=1)
 		if naluType != 5 && naluType != 1 {
+			continue
+		}
+		if naluType == 1 {
+			r.cfg.Adaptive.ObservePFrame(len(nalu))
+		}
+		if !r.cfg.Adaptive.ShouldWrite(naluType == 5, time.Now()) {
 			continue
 		}
 		if r.sps == nil || r.pps == nil {

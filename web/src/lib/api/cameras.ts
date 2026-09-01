@@ -35,9 +35,15 @@ export interface Camera {
   recording_mode?: RecordingMode;
   archived?: boolean;
   created_at?: string; // RFC3339
+  activation_state?: string;
+  stable_id?: string;
+  sub_stream_url?: string;
+  sub_profile_token?: string;
+  subnet_hints?: string[];
+  adaptive?: { timelapse_interval?: string };
 }
 
-export type RecordingMode = 'continuous' | 'scheduled' | 'off';
+export type RecordingMode = 'continuous' | 'scheduled' | 'off' | 'event' | 'adaptive';
 
 export interface RecordingScheduleRange {
   day_of_week: number; // 0=Sunday .. 6=Saturday
@@ -64,6 +70,11 @@ export interface CreateCameraRequest {
   profile_name?: string;
   stream_encoding?: string;
   audio_enabled?: boolean;
+  recording_mode?: RecordingMode;
+  sub_stream_url?: string;
+  sub_profile_token?: string;
+  subnet_hints?: string[];
+  adaptive?: { timelapse_interval?: string };
 }
 
 export interface UpdateCameraRequest {
@@ -87,6 +98,10 @@ export interface UpdateCameraRequest {
   stream_encoding?: string;
   audio_enabled?: boolean;
   recording_mode?: RecordingMode;
+  sub_stream_url?: string;
+  sub_profile_token?: string;
+  subnet_hints?: string[];
+  adaptive?: { timelapse_interval?: string };
 }
 
 export interface DiscoveredDevice {
@@ -349,6 +364,29 @@ export async function stopCamera(
   signal?: AbortSignal
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${id}/stop`, {
+    method: 'POST',
+    signal,
+  });
+}
+
+export async function activateCamera(
+  id: string,
+  username: string,
+  password: string,
+  signal?: AbortSignal
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${id}/activate`, {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+    signal,
+  });
+}
+
+export async function rediscoverCamera(
+  id: string,
+  signal?: AbortSignal
+): Promise<{ found: boolean }> {
+  return apiRequest<{ found: boolean }>(`/cameras/${id}/rediscover`, {
     method: 'POST',
     signal,
   });

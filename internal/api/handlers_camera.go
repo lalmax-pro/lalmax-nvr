@@ -38,6 +38,18 @@ func (h *Handler) injectCameraConfigFields(row *storage.CameraRow) {
 		if cam := h.camMgr.GetCameraConfig(row.ID); cam != nil {
 			row.AudioEnabled = cam.AudioEnabled
 			row.SourceType = cam.SourceType
+			row.SubStreamURL = cam.SubStreamURL
+			row.SubnetHints = cam.SubnetHints
+			row.Adaptive = cam.Adaptive
+			if cam.SubProfileToken != "" {
+				row.SubProfileToken = cam.SubProfileToken
+			}
+			if cam.ActivationState != "" {
+				row.ActivationState = cam.ActivationState
+			}
+			if cam.StableID != "" {
+				row.StableID = cam.StableID
+			}
 			return
 		}
 	}
@@ -46,6 +58,9 @@ func (h *Handler) injectCameraConfigFields(row *storage.CameraRow) {
 			if cam.ID == row.ID {
 				row.AudioEnabled = cam.AudioEnabled
 				row.SourceType = cam.SourceType
+				row.SubStreamURL = cam.SubStreamURL
+				row.SubnetHints = cam.SubnetHints
+				row.Adaptive = cam.Adaptive
 				return
 			}
 		}
@@ -194,24 +209,29 @@ var validProtocols = map[string]bool{
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name           string `json:"name"`
-		Protocol       string `json:"protocol"`
-		URL            string `json:"url"`
-		RTSPTransport  string `json:"rtsp_transport"`
-		Username       string `json:"username"`
-		Password       string `json:"password"`
-		Enabled        *bool  `json:"enabled"`
-		Description    string `json:"description"`
-		Location       string `json:"location"`
-		Brand          string `json:"brand"`
-		Model          string `json:"model"`
-		SerialNumber   string `json:"serial_number"`
-		ONVIFEndpoint  string `json:"onvif_endpoint"`
-		ProfileToken   string `json:"profile_token"`
-		ProfileName    string `json:"profile_name"`
-		StreamEncoding string `json:"stream_encoding"`
-		Encoding       string `json:"encoding"`
-		AudioEnabled   *bool  `json:"audio_enabled"`
+		Name            string                       `json:"name"`
+		Protocol        string                       `json:"protocol"`
+		URL             string                       `json:"url"`
+		RTSPTransport   string                       `json:"rtsp_transport"`
+		Username        string                       `json:"username"`
+		Password        string                       `json:"password"`
+		Enabled         *bool                        `json:"enabled"`
+		Description     string                       `json:"description"`
+		Location        string                       `json:"location"`
+		Brand           string                       `json:"brand"`
+		Model           string                       `json:"model"`
+		SerialNumber    string                       `json:"serial_number"`
+		ONVIFEndpoint   string                       `json:"onvif_endpoint"`
+		ProfileToken    string                       `json:"profile_token"`
+		ProfileName     string                       `json:"profile_name"`
+		StreamEncoding  string                       `json:"stream_encoding"`
+		Encoding        string                       `json:"encoding"`
+		AudioEnabled    *bool                        `json:"audio_enabled"`
+		SubStreamURL    string                       `json:"sub_stream_url"`
+		SubProfileToken string                       `json:"sub_profile_token"`
+		SubnetHints     []string                     `json:"subnet_hints"`
+		RecordingMode   string                       `json:"recording_mode"`
+		Adaptive        *config.CameraAdaptiveConfig `json:"adaptive"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -264,6 +284,10 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid URL format")
 		return
 	}
+	if body.RecordingMode != "" && !isValidRecordingMode(body.RecordingMode) {
+		writeError(w, http.StatusBadRequest, "recording_mode must be continuous, scheduled, off, event, or adaptive")
+		return
+	}
 	// Normalize protocol — handle legacy combined formats
 	proto := body.Protocol
 	enc := body.Encoding
@@ -300,16 +324,21 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cam := config.CameraConfig{
-		Name:           body.Name,
-		Protocol:       proto,
-		Encoding:       enc,
-		RTSPTransport:  config.NormalizeRTSPTransport(body.RTSPTransport),
-		URL:            body.URL,
-		Username:       body.Username,
-		Password:       body.Password,
-		ONVIFEndpoint:  body.ONVIFEndpoint,
-		ProfileToken:   body.ProfileToken,
-		StreamEncoding: body.StreamEncoding,
+		Name:            body.Name,
+		Protocol:        proto,
+		Encoding:        enc,
+		RTSPTransport:   config.NormalizeRTSPTransport(body.RTSPTransport),
+		URL:             body.URL,
+		Username:        body.Username,
+		Password:        body.Password,
+		ONVIFEndpoint:   body.ONVIFEndpoint,
+		ProfileToken:    body.ProfileToken,
+		StreamEncoding:  body.StreamEncoding,
+		SubStreamURL:    body.SubStreamURL,
+		SubProfileToken: body.SubProfileToken,
+		SubnetHints:     body.SubnetHints,
+		RecordingMode:   body.RecordingMode,
+		Adaptive:        body.Adaptive,
 	}
 	if body.Enabled != nil {
 		cam.Enabled = *body.Enabled
@@ -444,32 +473,36 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	id := getCameraID(r)
 
 	var body struct {
-		Name           *string `json:"name"`
-		URL            *string `json:"url"`
-		Protocol       *string `json:"protocol"`
-		Encoding       *string `json:"encoding"`
-		RTSPTransport  *string `json:"rtsp_transport"`
-		Username       *string `json:"username"`
-		Password       *string `json:"password"`
-		Enabled        *bool   `json:"enabled"`
-		Description    *string `json:"description"`
-		Location       *string `json:"location"`
-		Brand          *string `json:"brand"`
-		Model          *string `json:"model"`
-		SerialNumber   *string `json:"serial_number"`
-		RetentionDays  *int    `json:"retention_days"`
-		ONVIFEndpoint  *string `json:"onvif_endpoint"`
-		ProfileToken   *string `json:"profile_token"`
-		StreamEncoding *string `json:"stream_encoding"`
-		AudioEnabled   *bool   `json:"audio_enabled"`
-		RecordingMode  *string `json:"recording_mode"`
+		Name            *string                      `json:"name"`
+		URL             *string                      `json:"url"`
+		Protocol        *string                      `json:"protocol"`
+		Encoding        *string                      `json:"encoding"`
+		RTSPTransport   *string                      `json:"rtsp_transport"`
+		Username        *string                      `json:"username"`
+		Password        *string                      `json:"password"`
+		Enabled         *bool                        `json:"enabled"`
+		Description     *string                      `json:"description"`
+		Location        *string                      `json:"location"`
+		Brand           *string                      `json:"brand"`
+		Model           *string                      `json:"model"`
+		SerialNumber    *string                      `json:"serial_number"`
+		RetentionDays   *int                         `json:"retention_days"`
+		ONVIFEndpoint   *string                      `json:"onvif_endpoint"`
+		ProfileToken    *string                      `json:"profile_token"`
+		StreamEncoding  *string                      `json:"stream_encoding"`
+		AudioEnabled    *bool                        `json:"audio_enabled"`
+		RecordingMode   *string                      `json:"recording_mode"`
+		SubStreamURL    *string                      `json:"sub_stream_url"`
+		SubProfileToken *string                      `json:"sub_profile_token"`
+		SubnetHints     *[]string                    `json:"subnet_hints"`
+		Adaptive        *config.CameraAdaptiveConfig `json:"adaptive"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if body.RecordingMode != nil && !isValidRecordingMode(*body.RecordingMode) {
-		writeError(w, http.StatusBadRequest, "recording_mode must be continuous, scheduled, or off")
+		writeError(w, http.StatusBadRequest, "recording_mode must be continuous, scheduled, off, event, or adaptive")
 		return
 	}
 
@@ -484,25 +517,29 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := camera.CameraUpdate{
-		Name:           body.Name,
-		URL:            body.URL,
-		Protocol:       body.Protocol,
-		Encoding:       body.Encoding,
-		RTSPTransport:  body.RTSPTransport,
-		Username:       username,
-		Password:       password,
-		Enabled:        body.Enabled,
-		Description:    body.Description,
-		Location:       body.Location,
-		Brand:          body.Brand,
-		Model:          body.Model,
-		SerialNumber:   body.SerialNumber,
-		RetentionDays:  body.RetentionDays,
-		ONVIFEndpoint:  body.ONVIFEndpoint,
-		ProfileToken:   body.ProfileToken,
-		StreamEncoding: body.StreamEncoding,
-		AudioEnabled:   body.AudioEnabled,
-		RecordingMode:  body.RecordingMode,
+		Name:            body.Name,
+		URL:             body.URL,
+		Protocol:        body.Protocol,
+		Encoding:        body.Encoding,
+		RTSPTransport:   body.RTSPTransport,
+		Username:        username,
+		Password:        password,
+		Enabled:         body.Enabled,
+		Description:     body.Description,
+		Location:        body.Location,
+		Brand:           body.Brand,
+		Model:           body.Model,
+		SerialNumber:    body.SerialNumber,
+		RetentionDays:   body.RetentionDays,
+		ONVIFEndpoint:   body.ONVIFEndpoint,
+		ProfileToken:    body.ProfileToken,
+		StreamEncoding:  body.StreamEncoding,
+		AudioEnabled:    body.AudioEnabled,
+		RecordingMode:   body.RecordingMode,
+		SubStreamURL:    body.SubStreamURL,
+		SubProfileToken: body.SubProfileToken,
+		SubnetHints:     body.SubnetHints,
+		Adaptive:        body.Adaptive,
 	}
 	if body.RTSPTransport != nil && !config.IsValidRTSPTransport(*body.RTSPTransport) {
 		writeError(w, http.StatusBadRequest, "rtsp_transport must be tcp or udp")
@@ -822,10 +859,9 @@ func (h *Handler) handleResumeRecording(w http.ResponseWriter, r *http.Request) 
 }
 
 // isValidRecordingMode reports whether mode is an accepted recording_mode value.
-// 'event' is reserved for a later phase and not yet settable via the API.
 func isValidRecordingMode(mode string) bool {
 	switch mode {
-	case storage.RecordingModeContinuous, storage.RecordingModeScheduled, storage.RecordingModeOff:
+	case storage.RecordingModeContinuous, storage.RecordingModeScheduled, storage.RecordingModeOff, storage.RecordingModeEvent, storage.RecordingModeAdaptive:
 		return true
 	default:
 		return false

@@ -157,7 +157,8 @@ type Handler struct {
 	// streamMetrics holds per-stream ring buffers of periodic live metric samples.
 	streamMetrics *streamMetricsHistory
 	// apiObserver records low-cardinality API telemetry for OTel and the local dashboard.
-	apiObserver *observability.HTTPObserver
+	apiObserver       *observability.HTTPObserver
+	autoDiscoverApply func(config.AutoDiscoverConfig)
 }
 
 // GB28181StreamStatus reports active GB28181 play sessions for stream status overlay.
@@ -320,6 +321,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/stream/ws", h.handleStreamWS)
 				// HTTP fMP4 stream (must be before HLS catch-all /stream/*)
 				r.Get("/stream.m4s", h.handleFMP4Stream)
+				r.Get("/stream/sub/*", h.handleSubHLSStream)
 				r.Get("/stream/*", h.handleHLSStream)
 				r.Delete("/stream", h.handleStopHLSStream)
 				// WebRTC WHEP endpoints
@@ -370,6 +372,8 @@ func (h *Handler) Routes() http.Handler {
 				r.With(middleware.RequireOperatePermission()).Post("/stop", h.handleStopCamera)
 				r.With(middleware.RequireOperatePermission()).Post("/pause-recording", h.handlePauseRecording)
 				r.With(middleware.RequireOperatePermission()).Post("/resume-recording", h.handleResumeRecording)
+				r.With(middleware.RequireOperatePermission()).Post("/activate", h.handleActivateCamera)
+				r.With(middleware.RequireOperatePermission()).Post("/rediscover", h.handleRediscoverCamera)
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
@@ -399,6 +403,8 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/merge", h.handleUpdateMergeSettings)
 		r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
+		r.Get("/api/settings/auto-discover", h.handleGetAutoDiscoverSettings)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings/auto-discover", h.handleUpdateAutoDiscoverSettings)
 		r.Get("/api/settings/gb28181", h.handleGetGB28181Settings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/gb28181", h.handleUpdateGB28181Settings)
 		r.Get("/api/settings/hls", h.handleGetHLSSettings)
@@ -984,7 +990,24 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	protocols = h.attachMediaPlayURLs(r.Context(), id, protocols)
+	streamID, quality := h.resolvePlayStreamID(r, id)
+	w.Header().Set("X-Stream-Quality", quality)
+	protocols = h.attachMediaPlayURLs(r.Context(), streamID, protocols)
+	if quality == "sub" {
+		for i := range protocols {
+			switch protocols[i].Protocol {
+			case "wasm":
+				protocols[i].PlayURL = "/api/cameras/" + id + "/stream/ws"
+			case "hls", "ll-hls":
+				if protocols[i].Available {
+					protocols[i].PlayURL = "/api/cameras/" + id + "/stream/sub/index.m3u8"
+					if protocols[i].Protocol == "ll-hls" {
+						protocols[i].PlayURL += "?ll-hls=1"
+					}
+				}
+			}
+		}
+	}
 
 	writeJSON(w, http.StatusOK, cameraProtocolsResponse{
 		Protocols:    protocols,

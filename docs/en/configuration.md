@@ -558,6 +558,11 @@ HLS playback is independent of recording pulls: disabling `hls.enabled` or using
 - **Options**: `webrtc`, `flv`, `ws-flv`, `hls`, `ll-hls`
 - **Description**: Default streaming protocol
 
+### `streaming.preview_auto_stop_sec`
+- **Type**: integer
+- **Default**: `60`
+- **Description**: Idle timeout (seconds) for on-demand sub-stream pulls
+
 ### `streaming.webrtc`
 ```yaml
 streaming:
@@ -627,7 +632,36 @@ health:
     cooldown_minutes: 10
     blacklist_hours: 1
     global_max_per_min: 5
+  rediscovery:
+    enabled: true                # unicast IP self-healing by ONVIF serial
+    max_parallel: 16
+    probe_timeout: "2s"
 ```
+
+## ONVIF auto-discover (plug-and-play)
+
+Disabled by default. When enabled, the NVR listens for WS-Discovery Hello and periodically Probes the LAN, then enrolls new ONVIF cameras (pending activation if credentials are missing).
+
+```yaml
+auto_discover:
+  enabled: false
+  listen_for_hello: true
+  scan_interval: 60s
+  default_username: ""
+  default_password: ""
+```
+
+## Event recording
+
+Used when a camera's `recording_mode` is `event` (MQTT / ONVIF motion) or `adaptive` (sparse IDR while calm).
+
+```yaml
+event:
+  post_roll: 30s
+  max_duration: 5m
+```
+
+Cameras may also set `adaptive.timelapse_interval` (default `30s`) for calm-state keyframe spacing.
 
 ## Remote Log Configuration
 

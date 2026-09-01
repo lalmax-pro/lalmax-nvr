@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAiSettings, saveAiSettings, detectAiBackend, getAiBackendConfig, updateAiBackendConfig, getGB28181Settings, updateGB28181Settings, reloadConfig, checkConfigChange, regenerateLalmaxConfig, getHLSSettings, updateHLSSettings, getLocalNetworkInterfaces } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAutoDiscoverSettings, updateAutoDiscoverSettings, getAiSettings, saveAiSettings, detectAiBackend, getAiBackendConfig, updateAiBackendConfig, getGB28181Settings, updateGB28181Settings, reloadConfig, checkConfigChange, regenerateLalmaxConfig, getHLSSettings, updateHLSSettings, getLocalNetworkInterfaces } from '$lib/api';
   import type { AiBackendConfig } from '$lib/api';
   import type { SettingsConfig, FeatureFlags, StorageStats, Camera, StreamingConfig, GB28181Config, HLSConfig, NetworkInterface } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '../lib/preferences';
@@ -45,6 +45,14 @@ let streamingRtmpPort = $state(1935);
 let streamingSrtEnabled = $state(false);
 let streamingSrtPort = $state(9000);
 let streamingSaving = $state(false);
+
+let autoDiscoverEnabled = $state(false);
+let autoDiscoverHello = $state(true);
+let autoDiscoverInterval = $state('60s');
+let autoDiscoverUsername = $state('');
+let autoDiscoverPassword = $state('');
+let autoDiscoverHasPassword = $state(false);
+let autoDiscoverSaving = $state(false);
 let expandedProtocolDoc = $state<string | null>(null);
 
 // SRT stream configurations
@@ -510,6 +518,7 @@ function getAffectedCameraCount(protocol: string): number {
         // Reload all settings from fresh config
         await loadSettings();
         await loadStreamingConfig();
+        await loadAutoDiscoverConfig();
       } else {
         showToast(t('settings.config.noChanges'), 'info');
       }
@@ -533,6 +542,7 @@ function getAffectedCameraCount(protocol: string): number {
     loadDiskInfo();
     loadCameraList();
     loadStreamingConfig();
+    loadAutoDiscoverConfig();
     loadAiSettings();
     loadAiBackendSettings();
     window.addEventListener('hashchange', handleHashChange);
@@ -580,6 +590,38 @@ function getAffectedCameraCount(protocol: string): number {
     try {
       allCameras = await listCameras();
     } catch (e) { /* non-critical */ }
+  }
+
+  async function loadAutoDiscoverConfig() {
+    try {
+      const cfg = await getAutoDiscoverSettings();
+      autoDiscoverEnabled = cfg.enabled;
+      autoDiscoverHello = cfg.listen_for_hello;
+      autoDiscoverInterval = cfg.scan_interval || '60s';
+      autoDiscoverUsername = cfg.default_username || '';
+      autoDiscoverHasPassword = !!cfg.has_password;
+      autoDiscoverPassword = '';
+    } catch (e) { console.warn('Failed to load auto-discover settings:', e); }
+  }
+
+  async function saveAutoDiscoverConfig() {
+    autoDiscoverSaving = true;
+    try {
+      const updated = await updateAutoDiscoverSettings({
+        enabled: autoDiscoverEnabled,
+        listen_for_hello: autoDiscoverHello,
+        scan_interval: autoDiscoverInterval,
+        default_username: autoDiscoverUsername,
+        default_password: autoDiscoverPassword || undefined,
+      });
+      autoDiscoverHasPassword = !!updated.has_password;
+      autoDiscoverPassword = '';
+      showToast(t('settings.autoDiscover.saved'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.autoDiscover.error'), 'error');
+    } finally {
+      autoDiscoverSaving = false;
+    }
   }
 
   async function loadStreamingConfig() {
@@ -935,6 +977,56 @@ function getAffectedCameraCount(protocol: string): number {
                 <option value="off">{t('settings.off')}</option>
               </select>
             </div>
+          </div>
+        </div>
+
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.autoDiscover.title')}</h3>
+          <p class="text-sm th-text-tertiary mb-8">{t('settings.autoDiscover.desc')}</p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label class="input-label" for="auto-discover-toggle">{t('settings.autoDiscover.enabled')}</label>
+              <button
+                type="button"
+                id="auto-discover-toggle"
+                class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors {autoDiscoverEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                onclick={() => { autoDiscoverEnabled = !autoDiscoverEnabled; }}
+                role="switch"
+                aria-checked={autoDiscoverEnabled}
+              >
+                <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {autoDiscoverEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+              </button>
+            </div>
+            <div>
+              <label class="input-label" for="auto-discover-hello">{t('settings.autoDiscover.hello')}</label>
+              <button
+                type="button"
+                id="auto-discover-hello"
+                class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors {autoDiscoverHello ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                onclick={() => { autoDiscoverHello = !autoDiscoverHello; }}
+                role="switch"
+                aria-checked={autoDiscoverHello}
+              >
+                <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {autoDiscoverHello ? 'translate-x-6' : 'translate-x-1'}"></span>
+              </button>
+            </div>
+            <div>
+              <label for="auto-discover-interval" class="input-label">{t('settings.autoDiscover.interval')}</label>
+              <input id="auto-discover-interval" class="input" bind:value={autoDiscoverInterval} />
+            </div>
+            <div>
+              <label for="auto-discover-user" class="input-label">{t('settings.autoDiscover.username')}</label>
+              <input id="auto-discover-user" class="input" bind:value={autoDiscoverUsername} />
+            </div>
+            <div>
+              <label for="auto-discover-pass" class="input-label">{t('settings.autoDiscover.password')}</label>
+              <input id="auto-discover-pass" type="password" class="input" bind:value={autoDiscoverPassword} placeholder={autoDiscoverHasPassword ? '••••••' : ''} />
+            </div>
+          </div>
+          <div class="mt-6 flex justify-end">
+            <button type="button" class="btn btn-primary" onclick={saveAutoDiscoverConfig} disabled={autoDiscoverSaving}>
+              {autoDiscoverSaving ? t('settings.saving') : t('settings.save')}
+            </button>
           </div>
         </div>
 

@@ -279,7 +279,7 @@
   async function loadCameraPlayURLs(cameraIds: string[]) {
     const results = await Promise.all(cameraIds.map(async (cameraId) => {
       try {
-        const response = await apiRequest<{ protocols: CameraProtocolDetail[] }>(`/cameras/${cameraId}/protocols`);
+        const response = await apiRequest<{ protocols: CameraProtocolDetail[] }>(`/cameras/${cameraId}/protocols?quality=sub`);
         const urls: Record<string, string> = {};
         for (const protocol of response.protocols) {
           if (protocol.Available && protocol.PlayURL) {

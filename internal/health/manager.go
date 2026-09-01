@@ -15,16 +15,17 @@ import (
 //   - Layer 2: StreamStatsCollector — detects bitrate/FPS/IDR anomalies
 //   - Layer 2.5: FreezeDetector — detects frozen video streams
 //   - AlertPipeline — deduplicates and dispatches events to storage + MQTT
+//
 // StatusFunc returns current camera statuses as map[cameraID]status.
 type StatusFunc func() map[string]string
 type Manager struct {
 	cfg config.HealthConfig
 
-	conn      *ConnectionMonitor
-	collector *StreamStatsCollector
-	freeze    *FreezeDetector
-	pipeline  *AlertPipeline
-	autoRemediate *AutoRemediator
+	conn                *ConnectionMonitor
+	collector           *StreamStatsCollector
+	freeze              *FreezeDetector
+	pipeline            *AlertPipeline
+	autoRemediate       *AutoRemediator
 	qualityTracker      *QualityTracker // 24h rolling window
 	qualityTrackerShort *QualityTracker // 1h rolling window for trend
 
@@ -37,6 +38,7 @@ type Manager struct {
 
 	store HealthStorage
 }
+
 // NewManager creates a health manager. Returns nil if health monitoring is disabled.
 func NewManager(cfg config.HealthConfig, store HealthStorage) *Manager {
 	if !cfg.Enabled {
@@ -75,18 +77,18 @@ func NewManager(cfg config.HealthConfig, store HealthStorage) *Manager {
 	}
 
 	return &Manager{
-		cfg:       cfg,
-		conn:      conn,
-		collector: collector,
-		freeze:    freeze,
-		pipeline:  pipeline,
-		autoRemediate: remediator,
+		cfg:                 cfg,
+		conn:                conn,
+		collector:           collector,
+		freeze:              freeze,
+		pipeline:            pipeline,
+		autoRemediate:       remediator,
 		qualityTracker:      NewQualityTracker(24 * time.Hour),
 		qualityTrackerShort: NewQualityTracker(1 * time.Hour),
 
 		knownStatuses: make(map[string]string),
-		done:      make(chan struct{}),
-		store:     store,
+		done:          make(chan struct{}),
+		store:         store,
 	}
 }
 
@@ -137,6 +139,7 @@ func (m *Manager) run(ctx context.Context) {
 		}
 	}
 }
+
 // Stop shuts down the health manager.
 func (m *Manager) Stop() {
 	if m == nil || m.cancel == nil {
@@ -170,6 +173,22 @@ func (m *Manager) SetRestarter(fn RestartRecorderFunc) {
 		return
 	}
 	m.autoRemediate.restartFn = fn
+}
+
+// SetRediscoverer injects IP self-healing used once a camera is blacklisted.
+func (m *Manager) SetRediscoverer(fn RediscoverFunc) {
+	if m == nil || m.autoRemediate == nil {
+		return
+	}
+	m.autoRemediate.SetRediscoverer(fn)
+}
+
+// ClearCameraBlacklist clears auto-remediation blacklist after a successful rediscovery.
+func (m *Manager) ClearCameraBlacklist(cameraID string) {
+	if m == nil || m.autoRemediate == nil {
+		return
+	}
+	m.autoRemediate.ClearBlacklist(cameraID)
 }
 
 // SetCameraEnabledFn injects the function used to check if a camera is enabled for auto-remediation.
@@ -269,6 +288,7 @@ func (m *Manager) OnStatusChange(cameraID string, status string) {
 		m.collector.ResetCameraState(cameraID)
 	}
 }
+
 // GetCameraHealth returns the current health status for a camera.
 func (m *Manager) GetCameraHealth(cameraID string) *model.CameraHealth {
 	if m == nil {
@@ -334,13 +354,13 @@ func (m *Manager) knownRecorderStatus(cameraID string) string {
 // StabilityData represents the stability quality metrics for a single camera,
 // including a computed trend based on short vs long window comparison.
 type StabilityData struct {
-	UptimePercent      float64 `json:"uptime_percent"`
-	TotalFailures      int     `json:"total_failures"`
-	MTBF               string  `json:"mtbf"`
-	AvgSession         string  `json:"avg_session"`
-	LastFailure        string  `json:"last_failure,omitempty"`
-	CurrentStatus      string  `json:"current_status"`
-	Trend              string  `json:"trend"` // "stable", "degrading", "improving"
+	UptimePercent float64 `json:"uptime_percent"`
+	TotalFailures int     `json:"total_failures"`
+	MTBF          string  `json:"mtbf"`
+	AvgSession    string  `json:"avg_session"`
+	LastFailure   string  `json:"last_failure,omitempty"`
+	CurrentStatus string  `json:"current_status"`
+	Trend         string  `json:"trend"` // "stable", "degrading", "improving"
 }
 
 // GetStability returns stability quality data for a single camera.
@@ -396,12 +416,12 @@ func (m *Manager) computeTrend(cameraID string) string {
 // qualityToStabilityData converts a ConnectionQuality to a StabilityData.
 func qualityToStabilityData(q ConnectionQuality, trend string) *StabilityData {
 	data := &StabilityData{
-		UptimePercent:  q.UptimePercent,
-		TotalFailures:  q.TotalFailures,
-		MTBF:           q.MTBF.String(),
-		AvgSession:     q.AvgSessionDuration.String(),
-		CurrentStatus:  q.CurrentStatus,
-		Trend:          trend,
+		UptimePercent: q.UptimePercent,
+		TotalFailures: q.TotalFailures,
+		MTBF:          q.MTBF.String(),
+		AvgSession:    q.AvgSessionDuration.String(),
+		CurrentStatus: q.CurrentStatus,
+		Trend:         trend,
 	}
 	if !q.LastFailure.IsZero() {
 		data.LastFailure = q.LastFailure.Format(time.RFC3339)

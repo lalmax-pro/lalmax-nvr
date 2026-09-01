@@ -15,13 +15,17 @@ import (
 // Injected to avoid circular dependency on internal/camera.
 type RestartRecorderFunc func(ctx context.Context, cameraID string) error
 
+// RediscoverFunc attempts to find a camera by serial and reconnect it.
+type RediscoverFunc func(ctx context.Context, cameraID string) (found bool, err error)
+
 // IsCameraEnabledFunc checks whether a camera is enabled for auto-remediation.
 type IsCameraEnabledFunc func(cameraID string) bool
 
 // cameraRestartState tracks per-camera restart history and blacklist status.
 type cameraRestartState struct {
-	attempts         []time.Time
-	blacklistedSince time.Time
+	attempts            []time.Time
+	blacklistedSince    time.Time
+	rediscoverAttempted bool
 }
 
 // AutoRemediator decides whether to automatically restart a failed camera recorder.
@@ -31,9 +35,10 @@ type cameraRestartState struct {
 // source encoding changed mid-stream). It enforces safety rules: per-camera rate
 // limiting, cooldown, global rate limiting, and blacklisting.
 type AutoRemediator struct {
-	cfg         config.HealthAutoRemediationConfig
-	restartFn   RestartRecorderFunc
-	isEnabledFn IsCameraEnabledFunc
+	cfg          config.HealthAutoRemediationConfig
+	restartFn    RestartRecorderFunc
+	isEnabledFn  IsCameraEnabledFunc
+	rediscoverFn RediscoverFunc
 
 	mu             sync.Mutex
 	cameraStates   map[string]*cameraRestartState
@@ -104,11 +109,28 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 	if !state.blacklistedSince.IsZero() {
 		blacklistExpiry := state.blacklistedSince.Add(time.Duration(r.cfg.BlacklistHours) * time.Hour)
 		if now.Before(blacklistExpiry) {
+			if r.rediscoverFn != nil && !state.rediscoverAttempted {
+				state.rediscoverAttempted = true
+				r.mu.Unlock()
+				found, err := r.rediscoverFn(context.Background(), cameraID)
+				r.mu.Lock()
+				if found {
+					state.blacklistedSince = time.Time{}
+					state.attempts = nil
+					state.rediscoverAttempted = false
+					delete(r.unhealthySince, cameraID)
+					return nil
+				}
+				if err != nil {
+					slog.Warn("rediscovery after blacklist failed", "camera_id", cameraID, "error", err)
+				}
+			}
 			return fmt.Errorf("camera %s is blacklisted until %s", cameraID, blacklistExpiry.Format(time.RFC3339))
 		}
 		// Blacklist expired — reset state.
 		state.blacklistedSince = time.Time{}
 		state.attempts = nil
+		state.rediscoverAttempted = false
 	}
 
 	// Safety check 4: per-camera rate limit (count attempts in last hour).
@@ -165,6 +187,31 @@ func (r *AutoRemediator) IsBlacklisted(cameraID string) bool {
 
 	blacklistExpiry := state.blacklistedSince.Add(time.Duration(r.cfg.BlacklistHours) * time.Hour)
 	return time.Now().Before(blacklistExpiry)
+}
+
+// SetRediscoverer injects IP self-healing used once when a camera is blacklisted.
+func (r *AutoRemediator) SetRediscoverer(fn RediscoverFunc) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rediscoverFn = fn
+}
+
+// ClearBlacklist removes a camera from the auto-remediation blacklist.
+func (r *AutoRemediator) ClearBlacklist(cameraID string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if state, ok := r.cameraStates[cameraID]; ok {
+		state.blacklistedSince = time.Time{}
+		state.attempts = nil
+		state.rediscoverAttempted = false
+	}
+	delete(r.unhealthySince, cameraID)
 }
 
 // CheckAll evaluates all cameras in the given status map and attempts remediation

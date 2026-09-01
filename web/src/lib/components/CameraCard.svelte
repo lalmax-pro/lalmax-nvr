@@ -1,10 +1,11 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import { normalizeProtocol, enableCamera, disableCamera, getSnapshotUrl } from '$lib/api';
+  import { normalizeProtocol, enableCamera, disableCamera, getSnapshotUrl, activateCamera, rediscoverCamera } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
   import type { PTZCapabilitiesDetailed } from '$lib/api/cameras';
-  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home, CalendarClock, CircleOff } from 'lucide-svelte';
+  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home, CalendarClock, CircleOff, KeyRound, Search } from 'lucide-svelte';
+  import { showToast } from '$lib/toast';
 
   interface Props {
     camera: Camera;
@@ -50,6 +51,12 @@
   $effect(() => { nameInput = camera.name; });
 
   let isRecordingPaused = $derived(recordingPaused || camera.recording_paused);
+  let isPending = $derived(camera.activation_state === 'pending_activation');
+  let activateOpen = $state(false);
+  let activateUser = $state('');
+  let activatePass = $state('');
+  let activating = $state(false);
+  let rediscovering = $state(false);
 
   let variant = $derived(
     !camera.enabled
@@ -105,6 +112,34 @@
       ontoggle(camera);
     } catch (e) {
       console.error('Toggle failed:', e);
+    }
+  }
+
+  async function handleActivate() {
+    activating = true;
+    try {
+      await activateCamera(camera.id, activateUser, activatePass);
+      activateOpen = false;
+      activatePass = '';
+      showToast(t('cameras.activated'), 'success');
+      ontoggle(camera);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('cameras.activateFailed'), 'error');
+    } finally {
+      activating = false;
+    }
+  }
+
+  async function handleRediscover() {
+    rediscovering = true;
+    try {
+      const result = await rediscoverCamera(camera.id);
+      showToast(result.found ? t('cameras.rediscoverFound') : t('cameras.rediscoverNotFound'), result.found ? 'success' : 'info');
+      if (result.found) ontoggle(camera);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('cameras.rediscoverFailed'), 'error');
+    } finally {
+      rediscovering = false;
     }
   }
 
@@ -200,7 +235,9 @@
             {t('cameras.tutkCardBadge')}
           </span>
         {/if}
-        {#if variant === 'disabled'}
+        {#if isPending}
+          <span class="badge badge-warning">{t('cameras.pendingActivation')}</span>
+        {:else if variant === 'disabled'}
           <span class="badge badge-neutral">{t('cameras.status.disabled')}</span>
         {:else if isRecordingPaused || camera.status === 'paused'}
           <span class="badge badge-warning">{t('cameras.statusPaused')}</span>
@@ -274,6 +311,15 @@
             <CalendarClock size={10} />
             {t('cameras.recordingMode.scheduled')}
           </span>
+        {:else if camera.recording_mode === 'event'}
+          <span class="inline-flex items-center gap-1 text-xs text-sky-600 bg-sky-50 dark:text-sky-400 dark:bg-sky-900/30 px-2 py-0.5 rounded">
+            <Bell size={10} />
+            {t('cameras.recordingMode.event')}
+          </span>
+        {:else if camera.recording_mode === 'adaptive'}
+          <span class="inline-flex items-center gap-1 text-xs text-violet-600 bg-violet-50 dark:text-violet-400 dark:bg-violet-900/30 px-2 py-0.5 rounded">
+            {t('cameras.recordingMode.adaptive')}
+          </span>
         {:else if camera.recording_mode === 'off'}
           <span class="inline-flex items-center gap-1 text-xs th-text-tertiary th-bg-tertiary px-2 py-0.5 rounded">
             <CircleOff size={10} />
@@ -337,6 +383,25 @@
 
       <!-- Action buttons (right) -->
       <div class="flex items-center gap-1">
+        {#if isPending}
+          <button
+            class="btn btn-ghost px-2 py-1 text-sm"
+            onclick={() => activateOpen = true}
+            title={t('cameras.activate')}
+          >
+            <KeyRound size={14} />
+          </button>
+        {/if}
+        {#if normalizeProtocol(camera.protocol) === 'onvif' && (camera.status === 'error' || camera.status === 'reconnecting' || camera.status === 'offline')}
+          <button
+            class="btn btn-ghost px-2 py-1 text-sm"
+            onclick={handleRediscover}
+            disabled={rediscovering}
+            title={t('cameras.rediscover')}
+          >
+            <Search size={14} />
+          </button>
+        {/if}
         {#if variant !== 'disabled'}
           {#if camera.status === 'recording' || camera.status === 'reconnecting' || camera.status === 'paused' || isRecordingPaused}
             <button
@@ -442,6 +507,25 @@
     </div>
   </div>
 </div>
+
+{#if activateOpen}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onclick={() => activateOpen = false}>
+    <div class="card p-6 w-full max-w-sm border th-border" onclick={(e) => e.stopPropagation()}>
+      <h4 class="text-base font-semibold th-text-primary mb-1">{t('cameras.activateTitle')}</h4>
+      <p class="text-sm th-text-tertiary mb-4">{t('cameras.activateHint')}</p>
+      <label class="input-label" for="activate-user">{t('cameras.username')}</label>
+      <input id="activate-user" class="input mb-3" bind:value={activateUser} />
+      <label class="input-label" for="activate-pass">{t('cameras.password')}</label>
+      <input id="activate-pass" type="password" class="input mb-4" bind:value={activatePass} />
+      <div class="flex justify-end gap-2">
+        <button type="button" class="btn btn-ghost" onclick={() => activateOpen = false}>{t('common.cancel')}</button>
+        <button type="button" class="btn btn-primary" onclick={handleActivate} disabled={activating}>
+          {activating ? t('cameras.activating') : t('cameras.activate')}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .camera-card {

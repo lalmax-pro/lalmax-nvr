@@ -45,6 +45,7 @@ type H265Config struct {
 	AudioEnabled         bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
 	EventBus             *event.EventBus
+	Adaptive             *AdaptiveGate
 }
 
 // H265Recorder records H.265/HEVC video from an RTSP source.
@@ -225,6 +226,11 @@ func (r *H265Recorder) Resume() {
 	r.paused.Store(false)
 	r.setStatus(model.StatusRecording)
 	h265Logger.Info("recording resumed", "camera_id", r.cfg.CameraID)
+}
+
+// TriggerAdaptive promotes sparse recording to full-speed for hold.
+func (r *H265Recorder) TriggerAdaptive(hold time.Duration) {
+	r.cfg.Adaptive.Trigger(hold)
 }
 
 // IsPaused returns true if recording is paused.
@@ -625,6 +631,13 @@ func (r *H265Recorder) writeFrames(done chan struct{}) {
 		// Only write VCL NALUs (slice segments). HEVC VCL types are 0-31, non-VCL are 32+.
 		// Skip parameter sets (VPS=32, SPS=33, PPS=34) and other non-VCL types.
 		if naluType >= 32 {
+			continue
+		}
+		isIDR := naluType == 19 || naluType == 20
+		if !isIDR {
+			r.cfg.Adaptive.ObservePFrame(len(nalu))
+		}
+		if !r.cfg.Adaptive.ShouldWrite(isIDR, time.Now()) {
 			continue
 		}
 		if r.vps == nil || r.sps == nil || r.pps == nil {

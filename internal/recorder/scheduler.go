@@ -15,10 +15,11 @@ var schedLogger = slog.Default().With("component", "recording-scheduler")
 // recording_mode + weekly schedule: continuous → always recording, off/event →
 // paused, scheduled → recording only within the camera's time windows.
 type RecordingScheduler struct {
-	db     *storage.DB
-	mu     sync.Mutex
-	stopCh chan struct{}
-	done   chan struct{}
+	db            *storage.DB
+	mu            sync.Mutex
+	stopCh        chan struct{}
+	done          chan struct{}
+	keepRecording func(cameraID string) bool
 }
 
 func NewRecordingScheduler(db *storage.DB) *RecordingScheduler {
@@ -27,6 +28,13 @@ func NewRecordingScheduler(db *storage.DB) *RecordingScheduler {
 		stopCh: make(chan struct{}),
 		done:   make(chan struct{}),
 	}
+}
+
+// SetKeepRecording skips pause when the callback reports an active event window.
+func (s *RecordingScheduler) SetKeepRecording(fn func(cameraID string) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keepRecording = fn
 }
 
 // Start begins the scheduler loop. It checks every 30 seconds.
@@ -78,10 +86,13 @@ func (s *RecordingScheduler) check(ctx context.Context, pauseFn, resumeFn func(c
 			if err := resumeFn(ctx, cameraID); err != nil {
 				schedLogger.Debug("resume failed (camera may already be recording)", "camera_id", cameraID, "error", err)
 			}
-		} else {
-			if err := pauseFn(ctx, cameraID); err != nil {
-				schedLogger.Debug("pause failed (camera may already be paused)", "camera_id", cameraID, "error", err)
-			}
+			continue
+		}
+		if s.keepRecording != nil && s.keepRecording(cameraID) {
+			continue
+		}
+		if err := pauseFn(ctx, cameraID); err != nil {
+			schedLogger.Debug("pause failed (camera may already be paused)", "camera_id", cameraID, "error", err)
 		}
 	}
 }

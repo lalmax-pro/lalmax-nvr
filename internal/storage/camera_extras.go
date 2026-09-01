@@ -20,6 +20,9 @@ type cameraExtras struct {
 	DID                  string                        `json:"did,omitempty"`
 	Vendor               string                        `json:"vendor,omitempty"`
 	SourceType           string                        `json:"source_type,omitempty"`
+	SubProfileToken      string                        `json:"sub_profile_token,omitempty"`
+	SubnetHints          []string                      `json:"subnet_hints,omitempty"`
+	Adaptive             *config.CameraAdaptiveConfig  `json:"adaptive,omitempty"`
 }
 
 func extrasFromCameraConfig(cam config.CameraConfig) cameraExtras {
@@ -35,6 +38,9 @@ func extrasFromCameraConfig(cam config.CameraConfig) cameraExtras {
 		DID:                  cam.DID,
 		Vendor:               cam.Vendor,
 		SourceType:           cam.SourceType,
+		SubProfileToken:      cam.SubProfileToken,
+		SubnetHints:          cam.SubnetHints,
+		Adaptive:             cam.Adaptive,
 	}
 	if config.CameraSupportsAudioRecording(cam) {
 		v := cam.AudioEnabled
@@ -58,6 +64,9 @@ func applyExtrasToCamera(cam *config.CameraConfig, extras cameraExtras) {
 	cam.DID = extras.DID
 	cam.Vendor = extras.Vendor
 	cam.SourceType = extras.SourceType
+	cam.SubProfileToken = extras.SubProfileToken
+	cam.SubnetHints = extras.SubnetHints
+	cam.Adaptive = extras.Adaptive
 }
 
 func mergeConfigFromRow(row CameraRow) *config.MergeConfig {

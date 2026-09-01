@@ -62,6 +62,8 @@ export {
   disableCamera,
   startCamera,
   stopCamera,
+  activateCamera,
+  rediscoverCamera,
   pauseRecording,
   resumeRecording,
   getDashboardCameras,
@@ -216,6 +218,8 @@ export {
   updateFeatures,
   getStreamingSettings,
   updateStreamingSettings,
+  getAutoDiscoverSettings,
+  updateAutoDiscoverSettings,
   getGB28181Settings,
   updateGB28181Settings,
   reloadConfig,
@@ -240,6 +244,7 @@ export type {
   SRTConfig,
   GB28181Config,
   HLSConfig,
+  AutoDiscoverSettings,
 } from './settings';
 
 // Streams — runtime stream inventory

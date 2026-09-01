@@ -21,7 +21,8 @@ func (d *DB) SaveCameraExtras(ctx context.Context, cam config.CameraConfig) erro
 func (d *DB) ListCameraConfigs(ctx context.Context) ([]config.CameraConfig, error) {
 	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, username, password, enabled,
 		onvif_endpoint, profile_token, stream_encoding, extras_json,
-		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge
+		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
+		COALESCE(recording_mode,'continuous'), COALESCE(activation_state,'active'), COALESCE(stable_id,'')
 		FROM cameras WHERE archived=0 ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -39,6 +40,7 @@ func (d *DB) ListCameraConfigs(ctx context.Context) ([]config.CameraConfig, erro
 			&cam.ID, &cam.Name, &cam.Protocol, &cam.Encoding, &cam.RTSPTransport, &cam.URL, &cam.Username, &cam.Password, &cam.Enabled,
 			&cam.ONVIFEndpoint, &cam.ProfileToken, &cam.StreamEncoding, &extrasRaw,
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
+			&cam.RecordingMode, &cam.ActivationState, &cam.StableID,
 		); err != nil {
 			return nil, err
 		}

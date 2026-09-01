@@ -11,11 +11,13 @@ import (
 // handleFLVStream handles GET /api/cameras/{id}/stream.flv
 func (h *Handler) handleFLVStream(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	streamID, quality := h.resolvePlayStreamID(r, id)
+	w.Header().Set("X-Stream-Quality", quality)
 	if h.mediaEngine == nil {
 		writeError(w, http.StatusServiceUnavailable, "FLV streaming not available")
 		return
 	}
-	upstream, err := h.mediaPlayURL(r.Context(), id, "flv")
+	upstream, err := h.mediaPlayURL(r.Context(), streamID, "flv")
 	if err != nil || upstream == nil {
 		writeError(w, http.StatusBadGateway, "failed to build FLV URL")
 		return

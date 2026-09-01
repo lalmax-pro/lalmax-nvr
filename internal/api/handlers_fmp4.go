@@ -12,12 +12,14 @@ import (
 // followed by fragmented moof+mdat parts.
 func (h *Handler) handleFMP4Stream(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	streamID, quality := h.resolvePlayStreamID(r, id)
+	w.Header().Set("X-Stream-Quality", quality)
 	if h.mediaEngine == nil {
 		writeError(w, http.StatusServiceUnavailable, "fMP4 streaming not available: media engine disabled")
 		return
 	}
 
-	upstream, err := h.mediaPlayURL(r.Context(), id, "fmp4")
+	upstream, err := h.mediaPlayURL(r.Context(), streamID, "fmp4")
 	if err != nil || upstream == nil {
 		writeError(w, http.StatusBadGateway, "failed to resolve fMP4 stream URL")
 		return

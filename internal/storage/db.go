@@ -469,6 +469,10 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_operation_logs_username ON operation_logs(username)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='25' WHERE key='schema_version'")
 
+	if err := d.migrateActivationIdentity(ctx); err != nil {
+		return err
+	}
+
 	return nil
 
 }

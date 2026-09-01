@@ -558,6 +558,11 @@ HLS 播放与录像拉流相互独立：关闭 `hls.enabled` 或启用按需切�
 - **选项**: `webrtc`, `flv`, `ws-flv`, `hls`, `ll-hls`
 - **描述**: 默认流媒体协议
 
+### `streaming.preview_auto_stop_sec`
+- **类型**: integer
+- **默认**: `60`
+- **描述**: 按需子码流拉流的空闲超时（秒）
+
 ### `streaming.webrtc`
 ```yaml
 streaming:
@@ -627,7 +632,36 @@ health:
     cooldown_minutes: 10
     blacklist_hours: 1
     global_max_per_min: 5
+  rediscovery:
+    enabled: true                # 按 ONVIF 序列号单播自愈 IP
+    max_parallel: 16
+    probe_timeout: "2s"
 ```
+
+## ONVIF 即插即用
+
+默认关闭。开启后监听 WS-Discovery Hello 并周期 Probe，自动登记新摄像头（无凭据时进入待激活）。
+
+```yaml
+auto_discover:
+  enabled: false
+  listen_for_hello: true
+  scan_interval: 60s
+  default_username: ""
+  default_password: ""
+```
+
+## 事件录像
+
+摄像头 `recording_mode` 为 `event`（MQTT / ONVIF 移动侦测）或 `adaptive`（平静时稀疏关键帧）时生效。
+
+```yaml
+event:
+  post_roll: 30s
+  max_duration: 5m
+```
+
+每路还可配置 `adaptive.timelapse_interval`（默认 `30s`）作为平静时的关键帧间隔。
 
 ## 远程日志配置
 
