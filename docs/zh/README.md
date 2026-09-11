@@ -27,7 +27,8 @@ Release 包里的 [QUICKSTART](../QUICKSTART.md) 是精简版，细节以本文�
 
 | 文档 | 说明 |
 |------|------|
-| [API 文档](api-reference.md) | REST API |
+| [API 文档](api-reference.md) | REST API（Markdown） |
+| [API 文档站](../../internal/docsportal/) | OpenAPI；NVR 上访问 `/docs/` |
 | [MQTT](mqtt-integration.md) | 事件触发录像 |
 | [FTP](ftp-integration.md) | FTP 访问录像 |
 | [WebDAV](webdav-integration.md) | WebDAV 访问录像 |

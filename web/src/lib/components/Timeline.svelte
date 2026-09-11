@@ -1,17 +1,40 @@
 <script lang="ts">
-  import type { Recording } from '$lib/api';
+  import type { Recording, NvrEvent, TimelineEntry } from '$lib/api';
   import { formatDuration, formatFileSize } from '$lib/format';
+  import { t } from '$lib/i18n';
+  import { wallMsToHour } from '$lib/playback';
+
+  type TimelineItem = Recording | TimelineEntry;
 
   interface Props {
-    recordings: Recording[];
-    selectedRecording?: Recording;
+    recordings: TimelineItem[];
+    selectedRecording?: TimelineItem;
     selectedHour?: number;
-    onSelect: (recording: Recording) => void;
+    playheadHour?: number;
+    events?: NvrEvent[];
+    onSelect: (recording: TimelineItem) => void;
     onHourSelect?: (hour: number) => void;
-    onSeek?: (recording: Recording, offsetSec: number) => void;
+    onSeek?: (recording: TimelineItem, offsetSec: number) => void;
+    onEventSelect?: (event: NvrEvent) => void;
+    markInHour?: number;
+    markOutHour?: number;
+    onMark?: (hour: number, kind: 'in' | 'out') => void;
   }
 
-  let { recordings, selectedRecording, selectedHour = -1, onSelect, onHourSelect, onSeek }: Props = $props();
+  let {
+    recordings,
+    selectedRecording,
+    selectedHour = -1,
+    playheadHour = -1,
+    events = [],
+    onSelect,
+    onHourSelect,
+    onSeek,
+    onEventSelect,
+    markInHour = -1,
+    markOutHour = -1,
+    onMark,
+  }: Props = $props();
 
   const HOURS = 24;
   
@@ -52,7 +75,7 @@
     return labels;
   }
 
-  function getBlockStyle(recording: Recording): string {
+  function getBlockStyle(recording: TimelineItem): string {
     const start = new Date(recording.started_at);
     const end = new Date(recording.ended_at);
     const dayStart = new Date(start);
@@ -73,7 +96,16 @@
     return `left: ${left}%; width: ${Math.max(width, 0.5)}%;`;
   }
 
-  function getBlockColor(recording: Recording): string {
+  function getBlockColor(recording: TimelineItem): string {
+    if ('source' in recording && (recording as { source?: string }).source === 'gb') {
+      return 'bg-teal-500 hover:bg-teal-400';
+    }
+    if ('source' in recording && (recording as { source?: string }).source === 'onvif') {
+      return 'bg-orange-500 hover:bg-orange-400';
+    }
+    if ('gap_reason' in recording && recording.gap_reason) {
+      return 'bg-amber-700 hover:bg-amber-600';
+    }
     switch (recording.format) {
       case 'h264':
       case 'h265':
@@ -98,11 +130,11 @@
     return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
   }
 
-  let hoveredRecording = $state<Recording | null>(null);
+  let hoveredRecording = $state<TimelineItem | null>(null);
   let tooltipX = $state(0);
   let tooltipY = $state(0);
 
-  function handleMouseMove(e: MouseEvent, recording: Recording) {
+  function handleMouseMove(e: MouseEvent, recording: TimelineItem) {
     hoveredRecording = recording;
     tooltipX = e.clientX;
     tooltipY = e.clientY - 60;
@@ -227,7 +259,12 @@
   function handleTimelineClick(e: MouseEvent) {
     if (dragMoved) return;
     if ((e.target as HTMLElement).closest('button')) return;
-    snapSeekAtHour(hourFromClientX(e.clientX));
+    const hour = hourFromClientX(e.clientX);
+    if (e.altKey && onMark) {
+      onMark(hour, e.shiftKey ? 'out' : 'in');
+      return;
+    }
+    snapSeekAtHour(hour);
   }
 
   function resetZoom() {
@@ -245,7 +282,7 @@
   }
 
   // Check if recording is visible in current view
-  function isRecordingVisible(recording: Recording): boolean {
+  function isRecordingVisible(recording: TimelineItem): boolean {
     const start = new Date(recording.started_at);
     const end = new Date(recording.ended_at);
     const dayStart = new Date(start);
@@ -258,6 +295,32 @@
   }
 
   const visibleRecordings = $derived(recordings.filter(isRecordingVisible));
+
+  function eventHour(event: NvrEvent): number {
+    const start = new Date(event.started_at);
+    const dayStart = new Date(start);
+    dayStart.setHours(0, 0, 0, 0);
+    return wallMsToHour(start.getTime(), dayStart);
+  }
+
+  function eventLeft(event: NvrEvent): string {
+    const hour = eventHour(event);
+    const viewRange = viewEnd - viewStart;
+    return `${((hour - viewStart) / viewRange) * 100}%`;
+  }
+
+  function playheadLeft(): string {
+    if (playheadHour < 0) return '0%';
+    const viewRange = viewEnd - viewStart;
+    return `${((playheadHour - viewStart) / viewRange) * 100}%`;
+  }
+
+  const visibleEvents = $derived(
+    events.filter(ev => {
+      const hour = eventHour(ev);
+      return hour >= viewStart && hour <= viewEnd;
+    })
+  );
 </script>
 
 <div class="timeline-container">
@@ -269,7 +332,7 @@
   </div>
 
   <!-- Timeline bar -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_tabindex -->
   <div 
     bind:this={timelineEl}
     class="relative h-12 th-bg-tertiary rounded-lg cursor-grab select-none"
@@ -313,11 +376,33 @@
       ></button>
     {/each}
 
+    {#each visibleEvents as event (event.id)}
+      <button
+        class="absolute top-0 h-full w-0.5 bg-red-500 z-[5]"
+        class:bg-amber-400={event.severity === 'warning'}
+        class:bg-red-500={event.severity === 'critical'}
+        class:bg-sky-400={event.severity === 'info'}
+        style="left: {eventLeft(event)};"
+        title="{event.type}: {event.message}"
+        onclick={(e) => { e.stopPropagation(); onEventSelect?.(event); }}
+      ></button>
+    {/each}
+
+    {#if markInHour >= 0 && markOutHour > markInHour}
+      <div
+        class="absolute top-0 bottom-0 bg-emerald-400/25 z-[4] pointer-events-none"
+        style="left: {((markInHour - viewStart) / (viewEnd - viewStart)) * 100}%; width: {((markOutHour - markInHour) / (viewEnd - viewStart)) * 100}%;"
+      ></div>
+    {/if}
+    {#if playheadHour >= viewStart && playheadHour <= viewEnd}
+      <div class="absolute top-0 bottom-0 w-0.5 bg-white z-[6] pointer-events-none" style="left: {playheadLeft()}; box-shadow: 0 0 4px rgba(255,255,255,0.8);"></div>
+    {/if}
+
     <!-- Empty state -->
     {#if visibleRecordings.length === 0}
       <div class="absolute inset-0 flex items-center justify-center">
         <span class="text-sm th-text-muted">
-          {recordings.length === 0 ? 'No recordings for this day' : 'No recordings in this time range'}
+          {recordings.length === 0 ? t('recordings.timeline.emptyDay') : t('recordings.timeline.emptyRange')}
         </span>
       </div>
     {/if}
@@ -328,9 +413,9 @@
         <button 
           onclick={(e) => { e.stopPropagation(); resetZoom(); }}
           class="btn btn-ghost btn-xs th-bg-primary/80 hover:th-bg-primary"
-          title="Reset zoom (show full day)"
+          title={t('recordings.timeline.reset')}
         >
-          Reset
+          {t('recordings.timeline.reset')}
         </button>
       {/if}
       <button 
@@ -353,7 +438,7 @@
   <!-- Zoom hint -->
   {#if zoomLevel === 1}
     <div class="text-xs th-text-tertiary mt-1 text-center">
-      Ctrl+Scroll to zoom • Scroll to pan • Click hour to focus
+      {t('recordings.page.zoomHint')}
     </div>
   {/if}
 </div>
@@ -370,7 +455,10 @@
       {formatTime(hoveredRecording.started_at)} - {formatTime(hoveredRecording.ended_at)}
     </div>
     <div class="th-text-secondary text-xs">
-      {formatDuration(hoveredRecording.duration)} · {formatFileSize(hoveredRecording.file_size)} · {hoveredRecording.format.toUpperCase()}
+      {formatDuration(hoveredRecording.duration)}{#if 'file_size' in hoveredRecording && hoveredRecording.file_size} · {formatFileSize(hoveredRecording.file_size)}{/if} · {hoveredRecording.format.toUpperCase()}
+      {#if 'gap_reason' in hoveredRecording && hoveredRecording.gap_reason}
+        · {hoveredRecording.gap_reason}
+      {/if}
     </div>
   </div>
 {/if}

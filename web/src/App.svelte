@@ -22,6 +22,7 @@
   import OperationLogs from './routes/OperationLogs.svelte';
   import AIDetection from './routes/AIDetection.svelte';
   import Relay from './routes/Relay.svelte';
+  import MapView from './routes/MapView.svelte';
   import Header from './components/Header';
 
   // Network status
@@ -114,6 +115,10 @@
 
     if (segments[0] === 'devices') {
       return { route: 'devices', params: {} };
+    }
+
+    if (segments[0] === 'map') {
+      return { route: 'map', params: {} };
     }
 
     if (segments[0] === 'streams') {
@@ -246,7 +251,7 @@
     <Setup />
   {:else}
     <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live' || currentRoute === 'stream-detail'} />
-    <main class="main-content">
+    <main class="main-content" class:fill-viewport={currentRoute === 'map'}>
       {#if currentRoute === 'recordings'}
         <Recordings initialCameraId={params.cameraId} />
       {:else if currentRoute === 'recording-detail'}
@@ -279,6 +284,8 @@
         <AIDetection />
       {:else if currentRoute === 'relay'}
         <Relay />
+      {:else if currentRoute === 'map'}
+        <MapView />
       {/if}
     </main>
   {/if}
@@ -289,6 +296,11 @@
     margin-top: 56px;
     min-height: calc(100vh - 56px);
     transition: margin-left var(--duration-normal) var(--ease-out);
+  }
+
+  .main-content.fill-viewport {
+    height: calc(100vh - 56px);
+    overflow: hidden;
   }
 
   @media (max-width: 767px) {

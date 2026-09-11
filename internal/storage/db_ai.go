@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
@@ -12,6 +13,7 @@ import (
 
 type AIHistoryFilter struct {
 	CameraID string
+	Label    string
 	Limit    int
 	Offset   int
 }
@@ -101,7 +103,7 @@ func (d *DB) InsertAIAnalysis(ctx context.Context, raw interface{}) error {
 
 func (d *DB) ListAIDetections(ctx context.Context, filter AIHistoryFilter) ([]ai.DetectionResult, int, error) {
 	limit, offset := normalizeAIHistoryPage(filter.Limit, filter.Offset)
-	where, args := aiHistoryWhere(filter.CameraID)
+	where, args := aiHistoryWhere(filter.CameraID, filter.Label)
 
 	var total int
 	if err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ai_detections `+where, args...).Scan(&total); err != nil {
@@ -133,7 +135,7 @@ func (d *DB) ListAIDetections(ctx context.Context, filter AIHistoryFilter) ([]ai
 
 func (d *DB) ListAIAnalyses(ctx context.Context, filter AIHistoryFilter) ([]multimodal.AnalysisResult, int, error) {
 	limit, offset := normalizeAIHistoryPage(filter.Limit, filter.Offset)
-	where, args := aiHistoryWhere(filter.CameraID)
+	where, args := aiHistoryWhere(filter.CameraID, "")
 
 	var total int
 	if err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ai_analyses `+where, args...).Scan(&total); err != nil {
@@ -175,9 +177,19 @@ func normalizeAIHistoryPage(limit, offset int) (int, int) {
 	return limit, offset
 }
 
-func aiHistoryWhere(cameraID string) (string, []interface{}) {
-	if cameraID == "" {
+func aiHistoryWhere(cameraID, label string) (string, []interface{}) {
+	where := []string{}
+	args := []interface{}{}
+	if cameraID != "" {
+		where = append(where, "camera_id = ?")
+		args = append(args, cameraID)
+	}
+	if label != "" {
+		where = append(where, "detections_json LIKE ?")
+		args = append(args, "%"+label+"%")
+	}
+	if len(where) == 0 {
 		return "", nil
 	}
-	return "WHERE camera_id = ?", []interface{}{cameraID}
+	return "WHERE " + strings.Join(where, " AND "), args
 }

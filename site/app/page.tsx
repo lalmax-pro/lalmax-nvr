@@ -104,6 +104,7 @@ export default function Home() {
           <a href="#gb">国标</a>
           <a href="#architecture">架构</a>
           <a href="#quickstart">快速开始</a>
+          <a href={`${basePath}/docs/`}>API</a>
         </div>
         <a
           className="nav-github"
@@ -382,6 +383,7 @@ export default function Home() {
             lalmax<span className="brand-accent">-nvr</span>
           </span>
         </a>
+        <a href={`${basePath}/docs/`}>API 文档</a>
         <span>Built on the lalmax media engine</span>
         <span>© {new Date().getFullYear()} lalmax-nvr</span>
       </footer>

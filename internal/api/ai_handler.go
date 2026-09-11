@@ -97,6 +97,7 @@ func aiHistoryFilterFromRequest(r *http.Request) storage.AIHistoryFilter {
 	offset, _ := strconv.Atoi(q.Get("offset"))
 	return storage.AIHistoryFilter{
 		CameraID: q.Get("camera_id"),
+		Label:    q.Get("label"),
 		Limit:    limit,
 		Offset:   offset,
 	}

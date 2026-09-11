@@ -27,7 +27,8 @@ The release [QUICKSTART](../QUICKSTART.md) is a short cheat sheet; this tree is 
 
 | Document | Description |
 |----------|-------------|
-| [API Reference](api-reference.md) | REST API |
+| [API Reference](api-reference.md) | REST API (markdown) |
+| [API docs site](../../internal/docsportal/) | OpenAPI; live at `/docs/` on the NVR |
 | [MQTT](mqtt-integration.md) | Event-triggered recording |
 | [FTP](ftp-integration.md) | FTP access to recordings |
 | [WebDAV](webdav-integration.md) | WebDAV access to recordings |

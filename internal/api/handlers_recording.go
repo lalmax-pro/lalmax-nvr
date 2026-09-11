@@ -113,6 +113,10 @@ func (h *Handler) handleDeleteRecording(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "recording not found")
 		return
 	}
+	if rec.Locked {
+		writeError(w, http.StatusConflict, "recording is locked")
+		return
+	}
 
 	// Delete from DB first (authoritative source)
 	if err := h.db.DeleteRecording(ctx, id); err != nil {
@@ -151,11 +155,27 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	}
 	// Fetch file paths before batch delete
 	filePaths := map[string]string{}
+	skipLocked := []string{}
+	unlockedIDs := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		rec, err := h.db.GetRecording(ctx, id)
-		if err == nil && rec != nil && rec.FilePath != "" {
-			filePaths[id] = rec.FilePath
+		if err == nil && rec != nil {
+			if rec.Locked {
+				skipLocked = append(skipLocked, id)
+				continue
+			}
+			unlockedIDs = append(unlockedIDs, id)
+			if rec.FilePath != "" {
+				filePaths[id] = rec.FilePath
+			}
+		} else {
+			unlockedIDs = append(unlockedIDs, id)
 		}
+	}
+	body.IDs = unlockedIDs
+	if len(body.IDs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": []string{}, "failed": skipLocked, "locked": skipLocked})
+		return
 	}
 
 	// Delete DB records (transaction)
@@ -182,12 +202,7 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	result := map[string]any{"deleted": deleted}
-	if len(failed) > 0 {
-		result["failed"] = failed
-	} else {
-		result["failed"] = []string{}
-	}
+	result := map[string]any{"deleted": deleted, "failed": failed, "locked": skipLocked}
 	h.logSuccess(r, "recording.batch_delete", "recording", "", "recordings batch deleted", map[string]any{"count": len(deleted)})
 	writeJSON(w, http.StatusOK, result)
 }
@@ -273,8 +288,45 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 	case ".jpg", ".jpeg":
 		w.Header().Set("Content-Type", "image/jpeg")
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filepath.Base(filePath)))
+	disposition := "attachment"
+	if r.URL.Query().Get("inline") == "1" {
+		disposition = "inline"
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"", disposition, filepath.Base(filePath)))
 	http.ServeFile(w, r, filePath)
+}
+
+func (h *Handler) handleLockRecording(w http.ResponseWriter, r *http.Request) {
+	h.setRecordingLocked(w, r, true)
+}
+
+func (h *Handler) handleUnlockRecording(w http.ResponseWriter, r *http.Request) {
+	h.setRecordingLocked(w, r, false)
+}
+
+func (h *Handler) setRecordingLocked(w http.ResponseWriter, r *http.Request, locked bool) {
+	id := chi.URLParam(r, "id")
+	rec, err := h.db.GetRecording(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		return
+	}
+	if rec == nil {
+		writeError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+	if err := h.db.SetRecordingLocked(r.Context(), id, locked); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update lock")
+		return
+	}
+	action := "recording.unlock"
+	status := "unlocked"
+	if locked {
+		action = "recording.lock"
+		status = "locked"
+	}
+	h.logSuccess(r, action, "recording", id, "recording "+status, map[string]any{"camera_id": rec.CameraID})
+	writeJSON(w, http.StatusOK, map[string]any{"status": status, "id": id, "locked": locked})
 }
 
 func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {

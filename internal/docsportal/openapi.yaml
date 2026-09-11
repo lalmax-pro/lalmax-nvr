@@ -1,0 +1,581 @@
+openapi: 3.1.0
+info:
+  title: lalmax-nvr API
+  version: dev
+  description: |
+    REST API for lalmax-nvr. Default listen `:9090`.
+
+    Protected routes use **HTTP Basic Auth**. Live media players may pass
+    `?token=` as base64(`username:password`).
+
+    Interactive docs: NVR `/docs/` · product site `/docs/`
+  contact:
+    url: https://github.com/lalmax-pro/lalmax-nvr
+servers:
+  - url: http://localhost:9090
+    description: Local NVR
+security:
+  - basicAuth: []
+tags:
+  - name: Auth
+  - name: Health
+  - name: Cameras
+  - name: Recordings
+  - name: Playback
+  - name: Events
+  - name: AI
+  - name: GB28181
+  - name: Groups
+  - name: Stats
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      security: []
+      summary: Health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: System health
+  /api/readyz:
+    get:
+      tags: [Health]
+      security: []
+      summary: Readiness
+      operationId: getReadyz
+      responses:
+        "200":
+          description: Ready
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Login
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Session established
+        "401":
+          description: Invalid credentials
+  /api/cameras:
+    get:
+      tags: [Cameras]
+      summary: List cameras
+      operationId: listCameras
+      parameters:
+        - in: query
+          name: archived
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Camera list
+    post:
+      tags: [Cameras]
+      summary: Create camera
+      operationId: createCamera
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCamera"
+      responses:
+        "201":
+          description: Created
+  /api/cameras/batch:
+    post:
+      tags: [Cameras]
+      summary: Batch start or stop cameras
+      operationId: batchCameras
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, ids]
+              properties:
+                action:
+                  type: string
+                  enum: [start, stop]
+                ids:
+                  type: array
+                  items: { type: string }
+                  maxItems: 100
+      responses:
+        "200":
+          description: Per-id results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  action: { type: string }
+                  ok:
+                    type: array
+                    items: { type: string }
+                  failed:
+                    type: object
+                    additionalProperties: { type: string }
+  /api/cameras/{id}:
+    parameters:
+      - $ref: "#/components/parameters/CameraID"
+    get:
+      tags: [Cameras]
+      summary: Get camera
+      operationId: getCamera
+      responses:
+        "200":
+          description: Camera
+    put:
+      tags: [Cameras]
+      summary: Update camera
+      operationId: updateCamera
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCamera"
+      responses:
+        "200":
+          description: Updated
+    delete:
+      tags: [Cameras]
+      summary: Archive or delete camera
+      operationId: deleteCamera
+      responses:
+        "200":
+          description: Deleted
+  /api/cameras/{id}/start:
+    post:
+      tags: [Cameras]
+      parameters:
+        - $ref: "#/components/parameters/CameraID"
+      summary: Start recorder
+      operationId: startCamera
+      responses:
+        "200":
+          description: Started
+  /api/cameras/{id}/stop:
+    post:
+      tags: [Cameras]
+      parameters:
+        - $ref: "#/components/parameters/CameraID"
+      summary: Stop recorder
+      operationId: stopCamera
+      responses:
+        "200":
+          description: Stopped
+  /api/cameras/{id}/ptz/move:
+    post:
+      tags: [Cameras]
+      parameters:
+        - $ref: "#/components/parameters/CameraID"
+      summary: PTZ move (continuous / relative / absolute)
+      operationId: ptzMove
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode: { type: string, enum: [continuous, relative, absolute] }
+                pan: { type: number }
+                tilt: { type: number }
+                zoom: { type: number }
+      responses:
+        "200":
+          description: OK
+  /api/cameras/{id}/playback/playlist.m3u8:
+    get:
+      tags: [Playback]
+      parameters:
+        - $ref: "#/components/parameters/CameraID"
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+      summary: Continuous VOD playlist
+      operationId: vodPlaylist
+      responses:
+        "200":
+          description: HLS fMP4 playlist
+          content:
+            application/vnd.apple.mpegurl:
+              schema: { type: string }
+  /api/cameras/{id}/playback/export.m3u8:
+    get:
+      tags: [Playback]
+      parameters:
+        - $ref: "#/components/parameters/CameraID"
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+      summary: Export a wall-clock window as HLS (max 24h)
+      operationId: vodExport
+      responses:
+        "200":
+          description: Clipped playlist
+        "404":
+          description: No recordings in window
+  /api/recordings:
+    get:
+      tags: [Recordings]
+      summary: List recordings
+      operationId: listRecordings
+      parameters:
+        - in: query
+          name: camera_id
+          schema: { type: string }
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+        - in: query
+          name: format
+          schema: { type: string, enum: [h264, h265, mjpeg, timelapse] }
+        - in: query
+          name: limit
+          schema: { type: integer }
+        - in: query
+          name: offset
+          schema: { type: integer }
+        - in: query
+          name: sort_by
+          schema: { type: string }
+        - in: query
+          name: order
+          schema: { type: string, enum: [asc, desc] }
+        - in: query
+          name: archived
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Paginated recordings
+  /api/recordings/timeline:
+    get:
+      tags: [Recordings]
+      summary: Compact 24h timeline
+      operationId: recordingsTimeline
+      parameters:
+        - in: query
+          name: camera_id
+          required: true
+          schema: { type: string }
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+      responses:
+        "200":
+          description: Timeline entries including gap_reason and locked
+  /api/recordings/batch-delete:
+    post:
+      tags: [Recordings]
+      summary: Batch delete recordings
+      operationId: batchDeleteRecordings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  items: { type: string }
+                  maxItems: 100
+      responses:
+        "200":
+          description: Deleted / failed / locked ids
+  /api/recordings/{id}:
+    parameters:
+      - $ref: "#/components/parameters/RecordingID"
+    get:
+      tags: [Recordings]
+      summary: Get recording
+      operationId: getRecording
+      responses:
+        "200":
+          description: Recording (locked, gap_reason, reconnected_at)
+    delete:
+      tags: [Recordings]
+      summary: Delete recording
+      operationId: deleteRecording
+      responses:
+        "200":
+          description: Deleted
+        "409":
+          description: Recording is locked
+  /api/recordings/{id}/lock:
+    post:
+      tags: [Recordings]
+      parameters:
+        - $ref: "#/components/parameters/RecordingID"
+      summary: Lock recording (skip cleanup)
+      operationId: lockRecording
+      responses:
+        "200":
+          description: Locked
+  /api/recordings/{id}/unlock:
+    post:
+      tags: [Recordings]
+      parameters:
+        - $ref: "#/components/parameters/RecordingID"
+      summary: Unlock recording
+      operationId: unlockRecording
+      responses:
+        "200":
+          description: Unlocked
+  /api/recordings/{id}/download:
+    get:
+      tags: [Recordings]
+      parameters:
+        - $ref: "#/components/parameters/RecordingID"
+        - in: query
+          name: inline
+          schema: { type: string, enum: ["1"] }
+      summary: Download file (Range supported)
+      operationId: downloadRecording
+      responses:
+        "200":
+          description: File
+  /api/events:
+    get:
+      tags: [Events]
+      summary: List NVR events
+      operationId: listEvents
+      parameters:
+        - in: query
+          name: camera_id
+          schema: { type: string }
+        - in: query
+          name: source
+          schema: { type: string }
+        - in: query
+          name: type
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+        - in: query
+          name: until
+          schema: { type: string, format: date-time }
+        - in: query
+          name: limit
+          schema: { type: integer }
+        - in: query
+          name: offset
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Events
+  /api/events/stream:
+    get:
+      tags: [Events]
+      summary: SSE stream of product events
+      operationId: eventsStream
+      parameters:
+        - in: query
+          name: camera_id
+          schema: { type: string }
+        - in: query
+          name: source
+          schema: { type: string }
+        - in: query
+          name: token
+          schema: { type: string }
+          description: Basic token for EventSource
+      responses:
+        "200":
+          description: text/event-stream named event `nvr`
+  /api/events/rules:
+    get:
+      tags: [Events]
+      summary: List alarm linkage rules
+      operationId: listAlarmRules
+      responses:
+        "200":
+          description: Rules
+    post:
+      tags: [Events]
+      summary: Create alarm linkage rule
+      operationId: createAlarmRule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlarmRule"
+      responses:
+        "201":
+          description: Created
+  /api/events/rules/{ruleID}:
+    delete:
+      tags: [Events]
+      summary: Delete alarm rule
+      operationId: deleteAlarmRule
+      parameters:
+        - in: path
+          name: ruleID
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Deleted
+  /api/events/{id}/ack:
+    post:
+      tags: [Events]
+      summary: Acknowledge event
+      operationId: ackEvent
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Acknowledged
+  /api/ai/detections:
+    get:
+      tags: [AI]
+      summary: List AI detections
+      operationId: listAiDetections
+      parameters:
+        - in: query
+          name: camera_id
+          schema: { type: string }
+        - in: query
+          name: label
+          schema: { type: string }
+          description: Substring match in detections JSON
+        - in: query
+          name: limit
+          schema: { type: integer }
+        - in: query
+          name: offset
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Detections
+  /api/gb28181/record_info:
+    post:
+      tags: [GB28181]
+      summary: Query device recordings
+      operationId: gbRecordInfo
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                device_id: { type: string }
+                channel_id: { type: string }
+                start_time: { type: string }
+                end_time: { type: string }
+      responses:
+        "200":
+          description: Device record list
+  /api/gb28181/playback:
+    post:
+      tags: [GB28181]
+      summary: Start device playback
+      operationId: gbPlayback
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                device_id: { type: string }
+                channel_id: { type: string }
+                start_time: { type: string }
+                end_time: { type: string }
+                stream_id: { type: string }
+      responses:
+        "200":
+          description: Playback URLs
+  /api/groups/tree:
+    get:
+      tags: [Groups]
+      summary: Device group tree
+      operationId: groupTree
+      responses:
+        "200":
+          description: Tree
+  /api/stats:
+    get:
+      tags: [Stats]
+      summary: Storage and recording stats
+      operationId: getStats
+      responses:
+        "200":
+          description: Stats
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+  parameters:
+    CameraID:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+    RecordingID:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+    Start:
+      in: query
+      name: start
+      schema: { type: string, format: date-time }
+      description: RFC3339
+    End:
+      in: query
+      name: end
+      schema: { type: string, format: date-time }
+      description: RFC3339
+  schemas:
+    CreateCamera:
+      type: object
+      required: [name, protocol]
+      properties:
+        name: { type: string }
+        protocol: { type: string }
+        url: { type: string }
+        username: { type: string }
+        password: { type: string }
+        longitude: { type: number }
+        latitude: { type: number }
+    UpdateCamera:
+      type: object
+      properties:
+        name: { type: string }
+        enabled: { type: boolean }
+        longitude: { type: number }
+        latitude: { type: number }
+        recording_mode:
+          type: string
+          enum: [continuous, scheduled, off, event, adaptive]
+    AlarmRule:
+      type: object
+      required: [action]
+      properties:
+        name: { type: string }
+        enabled: { type: boolean }
+        camera_id: { type: string }
+        source: { type: string }
+        event_type: { type: string }
+        severity: { type: string }
+        action:
+          type: string
+          enum: [record, webhook, goto_preset]
+        action_target:
+          type: string
+          description: Webhook URL or PTZ preset token

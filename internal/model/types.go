@@ -60,6 +60,7 @@ type Recording struct {
 	Archived      bool      `json:"archived"`
 	ReconnectedAt time.Time `json:"reconnected_at,omitempty"`
 	GapReason     string    `json:"gap_reason,omitempty"`
+	Locked        bool      `json:"locked"`
 }
 
 type Segment struct {
@@ -121,7 +122,24 @@ const (
 
 	EventStatusOpen         = "open"
 	EventStatusAcknowledged = "acknowledged"
+
+	AlarmActionRecord     = "record"
+	AlarmActionWebhook    = "webhook"
+	AlarmActionGotoPreset = "goto_preset"
 )
+
+type AlarmRule struct {
+	ID           int64     `json:"id"`
+	Name         string    `json:"name"`
+	Enabled      bool      `json:"enabled"`
+	CameraID     string    `json:"camera_id"`
+	Source       string    `json:"source"`
+	EventType    string    `json:"event_type"`
+	Severity     string    `json:"severity"`
+	Action       string    `json:"action"`
+	ActionTarget string    `json:"action_target"`
+	CreatedAt    time.Time `json:"created_at"`
+}
 
 type RecorderStatus string
 

@@ -1010,6 +1010,7 @@ function getAffectedCameraCount(protocol: string): number {
                 onclick={() => { autoDiscoverEnabled = !autoDiscoverEnabled; }}
                 role="switch"
                 aria-checked={autoDiscoverEnabled}
+                aria-label={t('settings.autoDiscover.enabled')}
               >
                 <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {autoDiscoverEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
               </button>
@@ -1023,6 +1024,7 @@ function getAffectedCameraCount(protocol: string): number {
                 onclick={() => { autoDiscoverHello = !autoDiscoverHello; }}
                 role="switch"
                 aria-checked={autoDiscoverHello}
+                aria-label={t('settings.autoDiscover.hello')}
               >
                 <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {autoDiscoverHello ? 'translate-x-6' : 'translate-x-1'}"></span>
               </button>
@@ -1212,6 +1214,7 @@ function getAffectedCameraCount(protocol: string): number {
                   onclick={() => { mergeRollingEnabled = !mergeRollingEnabled; }}
                   role="switch"
                   aria-checked={mergeRollingEnabled}
+                  aria-label={t('merge.rollingEnabled')}
                 >
                   <span class="inline-block h-4 w-4 transform rounded-full bg-white {mergeRollingEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
                 </button>

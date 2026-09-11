@@ -121,6 +121,8 @@ type CameraConfig struct {
 	SubnetHints     []string              `yaml:"subnet_hints,omitempty" json:"subnet_hints,omitempty"`
 	RecordingMode   string                `yaml:"recording_mode,omitempty" json:"recording_mode,omitempty"`
 	Adaptive        *CameraAdaptiveConfig `yaml:"adaptive,omitempty" json:"adaptive,omitempty"`
+	Longitude       float64               `yaml:"longitude,omitempty" json:"longitude,omitempty"`
+	Latitude        float64               `yaml:"latitude,omitempty" json:"latitude,omitempty"`
 }
 
 // HealthOverrides allows per-camera health monitoring threshold overrides.

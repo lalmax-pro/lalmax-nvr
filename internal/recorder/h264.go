@@ -80,7 +80,8 @@ type H264Recorder struct {
 	status model.RecorderStatus
 	cancel context.CancelFunc
 	done   chan struct{}
-	paused atomic.Bool // when true, frames are consumed but not written to disk
+	paused  atomic.Bool // when true, frames are consumed but not written to disk
+	preroll *prerollRing
 
 	muxer            *muxer.MP4Muxer
 	trackID          int
@@ -198,6 +199,7 @@ func NewH264Recorder(cfg H264Config, store SegmentStore, opts ...*metrics.Metric
 		store:   store,
 		metrics: m,
 		status:  model.StatusStopped,
+		preroll: newPrerollRing(2),
 	}
 }
 
@@ -245,6 +247,12 @@ func (r *H264Recorder) Pause() {
 func (r *H264Recorder) Resume() {
 	r.paused.Store(false)
 	r.setStatus(model.StatusRecording)
+	for _, data := range r.preroll.Drain() {
+		select {
+		case r.frameCh <- data:
+		default:
+		}
+	}
 	h264Logger.Info("recording resumed", "camera_id", r.cfg.CameraID)
 }
 
@@ -616,6 +624,12 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 	for data := range r.frameCh {
 		// If paused, consume frames but don't write to disk
 		if r.paused.Load() {
+			if len(data) >= 5 {
+				naluType := data[4] & 0x1F
+				if naluType == 5 || naluType == 1 {
+					r.preroll.Push(data, naluType == 5)
+				}
+			}
 			continue
 		}
 		if len(data) < 5 {

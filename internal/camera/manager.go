@@ -53,6 +53,8 @@ type CameraUpdate struct {
 	SubnetHints     *[]string
 	StableID        *string
 	Adaptive        *config.CameraAdaptiveConfig
+	Longitude       *float64
+	Latitude        *float64
 }
 
 type CameraManager struct {
@@ -1409,6 +1411,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	}
 	if updates.Adaptive != nil {
 		cam.Adaptive = updates.Adaptive
+	}
+	if updates.Longitude != nil {
+		cam.Longitude = *updates.Longitude
+	}
+	if updates.Latitude != nil {
+		cam.Latitude = *updates.Latitude
 	}
 
 	// Handle enabled state changes

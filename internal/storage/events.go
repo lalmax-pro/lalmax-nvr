@@ -69,7 +69,13 @@ func (d *DB) InsertEvent(ctx context.Context, event model.Event) (int64, error) 
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	event.ID = id
+	d.NotifyEvent(event)
+	return id, nil
 }
 
 // ListEvents returns events matching the filter, ordered by started_at DESC.

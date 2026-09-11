@@ -622,6 +622,29 @@ img { max-width: 100%; }
 }
 .footer .brand { font-size: 15px; }
 
+/* ---------- API docs ---------- */
+.docs-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.docs-bar {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+.docs-bar-links {
+  display: flex;
+  gap: 20px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+.docs-bar-links a:hover { color: var(--text); }
+.docs-scalar { flex: 1; min-height: calc(100vh - 56px); }
+
 /* ---------- 响应式 ---------- */
 @media (max-width: 850px) and (min-width: 541px) {
   .hero { grid-template-columns: 1fr; gap: 40px; padding: 64px 0 56px; }

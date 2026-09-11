@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream, getONVIFProfiles } from '$lib/api';
+  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream, getONVIFProfiles, ptzMove, buildPTZRelativeMove } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff, Info, Settings, Video, Copy } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
@@ -18,10 +18,14 @@
   import XiaomiTalkButton from '../components/XiaomiTalkButton.svelte';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
+  import { loadZones, saveZones, type AiZone } from '$lib/ai-zones';
 
   let { cameraId = '' }: { cameraId?: string } = $props();
 
   let camera = $state<Camera | null>(null);
+  let drawingZone = $state(false);
+  let zoneDraft = $state<[number, number][]>([]);
+  let zones = $state<AiZone[]>([]);
   let loading = $state(true);
   let error = $state('');
   let isFullscreen = $state(false);
@@ -86,6 +90,37 @@
     return getProtocolCapabilities(cam.protocol, protocolsMap).ptz;
   }
 
+  async function handleClickToCenter(e: MouseEvent) {
+    if (drawingZone && camera) {
+      const el = playerContainer;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      zoneDraft = [...zoneDraft, [(e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height]];
+      if (zoneDraft.length >= 4) {
+        const all = loadZones().filter(z => z.camera_id !== camera.id);
+        all.push({ id: `z-${Date.now()}`, name: 'zone', camera_id: camera.id, points: zoneDraft });
+        saveZones(all);
+        zones = loadZones(camera.id);
+        zoneDraft = [];
+        drawingZone = false;
+        showToast(t('ai.zoneSaved'), 'success');
+      }
+      return;
+    }
+    if (!camera || !isPtzSupported(camera)) return;
+    const el = playerContainer;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) return;
+    const nx = (e.clientX - rect.left) / rect.width;
+    const ny = (e.clientY - rect.top) / rect.height;
+    try {
+      await ptzMove(camera.id, buildPTZRelativeMove(nx, ny));
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : t('ptz.failed'), 'error');
+    }
+  }
+
   function isOnvifCamera(cam: Camera): boolean {
     return normalizeProtocol(cam.protocol) === 'onvif';
   }
@@ -119,6 +154,7 @@
     error = '';
     try {
       camera = await getCamera(cameraId);
+      zones = loadZones(camera.id);
     } catch (e) {
       // If camera not found and ID looks like GB28181 (contains ':'), try to start play first
       if (cameraId.includes(':')) {
@@ -323,6 +359,9 @@
               RTSP
             </button>
           {/if}
+          <button class="btn btn-sm {drawingZone ? 'btn-primary' : 'btn-ghost'}" onclick={() => { drawingZone = !drawingZone; zoneDraft = []; }}>
+            {t('ai.drawZone')}
+          </button>
           <button onclick={toggleFullscreen} class="btn btn-ghost btn-sm flex items-center gap-1">
             {#if isFullscreen}
               <Minimize size={16} />
@@ -341,7 +380,17 @@
             <div
               class="card border th-border overflow-hidden h-full"
               bind:this={playerContainer}
+              onclick={handleClickToCenter}
+              role="presentation"
             >
+              <svg class="absolute inset-0 w-full h-full pointer-events-none z-10">
+                {#each zones as z}
+                  <polygon points={z.points.map(([x,y]) => `${x * 100}%,${y * 100}%`).join(' ')} fill="rgba(139,92,246,0.2)" stroke="#8b5cf6" stroke-width="2" />
+                {/each}
+                {#if zoneDraft.length}
+                  <polyline points={zoneDraft.map(([x,y]) => `${x * 100}%,${y * 100}%`).join(' ')} fill="none" stroke="#22c55e" stroke-width="2" />
+                {/if}
+              </svg>
               {#if switchingProtocol}
                 <div class="relative w-full h-full bg-black flex items-center justify-center">
                   <div class="flex items-center gap-2">

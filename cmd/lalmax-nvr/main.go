@@ -28,6 +28,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/cleanup"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/lalmax-pro/lalmax-nvr/internal/docsportal"
 	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ftp"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
@@ -41,6 +42,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/mqtt"
 	"github.com/lalmax-pro/lalmax-nvr/internal/observability"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
+	"github.com/lalmax-pro/lalmax-nvr/internal/relay"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/streamhistory"
 	ui "github.com/lalmax-pro/lalmax-nvr/internal/ui"
@@ -401,6 +403,7 @@ type App struct {
 	// Stream management
 	banMgr     *ban.Manager
 	historyMgr *streamhistory.Manager
+	relayMgr   *relay.Manager
 
 	// HTTP server
 	httpServer *http.Server
@@ -587,6 +590,9 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	}
 	a.mediaEngine = engine
 	a.camMgr.SetMediaEngine(engine)
+
+	a.relayMgr = relay.NewManager(db, engine)
+	slog.Info("relay manager started")
 
 	// Set kick function on ban manager (deferred to break circular dependency)
 	a.banMgr.SetKickFunc(func(ctx context.Context, sessionID string) error {
@@ -798,6 +804,9 @@ func (a *App) buildRouter() http.Handler {
 		aiMgr.SetStore(a.db)
 	}
 	handler.SetAIManager(aiMgr)
+	if a.relayMgr != nil {
+		handler.SetRelayManager(a.relayMgr)
+	}
 
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()
@@ -898,6 +907,11 @@ func (a *App) buildRouter() http.Handler {
 	} else {
 		r.Handle("/metrics", promhttp.HandlerFor(a.metrics.Registry, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
 	}
+
+	r.Get("/docs", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/docs/", http.StatusFound)
+	})
+	r.Handle("/docs/", http.StripPrefix("/docs/", http.FileServer(http.FS(docsportal.FS))))
 
 	r.Mount("/", handler.Routes())
 
@@ -1173,6 +1187,10 @@ func (a *App) Stop() error {
 		if a.historyMgr != nil {
 			log.Info("stopping stream history manager")
 			a.historyMgr.Stop()
+		}
+		if a.relayMgr != nil {
+			log.Info("stopping relay manager")
+			a.relayMgr.Stop()
 		}
 		if a.rtmpIngest != nil {
 			log.Info("stopping RTMP ingest handler")

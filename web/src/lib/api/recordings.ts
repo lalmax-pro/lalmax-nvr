@@ -18,6 +18,9 @@ export interface Recording {
   merged: boolean;
   merge_status?: string;
   archived?: boolean;
+  reconnected_at?: string;
+  gap_reason?: string;
+  locked?: boolean;
 }
 
 export interface FrameInfo {
@@ -146,6 +149,8 @@ export interface TimelineEntry {
   duration: number;
   format: Recording['format'];
   merged: boolean;
+  gap_reason?: string;
+  locked?: boolean;
 }
 
 export async function getRecordingsTimeline(
@@ -164,10 +169,52 @@ export function getVodPlaylistUrl(cameraId: string, start: string, end: string):
   return `/api/cameras/${encodeURIComponent(cameraId)}/playback/playlist.m3u8?${q}`;
 }
 
+export function getVodExportUrl(cameraId: string, start: string, end: string): string {
+  const q = new URLSearchParams({ start, end });
+  const creds = getCredentials();
+  if (creds) q.set('token', btoa(`${creds.username}:${creds.password}`));
+  return `/api/cameras/${encodeURIComponent(cameraId)}/playback/export.m3u8?${q}`;
+}
+
+export type UnifiedSource = 'nvr' | 'gb' | 'onvif';
+
+export interface UnifiedTimelineClip {
+  id: string;
+  camera_id: string;
+  started_at: string;
+  ended_at: string;
+  duration: number;
+  format?: Recording['format'];
+  source: UnifiedSource;
+  merged?: boolean;
+  gap_reason?: string;
+  locked?: boolean;
+  token?: string;
+}
+
+export async function setRecordingLocked(id: string, locked: boolean): Promise<void> {
+  await apiRequest<void>(`/recordings/${encodeURIComponent(id)}/${locked ? 'lock' : 'unlock'}`, {
+    method: 'POST',
+  });
+}
+
+export function openRecordingDownload(id: string): void {
+  const a = document.createElement('a');
+  a.href = getRecordingPlaybackUrl(id);
+  a.download = `recording_${id}.mp4`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 export async function downloadRecording(
   id: string,
   onProgress?: (loaded: number, total: number) => void
 ): Promise<void> {
+  if (!onProgress) {
+    openRecordingDownload(id);
+    return;
+  }
   const url = `/api/recordings/${encodeURIComponent(id)}/download`;
 
   const blob = await new Promise<Blob>((resolve, reject) => {

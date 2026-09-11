@@ -496,6 +496,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		SubProfileToken *string                      `json:"sub_profile_token"`
 		SubnetHints     *[]string                    `json:"subnet_hints"`
 		Adaptive        *config.CameraAdaptiveConfig `json:"adaptive"`
+		Longitude       *float64                     `json:"longitude"`
+		Latitude        *float64                     `json:"latitude"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -540,6 +542,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		SubProfileToken: body.SubProfileToken,
 		SubnetHints:     body.SubnetHints,
 		Adaptive:        body.Adaptive,
+		Longitude:       body.Longitude,
+		Latitude:        body.Latitude,
 	}
 	if body.RTSPTransport != nil && !config.IsValidRTSPTransport(*body.RTSPTransport) {
 		writeError(w, http.StatusBadRequest, "rtsp_transport must be tcp or udp")
@@ -1018,6 +1022,46 @@ func stripScheme(rawURL string) string {
 
 // probeONVIFEncoding connects to an ONVIF device and retrieves the encoding
 // from the first media profile. Returns "H264" or "H265", or empty string on failure.
+func (h *Handler) handleBatchCameras(w http.ResponseWriter, r *http.Request) {
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	var body struct {
+		Action string   `json:"action"`
+		IDs    []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.Action != "start" && body.Action != "stop" {
+		writeError(w, http.StatusBadRequest, "action must be start or stop")
+		return
+	}
+	if len(body.IDs) == 0 || len(body.IDs) > 100 {
+		writeError(w, http.StatusBadRequest, "ids must contain 1-100 camera ids")
+		return
+	}
+	okIDs := []string{}
+	failed := map[string]string{}
+	for _, id := range body.IDs {
+		var err error
+		if body.Action == "start" {
+			err = h.camMgr.StartCamera(r.Context(), id)
+		} else {
+			err = h.camMgr.StopCamera(r.Context(), id)
+		}
+		if err != nil {
+			failed[id] = err.Error()
+			continue
+		}
+		okIDs = append(okIDs, id)
+	}
+	h.logSuccess(r, "camera.batch_"+body.Action, "camera", "", "batch camera "+body.Action, map[string]any{"count": len(okIDs)})
+	writeJSON(w, http.StatusOK, map[string]any{"action": body.Action, "ok": okIDs, "failed": failed})
+}
+
 func probeONVIFEncoding(ctx context.Context, endpoint, username, password string) string {
 	client := onvif.NewClient(endpoint, username, password)
 	if err := client.Connect(ctx); err != nil {

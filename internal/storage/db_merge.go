@@ -124,13 +124,15 @@ func (d *DB) CountPendingMerges(ctx context.Context, cameraID string) (int, erro
 
 // TimelineEntry is a lightweight recording row for the 24h DVR bar.
 type TimelineEntry struct {
-	ID        string        `json:"id"`
-	CameraID  string        `json:"camera_id"`
-	StartedAt time.Time     `json:"started_at"`
-	EndedAt   time.Time     `json:"ended_at"`
-	Duration  float64       `json:"duration"`
-	Format    model.Format  `json:"format"`
-	Merged    bool          `json:"merged"`
+	ID        string       `json:"id"`
+	CameraID  string       `json:"camera_id"`
+	StartedAt time.Time    `json:"started_at"`
+	EndedAt   time.Time    `json:"ended_at"`
+	Duration  float64      `json:"duration"`
+	Format    model.Format `json:"format"`
+	Merged    bool         `json:"merged"`
+	GapReason string       `json:"gap_reason,omitempty"`
+	Locked    bool         `json:"locked"`
 }
 
 // ListRecordingTimeline returns a compact projection of recordings in [start, end], capped at limit.
@@ -139,7 +141,7 @@ func (d *DB) ListRecordingTimeline(ctx context.Context, cameraID string, start, 
 		limit = 10000
 	}
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT id, camera_id, started_at, ended_at, duration, format, merged FROM recordings WHERE camera_id = ? AND COALESCE(archived,0) = 0 AND ended_at IS NOT NULL AND started_at < ? AND ended_at > ? ORDER BY started_at ASC LIMIT ?;`,
+		`SELECT id, camera_id, started_at, ended_at, duration, format, merged, COALESCE(gap_reason,''), COALESCE(locked,0) FROM recordings WHERE camera_id = ? AND COALESCE(archived,0) = 0 AND ended_at IS NOT NULL AND started_at < ? AND ended_at > ? ORDER BY started_at ASC LIMIT ?;`,
 		cameraID, formatTime(end), formatTime(start), limit)
 	if err != nil {
 		return nil, err
@@ -149,11 +151,13 @@ func (d *DB) ListRecordingTimeline(ctx context.Context, cameraID string, start, 
 	for rows.Next() {
 		var e TimelineEntry
 		var startedAtStr, endedAtStr sql.NullString
-		if err := rows.Scan(&e.ID, &e.CameraID, &startedAtStr, &endedAtStr, &e.Duration, &e.Format, &e.Merged); err != nil {
+		var locked int
+		if err := rows.Scan(&e.ID, &e.CameraID, &startedAtStr, &endedAtStr, &e.Duration, &e.Format, &e.Merged, &e.GapReason, &locked); err != nil {
 			return nil, err
 		}
 		e.StartedAt = scanTime(startedAtStr)
 		e.EndedAt = scanTime(endedAtStr)
+		e.Locked = locked != 0
 		res = append(res, e)
 	}
 	return res, nil
