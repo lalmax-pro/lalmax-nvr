@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -26,13 +27,30 @@ func escapeLike(input string) string {
 }
 
 type DB struct {
-	path string
-	db   *sql.DB
+	path         string
+	db           *sql.DB
+	notifyEvent  func(model.Event)
+	notifyEventM sync.Mutex
 }
 
 // DB returns the underlying *sql.DB for advanced queries.
 func (d *DB) DB() *sql.DB {
 	return d.db
+}
+
+func (d *DB) SetEventNotifier(fn func(model.Event)) {
+	d.notifyEventM.Lock()
+	d.notifyEvent = fn
+	d.notifyEventM.Unlock()
+}
+
+func (d *DB) NotifyEvent(event model.Event) {
+	d.notifyEventM.Lock()
+	fn := d.notifyEvent
+	d.notifyEventM.Unlock()
+	if fn != nil {
+		fn(event)
+	}
 }
 
 func New(dbPath string) (*DB, error) {
@@ -468,6 +486,30 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_operation_logs_action ON operation_logs(action)")
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_operation_logs_username ON operation_logs(username)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='25' WHERE key='schema_version'")
+
+	var lockedColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='locked'`).Scan(&lockedColExists)
+	if lockedColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN locked INTEGER NOT NULL DEFAULT 0`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='26' WHERE key='schema_version'")
+
+	linkageSQL := `CREATE TABLE IF NOT EXISTS alarm_rules (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL DEFAULT '',
+		enabled INTEGER NOT NULL DEFAULT 1,
+		camera_id TEXT NOT NULL DEFAULT '',
+		source TEXT NOT NULL DEFAULT '',
+		event_type TEXT NOT NULL DEFAULT '',
+		severity TEXT NOT NULL DEFAULT '',
+		action TEXT NOT NULL,
+		action_target TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);`
+	if _, err := d.db.ExecContext(ctx, linkageSQL); err != nil {
+		return err
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='27' WHERE key='schema_version'")
 
 	if err := d.migrateActivationIdentity(ctx); err != nil {
 		return err

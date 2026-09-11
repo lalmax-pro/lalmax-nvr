@@ -1,5 +1,7 @@
 # lalmax-nvr API Reference
 
+Interactive docs: **http://localhost:9090/docs/** (OpenAPI + Scalar). Spec: [`internal/docsportal/openapi.yaml`](../../internal/docsportal/openapi.yaml).
+
 Layers and ports: [Architecture](architecture.md). The Web UI usually proxies live media on `:9090`. Continuous playback uses the VOD paths below.
 
 ## Table of Contents
@@ -15,6 +17,7 @@ Layers and ports: [Architecture](architecture.md). The Web UI usually proxies li
   - [Camera Merge Configuration](#camera-merge-configuration)
   - [ONVIF API](#onvif-api)
 - [Recordings API](#recordings-api)
+- [Events & alarm linkage](#events--alarm-linkage)
 - [Continuous VOD](#continuous-vod)
 - [Flow tree](#flow-tree)
 - [Archive API](#archive-api)
@@ -1379,7 +1382,7 @@ Delete multiple recordings by ID.
 **Request Body:**
 ```json
 {
-  "recording_ids": ["id1", "id2", "id3"]
+  "ids": ["id1", "id2", "id3"]
 }
 ```
 
@@ -1388,19 +1391,69 @@ Delete multiple recordings by ID.
 curl -u username:password \
   -X POST \
   -H "Content-Type: application/json" \
-  -d '{
-    "recording_ids": ["1704123456789012345", "1704123456789012346"]
-  }' \
+  -d '{"ids": ["1704123456789012345", "1704123456789012346"]}' \
   "http://localhost:9090/api/recordings/batch-delete"
 ```
 
 **Response:**
 ```json
 {
-  "deleted": 2,
-  "failed": 0
+  "deleted": ["1704123456789012345"],
+  "failed": [],
+  "locked": ["1704123456789012346"]
 }
 ```
+
+Locked recordings are skipped and listed in `locked`.
+
+### Lock / Unlock Recording
+
+**Endpoint:** `POST /api/recordings/:id/lock`  
+**Endpoint:** `POST /api/recordings/:id/unlock`
+
+Locked files are excluded from retention and disk-threshold cleanup. Delete returns `409` while locked.
+
+```bash
+curl -u username:password -X POST "http://localhost:9090/api/recordings/1704123456789012345/lock"
+```
+
+## Events & alarm linkage
+
+### List events
+
+**Endpoint:** `GET /api/events`
+
+Query: `camera_id`, `source`, `type`, `status`, `since`, `until`, `limit`, `offset`.
+
+### Event SSE
+
+**Endpoint:** `GET /api/events/stream`
+
+`text/event-stream`, named event `nvr`. Query: `camera_id`, `source`, `token`.
+
+### Alarm rules
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/events/rules` | List rules |
+| POST | `/api/events/rules` | Create (`action`: `record` \| `webhook` \| `goto_preset`) |
+| DELETE | `/api/events/rules/{id}` | Delete |
+
+On each persisted NVR event, matching enabled rules fire: start event recording, POST JSON to `action_target`, or ONVIF goto preset.
+
+### Batch cameras
+
+**Endpoint:** `POST /api/cameras/batch`
+
+```json
+{ "action": "start", "ids": ["cam-1", "cam-2"] }
+```
+
+### VOD export
+
+**Endpoint:** `GET /api/cameras/{id}/playback/export.m3u8?start=&end=`
+
+Wall-clock clip playlist (max 24h). Same fragment URLs as continuous VOD.
 
 ## Archive API
 

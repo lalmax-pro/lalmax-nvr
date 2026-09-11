@@ -296,3 +296,25 @@ func TestBatchDeleteRecordings_Success(t *testing.T) {
 	got2, _ := db.GetRecording(context.Background(), "batch-2")
 	require.Nil(t, got2)
 }
+
+func TestLockRecording_BlocksDelete(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := makeRecording("lock-1", "cam-1", "h264", now, false)
+	seedRecording(t, db, rec)
+
+	rr := doRequest(t, h.Routes(), "POST", "/api/recordings/lock-1/lock", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	rr = doRequest(t, h.Routes(), "DELETE", "/api/recordings/lock-1", nil, "", "")
+	require.Equal(t, http.StatusConflict, rr.Code)
+
+	got, err := db.GetRecording(context.Background(), "lock-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.True(t, got.Locked)
+}

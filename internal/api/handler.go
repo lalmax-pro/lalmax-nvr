@@ -19,7 +19,9 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
+	"github.com/lalmax-pro/lalmax-nvr/internal/linkage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/merge"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
@@ -159,6 +161,8 @@ type Handler struct {
 	// apiObserver records low-cardinality API telemetry for OTel and the local dashboard.
 	apiObserver       *observability.HTTPObserver
 	autoDiscoverApply func(config.AutoDiscoverConfig)
+	eventHub          *event.LiveHub
+	linkage           *linkage.Engine
 }
 
 // GB28181StreamStatus reports active GB28181 play sessions for stream status overlay.
@@ -210,6 +214,16 @@ func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler
 		onvifNewClient: func(endpoint, username, password string) onvifDeviceClient {
 			return onvif.NewClient(endpoint, username, password)
 		},
+		eventHub: event.NewLiveHub(),
+	}
+	if db != nil {
+		hub := h.eventHub
+		eng := linkage.New(db, camMgr, ptzPresetAdapter{cm: camMgr})
+		h.linkage = eng
+		db.SetEventNotifier(func(ev model.Event) {
+			hub.Publish(ev)
+			go eng.Dispatch(ev)
+		})
 	}
 	// Default multi-user auth: wraps authMW and injects a super_admin user
 	// so RequireOperatePermission works without explicit SetMultiUserAuthMW.
@@ -296,12 +310,18 @@ func (h *Handler) Routes() http.Handler {
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
 				r.With(middleware.RequireOperatePermission()).Delete("/", h.handleDeleteRecording)
+				r.With(middleware.RequireOperatePermission()).Post("/lock", h.handleLockRecording)
+				r.With(middleware.RequireOperatePermission()).Post("/unlock", h.handleUnlockRecording)
 				r.Get("/download", h.handleDownloadRecording)
 				r.Get("/frames", h.handleListFrames)
 			})
 		})
 		r.Route("/api/events", func(r chi.Router) {
 			r.Get("/", h.handleListEvents)
+			r.Get("/stream", h.handleEventsStream)
+			r.Get("/rules", h.handleListAlarmRules)
+			r.With(middleware.RequireOperatePermission()).Post("/rules", h.handleCreateAlarmRule)
+			r.With(middleware.RequireOperatePermission()).Delete("/rules/{ruleID}", h.handleDeleteAlarmRule)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetEvent)
 				r.With(middleware.RequireOperatePermission()).Delete("/", h.handleDeleteEvent)
@@ -312,6 +332,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Route("/api/cameras", func(r chi.Router) {
 			r.Get("/", h.handleListCameras)
 			r.With(middleware.RequireOperatePermission()).Post("/", h.handleCreateCamera)
+			r.With(middleware.RequireOperatePermission()).Post("/batch", h.handleBatchCameras)
 			r.With(middleware.RequireOperatePermission()).Post("/test-connection", h.handleTestConnection)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetCamera)
@@ -333,6 +354,7 @@ func (h *Handler) Routes() http.Handler {
 				// Per-camera protocols
 				r.Get("/flow", h.handleCameraFlow)
 				r.Get("/playback/playlist.m3u8", h.handleVODPlaylist)
+				r.Get("/playback/export.m3u8", h.handleVODExport)
 				r.Get("/playback/{recId}/init.mp4", h.handleVODInit)
 				r.Get("/playback/{recId}/{fragment}", h.handleVODFragment)
 				r.Get("/protocols", h.handleCameraProtocols)
@@ -382,6 +404,7 @@ func (h *Handler) Routes() http.Handler {
 				r.With(middleware.RequireOperatePermission()).Post("/rediscover", h.handleRediscoverCamera)
 			})
 		})
+		r.Get("/api/map/tiles/{z}/{x}/{y}.png", h.handleMapTile)
 		r.Get("/api/stats", h.handleStats)
 		r.Get("/api/stats/system", h.handleSystemStats)
 		r.Get("/api/stats/trends", h.handleStatsTrends)
@@ -1148,4 +1171,19 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+type ptzPresetAdapter struct {
+	cm *camera.CameraManager
+}
+
+func (a ptzPresetAdapter) GoToPreset(ctx context.Context, cameraID, token string) error {
+	if a.cm == nil {
+		return nil
+	}
+	ptz, err := a.cm.GetONVIFPTZController(ctx, cameraID)
+	if err != nil {
+		return err
+	}
+	return ptz.GoToPreset(ctx, token)
 }

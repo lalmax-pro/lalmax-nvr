@@ -551,8 +551,10 @@
 </div>
 
 {#if activateOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onclick={() => activateOpen = false}>
-    <div class="card p-6 w-full max-w-sm border th-border" onclick={(e) => e.stopPropagation()}>
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="presentation" onclick={() => activateOpen = false}>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="card p-6 w-full max-w-sm border th-border" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
       <h4 class="text-base font-semibold th-text-primary mb-1">{t('cameras.activateTitle')}</h4>
       <p class="text-sm th-text-tertiary mb-4">{t('cameras.activateHint')}</p>
       <label class="input-label" for="activate-user">{t('cameras.username')}</label>

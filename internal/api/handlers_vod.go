@@ -86,6 +86,71 @@ func (h *Handler) handleVODPlaylist(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(body))
 }
 
+func (h *Handler) handleVODExport(w http.ResponseWriter, r *http.Request) {
+	cameraID := getCameraID(r)
+	start, end, ok := parseStartEnd(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "start and end must be RFC3339 timestamps")
+		return
+	}
+	if end.Sub(start) > 24*time.Hour {
+		writeError(w, http.StatusBadRequest, "export window must be <= 24h")
+		return
+	}
+	recs, err := h.db.ListRecordings(r.Context(), model.RecordingFilter{
+		CameraID:  cameraID,
+		StartTime: start.Add(-time.Hour),
+		EndTime:   end,
+		SortBy:    "started_at",
+		SortOrder: "asc",
+		Limit:     10000,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list recordings")
+		return
+	}
+	var items []vod.PlaylistItem
+	for i := range recs {
+		rec := recs[i]
+		if !vod.IsVODFormat(rec.Format) {
+			continue
+		}
+		if rec.EndedAt.Before(start) || rec.StartedAt.After(end) {
+			continue
+		}
+		info, err := merge.ParseSegment(rec.FilePath)
+		if err != nil || info == nil || len(info.Samples) == 0 {
+			continue
+		}
+		info.FilePath = rec.FilePath
+		first, last, ok := vod.ClipWindow(info, rec.StartedAt, start, end)
+		if !ok {
+			continue
+		}
+		frags := vod.FilterFragments(vod.SplitFragments(info), first, last)
+		if len(frags) == 0 {
+			continue
+		}
+		clipStart := rec.StartedAt
+		if start.After(clipStart) {
+			clipStart = start
+		}
+		recCopy := rec
+		recCopy.StartedAt = clipStart
+		items = append(items, vod.PlaylistItem{Recording: &recCopy, Info: info, Frags: frags})
+	}
+	if len(items) == 0 {
+		writeError(w, http.StatusNotFound, "no recordings in export window")
+		return
+	}
+	body := vod.BuildPlaylist(cameraID, items, fmt.Sprintf("/api/cameras/%s/playback/{recId}", cameraID))
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-export.m3u8\"", cameraID))
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(body))
+}
+
 func (h *Handler) handleVODInit(w http.ResponseWriter, r *http.Request) {
 	info, rec, ok := h.loadVODSegment(w, r)
 	if !ok {

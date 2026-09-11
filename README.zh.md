@@ -12,7 +12,7 @@
 
 这个项目最初受到 MiBeeNVR 的启发，后续已经演进为一个面向 `lal` / `lalmax` 媒体体系的专属 NVR 项目。
 
-[**产品官网**](https://lalmax-pro.github.io/lalmax-nvr/)
+[**产品官网**](https://lalmax-pro.github.io/lalmax-nvr/) · [**API 文档**](https://lalmax-pro.github.io/lalmax-nvr/docs/)（运行中的 NVR 也可访问 `/docs/`）
 
 [**English**](README.md)
 

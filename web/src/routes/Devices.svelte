@@ -3,7 +3,7 @@
   import { 
     listGB28181Devices, playGB28181Stream, stopGB28181Stream, 
     listStreams, listCameras, deleteCamera, permanentlyDeleteCamera,
-    startCamera, stopCamera, updateCamera, pauseRecording, resumeRecording,
+    startCamera, stopCamera, batchCameras, updateCamera, pauseRecording, resumeRecording,
     xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap,
     enableCamera, disableCamera, getHealthStatus, getSnapshotUrl,
     ApiRequestError, queryDeviceRecords, startDevicePlayback,
@@ -1362,6 +1362,14 @@
             <p class="text-sm th-text-tertiary mt-1">点击上方「扫描设备」按钮发现局域网中的 ONVIF 摄像头</p>
           </div>
         {:else}
+          <div class="flex gap-2 mb-3">
+            <button class="btn btn-secondary btn-sm" onclick={async () => { const r = await batchCameras('start', onvifCameras.map(c => c.id)); showToast(`${t('devices.batchStart')}: ${r.ok.length}`, 'success'); }}>
+              {t('devices.batchStart')}
+            </button>
+            <button class="btn btn-secondary btn-sm" onclick={async () => { const r = await batchCameras('stop', onvifCameras.map(c => c.id)); showToast(`${t('devices.batchStop')}: ${r.ok.length}`, 'success'); }}>
+              {t('devices.batchStop')}
+            </button>
+          </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {#each onvifCameras as camera (camera.id)}
               <CameraCard

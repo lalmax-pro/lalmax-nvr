@@ -62,6 +62,8 @@ export {
   disableCamera,
   startCamera,
   stopCamera,
+  batchCameras,
+  buildPTZRelativeMove,
   activateCamera,
   rediscoverCamera,
   pauseRecording,
@@ -177,7 +179,10 @@ export {
   loadRecordingVideoBlob,
   getRecordingPlaybackUrl,
   getRecordingsTimeline,
+  setRecordingLocked,
+  openRecordingDownload,
   getVodPlaylistUrl,
+  getVodExportUrl,
   getStats,
   getStatsTrends,
   listArchives,
@@ -188,9 +193,13 @@ export {
   setArchiveRetention,
 } from './recordings';
 
+export { getONVIFRecordings, searchONVIFRecordings, getONVIFReplayURI } from './onvif-recording';
+
 export type {
   Recording,
   TimelineEntry,
+  UnifiedTimelineClip,
+  UnifiedSource,
   FrameInfo,
   FramesResponse,
   RecordingListResponse,
@@ -201,7 +210,9 @@ export type {
 } from './recordings';
 
 // Events — unified event center
-export { listEvents, getEvent, acknowledgeEvent, deleteEvent } from './events';
+export { listEvents, getEvent, acknowledgeEvent, deleteEvent, eventsStreamUrl } from './events';
+export { listAlarmRules, createAlarmRule, deleteAlarmRule } from './alarm-rules';
+export type { AlarmRule } from './alarm-rules';
 
 // Operation logs — user and system audit trail
 export { listOperationLogs } from './operation-logs';

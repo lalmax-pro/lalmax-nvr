@@ -10,9 +10,12 @@
     start: string;
     end: string;
     seekToMs?: number;
+    embedded?: boolean;
+    playbackRate?: number;
+    onTime?: (mediaMs: number) => void;
   }
 
-  let { cameraId, start, end, seekToMs = $bindable(0) }: Props = $props();
+  let { cameraId, start, end, seekToMs = $bindable(0), embedded = false, playbackRate = 1, onTime }: Props = $props();
 
   let videoEl: HTMLVideoElement | undefined = $state();
   let hls: Hls | null = null;
@@ -78,6 +81,10 @@
     }
   });
 
+  $effect(() => {
+    if (videoEl) videoEl.playbackRate = playbackRate;
+  });
+
   onDestroy(() => destroyHls());
 
   export function seekWallClock(offsetMs: number) {
@@ -86,20 +93,42 @@
   }
 </script>
 
-<div class="card border th-border overflow-hidden">
-  <div class="px-4 py-2 th-bg-secondary border-b th-border text-sm th-text-secondary">
+<div class="overflow-hidden {embedded ? 'player-fill' : 'card border th-border'}">
+  <div class="px-4 py-2 th-bg-secondary {embedded ? '' : 'border-b th-border'} text-sm th-text-secondary">
     {t('recordings.continuousPlaying')}
   </div>
   {#if error}
     <div class="p-8 text-center th-color-danger">{error}</div>
   {:else}
-    <video
-      bind:this={videoEl}
-      class="w-full max-h-[60vh] bg-black"
-      controls
-      ontimeupdate={() => { lastWall = (videoEl?.currentTime || 0) * 1000; }}
-    >
-      <track kind="captions" />
-    </video>
+    <div class={embedded ? 'player-stage bg-black' : ''}>
+      <video
+        bind:this={videoEl}
+        class={embedded ? 'w-full h-full object-contain bg-black' : 'w-full max-h-[60vh] bg-black'}
+        controls
+        ontimeupdate={() => {
+          lastWall = (videoEl?.currentTime || 0) * 1000;
+          onTime?.(lastWall);
+        }}
+      >
+        <track kind="captions" />
+      </video>
+    </div>
   {/if}
 </div>
+
+<style>
+  .player-fill {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: var(--bg-elevated);
+  }
+  .player-stage {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+</style>

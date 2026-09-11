@@ -86,3 +86,15 @@ func TestIsVODFormat(t *testing.T) {
 	require.True(t, IsVODFormat(model.FormatH265))
 	require.False(t, IsVODFormat(model.FormatMJPEG))
 }
+
+func TestClipWindowAndFilterFragments(t *testing.T) {
+	path := createTinyH264(t, t.TempDir())
+	info, err := merge.ParseSegment(path)
+	require.NoError(t, err)
+	start := time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)
+	first, last, ok := ClipWindow(info, start, start, start.Add(8*time.Second))
+	require.True(t, ok)
+	require.GreaterOrEqual(t, last, first)
+	frags := FilterFragments(SplitFragments(info), first, last)
+	require.NotEmpty(t, frags)
+}

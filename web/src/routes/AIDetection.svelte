@@ -29,6 +29,7 @@
   let selectedCamera = $state<string>('all');
   let activeTab = $state<'detection' | 'analysis'>('detection');
   let selectedImage = $state<string | null>(null);
+  let labelQuery = $state('');
 
   // Load AI status
   async function loadAiStatus() {
@@ -57,7 +58,7 @@
   async function loadHistory() {
     try {
       const [detectionHistory, analysisHistory] = await Promise.all([
-        listAiDetections({ limit: 100 }),
+        listAiDetections({ limit: 100, camera_id: selectedCamera === 'all' ? undefined : selectedCamera, label: labelQuery || undefined }),
         listAiAnalyses({ limit: 50 }),
       ]);
       events = detectionHistory.detections || [];
@@ -387,9 +388,11 @@
         </h2>
 
         <!-- Camera Filter -->
+        <input class="input w-40" placeholder="按类别检索" bind:value={labelQuery} onchange={() => loadHistory()} />
         <select
           class="input w-48"
           bind:value={selectedCamera}
+          onchange={() => loadHistory()}
         >
           <option value="all">所有摄像头</option>
           {#each cameras as camera}

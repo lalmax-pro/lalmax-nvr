@@ -27,6 +27,7 @@
     ClipboardList,
     Brain,
     Send,
+    MapPin,
   } from 'lucide-svelte';
 
   // Props
@@ -84,6 +85,7 @@
   const navItems = [
     { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard', icon: LayoutDashboard },
     { href: '#/devices', labelKey: 'nav.devices', route: '/devices', icon: Monitor },
+    { href: '#/map', labelKey: 'nav.map', route: '/map', icon: MapPin },
     { href: '#/device-groups', labelKey: 'nav.device_groups', route: '/device-groups', icon: FolderTree },
     { href: '#/gb-channels', labelKey: 'nav.gb_channels', route: '/gb-channels', icon: Network },
     { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings', icon: Film },

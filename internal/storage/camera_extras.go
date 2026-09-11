@@ -23,6 +23,8 @@ type cameraExtras struct {
 	SubProfileToken      string                        `json:"sub_profile_token,omitempty"`
 	SubnetHints          []string                      `json:"subnet_hints,omitempty"`
 	Adaptive             *config.CameraAdaptiveConfig  `json:"adaptive,omitempty"`
+	Longitude            float64                       `json:"longitude,omitempty"`
+	Latitude             float64                       `json:"latitude,omitempty"`
 }
 
 func extrasFromCameraConfig(cam config.CameraConfig) cameraExtras {
@@ -41,6 +43,8 @@ func extrasFromCameraConfig(cam config.CameraConfig) cameraExtras {
 		SubProfileToken:      cam.SubProfileToken,
 		SubnetHints:          cam.SubnetHints,
 		Adaptive:             cam.Adaptive,
+		Longitude:            cam.Longitude,
+		Latitude:             cam.Latitude,
 	}
 	if config.CameraSupportsAudioRecording(cam) {
 		v := cam.AudioEnabled
@@ -67,6 +71,8 @@ func applyExtrasToCamera(cam *config.CameraConfig, extras cameraExtras) {
 	cam.SubProfileToken = extras.SubProfileToken
 	cam.SubnetHints = extras.SubnetHints
 	cam.Adaptive = extras.Adaptive
+	cam.Longitude = extras.Longitude
+	cam.Latitude = extras.Latitude
 }
 
 func mergeConfigFromRow(row CameraRow) *config.MergeConfig {

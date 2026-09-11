@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { listEvents, acknowledgeEvent, listCameras } from '$lib/api';
-  import type { Camera, EventsResponse, NvrEvent } from '$lib/api';
+  import { listEvents, acknowledgeEvent, listCameras, listAlarmRules, createAlarmRule, deleteAlarmRule } from '$lib/api';
+  import type { Camera, EventsResponse, NvrEvent, AlarmRule } from '$lib/api';
   import { formatDate } from '$lib/format';
   import { t } from '$lib/i18n';
   import { Activity, AlertCircle, Check, ExternalLink, RefreshCw } from 'lucide-svelte';
@@ -19,6 +19,11 @@
   let statusFilter = $state('');
   let page = $state(0);
   const pageSize = 20;
+  let rules = $state<AlarmRule[]>([]);
+  let ruleName = $state('');
+  let ruleAction = $state<'record' | 'webhook' | 'goto_preset'>('record');
+  let ruleTarget = $state('');
+  let ruleSource = $state('');
 
   const sources = [
     { value: '', label: () => t('events.filters.allSources') },
@@ -155,8 +160,31 @@
     };
   });
 
+  async function loadRules() {
+    try { rules = await listAlarmRules(); } catch { rules = []; }
+  }
+
+  async function addRule() {
+    try {
+      await createAlarmRule({
+        name: ruleName || ruleAction,
+        camera_id: cameraFilter,
+        source: ruleSource,
+        action: ruleAction,
+        action_target: ruleTarget,
+        enabled: true,
+      });
+      ruleName = '';
+      ruleTarget = '';
+      await loadRules();
+    } catch (e) {
+      error = e instanceof Error ? e.message : t('common.error');
+    }
+  }
+
   onMount(() => {
     loadCameras();
+    loadRules();
   });
 </script>
 
@@ -201,6 +229,33 @@
           </select>
         </div>
       </div>
+    </div>
+
+    <div class="card p-5 mb-6 border th-border">
+      <h2 class="text-sm font-semibold th-text-primary mb-3">{t('events.rules.title')}</h2>
+      <div class="flex flex-wrap gap-2 mb-3">
+        <input class="input" style="max-width:10rem" placeholder={t('events.rules.name')} bind:value={ruleName} />
+        <select class="input" style="max-width:8rem" bind:value={ruleSource}>
+          <option value="">{t('events.filters.allSources')}</option>
+          <option value="health">health</option>
+          <option value="recorder">recorder</option>
+          <option value="ai">ai</option>
+          <option value="mqtt">mqtt</option>
+        </select>
+        <select class="input" style="max-width:9rem" bind:value={ruleAction}>
+          <option value="record">{t('events.rules.record')}</option>
+          <option value="webhook">Webhook</option>
+          <option value="goto_preset">{t('events.rules.preset')}</option>
+        </select>
+        <input class="input" style="max-width:16rem" placeholder={t('events.rules.target')} bind:value={ruleTarget} />
+        <button class="btn btn-primary btn-sm" onclick={addRule}>{t('events.rules.add')}</button>
+      </div>
+      {#each rules as rule (rule.id)}
+        <div class="flex items-center justify-between py-2 border-t th-border text-sm">
+          <span>{rule.name} · {rule.action} {rule.action_target} · {rule.source || '*'} / {rule.camera_id || '*'}</span>
+          <button class="btn btn-ghost btn-sm" onclick={async () => { await deleteAlarmRule(rule.id); await loadRules(); }}>{t('recordings.page.delete')}</button>
+        </div>
+      {/each}
     </div>
 
     {#if error}

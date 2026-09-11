@@ -84,10 +84,8 @@
 
       const token = getAuthToken();
       const authParam = token ? `&token=${encodeURIComponent(token)}` : '';
-      
-      const url = cameraId
-        ? `/api/events?filter=onvif.&camera_id=${encodeURIComponent(cameraId)}${authParam}`
-        : `/api/events?filter=onvif.${authParam}`;
+      const cam = cameraId ? `&camera_id=${encodeURIComponent(cameraId)}` : '';
+      const url = `/api/events/stream?source=health${cam}${authParam}`;
 
       es = new EventSource(url);
 
@@ -97,30 +95,24 @@
         error = '';
       };
 
-      es.onmessage = (e) => {
+      const pushEvent = (raw: string) => {
         try {
-          const event: ONVIFEvent = JSON.parse(e.data);
-          // Filter for ONVIF events by topic prefix
-          if (event.topic && event.topic.startsWith('onvif.')) {
-            events = [...events.slice(-(maxEvents - 1)), event];
-            // Auto-scroll after update
-            requestAnimationFrame(scrollToBottom);
-          }
+          const parsed = JSON.parse(raw) as { type?: string; message?: string; started_at?: string; created_at?: string; camera_id?: string };
+          const event: ONVIFEvent = {
+            topic: parsed.type || 'nvr.event',
+            timestamp: parsed.started_at || parsed.created_at || new Date().toISOString(),
+            data: parsed as Record<string, unknown>,
+            camera_id: parsed.camera_id || cameraId,
+          };
+          events = [...events.slice(-(maxEvents - 1)), event];
+          requestAnimationFrame(scrollToBottom);
         } catch {
           // Ignore malformed events
         }
       };
 
-      // Handle named event types
-      es.addEventListener('onvif.event', (e) => {
-        try {
-          const event: ONVIFEvent = JSON.parse((e as MessageEvent).data);
-          events = [...events.slice(-(maxEvents - 1)), event];
-          requestAnimationFrame(scrollToBottom);
-        } catch {
-          // Ignore
-        }
-      });
+      es.onmessage = (e) => pushEvent(e.data);
+      es.addEventListener('nvr', (e) => pushEvent((e as MessageEvent).data));
 
       es.onerror = () => {
         connected = false;

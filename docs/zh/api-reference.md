@@ -1,5 +1,7 @@
 # lalmax-nvr API 参考
 
+可浏览文档站：**http://localhost:9090/docs/**（OpenAPI + Scalar）。规范文件：[`internal/docsportal/openapi.yaml`](../../internal/docsportal/openapi.yaml)。
+
 架构与端口见 [架构](architecture.md)。Web UI 默认走 `:9090` 反代直播；连续回放走下面的 VOD 路径。
 
 ## 目录
@@ -1370,7 +1372,7 @@ curl -u username:password \
 **请求体：**
 ```json
 {
-  "recording_ids": ["id1", "id2", "id3"]
+  "ids": ["id1", "id2", "id3"]
 }
 ```
 
@@ -1379,19 +1381,32 @@ curl -u username:password \
 curl -u username:password \
   -X POST \
   -H "Content-Type: application/json" \
-  -d '{
-    "recording_ids": ["1704123456789012345", "1704123456789012346"]
-  }' \
+  -d '{"ids": ["1704123456789012345", "1704123456789012346"]}' \
   "http://localhost:9090/api/recordings/batch-delete"
 ```
 
 **响应：**
 ```json
 {
-  "deleted": 2,
-  "failed": 0
+  "deleted": ["1704123456789012345"],
+  "failed": [],
+  "locked": ["1704123456789012346"]
 }
 ```
+
+已锁定录像不会删除，出现在 `locked`。
+
+### 锁定 / 解锁录像
+
+`POST /api/recordings/:id/lock` 与 `POST /api/recordings/:id/unlock`。锁定后不参与清理，删除返回 409。
+
+## 事件与告警联动
+
+- `GET /api/events` 事件列表
+- `GET /api/events/stream` SSE（事件名 `nvr`）
+- `GET/POST /api/events/rules`、`DELETE /api/events/rules/{id}` 联动规则（`record` / `webhook` / `goto_preset`）
+- `POST /api/cameras/batch` 批量启停
+- `GET /api/cameras/{id}/playback/export.m3u8` 时间范围导出
 
 ## 归档 API
 

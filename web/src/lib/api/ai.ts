@@ -228,9 +228,10 @@ export interface MultimodalHistoryResponse {
 }
 
 /** List persisted AI detection history. */
-export async function listAiDetections(params: { camera_id?: string; limit?: number; offset?: number } = {}): Promise<AiDetectionHistoryResponse> {
+export async function listAiDetections(params: { camera_id?: string; label?: string; limit?: number; offset?: number } = {}): Promise<AiDetectionHistoryResponse> {
   const query = new URLSearchParams();
   if (params.camera_id) query.set('camera_id', params.camera_id);
+  if (params.label) query.set('label', params.label);
   if (params.limit) query.set('limit', String(params.limit));
   if (params.offset) query.set('offset', String(params.offset));
   const suffix = query.toString() ? `?${query}` : '';

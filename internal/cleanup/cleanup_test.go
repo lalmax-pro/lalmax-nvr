@@ -139,6 +139,7 @@ func TestRunOnce_TimeBasedCleanup(t *testing.T) {
 	// Use 1 day retention so only recordings older than 1 day are cleaned
 	cfg := defaultCleanupConfig()
 	cfg.RetentionDays = 1
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -195,6 +196,7 @@ func TestRunOnce_WithRetentionDays(t *testing.T) {
 
 	cfg := defaultCleanupConfig()
 	cfg.RetentionDays = 7
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -227,6 +229,7 @@ func TestRunOnce_TimeBasedCleanup_Ordering(t *testing.T) {
 
 	cfg := defaultCleanupConfig()
 	cfg.RetentionDays = 1
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -285,6 +288,34 @@ func TestRunOnce_DiskThresholdCleanup(t *testing.T) {
 	require.Nil(t, got, "oldest recording should be deleted by disk cleanup")
 }
 
+func TestRunOnce_SkipsLockedRecordings(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	cfg := defaultCleanupConfig()
+	cfg.RetentionDays = 1
+	cfg.DiskThresholdPercent = 101
+	cm, err := NewCleanupManager(env.db, env.store, cfg)
+	require.NoError(t, err)
+
+	now := time.Now()
+	env.insertTestRecording(t, "unlocked-old", "cam1", "/unlocked_old.mp4", now.Add(-48*time.Hour), false)
+	env.insertTestRecording(t, "locked-old", "cam1", "/locked_old.mp4", now.Add(-48*time.Hour), false)
+	require.NoError(t, env.db.SetRecordingLocked(context.Background(), "locked-old", true))
+
+	require.NoError(t, cm.RunOnce(context.Background()))
+
+	got, err := env.db.GetRecording(context.Background(), "unlocked-old")
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	got, err = env.db.GetRecording(context.Background(), "locked-old")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.True(t, got.Locked)
+}
+
 func TestRunOnce_NoExpiredRecordings(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)
@@ -292,6 +323,7 @@ func TestRunOnce_NoExpiredRecordings(t *testing.T) {
 
 	cfg := defaultCleanupConfig()
 	cfg.RetentionDays = 7
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -318,6 +350,7 @@ func TestRunOnce_EmptyDatabase(t *testing.T) {
 	defer env.close(t)
 
 	cfg := defaultCleanupConfig()
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -332,6 +365,7 @@ func TestRunOnce_FileMissingFromDisk(t *testing.T) {
 
 	cfg := defaultCleanupConfig()
 	cfg.RetentionDays = 1
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -369,6 +403,7 @@ func TestRun_ContextCancellation(t *testing.T) {
 
 	cfg := defaultCleanupConfig()
 	cfg.CheckInterval = "100ms"
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -401,6 +436,7 @@ func TestRunOnce_HealthRetentionCleanup(t *testing.T) {
 	defer env.close(t)
 
 	cfg := defaultCleanupConfig()
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -455,6 +491,7 @@ func TestRunOnce_HealthRetentionCleanup_Disabled(t *testing.T) {
 	defer env.close(t)
 
 	cfg := defaultCleanupConfig()
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -495,6 +532,7 @@ func TestOrphanCleanup_TimelapseSurvives(t *testing.T) {
 	// High retention so time-based cleanup doesn't interfere
 	cfg := defaultCleanupConfig()
 	cfg.RetentionDays = 365
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -541,6 +579,7 @@ func TestTimeBasedCleanup_TimelapseExpired(t *testing.T) {
 
 	cfg := defaultCleanupConfig()
 	cfg.RetentionDays = 1
+	cfg.DiskThresholdPercent = 101
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 

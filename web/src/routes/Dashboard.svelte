@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount, setContext } from 'svelte';
-  import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, apiRequest } from '$lib/api';
+  import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, apiRequest, eventsStreamUrl } from '$lib/api';
+  import type { NvrEvent } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
-  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert, RefreshCw, WifiOff, LayoutGrid, Plus, Search } from 'lucide-svelte';
+  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert, RefreshCw, WifiOff, LayoutGrid, Plus, Search, Play } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
@@ -61,6 +62,10 @@
   let snapshotLoading = $state<Record<string, boolean>>({});
   let snapshotTransientErrors = $state<Record<string, boolean>>({});
   let healthStatuses = $state<Record<string, string>>({});
+  let alarmFlash = $state<Record<string, number>>({});
+  let tourOn = $state(false);
+  let tourIndex = $state(0);
+  let instantReplayId = $state<string | null>(null);
 
   function healthDotColor(status: string): string {
     switch (status) {
@@ -430,6 +435,21 @@
     ptzOpenIndex = -1;
   }
 
+  function toggleTour() {
+    tourOn = !tourOn;
+    tourIndex = 0;
+  }
+
+  function startInstantReplay(cameraId: string) {
+    instantReplayId = cameraId;
+  }
+
+  function instantReplayUrl(cameraId: string): string {
+    const end = new Date();
+    const start = new Date(end.getTime() - 30 * 1000);
+    return `/api/cameras/${encodeURIComponent(cameraId)}/playback/playlist.m3u8?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
+  }
+
 
   // --- Lifecycle ---
 
@@ -486,6 +506,30 @@
     };
     document.addEventListener('visibilitychange', visibilityHandler);
 
+    const tourTimer = window.setInterval(() => {
+      if (!tourOn || assignedCameraIds.length === 0) return;
+      tourIndex = (tourIndex + 1) % assignedCameraIds.length;
+      expandedCameraId = assignedCameraIds[tourIndex];
+    }, 8000);
+
+    const es = new EventSource(eventsStreamUrl());
+    es.addEventListener('nvr', (e) => {
+      try {
+        const ev = JSON.parse((e as MessageEvent).data) as NvrEvent;
+        if (!ev.camera_id) return;
+        alarmFlash = { ...alarmFlash, [ev.camera_id]: Date.now() };
+        window.setTimeout(() => {
+          if (alarmFlash[ev.camera_id]) {
+            const next = { ...alarmFlash };
+            delete next[ev.camera_id];
+            alarmFlash = next;
+          }
+        }, 4000);
+      } catch {
+        // ignore
+      }
+    });
+
     // Intercept fetch to detect backend pressure (HTTP 503 → global cooldown)
     const originalFetch = window.fetch;
     window.fetch = async function (...args: Parameters<typeof fetch>): Promise<Response> {
@@ -500,6 +544,8 @@
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('visibilitychange', visibilityHandler);
+      es.close();
+      window.clearInterval(tourTimer);
       window.fetch = originalFetch;
       reconnectCoordinator.dispose();
     };
@@ -559,6 +605,13 @@
             </button>
           {/each}
         </div>
+        <button
+          class="btn btn-sm {tourOn ? 'btn-primary' : 'btn-ghost'}"
+          onclick={toggleTour}
+          title={t('dashboard.tour')}
+        >
+          {t('dashboard.tour')}
+        </button>
         <button
           class="btn btn-ghost p-2"
           onclick={() => configOpen ? (configOpen = false) : openConfig(null)}
@@ -714,6 +767,7 @@
             <div
               class="relative bg-black rounded-lg overflow-hidden group camera-grid-cell {getCellClass(cameraId, slotIndex)}"
               class:cell-expanded={expandedCameraId === camera.id}
+              class:cell-alarm={!!alarmFlash[camera.id]}
               style="min-height: {getCellMinHeight(gridLayout)};"
               role="button"
               tabindex="0"
@@ -868,6 +922,26 @@
               </div>
             {/if}
 
+            {#if instantReplayId === camera.id}
+              <div class="absolute inset-0 z-20 bg-black flex flex-col">
+                <div class="flex items-center justify-between px-2 py-1 th-bg-secondary text-xs">
+                  <span>{t('dashboard.instantReplay')}</span>
+                  <button class="btn btn-ghost btn-sm" onclick={(e) => { e.stopPropagation(); instantReplayId = null; }}>{t('common.close')}</button>
+                </div>
+                <video class="w-full flex-1 object-contain bg-black" controls autoplay src={instantReplayUrl(camera.id)}>
+                  <track kind="captions" />
+                </video>
+              </div>
+            {/if}
+
+            <button
+              class="absolute bottom-2 right-2 z-10 btn btn-ghost btn-sm bg-black/50 text-white opacity-0 group-hover:opacity-100"
+              onclick={(e) => { e.stopPropagation(); startInstantReplay(camera.id); }}
+              title={t('dashboard.instantReplay')}
+            >
+              <Play size={12} />
+            </button>
+
             <!-- Streaming protocol badge -->
             {#if mode !== 'unsupported'}
               {@const protocolLabel = mode === 'wasm' ? 'WebCodecs' : mode === 'fmp4' ? 'fMP4' : mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'HTTP-FLV' : mode === 'ws-flv' ? 'WS-FLV' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'LL-HLS' : 'HLS') : 'JPEG'}
@@ -943,6 +1017,16 @@
   /* Fade-in + scale-up when a cell expands */
   .cell-expanded {
     animation: cell-expand var(--duration-normal) var(--ease-out);
+  }
+
+  .cell-alarm {
+    box-shadow: inset 0 0 0 3px var(--color-danger);
+    animation: alarm-pulse 0.8s ease-in-out infinite;
+  }
+
+  @keyframes alarm-pulse {
+    0%, 100% { box-shadow: inset 0 0 0 3px var(--color-danger); }
+    50% { box-shadow: inset 0 0 0 3px transparent; }
   }
 
   @keyframes cell-expand {

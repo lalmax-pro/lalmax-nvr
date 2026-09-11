@@ -1,7 +1,7 @@
 /**
  * Events API — unified NVR event center
  */
-import { apiRequest } from './client';
+import { apiRequest, getAuthToken } from './client';
 
 export type EventSource = 'health' | 'recorder' | 'ai' | 'mqtt';
 export type EventSeverity = 'info' | 'warning' | 'critical';
@@ -74,4 +74,14 @@ export async function deleteEvent(id: number, signal?: AbortSignal): Promise<{ s
     method: 'DELETE',
     signal,
   });
+}
+
+export function eventsStreamUrl(params: { camera_id?: string; source?: string } = {}): string {
+  const query = new URLSearchParams();
+  if (params.camera_id) query.set('camera_id', params.camera_id);
+  if (params.source) query.set('source', params.source);
+  const token = getAuthToken();
+  if (token) query.set('token', token);
+  const qs = query.toString();
+  return qs ? `/api/events/stream?${qs}` : '/api/events/stream';
 }

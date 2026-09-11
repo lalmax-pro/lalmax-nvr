@@ -41,6 +41,8 @@ export interface Camera {
   sub_profile_token?: string;
   subnet_hints?: string[];
   adaptive?: { timelapse_interval?: string };
+  longitude?: number;
+  latitude?: number;
 }
 
 export type RecordingMode = 'continuous' | 'scheduled' | 'off' | 'event' | 'adaptive';
@@ -102,6 +104,8 @@ export interface UpdateCameraRequest {
   sub_profile_token?: string;
   subnet_hints?: string[];
   adaptive?: { timelapse_interval?: string };
+  longitude?: number;
+  latitude?: number;
 }
 
 export interface DiscoveredDevice {
@@ -375,6 +379,19 @@ export async function stopCamera(
     method: 'POST',
     signal,
   });
+}
+
+export async function batchCameras(action: 'start' | 'stop', ids: string[]): Promise<{ ok: string[]; failed: Record<string, string> }> {
+  return apiRequest(`/cameras/batch`, {
+    method: 'POST',
+    body: JSON.stringify({ action, ids }),
+  });
+}
+
+export function buildPTZRelativeMove(nx: number, ny: number, zoom = 0): PTZMoveRequest {
+  const pan = Math.max(-1, Math.min(1, (nx - 0.5) * 2));
+  const tilt = Math.max(-1, Math.min(1, (0.5 - ny) * 2));
+  return { mode: 'relative', pan, tilt, zoom };
 }
 
 export async function activateCamera(
