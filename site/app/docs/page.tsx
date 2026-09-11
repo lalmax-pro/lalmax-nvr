@@ -19,6 +19,8 @@ export default function ApiDocsPage() {
       window.Scalar?.createApiReference("#scalar-app", {
         url: `${basePath}/openapi.yaml`,
         hideClientButton: false,
+        hideModels: false,
+        defaultOpenFirstTag: true,
         defaultHttpClient: { targetKey: "shell", clientKey: "curl" },
       });
     };

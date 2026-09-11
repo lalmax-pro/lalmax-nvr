@@ -3,230 +3,502 @@ info:
   title: lalmax-nvr API
   version: dev
   description: |
+    lalmax-nvr REST 接口。默认监听 `:9090`。
     REST API for lalmax-nvr. Default listen `:9090`.
 
-    Protected routes use **HTTP Basic Auth**. Live media players may pass
-    `?token=` as base64(`username:password`).
+    受保护接口使用 **HTTP Basic Auth**。直播播放器无法设置 `Authorization` 时（例如 `EventSource`），可传 `?token=`，值为 base64(`username:password`)。
+    Protected routes use **HTTP Basic Auth**. Live players may pass `?token=` as base64(`username:password`) when headers cannot be set.
 
-    Interactive docs: NVR `/docs/` · product site `/docs/`
+    错误体固定为 `{"error": "<message>"}`。摄像头启停失败时可能额外返回 `"code"`（如 `CAMERA_NOT_FOUND`）。
+    Error bodies are always `{"error": "<message>"}`. Camera start/stop failures may also include `"code"`.
+
+    可浏览文档：NVR `/docs/` · 产品站 `/docs/`。
+    Interactive docs: NVR `/docs/` · product site `/docs/`.
   contact:
     url: https://github.com/lalmax-pro/lalmax-nvr
 servers:
   - url: http://localhost:9090
-    description: Local NVR
+    description: 本地 NVR / Local NVR
 security:
   - basicAuth: []
 tags:
   - name: Auth
+    description: |
+      登录鉴权。用 HTTP Basic Auth 校验账号密码。
+      Authentication. Validates username/password with HTTP Basic Auth.
   - name: Health
+    description: |
+      健康与就绪探测，无需登录。
+      Liveness and readiness probes. No authentication.
   - name: Cameras
+    description: |
+      摄像头增删改查、启停录像、云台与地图坐标。
+      Camera CRUD, recorder start/stop, PTZ, and map coordinates.
   - name: Recordings
+    description: |
+      录像列表、锁定、下载与删除。
+      List, lock, download, and delete NVR recordings.
   - name: Playback
+    description: |
+      连续回放与按时间范围导出（HLS fMP4）。
+      Continuous VOD playlists and time-range export (HLS fMP4).
   - name: Events
+    description: |
+      产品事件、SSE 实时推送、告警联动规则。
+      Product events, SSE, and alarm linkage rules.
   - name: AI
+    description: |
+      已落库的 AI 检测记录。
+      Stored AI detection history.
   - name: GB28181
+    description: |
+      国标设备录像查询与回放。
+      GB/T 28181 device recordings and playback.
   - name: Groups
+    description: |
+      设备分组树。
+      Device group tree.
   - name: Stats
+    description: |
+      磁盘占用与录像数量统计。
+      Storage usage and recording counts.
 paths:
   /api/health:
     get:
       tags: [Health]
       security: []
-      summary: Health check
+      summary: 健康检查 · Health check
+      description: |
+        进程健康总览：数据库、磁盘、协程数、摄像头聚合状态。即使 `status` 为 `degraded` / `unhealthy` 仍返回 HTTP 200。
+        Overall process health (database, disk, goroutines, camera rollup). HTTP 200 even when status is `degraded` or `unhealthy`.
       operationId: getHealth
       responses:
         "200":
-          description: System health
+          description: 系统健康 / System health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              example:
+                status: ok
+                checks:
+                  database: { status: ok }
+                  storage: { status: ok, message: "12% used (12884901888 / 107374182400 bytes)" }
+                  goroutines: { status: ok, message: "42 goroutines" }
+                uptime: 2h34m15s
+                start_time: "2026-09-11T08:00:00Z"
+                setup_required: false
+                cameras:
+                  total: 2
+                  recording: 1
+                  reconnecting: 0
+                  error: 0
+                  offline: 1
+                  details:
+                    - { id: front-door, name: Front Door, status: recording }
   /api/readyz:
     get:
       tags: [Health]
       security: []
-      summary: Readiness
+      summary: 就绪检查 · Readiness
+      description: |
+        仅当数据库、存储、协程检查全部通过时返回 200，供负载均衡探活用。
+        Returns 200 only when database, storage, and goroutine checks pass. Used by load balancers.
       operationId: getReadyz
       responses:
         "200":
-          description: Ready
+          description: 已就绪 / Ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example: { status: ok }
+        "503":
+          description: 未就绪 / Not ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: not ready }
+                  checks:
+                    type: object
+                    additionalProperties:
+                      $ref: "#/components/schemas/HealthCheck"
   /api/auth/login:
     post:
       tags: [Auth]
-      security: []
-      summary: Login
+      summary: 登录 · Login
+      description: |
+        用与受保护接口相同的 Basic Auth 中间件校验账号。请求头：`Authorization: Basic base64(username:password)`，**没有 JSON body**。成功后 Web UI 把凭据写入 `sessionStorage`。
+        Validates credentials with the same Basic Auth middleware as protected routes. Send `Authorization: Basic base64(username:password)`. There is **no JSON body**. On success the Web UI stores credentials in `sessionStorage`.
       operationId: login
+      security:
+        - basicAuth: []
+      responses:
+        "200":
+          description: 凭据有效 / Credentials accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example: { status: ok }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: 需要完成初始向导（尚未配置密码）/ Initial setup required (no password configured)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "setup required", code: SETUP_REQUIRED }
+  /api/cameras:
+    get:
+      tags: [Cameras]
+      summary: 列出摄像头 · List cameras
+      description: |
+        返回未归档摄像头数组（不是 `{cameras: [...]}` 包装）。`include_archived=true` 时在末尾追加已归档摄像头，供录像页选用。
+        Returns the active camera array (not wrapped). Pass `include_archived=true` to append archived cameras (used by the recordings page).
+      operationId: listCameras
+      parameters:
+        - in: query
+          name: include_archived
+          schema: { type: boolean }
+          description: 为 true 时在列表末尾追加已归档摄像头 / When true, archived cameras are appended after active ones.
+      responses:
+        "200":
+          description: 摄像头数组（无包装）/ Camera array (not wrapped)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Camera"
+              example:
+                - id: front-door
+                  name: Front Door
+                  protocol: rtsp
+                  encoding: h264
+                  rtsp_transport: tcp
+                  url: rtsp://192.168.1.100:554/Streaming/Channels/101
+                  enabled: true
+                  status: recording
+                  username: admin
+                  has_password: true
+                  retention_days: 30
+                  recording_mode: continuous
+                  recording_paused: false
+                  archived: false
+                  longitude: 121.4737
+                  latitude: 31.2304
+                  created_at: "2026-09-01T10:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Cameras]
+      summary: 创建摄像头 · Create camera
+      description: |
+        `protocol` 是传输层（`rtsp` / `http` / `onvif` / `xiaomi` / `gb28181` 及推拉流变体），`encoding` 是编码（`h264` / `h265` / `mjpeg` / `jpeg`）。仍接受旧的组合值如 `rtsp_h264`，服务端会拆开。ONVIF 可传 `url` **或** `onvif_endpoint`。
+        `protocol` is the transport (`rtsp`, `http`, `onvif`, `xiaomi`, `gb28181`, plus push/pull variants). `encoding` is the codec. Legacy combined values such as `rtsp_h264` are split server-side. ONVIF cameras may send `url` **or** `onvif_endpoint`.
+      operationId: createCamera
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                username: { type: string }
-                password: { type: string }
-      responses:
-        "200":
-          description: Session established
-        "401":
-          description: Invalid credentials
-  /api/cameras:
-    get:
-      tags: [Cameras]
-      summary: List cameras
-      operationId: listCameras
-      parameters:
-        - in: query
-          name: archived
-          schema: { type: boolean }
-      responses:
-        "200":
-          description: Camera list
-    post:
-      tags: [Cameras]
-      summary: Create camera
-      operationId: createCamera
-      requestBody:
-        content:
-          application/json:
-            schema:
               $ref: "#/components/schemas/CreateCamera"
+            examples:
+              rtsp:
+                summary: RTSP H.264 拉流
+                value:
+                  name: Front Door
+                  protocol: rtsp
+                  encoding: h264
+                  url: rtsp://192.168.1.100:554/Streaming/Channels/101
+                  username: admin
+                  password: secret
+                  enabled: true
+                  retention_days: 30
+                  recording_mode: continuous
+                  longitude: 121.4737
+                  latitude: 31.2304
+              onvif:
+                summary: ONVIF 接入
+                value:
+                  name: Lobby
+                  protocol: onvif
+                  url: http://192.168.1.101/onvif/device_service
+                  username: admin
+                  password: secret
+                  profile_token: Profile_1
       responses:
         "201":
-          description: Created
+          description: 已创建的摄像头 / Created camera
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Camera"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: ONVIF 接入地址重复 / Duplicate ONVIF endpoint
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "ONVIF camera with this endpoint already exists" }
   /api/cameras/batch:
     post:
       tags: [Cameras]
-      summary: Batch start or stop cameras
+      summary: 批量启停摄像头 · Batch start or stop cameras
+      description: |
+        一次启动或停止最多 100 路。部分失败不影响已成功的路，失败项在 `failed` 里按 id 返回错误字符串。
+        Start or stop up to 100 cameras. Failures do not roll back successes; `failed` maps id → error string.
       operationId: batchCameras
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [action, ids]
-              properties:
-                action:
-                  type: string
-                  enum: [start, stop]
-                ids:
-                  type: array
-                  items: { type: string }
-                  maxItems: 100
+              $ref: "#/components/schemas/BatchCamerasRequest"
+            example:
+              action: start
+              ids: [front-door, lobby]
       responses:
         "200":
-          description: Per-id results
+          description: 按 id 返回结果。失败项映射为错误字符串，成功的路保持已连接。 / Per-id results. Failed ids map to error strings.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  action: { type: string }
-                  ok:
-                    type: array
-                    items: { type: string }
-                  failed:
-                    type: object
-                    additionalProperties: { type: string }
+                $ref: "#/components/schemas/BatchCamerasResponse"
+              example:
+                action: start
+                ok: [front-door]
+                failed:
+                  lobby: "camera is disabled"
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /api/cameras/{id}:
     parameters:
       - $ref: "#/components/parameters/CameraID"
     get:
       tags: [Cameras]
-      summary: Get camera
+      summary: 获取摄像头 · Get camera
+      description: |
+        返回单路摄像头，含实时录像机状态、错误详情、经纬度等。
+        Returns one camera including live recorder status, error detail, and map coordinates.
       operationId: getCamera
       responses:
         "200":
-          description: Camera
+          description: 摄像头（含实时录像状态）/ Camera including live recorder status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Camera"
+        "404":
+          $ref: "#/components/responses/NotFound"
     put:
       tags: [Cameras]
-      summary: Update camera
+      summary: 更新摄像头 · Update camera
+      description: |
+        部分更新，未出现的字段保持不变。仅当请求里带了非空 `password` 时才改密码。
+        Partial update. Omitted fields are left unchanged. Password is only updated when the field is present and non-empty.
       operationId: updateCamera
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/UpdateCamera"
+            example:
+              name: Front Door (west)
+              enabled: true
+              recording_mode: event
+              longitude: 121.4737
+              latitude: 31.2304
       responses:
         "200":
-          description: Updated
+          description: 能重新加载行时返回完整摄像头，否则 `{status: updated}` / Updated camera when the row can be reloaded; otherwise `{status: updated}`
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Camera"
+                  - $ref: "#/components/schemas/Status"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
     delete:
       tags: [Cameras]
-      summary: Archive or delete camera
+      summary: 归档摄像头 · Archive camera
+      description: |
+        软删除：停止录像机并设 `archived=true`。磁盘上的录像会随摄像头一起归档，不会物理删除。
+        Soft-delete. Stops the recorder and sets `archived=true`. Recordings stay on disk and become archived with the camera.
       operationId: deleteCamera
       responses:
         "200":
-          description: Deleted
+          description: 已归档 / Archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example: { status: archived }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/cameras/{id}/start:
     post:
       tags: [Cameras]
       parameters:
         - $ref: "#/components/parameters/CameraID"
-      summary: Start recorder
+      summary: 启动录像 · Start recorder
+      description: |
+        启动该路录像机。已禁用返回 400，已在录返回 409。
+        Start this camera's recorder. 400 if disabled; 409 if already running.
       operationId: startCamera
       responses:
         "200":
-          description: Started
+          description: 录像已启动 / Recorder started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example: { status: started }
+        "400":
+          description: 摄像头已禁用或 ONVIF 认证失败 / Disabled camera or ONVIF auth failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: 已在录像 / Already running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "camera already running", code: CAMERA_ALREADY_RUNNING }
   /api/cameras/{id}/stop:
     post:
       tags: [Cameras]
       parameters:
         - $ref: "#/components/parameters/CameraID"
-      summary: Stop recorder
+      summary: 停止录像 · Stop recorder
+      description: |
+        停止该路录像机，不断开设备配置。
+        Stop this camera's recorder without removing the camera config.
       operationId: stopCamera
       responses:
         "200":
-          description: Stopped
+          description: 录像已停止 / Recorder stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example: { status: stopped }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/cameras/{id}/ptz/move:
     post:
       tags: [Cameras]
       parameters:
         - $ref: "#/components/parameters/CameraID"
-      summary: PTZ move (continuous / relative / absolute)
+      summary: 云台移动 · PTZ move
+      description: |
+        仅 ONVIF / GB28181 摄像头。`continuous` 的 pan/tilt/zoom 为速度 `[-1, 1]`；`relative` / `absolute` 为归一化位置。连续运动需再调停止接口。
+        ONVIF and GB28181 cameras only. `continuous` uses velocity in `[-1, 1]`. `relative` / `absolute` use normalized position. Call stop to halt continuous motion.
       operationId: ptzMove
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                mode: { type: string, enum: [continuous, relative, absolute] }
-                pan: { type: number }
-                tilt: { type: number }
-                zoom: { type: number }
+              $ref: "#/components/schemas/PTZMoveRequest"
+            examples:
+              continuous:
+                summary: 向右连续转动 / Pan right
+                value: { mode: continuous, pan: 0.4, tilt: 0, zoom: 0 }
+              relative:
+                summary: 相对点动俯仰 / Nudge tilt
+                value: { mode: relative, pan: 0, tilt: 0.1, zoom: 0 }
       responses:
         "200":
-          description: OK
+          description: 指令已接受 / Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example: { status: ok }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/cameras/{id}/playback/playlist.m3u8:
     get:
       tags: [Playback]
       parameters:
         - $ref: "#/components/parameters/CameraID"
-        - $ref: "#/components/parameters/Start"
-        - $ref: "#/components/parameters/End"
-      summary: Continuous VOD playlist
+        - $ref: "#/components/parameters/StartRequired"
+        - $ref: "#/components/parameters/EndRequired"
+      summary: 连续回放播放列表 · Continuous VOD playlist
+      description: |
+        覆盖 `[start, end]` 的 HLS fMP4 播放列表。分片从 `/api/cameras/{id}/playback/{recId}/...` 拉取。
+        HLS fMP4 playlist covering `[start, end]`. Fragments are served from `/api/cameras/{id}/playback/{recId}/...`.
       operationId: vodPlaylist
       responses:
         "200":
-          description: HLS fMP4 playlist
+          description: HLS 播放列表 / HLS playlist
           content:
             application/vnd.apple.mpegurl:
               schema: { type: string }
+              example: |
+                #EXTM3U
+                #EXT-X-VERSION:7
+                #EXT-X-MAP:URI="1704123456789012345/init.mp4"
+                #EXTINF:2.000,
+                1704123456789012345/f0-1.m4s
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /api/cameras/{id}/playback/export.m3u8:
     get:
       tags: [Playback]
       parameters:
         - $ref: "#/components/parameters/CameraID"
-        - $ref: "#/components/parameters/Start"
-        - $ref: "#/components/parameters/End"
-      summary: Export a wall-clock window as HLS (max 24h)
+        - $ref: "#/components/parameters/StartRequired"
+        - $ref: "#/components/parameters/EndRequired"
+      summary: 按时间范围导出 · Export time-range HLS
+      description: |
+        与连续回放相同的播放列表格式，但会裁掉窗口外的采样。窗口最长 24 小时。响应带 `Content-Disposition: attachment`。
+        Same playlist format as continuous VOD, but samples outside `[start, end]` are clipped. Window must be ≤ 24 hours. `Content-Disposition: attachment`.
       operationId: vodExport
       responses:
         "200":
-          description: Clipped playlist
+          description: 裁剪后的播放列表 / Clipped playlist
+          content:
+            application/vnd.apple.mpegurl:
+              schema: { type: string }
+        "400":
+          description: 缺少时间戳或窗口超过 24 小时 / Missing timestamps or window > 24h
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "export window must be <= 24h" }
         "404":
-          description: No recordings in window
+          description: 该时间范围内没有录像 / No overlapping recordings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "no recordings in export window" }
   /api/recordings:
     get:
       tags: [Recordings]
-      summary: List recordings
+      summary: 列出录像 · List recordings
+      description: |
+        分页查询本机录像。`total` 为未分页总数。可按摄像头、时间、格式、是否已合并、是否归档筛选。
+        Paginated NVR recordings. `total` is the unpaginated count. Filter by camera, time, format, merged, archived.
       operationId: listRecordings
       parameters:
         - in: query
@@ -238,42 +510,93 @@ paths:
           name: format
           schema: { type: string, enum: [h264, h265, mjpeg, timelapse] }
         - in: query
+          name: merged
+          schema: { type: boolean }
+          description: `true` 仅已合并分段，`false` 仅未合并。省略则全部。 / `true` = merged only, `false` = unmerged only. Omit for all.
+        - in: query
+          name: search
+          schema: { type: string }
+          description: 对录像 id / 文件路径做子串匹配 / Substring match on recording id / file path.
+        - in: query
           name: limit
-          schema: { type: integer }
+          schema: { type: integer, minimum: 1, default: 50 }
         - in: query
           name: offset
-          schema: { type: integer }
+          schema: { type: integer, minimum: 0, default: 0 }
         - in: query
           name: sort_by
-          schema: { type: string }
+          schema: { type: string, enum: [started_at, duration, file_size, camera_id], default: started_at }
         - in: query
           name: order
-          schema: { type: string, enum: [asc, desc] }
+          schema: { type: string, enum: [asc, desc], default: desc }
         - in: query
           name: archived
           schema: { type: boolean }
       responses:
         "200":
-          description: Paginated recordings
+          description: 分页录像列表。`total` 是未分页总数。 / Paginated recordings. `total` is the unpaginated count.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordingList"
+              example:
+                total: 1
+                recordings:
+                  - id: "1704123456789012345"
+                    camera_id: front-door
+                    file_path: /var/lib/lalmax-nvr/front-door/2026-09-11/1704123456789012345.mp4
+                    format: h264
+                    started_at: "2026-09-11T08:00:00Z"
+                    ended_at: "2026-09-11T08:02:00Z"
+                    duration: 120
+                    file_size: 15728640
+                    frame_count: 3000
+                    merged: false
+                    merge_status: pending
+                    archived: false
+                    locked: false
   /api/recordings/timeline:
     get:
       tags: [Recordings]
-      summary: Compact 24h timeline
+      summary: 紧凑时间轴 · Compact timeline
+      description: |
+        录像页用的轻量投影，必填 `camera_id`、`start`、`end`。含 `gap_reason`、`locked`。
+        Lightweight projection for the recordings UI. Requires `camera_id`, `start`, and `end`. Includes `gap_reason` and `locked`.
       operationId: recordingsTimeline
       parameters:
         - in: query
           name: camera_id
           required: true
           schema: { type: string }
-        - $ref: "#/components/parameters/Start"
-        - $ref: "#/components/parameters/End"
+        - $ref: "#/components/parameters/StartRequired"
+        - $ref: "#/components/parameters/EndRequired"
       responses:
         "200":
-          description: Timeline entries including gap_reason and locked
+          description: 时间轴条目 / Timeline entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimelineResponse"
+              example:
+                camera_id: front-door
+                entries:
+                  - id: "1704123456789012345"
+                    camera_id: front-door
+                    started_at: "2026-09-11T08:00:00Z"
+                    ended_at: "2026-09-11T08:02:00Z"
+                    duration: 120
+                    format: h264
+                    merged: false
+                    locked: false
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /api/recordings/batch-delete:
     post:
       tags: [Recordings]
-      summary: Batch delete recordings
+      summary: 批量删除录像 · Batch delete recordings
+      description: |
+        已锁定的录像不会删除，出现在 `locked`。请求字段是 `ids`（不是 `recording_ids`）。
+        Locked recordings are skipped and returned in `locked`. Request field is `ids` (not `recording_ids`).
       operationId: batchDeleteRecordings
       requestBody:
         required: true
@@ -286,49 +609,106 @@ paths:
                 ids:
                   type: array
                   items: { type: string }
+                  minItems: 1
                   maxItems: 100
+            example:
+              ids: ["1704123456789012345", "1704123456789012346"]
       responses:
         "200":
-          description: Deleted / failed / locked ids
+          description: 按 id 的删除结果 / Per-id outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchDeleteResponse"
+              example:
+                deleted: ["1704123456789012345"]
+                failed: []
+                locked: ["1704123456789012346"]
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /api/recordings/{id}:
     parameters:
       - $ref: "#/components/parameters/RecordingID"
     get:
       tags: [Recordings]
-      summary: Get recording
+      summary: 获取录像 · Get recording
+      description: |
+        返回单条录像元数据，含锁定、缺口原因、重连时间。
+        Recording metadata including lock, gap reason, and reconnect time.
       operationId: getRecording
       responses:
         "200":
-          description: Recording (locked, gap_reason, reconnected_at)
+          description: 录像元数据 / Recording metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Recording"
+        "404":
+          $ref: "#/components/responses/NotFound"
     delete:
       tags: [Recordings]
-      summary: Delete recording
+      summary: 删除录像 · Delete recording
+      description: |
+        删除数据库记录并尝试删除文件。已锁定返回 409。
+        Deletes the DB row and attempts to remove the file. 409 if the recording is locked.
       operationId: deleteRecording
       responses:
         "200":
-          description: Deleted
+          description: 已删除 / Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example: { status: deleted }
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
-          description: Recording is locked
+          description: 录像已锁定，无法删除 / Recording is locked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "recording is locked" }
   /api/recordings/{id}/lock:
     post:
       tags: [Recordings]
       parameters:
         - $ref: "#/components/parameters/RecordingID"
-      summary: Lock recording (skip cleanup)
+      summary: 锁定录像 · Lock recording
+      description: |
+        锁定后不参与保留期清理，解锁前无法删除。
+        Locked recordings are skipped by retention cleanup and cannot be deleted until unlocked.
       operationId: lockRecording
       responses:
         "200":
-          description: Locked
+          description: 已锁定 / Locked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockResponse"
+              example: { status: locked, id: "1704123456789012345", locked: true }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/recordings/{id}/unlock:
     post:
       tags: [Recordings]
       parameters:
         - $ref: "#/components/parameters/RecordingID"
-      summary: Unlock recording
+      summary: 解锁录像 · Unlock recording
+      description: |
+        解除锁定，之后可被清理或删除。
+        Unlock so the recording can be cleaned up or deleted again.
       operationId: unlockRecording
       responses:
         "200":
-          description: Unlocked
+          description: 已解锁 / Unlocked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockResponse"
+              example: { status: unlocked, id: "1704123456789012345", locked: false }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/recordings/{id}/download:
     get:
       tags: [Recordings]
@@ -337,15 +717,29 @@ paths:
         - in: query
           name: inline
           schema: { type: string, enum: ["1"] }
-      summary: Download file (Range supported)
+          description: 设为 `inline` 以便浏览器预览，默认是附件下载 / Use `Content-Disposition: inline` instead of `attachment` so the browser can preview.
+      summary: 下载录像文件 · Download file
+      description: |
+        支持 HTTP `Range`。默认 `Content-Disposition: attachment`。
+        Supports HTTP `Range`. Default disposition is `attachment`.
       operationId: downloadRecording
       responses:
         "200":
-          description: File
+          description: 完整文件 / Entire file
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "206":
+          description: 分片内容（Range）/ Partial content (Range)
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/events:
     get:
       tags: [Events]
-      summary: List NVR events
+      summary: 列出事件 · List NVR events
+      description: |
+        分页查询产品事件（健康、录像、AI、MQTT）。可按摄像头、来源、类型、状态、时间过滤。
+        Paginated product events (health, recorder, AI, MQTT). Filter by camera, source, type, status, time.
       operationId: listEvents
       parameters:
         - in: query
@@ -353,13 +747,14 @@ paths:
           schema: { type: string }
         - in: query
           name: source
-          schema: { type: string }
+          schema: { type: string, enum: [health, recorder, ai, mqtt] }
         - in: query
           name: type
           schema: { type: string }
+          description: 事件类型字符串，例如 `connection_lost` 或 `person` / Event type string, for example `connection_lost` or `person`.
         - in: query
           name: status
-          schema: { type: string }
+          schema: { type: string, enum: [open, acknowledged] }
         - in: query
           name: since
           schema: { type: string, format: date-time }
@@ -368,17 +763,40 @@ paths:
           schema: { type: string, format: date-time }
         - in: query
           name: limit
-          schema: { type: integer }
+          schema: { type: integer, minimum: 0 }
         - in: query
           name: offset
-          schema: { type: integer }
+          schema: { type: integer, minimum: 0 }
       responses:
         "200":
-          description: Events
+          description: 分页事件列表 / Paginated events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventList"
+              example:
+                total: 1
+                limit: 50
+                offset: 0
+                events:
+                  - id: 12
+                    camera_id: front-door
+                    source: ai
+                    type: person
+                    severity: warning
+                    status: open
+                    message: "person detected (0.92)"
+                    metadata: '{"label":"person","confidence":0.92}'
+                    recording_id: "1704123456789012345"
+                    started_at: "2026-09-11T08:01:02Z"
+                    created_at: "2026-09-11T08:01:02Z"
   /api/events/stream:
     get:
       tags: [Events]
-      summary: SSE stream of product events
+      summary: 事件实时推送 · Event SSE stream
+      description: |
+        `Content-Type: text/event-stream`。事件名为 `nvr`，data 是 JSON `Event`。心跳是 SSE 注释（`: ping`）。浏览器 `EventSource` 无法带 Basic Auth 时用 `?token=`。
+        `Content-Type: text/event-stream`. Named event is `nvr`; data is a JSON `Event`. Heartbeats are SSE comments (`: ping`). Use `?token=` when the browser cannot set Basic Auth.
       operationId: eventsStream
       parameters:
         - in: query
@@ -390,34 +808,103 @@ paths:
         - in: query
           name: token
           schema: { type: string }
-          description: Basic token for EventSource
+          description: EventSource 用的 Basic token，值为 base64(`username:password`) / base64(`username:password`) for EventSource
       responses:
         "200":
-          description: text/event-stream named event `nvr`
+          description: SSE 事件流 / SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: |
+                event: nvr
+                data: {"id":12,"camera_id":"front-door","source":"ai","type":"person","severity":"warning","status":"open"}
+
+                : ping
   /api/events/rules:
     get:
       tags: [Events]
-      summary: List alarm linkage rules
+      summary: 列出告警联动规则 · List alarm linkage rules
+      description: |
+        返回 `{ rules: [...] }`。规则按摄像头 / 来源 / 类型 / 级别匹配事件后执行动作。
+        Returns `{ rules: [...] }`. Rules match events by camera / source / type / severity then run an action.
       operationId: listAlarmRules
       responses:
         "200":
-          description: Rules
+          description: 规则列表包装 / Rules wrapper
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rules]
+                properties:
+                  rules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AlarmRule"
+              example:
+                rules:
+                  - id: 1
+                    name: person-record
+                    enabled: true
+                    camera_id: front-door
+                    source: ai
+                    event_type: person
+                    severity: ""
+                    action: record
+                    action_target: ""
+                    created_at: "2026-09-11T08:00:00Z"
     post:
       tags: [Events]
-      summary: Create alarm linkage rule
+      summary: 创建告警联动规则 · Create alarm linkage rule
+      description: |
+        空过滤字段表示匹配任意事件。`action` 必填：`record` 对该摄像头做事件录像（含预录）；`webhook` 把事件 JSON POST 到 `action_target`；`goto_preset` 把 `action_target` 当 ONVIF 预置位 token。
+        Empty filter fields match any event. `action` is required. `record` starts event recording (with preroll). `webhook` POSTs the event JSON to `action_target`. `goto_preset` calls ONVIF GoToPreset with `action_target` as the preset token.
       operationId: createAlarmRule
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/AlarmRule"
+              $ref: "#/components/schemas/CreateAlarmRule"
+            examples:
+              record:
+                summary: 检测到人后开始录像 / Start recording on person
+                value:
+                  name: person-record
+                  camera_id: front-door
+                  source: ai
+                  event_type: person
+                  action: record
+              webhook:
+                summary: Webhook 通知 / Notify webhook
+                value:
+                  name: motion-hook
+                  source: mqtt
+                  action: webhook
+                  action_target: https://example.com/hooks/nvr
+              preset:
+                summary: 云台预置位 / PTZ preset
+                value:
+                  name: look-gate
+                  camera_id: ptz-1
+                  action: goto_preset
+                  action_target: PresetToken_1
       responses:
         "201":
-          description: Created
+          description: 已创建规则（默认启用；空 name 会用 action 填充）/ Created rule (enabled defaults to true; empty name becomes the action)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlarmRule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /api/events/rules/{ruleID}:
     delete:
       tags: [Events]
-      summary: Delete alarm rule
+      summary: 删除告警联动规则 · Delete alarm rule
+      description: |
+        按规则 id 删除。不存在返回 404。
+        Delete by rule id. 404 if missing.
       operationId: deleteAlarmRule
       parameters:
         - in: path
@@ -426,11 +913,21 @@ paths:
           schema: { type: integer }
       responses:
         "200":
-          description: Deleted
+          description: 已删除 / Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example: { status: deleted }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/events/{id}/ack:
     post:
       tags: [Events]
-      summary: Acknowledge event
+      summary: 确认事件 · Acknowledge event
+      description: |
+        将事件状态改为 `acknowledged` 并写入确认时间。
+        Sets status to `acknowledged` and records `acknowledged_at`.
       operationId: ackEvent
       parameters:
         - in: path
@@ -439,11 +936,21 @@ paths:
           schema: { type: integer }
       responses:
         "200":
-          description: Acknowledged
+          description: 已确认 / Acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example: { status: acknowledged }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/ai/detections:
     get:
       tags: [AI]
-      summary: List AI detections
+      summary: 列出 AI 检测 · List AI detections
+      description: |
+        已落库的检测历史，按时间倒序。`label` 对 detections JSON 做子串匹配。
+        Stored detection history, newest first. `label` is a substring match against the detections JSON.
       operationId: listAiDetections
       parameters:
         - in: query
@@ -452,7 +959,7 @@ paths:
         - in: query
           name: label
           schema: { type: string }
-          description: Substring match in detections JSON
+          description: 对 detections JSON 做子串匹配 / Substring match against the detections JSON payload.
         - in: query
           name: limit
           schema: { type: integer }
@@ -461,121 +968,902 @@ paths:
           schema: { type: integer }
       responses:
         "200":
-          description: Detections
+          description: 检测历史，最新在前 / Detection history, newest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AIDetectionList"
+              example:
+                total: 1
+                detections:
+                  - camera_id: front-door
+                    pts: 90000
+                    timestamp: 1757582462000
+                    image_url: /api/snapshots/front-door
+                    detections:
+                      - label: person
+                        confidence: 0.92
+                        box: [0.12, 0.20, 0.18, 0.55]
   /api/gb28181/record_info:
     post:
       tags: [GB28181]
-      summary: Query device recordings
+      summary: 查询国标设备录像 · Query device recordings
+      description: |
+        SIP RecordInfo 查询。时间接受 RFC3339。返回按天分组，条目的 `start`/`end` 为 Unix 秒。
+        SIP RecordInfo query. Times accept RFC3339. Response is grouped by day; item `start`/`end` are Unix seconds.
       operationId: gbRecordInfo
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                device_id: { type: string }
-                channel_id: { type: string }
-                start_time: { type: string }
-                end_time: { type: string }
+              $ref: "#/components/schemas/GBRecordInfoRequest"
+            example:
+              device_id: "34020000001320000001"
+              channel_id: "34020000001320000001"
+              start_time: "2026-09-11T00:00:00Z"
+              end_time: "2026-09-11T23:59:59Z"
       responses:
         "200":
-          description: Device record list
+          description: 按天分组的设备录像。条目 `start`/`end` 为 Unix 秒。 / Recordings grouped by day. `start`/`end` on items are Unix seconds.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GBRecords"
+              example:
+                day_total: 1
+                time_num: 2
+                data:
+                  - date: "2026-09-11"
+                    items:
+                      - { start: 1757556000, end: 1757559600 }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          description: 未启用 GB28181 服务 / GB28181 server not enabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/gb28181/playback:
     post:
       tags: [GB28181]
-      summary: Start device playback
+      summary: 开始国标回放 · Start device playback
+      description: |
+        向设备发回放邀请，返回 SSRC、stream_id 以及 flv/hls/webrtc 等播放地址。
+        Sends a playback invite and returns SSRC, stream_id, and play URLs (flv/hls/webrtc/…).
       operationId: gbPlayback
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                device_id: { type: string }
-                channel_id: { type: string }
-                start_time: { type: string }
-                end_time: { type: string }
-                stream_id: { type: string }
+              $ref: "#/components/schemas/GBPlaybackRequest"
+            example:
+              device_id: "34020000001320000001"
+              channel_id: "34020000001320000001"
+              start_time: "2026-09-11T08:00:00Z"
+              end_time: "2026-09-11T08:10:00Z"
       responses:
         "200":
-          description: Playback URLs
+          description: 回放会话与播放地址 / Playback session and play URLs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GBPlaybackResponse"
+              example:
+                ssrc: "0100000001"
+                stream_id: "34020000001320000001_34020000001320000001_pb"
+                urls:
+                  - { protocol: flv, url: "http://127.0.0.1:8080/rtp/....flv" }
+                  - { protocol: hls, url: "http://127.0.0.1:8080/rtp/....m3u8" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /api/groups/tree:
     get:
       tags: [Groups]
-      summary: Device group tree
+      summary: 设备分组树 · Device group tree
+      description: |
+        嵌套的设备分组。`stats=true` 时每个节点带 `{total, online}` 通道统计。
+        Nested device groups. When `stats=true`, each node includes `{total, online}` channel counts.
       operationId: groupTree
+      parameters:
+        - in: query
+          name: stats
+          schema: { type: boolean }
+          description: 为 true 时每个节点带 `{total, online}` 通道统计 / When true, each node includes `{total, online}` channel counts.
       responses:
         "200":
-          description: Tree
+          description: 嵌套分组 / Nested groups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tree]
+                properties:
+                  tree:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GroupTreeNode"
+              example:
+                tree:
+                  - id: 1
+                    name: Building A
+                    parent_id: 0
+                    level: 1
+                    sort_order: 0
+                    children:
+                      - id: 2
+                        name: Floor 1
+                        parent_id: 1
+                        level: 2
+                        sort_order: 0
   /api/stats:
     get:
       tags: [Stats]
-      summary: Storage and recording stats
+      summary: 存储与录像统计 · Storage and recording stats
+      description: |
+        磁盘总容量/已用、录像条数、摄像头数量。
+        Disk capacity/used bytes plus recording and camera counts.
       operationId: getStats
       responses:
         "200":
-          description: Stats
+          description: 磁盘占用与录像/摄像头计数 / Disk usage plus recording/camera counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageStats"
+              example:
+                total_bytes: 107374182400
+                used_bytes: 12884901888
+                recording_count: 420
+                camera_count: 8
 components:
   securitySchemes:
     basicAuth:
       type: http
       scheme: basic
+      description: 请求头 `Authorization: Basic base64(username:password)`。默认用户 `admin`。 / `Authorization: Basic base64(username:password)`. Default user is `admin`.
   parameters:
     CameraID:
       in: path
       name: id
       required: true
       schema: { type: string }
+      description: 摄像头 id。国标摄像头为 `deviceId:channelId`。 / Camera id (slug). GB28181 cameras use `deviceId:channelId`.
+      example: front-door
     RecordingID:
       in: path
       name: id
       required: true
       schema: { type: string }
+      description: 录像 id / Recording id
+      example: "1704123456789012345"
     Start:
       in: query
       name: start
       schema: { type: string, format: date-time }
-      description: RFC3339
+      description: RFC3339 起始时间（含）/ RFC3339 inclusive lower bound
+      example: "2026-09-11T00:00:00Z"
     End:
       in: query
       name: end
       schema: { type: string, format: date-time }
-      description: RFC3339
+      description: RFC3339 结束时间 / RFC3339 upper bound
+      example: "2026-09-12T00:00:00Z"
+    StartRequired:
+      in: query
+      name: start
+      required: true
+      schema: { type: string, format: date-time }
+      description: RFC3339 起始时间 / RFC3339 start
+      example: "2026-09-11T00:00:00Z"
+    EndRequired:
+      in: query
+      name: end
+      required: true
+      schema: { type: string, format: date-time }
+      description: RFC3339 结束时间 / RFC3339 end
+      example: "2026-09-12T00:00:00Z"
+  responses:
+    BadRequest:
+      description: JSON 无效、缺字段或校验失败 / Invalid JSON, missing field, or failed validation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example: { error: "invalid request body" }
+    Unauthorized:
+      description: 缺少或错误的 Basic Auth / Missing or invalid Basic Auth
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example: { error: "unauthorized" }
+    NotFound:
+      description: 资源不存在 / Resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example: { error: "not found" }
   schemas:
+    Error:
+      title: 错误 · Error
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: 可读错误信息 / Human-readable message
+        code:
+          type: string
+          description: 可选机器码（`SETUP_REQUIRED`、`CAMERA_NOT_FOUND` 等） / Optional machine-readable code
+    Status:
+      title: 状态 · Status
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: 结果标记（`ok` / `started` / `stopped` / `deleted` / `archived` / `acknowledged` 等） / Result token
+    HealthCheck:
+      title: 单项健康检查 · Health check
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, warning, error]
+          description: 检查结果 / Check result
+        message:
+          type: string
+          description: 补充说明，如磁盘占用百分比 / Extra detail such as disk usage
+    Health:
+      title: 系统健康 · Health
+      description: |
+        `/api/health` 响应。`status` 为总评；`checks` 为分项。
+        `/api/health` response. `status` is the rollup; `checks` are per-subsystem.
+      type: object
+      required: [status, checks, uptime]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unhealthy]
+          description: 总评 / Overall status
+        checks:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/HealthCheck"
+          description: 分项，常见键 `database`、`storage`、`goroutines` / Keys include `database`, `storage`, `goroutines`
+        uptime:
+          type: string
+          description: 进程已运行时长 / Process uptime
+          example: 2h34m15s
+        start_time:
+          type: string
+          format: date-time
+          description: 进程启动时间 / Process start time
+        setup_required:
+          type: boolean
+          description: 尚未完成初始向导 / Initial setup is still required
+        cameras:
+          type: object
+          description: 摄像头状态聚合 / Camera status rollup
+          properties:
+            total: { type: integer, description: 总数 / Total }
+            recording: { type: integer, description: 正在录像 / Recording }
+            reconnecting: { type: integer, description: 重连中 / Reconnecting }
+            error: { type: integer, description: 错误 / Error }
+            offline: { type: integer, description: 离线 / Offline }
+            details:
+              type: array
+              description: 每路摘要 / Per-camera summary
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  status: { type: string }
+    Camera:
+      title: 摄像头 · Camera
+      description: |
+        摄像头配置与实时录像状态。密码永不回传，只给 `has_password`。
+        Camera config plus live recorder status. Password is never returned; only `has_password`.
+      type: object
+      required: [id, name, protocol, enabled]
+      properties:
+        id:
+          type: string
+          description: 摄像头 id / Camera id
+        name:
+          type: string
+          description: 显示名称 / Display name
+        protocol:
+          type: string
+          description: 传输协议：`rtsp` / `http` / `onvif` / `xiaomi` / `gb28181` 及推拉流变体 / Transport: `rtsp`, `http`, `onvif`, `xiaomi`, `gb28181`, plus push/pull variants
+          example: rtsp
+        encoding:
+          type: string
+          enum: [h264, h265, mjpeg, jpeg]
+          description: 视频编码 / Video codec
+        rtsp_transport:
+          type: string
+          enum: [tcp, udp]
+          description: RTSP 传输层，默认 tcp / RTSP transport, default tcp
+        url:
+          type: string
+          description: 流地址。ONVIF 列表/详情会把 `onvif_endpoint` 填到这里 / Stream URL. For ONVIF this is filled from `onvif_endpoint` in list/get responses
+        enabled:
+          type: boolean
+          description: 是否启用 / Enabled
+        description:
+          type: string
+          description: 备注 / Notes
+        location:
+          type: string
+          description: 安装位置 / Install location
+        brand:
+          type: string
+          description: 品牌 / Brand
+        model:
+          type: string
+          description: 型号 / Model
+        serial_number:
+          type: string
+          description: 序列号 / Serial number
+        retention_days:
+          type: integer
+          description: 本路保留天数。`0` 表示用全局默认，不是永久保存 / Per-camera retention. `0` means use the global default (not keep-forever)
+        status:
+          type: string
+          enum: [recording, paused, stopped, error, reconnecting, offline]
+          description: 实时录像机状态 / Live recorder status
+        error_type:
+          type: string
+          nullable: true
+          description: 错误分类 / Error class
+        error_detail:
+          type: string
+          nullable: true
+          description: 错误详情 / Error detail
+        last_seen:
+          type: string
+          format: date-time
+          nullable: true
+          description: 最近一次录像时间 / Last recording time
+        username:
+          type: string
+          description: 设备用户名 / Device username
+        has_password:
+          type: boolean
+          description: 是否已保存密码（密码本身不回传）/ Whether a password is stored (never returned)
+        onvif_endpoint:
+          type: string
+          description: ONVIF Device 服务地址 / ONVIF device service URL
+        profile_token:
+          type: string
+          description: ONVIF 主码流 profile / ONVIF main profile token
+        profile_name:
+          type: string
+          description: ONVIF profile 名称 / ONVIF profile name
+        stream_encoding:
+          type: string
+          description: 设备报告的编码（如 H264）/ Device-reported encoding
+        audio_enabled:
+          type: boolean
+          description: 是否采音频 / Audio enabled
+        source_type:
+          type: string
+          description: 接入来源，如 `rtmp_push` / `srt_push` / `whip_push` / `relay_pull` / Ingest origin
+        recording_paused:
+          type: boolean
+          description: 录像是否暂停（拉流仍可能在）/ Recording paused (stream may still be up)
+        recording_mode:
+          type: string
+          enum: [continuous, scheduled, off, event, adaptive]
+          description: 录像模式：连续 / 定时 / 关闭 / 事件 / 自适应 / Recording mode
+        activation_state:
+          type: string
+          enum: [active, pending_activation]
+          description: ONVIF 即插即用激活状态 / Plug-and-play activation state
+        stable_id:
+          type: string
+          description: ONVIF 序列号，用于 IP 自愈 / ONVIF serial used for IP self-heal
+        sub_stream_url:
+          type: string
+          description: 子码流 URL / Sub-stream URL
+        sub_profile_token:
+          type: string
+          description: ONVIF 子码流 profile / ONVIF sub-stream profile token
+        subnet_hints:
+          type: array
+          items: { type: string }
+          description: IP 重发现用的额外网段 / Extra CIDRs for IP rediscovery
+        adaptive:
+          type: object
+          description: `recording_mode=adaptive` 时的稀疏录像参数 / Sparse-recording settings when adaptive
+          properties:
+            timelapse_interval:
+              type: string
+              description: 平静期写 IDR 的间隔（Go duration，默认 `30s`）/ Calm-state IDR interval (Go duration, default `30s`)
+              example: 30s
+        archived:
+          type: boolean
+          description: 是否已归档 / Archived
+        archived_at:
+          type: string
+          format: date-time
+          description: 归档时间 / Archived at
+        archive_retention_days:
+          type: integer
+          description: 归档保留天数 / Archive retention days
+        longitude:
+          type: number
+          description: 地图经度（WGS-84）/ WGS-84 longitude for the map view
+        latitude:
+          type: number
+          description: 地图纬度（WGS-84）/ WGS-84 latitude
+        created_at:
+          type: string
+          format: date-time
+          description: 创建时间 / Created at
     CreateCamera:
+      title: 创建摄像头请求 · Create camera
+      description: |
+        新增一路摄像头。`name` 与 `protocol` 必填。
+        Create a camera. `name` and `protocol` are required.
       type: object
       required: [name, protocol]
       properties:
         name: { type: string }
-        protocol: { type: string }
-        url: { type: string }
+        protocol:
+          type: string
+          description: 传输协议，或旧的组合值如 `rtsp_h264` / Transport, or a legacy combined value such as `rtsp_h264`
+        encoding:
+          type: string
+          enum: [h264, h265, mjpeg, jpeg]
+        rtsp_transport:
+          type: string
+          enum: [tcp, udp]
+        url:
+          type: string
+          description: 流地址。ONVIF 可用 `onvif_endpoint` 代替 / Required except ONVIF, which may use `onvif_endpoint` instead
         username: { type: string }
-        password: { type: string }
-        longitude: { type: number }
-        latitude: { type: number }
-    UpdateCamera:
-      type: object
-      properties:
-        name: { type: string }
-        enabled: { type: boolean }
-        longitude: { type: number }
-        latitude: { type: number }
+        password:
+          type: string
+          description: 设备密码，加密存储，后续 GET 不回传 / Stored encrypted; never returned on subsequent GETs
+        enabled:
+          type: boolean
+          default: true
+        description: { type: string }
+        location: { type: string }
+        brand: { type: string }
+        model: { type: string }
+        serial_number: { type: string }
+        onvif_endpoint: { type: string }
+        profile_token: { type: string }
+        profile_name: { type: string }
+        stream_encoding: { type: string }
+        audio_enabled: { type: boolean }
+        sub_stream_url: { type: string }
+        sub_profile_token: { type: string }
+        subnet_hints:
+          type: array
+          items: { type: string }
         recording_mode:
           type: string
           enum: [continuous, scheduled, off, event, adaptive]
-    AlarmRule:
+        adaptive:
+          type: object
+          properties:
+            timelapse_interval: { type: string, example: 30s }
+        longitude: { type: number }
+        latitude: { type: number }
+    UpdateCamera:
+      title: 更新摄像头请求 · Update camera
+      description: |
+        部分更新，省略的字段不变。
+        Partial update; omitted fields stay unchanged.
       type: object
-      required: [action]
       properties:
         name: { type: string }
+        url: { type: string }
+        protocol: { type: string }
+        encoding: { type: string }
+        rtsp_transport: { type: string, enum: [tcp, udp] }
+        username: { type: string }
+        password: { type: string }
         enabled: { type: boolean }
+        description: { type: string }
+        location: { type: string }
+        brand: { type: string }
+        model: { type: string }
+        serial_number: { type: string }
+        retention_days: { type: integer }
+        onvif_endpoint: { type: string }
+        profile_token: { type: string }
+        stream_encoding: { type: string }
+        audio_enabled: { type: boolean }
+        recording_mode:
+          type: string
+          enum: [continuous, scheduled, off, event, adaptive]
+        sub_stream_url: { type: string }
+        sub_profile_token: { type: string }
+        subnet_hints:
+          type: array
+          items: { type: string }
+        adaptive:
+          type: object
+          properties:
+            timelapse_interval: { type: string }
+        longitude: { type: number }
+        latitude: { type: number }
+    BatchCamerasRequest:
+      title: 批量启停请求 · Batch cameras request
+      type: object
+      required: [action, ids]
+      properties:
+        action:
+          type: string
+          enum: [start, stop]
+        ids:
+          type: array
+          items: { type: string }
+          minItems: 1
+          maxItems: 100
+    BatchCamerasResponse:
+      title: 批量启停结果 · Batch cameras result
+      type: object
+      properties:
+        action: { type: string, enum: [start, stop] }
+        ok:
+          type: array
+          items: { type: string }
+          description: 成功的摄像头 id / Camera ids that succeeded
+        failed:
+          type: object
+          additionalProperties: { type: string }
+          description: 失败项：摄像头 id → 错误信息 / camera id → error message
+    PTZMoveRequest:
+      title: 云台移动请求 · PTZ move
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [continuous, relative, absolute]
+        pan:
+          type: number
+          description: 左右。连续模式为速度 `[-1,1]` / Left/right. Continuous = velocity `[-1,1]`
+        tilt:
+          type: number
+          description: 俯仰 / Down/up
+        zoom:
+          type: number
+          description: 变倍 / Out/in
+    Recording:
+      title: 录像 · Recording
+      description: |
+        本机落盘的一段录像。
+        One on-disk recording segment.
+      type: object
+      required: [id, camera_id, started_at]
+      properties:
+        id: { type: string }
         camera_id: { type: string }
-        source: { type: string }
-        event_type: { type: string }
-        severity: { type: string }
+        file_path: { type: string }
+        format:
+          type: string
+          enum: [h264, h265, mjpeg, timelapse]
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        duration:
+          type: number
+          description: 时长（秒）/ Duration in seconds
+        file_size:
+          type: integer
+          description: 文件大小（字节）/ Size in bytes
+        frame_count: { type: integer }
+        merged: { type: boolean }
+        merge_status:
+          type: string
+          enum: [pending, merged, failed]
+        archived: { type: boolean }
+        reconnected_at:
+          type: string
+          format: date-time
+          description: 断线重连后本段开始时间 / Set when this segment starts after a reconnect gap
+        gap_reason:
+          type: string
+          description: 本段之前出现缺口的原因（重连、暂停等）/ Why a gap exists before this segment (reconnect, pause, …)
+        locked:
+          type: boolean
+          description: 为 true 时清理和删除都会跳过 / When true, cleanup and delete are skipped
+    RecordingList:
+      title: 录像列表 · Recording list
+      type: object
+      required: [recordings]
+      properties:
+        recordings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Recording"
+        total:
+          type: integer
+    TimelineEntry:
+      title: 时间轴条目 · Timeline entry
+      type: object
+      properties:
+        id: { type: string }
+        camera_id: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        duration: { type: number }
+        format: { type: string }
+        merged: { type: boolean }
+        gap_reason: { type: string }
+        locked: { type: boolean }
+    TimelineResponse:
+      title: 时间轴响应 · Timeline response
+      type: object
+      required: [camera_id, entries]
+      properties:
+        camera_id: { type: string }
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/TimelineEntry"
+    BatchDeleteResponse:
+      title: 批量删除结果 · Batch delete result
+      type: object
+      properties:
+        deleted:
+          type: array
+          items: { type: string }
+        failed:
+          type: array
+          items: { type: string }
+        locked:
+          type: array
+          items: { type: string }
+          description: 因锁定而跳过的 id / Ids skipped because the recording is locked
+    LockResponse:
+      title: 锁定结果 · Lock result
+      type: object
+      properties:
+        status: { type: string, enum: [locked, unlocked] }
+        id: { type: string }
+        locked: { type: boolean }
+    Event:
+      title: 事件 · Event
+      description: |
+        产品级 NVR 事件，用于检索、联动和回放定位。
+        Product-level NVR event for search, linkage, and playback.
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        camera_id: { type: string }
+        source:
+          type: string
+          enum: [health, recorder, ai, mqtt]
+        type: { type: string }
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        status:
+          type: string
+          enum: [open, acknowledged]
+        message: { type: string }
+        metadata:
+          type: string
+          description: 不透明 JSON 字符串 / Opaque JSON string
+        recording_id: { type: string }
+        snapshot_path: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        acknowledged_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+    EventList:
+      title: 事件列表 · Event list
+      type: object
+      required: [events, total]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+    AlarmRule:
+      title: 告警联动规则 · Alarm rule
+      description: |
+        匹配事件后执行录像 / Webhook / 预置位。空过滤字段表示任意。
+        Match events then record, webhook, or PTZ preset. Empty filters match any.
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        enabled: { type: boolean }
+        camera_id:
+          type: string
+          description: 空 = 任意摄像头 / Empty = any camera
+        source:
+          type: string
+          description: 空 = 任意来源 / Empty = any source
+        event_type:
+          type: string
+          description: 空 = 任意类型 / Empty = any type
+        severity:
+          type: string
+          description: 空 = 任意级别 / Empty = any severity
         action:
           type: string
           enum: [record, webhook, goto_preset]
         action_target:
           type: string
-          description: Webhook URL or PTZ preset token
+          description: Webhook URL 或 ONVIF 预置位 token。`record` 不用 / Webhook URL or ONVIF preset token. Unused for `record`
+        created_at: { type: string, format: date-time }
+    CreateAlarmRule:
+      title: 创建告警规则 · Create alarm rule
+      type: object
+      required: [action]
+      properties:
+        name: { type: string }
+        camera_id: { type: string }
+        source: { type: string, enum: [health, recorder, ai, mqtt] }
+        event_type: { type: string }
+        severity: { type: string, enum: [info, warning, critical] }
+        action:
+          type: string
+          enum: [record, webhook, goto_preset]
+        action_target: { type: string }
+    Detection:
+      title: 单个检测框 · Detection
+      type: object
+      properties:
+        label: { type: string, example: person }
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        box:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items: { type: number }
+          description: 归一化 `[x, y, width, height]` / Normalized `[x, y, width, height]`
+        track_id: { type: integer }
+        zone_id: { type: string }
+    AIDetection:
+      title: AI 检测结果 · AI detection
+      type: object
+      properties:
+        camera_id: { type: string }
+        pts:
+          type: integer
+          format: int64
+          description: 流 PTS / Stream presentation timestamp
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix 毫秒时间戳 / Unix time in milliseconds
+        image_url: { type: string }
+        detections:
+          type: array
+          items:
+            $ref: "#/components/schemas/Detection"
+    AIDetectionList:
+      title: AI 检测列表 · AI detection list
+      type: object
+      properties:
+        detections:
+          type: array
+          items:
+            $ref: "#/components/schemas/AIDetection"
+        total: { type: integer }
+    GBRecordInfoRequest:
+      title: 国标录像查询请求 · GB record query
+      type: object
+      required: [device_id, channel_id, start_time, end_time]
+      properties:
+        device_id: { type: string }
+        channel_id: { type: string }
+        start_time:
+          type: string
+          description: RFC3339 或国标栈可解析的时间 / RFC3339 or datetime the GB stack accepts
+        end_time: { type: string }
+    GBRecordTime:
+      title: 国标时间段 · GB time range
+      type: object
+      properties:
+        start:
+          type: integer
+          format: int64
+          description: Unix 秒 / Unix seconds
+        end:
+          type: integer
+          format: int64
+    GBRecordDay:
+      title: 国标单日录像 · GB day records
+      type: object
+      properties:
+        date:
+          type: string
+          example: "2026-09-11"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/GBRecordTime"
+    GBRecords:
+      title: 国标录像查询结果 · GB records
+      type: object
+      properties:
+        day_total: { type: integer }
+        time_num: { type: integer }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/GBRecordDay"
+    GBPlaybackRequest:
+      title: 国标回放请求 · GB playback request
+      type: object
+      required: [device_id, channel_id, start_time, end_time]
+      properties:
+        device_id: { type: string }
+        channel_id: { type: string }
+        start_time: { type: string }
+        end_time: { type: string }
+        stream_id:
+          type: string
+          description: 可选 lalmax 流 id，默认 `{device}_{channel}_pb` / Optional lalmax stream id. Default is `{device}_{channel}_pb`
+    GBPlayURL:
+      title: 播放地址 · Play URL
+      type: object
+      properties:
+        protocol:
+          type: string
+          example: flv
+        url: { type: string }
+    GBPlaybackResponse:
+      title: 国标回放响应 · GB playback response
+      type: object
+      properties:
+        ssrc: { type: string }
+        stream_id: { type: string }
+        urls:
+          type: array
+          items:
+            $ref: "#/components/schemas/GBPlayURL"
+    GroupTreeNode:
+      title: 分组树节点 · Group tree node
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        parent_id: { type: integer, format: int64 }
+        level: { type: integer }
+        sort_order: { type: integer }
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/GroupTreeNode"
+        stats:
+          type: object
+          properties:
+            total: { type: integer }
+            online: { type: integer }
+    StorageStats:
+      title: 存储统计 · Storage stats
+      type: object
+      properties:
+        total_bytes:
+          type: integer
+          format: int64
+        used_bytes:
+          type: integer
+          format: int64
+        recording_count: { type: integer }
+        camera_count: { type: integer }
