@@ -446,6 +446,7 @@
             : formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' 
             : formProtocol === 'rtmp-pull' ? 'rtmp://example.com/live/stream' 
             : formProtocol === 'http-flv-pull' ? 'http://example.com/live/stream.flv' 
+            : formProtocol === 'udp-ts-pull' ? 'udp://239.1.1.1:5004?program=1' 
             : 'rtsp://...'}
           onblur={() => validateField('url', formUrl)} oninput={() => { if (validationErrors['url']) delete validationErrors['url']; testResult = null; }} />
         {#if formProtocol !== 'xiaomi'}

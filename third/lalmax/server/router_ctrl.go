@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
+	"github.com/q191201771/lalmax/udpts"
 )
 
 func (s *LalMaxServer) initCtrlRouter(router *gin.Engine, handlers ...gin.HandlerFunc) {
@@ -19,7 +20,10 @@ func (s *LalMaxServer) initCtrlRouter(router *gin.Engine, handlers ...gin.Handle
 }
 
 func (s *LalMaxServer) ctrlStartRelayPullHandler(c *gin.Context) {
-	var info base.ApiCtrlStartRelayPullReq
+	var info struct {
+		base.ApiCtrlStartRelayPullReq
+		ProgramID int `json:"program_id"`
+	}
 	var v base.ApiCtrlStartRelayPullResp
 	j, err := unmarshalRequestJSONBody(c.Request, &info, "url")
 	if err != nil {
@@ -42,11 +46,21 @@ func (s *LalMaxServer) ctrlStartRelayPullHandler(c *gin.Context) {
 	if !j.Exist("rtsp_mode") {
 		info.RtspMode = base.RtspModeTcp
 	}
+	if info.ProgramID > 0 {
+		info.Url = udpts.ApplyProgramID(info.Url, info.ProgramID)
+	}
 
-	Log.Infof("http api start pull. req info=%+v", info)
+	Log.Infof("http api start pull. req info=%+v", info.ApiCtrlStartRelayPullReq)
 
-	resp := s.lalsvr.CtrlStartRelayPull(info)
+	resp := s.startRelayPull(info.ApiCtrlStartRelayPullReq)
 	c.JSON(http.StatusOK, resp)
+}
+
+func (s *LalMaxServer) startRelayPull(info base.ApiCtrlStartRelayPullReq) base.ApiCtrlStartRelayPullResp {
+	if s.udptsMgr != nil && udpts.IsUDPURL(info.Url) {
+		return s.udptsMgr.Start(info)
+	}
+	return s.lalsvr.CtrlStartRelayPull(info)
 }
 
 func (s *LalMaxServer) ctrlStopRelayPullHandler(c *gin.Context) {
@@ -61,8 +75,21 @@ func (s *LalMaxServer) ctrlStopRelayPullHandler(c *gin.Context) {
 
 	Log.Infof("http api stop pull. stream_name=%s", streamName)
 
-	resp := s.lalsvr.CtrlStopRelayPull(streamName)
+	resp := s.stopRelayPull(streamName)
 	c.JSON(http.StatusOK, resp)
+}
+
+func (s *LalMaxServer) stopRelayPull(streamName string) base.ApiCtrlStopRelayPullResp {
+	if s.udptsMgr != nil {
+		if sessionID, err := s.udptsMgr.Stop(streamName); err == nil {
+			var ret base.ApiCtrlStopRelayPullResp
+			ret.ErrorCode = base.ErrorCodeSucc
+			ret.Desp = base.DespSucc
+			ret.Data.SessionId = sessionID
+			return ret
+		}
+	}
+	return s.lalsvr.CtrlStopRelayPull(streamName)
 }
 
 func (s *LalMaxServer) ctrlKickSessionHandler(c *gin.Context) {

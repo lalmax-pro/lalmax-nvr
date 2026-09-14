@@ -259,7 +259,7 @@ func (s *LalMaxServer) zlmAddStreamProxyHandler(c *gin.Context) {
 		pullReq.PullTimeoutMs = logic.DefaultApiCtrlStartRelayPullReqPullTimeoutMs
 	}
 
-	resp := s.lalsvr.CtrlStartRelayPull(pullReq)
+	resp := s.startRelayPull(pullReq)
 	if resp.ErrorCode != base.ErrorCodeSucc {
 		c.JSON(http.StatusOK, ZlmAddStreamProxyResp{ZlmFixedHeader: ZlmFixedHeader{Code: -1, Msg: resp.Desp}})
 		return

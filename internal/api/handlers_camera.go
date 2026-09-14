@@ -75,7 +75,7 @@ func (h *Handler) resolveCameraSourceType(ctx context.Context, row *storage.Came
 	case "rtmp_push", "srt_push", "whip_push", "relay_pull":
 		row.SourceType = row.Protocol
 		return
-	case "rtmp-pull", "http-flv-pull":
+	case "rtmp-pull", "http-flv-pull", "udp-ts-pull":
 		row.SourceType = "relay_pull"
 		return
 	}
@@ -200,6 +200,7 @@ var validProtocols = map[string]bool{
 	// Pull protocols (relay to lalmax)
 	"rtmp-pull":     true,
 	"http-flv-pull": true,
+	"udp-ts-pull":   true,
 	// Legacy combined protocols (accepted, will be normalized)
 	"rtsp_h264":  true,
 	"rtsp_h265":  true,

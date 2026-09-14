@@ -19,6 +19,17 @@ This file records local changes made to `third/lalmax` for lalmax-nvr.
 - Upstreamable: Yes, as a generic embedded lifecycle API.
 - Test: `go test ./server ./srt ./rtc ./gb28181/rtppub`
 
+### udp-ts-customize-pub
+
+- Reason: Pull UDP (unicast/multicast) MPEG-TS into lalmax via CustomizePub. Demux uses go-astits so PAT/PMT program_number can be selected (URL `?program=` or JSON `program_id`); gomedia OnFrame has no program id. AAC still uses gomedia go-codec like SRT.
+- Files:
+  - `udpts/`
+  - `server/server.go`
+  - `server/router_ctrl.go`
+  - `server/router_zlm_compat.go`
+- Upstreamable: Yes.
+- Test: `go test ./udpts ./server`
+
 ## Patch template
 
 ### patch-name

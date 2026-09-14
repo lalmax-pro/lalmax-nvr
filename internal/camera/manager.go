@@ -416,7 +416,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			}
 		}
 		rec = recorder.NewTimelapseRecorder(tlCfg, cm.store)
-	case "rtmp-pull", "http-flv-pull":
+	case "rtmp-pull", "http-flv-pull", "udp-ts-pull":
 		// These protocols pull via lalmax relay, then record via lalmax's RTSP output
 		if recordingSourceURL == "" {
 			logger.Warn("relay pull protocol requires media engine", "camera_id", cam.ID, "protocol", cam.Protocol)
@@ -478,7 +478,7 @@ func (cm *CameraManager) recordingSourceURL(cam config.CameraConfig) string {
 		if enc := cm.normalizedRecordingEncoding(cam); enc != string(model.FormatH264) && enc != string(model.FormatH265) {
 			return ""
 		}
-	case "rtmp-pull", "http-flv-pull":
+	case "rtmp-pull", "http-flv-pull", "udp-ts-pull":
 		// Relay pull protocols always use lalmax RTSP output for recording
 		if cam.Encoding != string(model.FormatH264) && cam.Encoding != string(model.FormatH265) && cam.Encoding != "" {
 			return ""
@@ -1783,7 +1783,7 @@ func (cm *CameraManager) shouldStartMediaPull(cam config.CameraConfig) bool {
 			return false
 		}
 		return cam.Encoding == string(model.FormatH264) || cam.Encoding == string(model.FormatH265)
-	case "rtmp-pull", "http-flv-pull":
+	case "rtmp-pull", "http-flv-pull", "udp-ts-pull":
 		// These protocols are pure relay pulls — always start media pull
 		return true
 	default:
@@ -1835,6 +1835,8 @@ func (cm *CameraManager) resolveMediaSourceURL(ctx context.Context, cam config.C
 		return applySourceCredentials(cam.URL, cam.Username, cam.Password)
 	case string(model.ProtoONVIF):
 		return cm.resolveONVIFStreamURL(ctx, cam)
+	case "rtmp-pull", "http-flv-pull", "udp-ts-pull":
+		return cam.URL, nil
 	default:
 		return "", nil
 	}
