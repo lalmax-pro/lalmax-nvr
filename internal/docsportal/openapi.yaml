@@ -318,7 +318,7 @@ paths:
               latitude: 31.2304
       responses:
         "200":
-          description: 能重新加载行时返回完整摄像头，否则 `{status: updated}` / Updated camera when the row can be reloaded; otherwise `{status: updated}`
+          description: "能重新加载行时返回完整摄像头，否则 `{status: updated}` / Updated camera when the row can be reloaded; otherwise `{status: updated}`"
           content:
             application/json:
               schema:
@@ -512,7 +512,7 @@ paths:
         - in: query
           name: merged
           schema: { type: boolean }
-          description: `true` 仅已合并分段，`false` 仅未合并。省略则全部。 / `true` = merged only, `false` = unmerged only. Omit for all.
+          description: "`true` 仅已合并分段，`false` 仅未合并。省略则全部。 / `true` = merged only, `false` = unmerged only. Omit for all."
         - in: query
           name: search
           schema: { type: string }
@@ -717,7 +717,7 @@ paths:
         - in: query
           name: inline
           schema: { type: string, enum: ["1"] }
-          description: 设为 `inline` 以便浏览器预览，默认是附件下载 / Use `Content-Disposition: inline` instead of `attachment` so the browser can preview.
+          description: "设为 `inline` 以便浏览器预览，默认是附件下载 / Use `Content-Disposition: inline` instead of `attachment` so the browser can preview."
       summary: 下载录像文件 · Download file
       description: |
         支持 HTTP `Range`。默认 `Content-Disposition: attachment`。
@@ -808,7 +808,7 @@ paths:
         - in: query
           name: token
           schema: { type: string }
-          description: EventSource 用的 Basic token，值为 base64(`username:password`) / base64(`username:password`) for EventSource
+          description: "EventSource 用的 Basic token，值为 base64(`username:password`) / base64(`username:password`) for EventSource"
       responses:
         "200":
           description: SSE 事件流 / SSE stream
@@ -1071,7 +1071,7 @@ paths:
         - in: query
           name: stats
           schema: { type: boolean }
-          description: 为 true 时每个节点带 `{total, online}` 通道统计 / When true, each node includes `{total, online}` channel counts.
+          description: "为 true 时每个节点带 `{total, online}` 通道统计 / When true, each node includes `{total, online}` channel counts."
       responses:
         "200":
           description: 嵌套分组 / Nested groups
@@ -1123,14 +1123,14 @@ components:
     basicAuth:
       type: http
       scheme: basic
-      description: 请求头 `Authorization: Basic base64(username:password)`。默认用户 `admin`。 / `Authorization: Basic base64(username:password)`. Default user is `admin`.
+      description: "请求头 `Authorization: Basic base64(username:password)`。默认用户 `admin`。 / `Authorization: Basic base64(username:password)`. Default user is `admin`."
   parameters:
     CameraID:
       in: path
       name: id
       required: true
       schema: { type: string }
-      description: 摄像头 id。国标摄像头为 `deviceId:channelId`。 / Camera id (slug). GB28181 cameras use `deviceId:channelId`.
+      description: "摄像头 id。国标摄像头为 `deviceId:channelId`。 / Camera id (slug). GB28181 cameras use `deviceId:channelId`."
       example: front-door
     RecordingID:
       in: path
@@ -1281,7 +1281,7 @@ components:
           description: 显示名称 / Display name
         protocol:
           type: string
-          description: 传输协议：`rtsp` / `http` / `onvif` / `xiaomi` / `gb28181` 及推拉流变体 / Transport: `rtsp`, `http`, `onvif`, `xiaomi`, `gb28181`, plus push/pull variants
+          description: "传输协议：`rtsp` / `http` / `onvif` / `xiaomi` / `gb28181` 及推拉流变体 / Transport: `rtsp`, `http`, `onvif`, `xiaomi`, `gb28181`, plus push/pull variants"
           example: rtsp
         encoding:
           type: string
@@ -1382,7 +1382,7 @@ components:
           description: IP 重发现用的额外网段 / Extra CIDRs for IP rediscovery
         adaptive:
           type: object
-          description: `recording_mode=adaptive` 时的稀疏录像参数 / Sparse-recording settings when adaptive
+          description: "`recording_mode=adaptive` 时的稀疏录像参数 / Sparse-recording settings when adaptive"
           properties:
             timelapse_interval:
               type: string
@@ -1818,7 +1818,7 @@ components:
         end_time: { type: string }
         stream_id:
           type: string
-          description: 可选 lalmax 流 id，默认 `{device}_{channel}_pb` / Optional lalmax stream id. Default is `{device}_{channel}_pb`
+          description: "可选 lalmax 流 id，默认 `{device}_{channel}_pb` / Optional lalmax stream id. Default is `{device}_{channel}_pb`"
     GBPlayURL:
       title: 播放地址 · Play URL
       type: object
