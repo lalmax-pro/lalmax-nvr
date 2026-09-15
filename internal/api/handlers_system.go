@@ -1084,6 +1084,14 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
 		},
 		{
+			ID:           "udp-ts-pull",
+			Label:        "UDP TS Pull",
+			Encodings:    []string{"h264", "h265"},
+			BuiltIn:      true,
+			Addable:      true,
+			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+		},
+		{
 			ID:           "rtmp",
 			Label:        "RTMP Push",
 			Encodings:    []string{"h264", "h265"},

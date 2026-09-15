@@ -13,6 +13,7 @@ import (
 	"github.com/q191201771/lalmax/rtc"
 
 	"github.com/q191201771/lalmax/gb28181/rtppub"
+	"github.com/q191201771/lalmax/udpts"
 
 	maxlogic "github.com/q191201771/lalmax/logic"
 
@@ -42,6 +43,7 @@ type LalMaxServer struct {
 	httpfmp4svr *httpfmp4.HttpFmp4Server
 	hlssvr      *hls.HlsServer
 	rtpPubMgr   *rtppub.Manager
+	udptsMgr    *udpts.Manager
 	recorder    *ffmpegRecorder
 
 	mu       sync.Mutex
@@ -103,6 +105,7 @@ func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxSe
 		stats:     maxlogic.NewStatAggregator(maxlogic.GetGroupManagerInstance()),
 		notifyHub: notifyHub,
 		rtpPubMgr: rtppub.NewManager(lalsvr, conf.GB28181Config.MediaConfig),
+		udptsMgr:  udpts.NewManager(lalsvr),
 		recorder:  newFfmpegRecorder(""),
 	}
 
@@ -291,6 +294,9 @@ func (s *LalMaxServer) Shutdown(ctx context.Context) error {
 	}
 	if s.rtpPubMgr != nil {
 		s.rtpPubMgr.StopAll()
+	}
+	if s.udptsMgr != nil {
+		s.udptsMgr.StopAll()
 	}
 
 	disposeDone := make(chan struct{})

@@ -258,6 +258,14 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: false },
   },
   {
+    id: 'udp-ts-pull',
+    label: 'UDP TS Pull',
+    encodings: ['h264', 'h265'],
+    builtIn: true,
+    addable: true,
+    capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: false },
+  },
+  {
     id: 'rtmp',
     label: 'RTMP Push',
     encodings: ['h264', 'h265'],
