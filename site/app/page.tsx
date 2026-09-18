@@ -166,7 +166,7 @@ export default function Home() {
               <span className="browser-dot green" />
               <span className="browser-url">localhost:9090</span>
             </div>
-            <img src={`${basePath}/dashboard.png`} alt="lalmax-nvr 控制台预览" />
+            <img src={`${basePath}/dashboard.jpg`} alt="lalmax-nvr 控制台预览" />
           </div>
         </div>
       </section>
