@@ -18,10 +18,16 @@
 
 ## 截图
 
-![登录页](docs/images/login-light.png)
-![仪表盘](docs/images/dashboard-light.png)
-![录像回放](docs/images/recordings-light.png)
-![设置页](docs/images/settings-light.png)
+![登录页](docs/images/login-light-zh.png)
+![监控大屏](docs/images/dashboard-light-zh.jpg)
+![仪表盘](docs/images/stats-light-zh.png)
+![设备管理](docs/images/devices-light-zh.png)
+![实时预览](docs/images/live-light-zh.jpg)
+![录像回放](docs/images/recordings-light-zh.jpg)
+![事件](docs/images/events-light-zh.png)
+![流管理](docs/images/streams-light-zh.png)
+![用户管理](docs/images/users-light-zh.png)
+![设置页](docs/images/settings-light-zh.png)
 
 ## 架构
 

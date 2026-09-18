@@ -19,8 +19,14 @@ This project was inspired by MiBeeNVR, and has since been developed into a dedic
 ## Screenshots
 
 ![Login](docs/images/login-light.png)
-![Dashboard](docs/images/dashboard-light.png)
-![Recordings](docs/images/recordings-light.png)
+![Monitoring](docs/images/dashboard-light.jpg)
+![Statistics](docs/images/stats-light.png)
+![Device manager](docs/images/devices-light.png)
+![Live preview](docs/images/live-light.jpg)
+![Recordings](docs/images/recordings-light.jpg)
+![Events](docs/images/events-light.png)
+![Streams](docs/images/streams-light.png)
+![Users](docs/images/users-light.png)
 ![Settings](docs/images/settings-light.png)
 
 ## Architecture
