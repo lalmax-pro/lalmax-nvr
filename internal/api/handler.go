@@ -28,6 +28,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/observability"
 	"github.com/lalmax-pro/lalmax-nvr/internal/onvif"
+	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
 	"github.com/lalmax-pro/lalmax-nvr/internal/relay"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
@@ -35,6 +36,24 @@ import (
 var logger = slog.Default().With("component", "api")
 
 var appStartTime = time.Now()
+
+// mediaProxyClient is used for live HLS/FLV/fMP4/WebRTC proxying.
+// Timeout is unset so long-lived streams are not killed; header wait is bounded
+// on the Transport. DefaultClient is not used because it has no timeouts and
+// shares an unbounded connection pool with the rest of the process.
+var mediaProxyClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
 
 // HealthCheck represents the result of a single health check.
 type HealthCheck struct {
@@ -123,35 +142,38 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
-	db                *storage.DB
-	store             *storage.Manager
-	authMW            func(http.Handler) http.Handler
-	multiUserMW       func(http.Handler) http.Handler
-	config            *config.Config
-	configWatcher     *config.Watcher
-	restartFunc       func()
-	restartOnce       sync.Once
-	camMgr            *camera.CameraManager
-	mediaEngine       media.Engine
-	wsMgr             media.WS
-	configPath        string
-	snapshotMu        sync.RWMutex
-	snapshots         map[string]*snapshotCache // cameraID -> cached snapshot
-	mergeMgr          *merge.MergeManager
-	healthMgr         HealthManager
-	stabilityProvider StabilityProvider
-	cloudProxy        CloudAuthProxy
-	streamRegistry    *StreamRegistry
-	aiManager         *ai.Manager
-	onvifDiscover     func(ctx context.Context, timeout time.Duration) *onvif.DiscoveryResult
-	onvifProbeDevice  func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error)
-	onvifNewClient    func(endpoint, username, password string) onvifDeviceClient
-	banMgr            BanManager
-	gb28181Svr        GB28181StreamStatus
-	gb28181Restarter  GB28181Restarter
-	gb28181Server     *gb28181.Server
-	snapshotMgr       *camera.SnapshotManager
-	relayMgr          *relay.Manager
+	db                 *storage.DB
+	store              *storage.Manager
+	authMW             func(http.Handler) http.Handler
+	multiUserMW        func(http.Handler) http.Handler
+	config             *config.Config
+	configWatcher      *config.Watcher
+	restartFunc        func()
+	restartOnce        sync.Once
+	camMgr             *camera.CameraManager
+	recPlanner         *recorder.RecordingPlanner
+	reconcileRecording func(context.Context)
+	mediaEngine        media.Engine
+	mediaProxy         *http.Client
+	wsMgr              media.WS
+	configPath         string
+	snapshotMu         sync.RWMutex
+	snapshots          map[string]*snapshotCache // cameraID -> cached snapshot
+	mergeMgr           *merge.MergeManager
+	healthMgr          HealthManager
+	stabilityProvider  StabilityProvider
+	cloudProxy         CloudAuthProxy
+	streamRegistry     *StreamRegistry
+	aiManager          *ai.Manager
+	onvifDiscover      func(ctx context.Context, timeout time.Duration) *onvif.DiscoveryResult
+	onvifProbeDevice   func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error)
+	onvifNewClient     func(endpoint, username, password string) onvifDeviceClient
+	banMgr             BanManager
+	gb28181Svr         GB28181StreamStatus
+	gb28181Restarter   GB28181Restarter
+	gb28181Server      *gb28181.Server
+	snapshotMgr        *camera.SnapshotManager
+	relayMgr           *relay.Manager
 	// readyzDiskUsage overrides disk probing for /api/readyz (tests only).
 	readyzDiskUsage func() (total, used int64, err error)
 	// sysMetrics holds the in-memory ring buffer of periodic system metric samples.
@@ -163,6 +185,8 @@ type Handler struct {
 	autoDiscoverApply func(config.AutoDiscoverConfig)
 	eventHub          *event.LiveHub
 	linkage           *linkage.Engine
+	logRing           *middleware.LogRing
+	serviceLogPath    string
 }
 
 // GB28181StreamStatus reports active GB28181 play sessions for stream status overlay.
@@ -181,6 +205,14 @@ type GB28181ServerProvider interface {
 
 func (h *Handler) SetConfigWatcher(w *config.Watcher) {
 	h.configWatcher = w
+}
+
+// SetServiceLogPath points the service-log page at lalmax-nvr.log.
+func (h *Handler) SetServiceLogPath(path string) {
+	if h == nil {
+		return
+	}
+	h.serviceLogPath = strings.TrimSpace(path)
 }
 
 // SetRestartFunc registers the process restart callback used by first-time
@@ -215,6 +247,7 @@ func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler
 			return onvif.NewClient(endpoint, username, password)
 		},
 		eventHub: event.NewLiveHub(),
+		logRing:  middleware.DefaultLogRing(),
 	}
 	if db != nil {
 		hub := h.eventHub
@@ -329,6 +362,8 @@ func (h *Handler) Routes() http.Handler {
 			})
 		})
 		r.With(middleware.RequireOperatePermission()).Get("/api/operation-logs", h.handleListOperationLogs)
+		r.With(middleware.RequireOperatePermission()).Get("/api/service-logs", h.handleListServiceLogs)
+		r.With(middleware.RequireOperatePermission()).Get("/api/service-logs/stream", h.handleServiceLogsStream)
 		r.Route("/api/cameras", func(r chi.Router) {
 			r.Get("/", h.handleListCameras)
 			r.With(middleware.RequireOperatePermission()).Post("/", h.handleCreateCamera)
@@ -393,9 +428,6 @@ func (h *Handler) Routes() http.Handler {
 				// Per-camera timelapse configuration
 				r.Get("/timelapse", h.handleGetCameraTimelapse)
 				r.With(middleware.RequireOperatePermission()).Put("/timelapse", h.handlePutCameraTimelapse)
-				// Per-camera recording schedule (used when recording_mode = scheduled)
-				r.Get("/recording-schedule", h.handleGetRecordingSchedule)
-				r.With(middleware.RequireOperatePermission()).Put("/recording-schedule", h.handleSetRecordingSchedule)
 				r.With(middleware.RequireOperatePermission()).Post("/start", h.handleStartCamera)
 				r.With(middleware.RequireOperatePermission()).Post("/stop", h.handleStopCamera)
 				r.With(middleware.RequireOperatePermission()).Post("/pause-recording", h.handlePauseRecording)
@@ -413,8 +445,21 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/stats/camera-uptime", h.handleCameraUptimeStats)
 		r.Get("/api/observability/api", h.handleAPIObservability)
 		r.Get("/api/network", h.handleGetNetworkInterfaces)
+		r.Get("/api/recording-plans", h.handleListRecordingPlans)
+		r.With(middleware.RequireOperatePermission()).Post("/api/recording-plans", h.handleCreateRecordingPlan)
+		r.Get("/api/recording-plans/{id}", h.handleGetRecordingPlan)
+		r.With(middleware.RequireOperatePermission()).Put("/api/recording-plans/{id}", h.handleUpdateRecordingPlan)
+		r.With(middleware.RequireOperatePermission()).Delete("/api/recording-plans/{id}", h.handleDeleteRecordingPlan)
 		r.Get("/api/streams", h.handleListStreams)
+		r.With(middleware.RequireOperatePermission()).Post("/api/streams", h.handleCreateStream)
 		r.Get("/api/streams/{stream_id}", h.handleGetStream)
+		r.With(middleware.RequireOperatePermission()).Put("/api/streams/{stream_id}", h.handleUpdateStream)
+		r.Get("/api/streams/{stream_id}/stream/ws", h.handleStreamWS)
+		r.Get("/api/streams/{stream_id}/stream.m4s", h.handleFMP4Stream)
+		r.Get("/api/streams/{stream_id}/stream/*", h.handleHLSStream)
+		r.Post("/api/streams/{stream_id}/stream/webrtc", h.handleCreateWHEPSession)
+		r.Delete("/api/streams/{stream_id}/stream/webrtc/{session}", h.handleDeleteWHEPSession)
+		r.Get("/api/streams/{stream_id}/stream.flv", h.handleFLVStream)
 		r.Get("/api/streams/{stream_id}/metrics/history", h.handleStreamMetricsHistory)
 		r.With(middleware.RequireOperatePermission()).Post("/api/streams/{stream_id}/bind-camera", h.handleBindCamera)
 		r.With(middleware.RequireOperatePermission()).Post("/api/streams/{stream_id}/unbind-camera", h.handleUnbindCamera)
@@ -746,6 +791,19 @@ func (h *Handler) SetWSManager(mgr media.WS) {
 // SetMediaEngine sets the lal/lalmax-backed media engine on the handler.
 func (h *Handler) SetMediaEngine(engine media.Engine) {
 	h.mediaEngine = engine
+	h.mediaProxy = mediaProxyClient
+	if p, ok := engine.(media.PlayHandlerProvider); ok && p.PlayHTTPHandler() != nil {
+		h.mediaProxy = &http.Client{
+			Transport: media.NewInProcessPlayTransport(p, mediaProxyClient.Transport),
+		}
+	}
+}
+
+func (h *Handler) playProxyClient() *http.Client {
+	if h != nil && h.mediaProxy != nil {
+		return h.mediaProxy
+	}
+	return mediaProxyClient
 }
 
 // SetHealthManager sets the health manager on the handler.
@@ -898,15 +956,36 @@ func (h *Handler) proxyMediaRequest(w http.ResponseWriter, r *http.Request, upst
 		return err
 	}
 	req.Header = r.Header.Clone()
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := h.playProxyClient().Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	copyHeaderFiltered(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, resp.Body)
-	return err
+	return copyBodyFlush(w, resp.Body)
+}
+
+func copyBodyFlush(dst http.ResponseWriter, src io.Reader) error {
+	buf := make([]byte, 32*1024)
+	flusher, _ := dst.(http.Flusher)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
 }
 
 func copyHeaderFiltered(dst, src http.Header) {
@@ -914,12 +993,22 @@ func copyHeaderFiltered(dst, src http.Header) {
 		dst.Del(k)
 	}
 	for k, values := range src {
-		if strings.EqualFold(k, "Content-Length") {
+		if isHopByHopHeader(k) {
 			continue
 		}
 		for _, v := range values {
 			dst.Add(k, v)
 		}
+	}
+}
+
+func isHopByHopHeader(k string) bool {
+	switch strings.ToLower(k) {
+	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+		"te", "trailers", "transfer-encoding", "upgrade", "content-length":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1023,6 +1112,12 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 	streamID, quality := h.resolvePlayStreamID(r, id)
 	w.Header().Set("X-Stream-Quality", quality)
 	protocols = h.attachMediaPlayURLs(r.Context(), streamID, protocols)
+	for i := range protocols {
+		if protocols[i].Protocol == "wasm" && protocols[i].Available {
+			protocols[i].PlayURL = "/api/cameras/" + id + "/stream/ws"
+			protocols[i].Backend = "builtin-ws"
+		}
+	}
 	if quality == "sub" {
 		for i := range protocols {
 			switch protocols[i].Protocol {
@@ -1091,18 +1186,22 @@ func (h *Handler) getCameraStreamStatus(ctx context.Context, cameraID string) *c
 	if h.mediaEngine == nil {
 		return nil
 	}
-	info, err := h.mediaEngine.GetStream(ctx, cameraID)
+	streamID := h.cameraIngestStreamID(ctx, cameraID)
+	if streamID == "" {
+		return &cameraStreamStatus{Engine: "lalmax"}
+	}
+	info, err := h.mediaEngine.GetStream(ctx, streamID)
 	if err != nil {
 		return &cameraStreamStatus{
 			Engine:    "lalmax",
-			StreamID:  cameraID,
+			StreamID:  streamID,
 			LastError: err.Error(),
 		}
 	}
 	if info == nil {
 		return &cameraStreamStatus{
 			Engine:   "lalmax",
-			StreamID: cameraID,
+			StreamID: streamID,
 		}
 	}
 
@@ -1125,19 +1224,7 @@ func (h *Handler) getCameraStreamStatus(ctx context.Context, cameraID string) *c
 			WriteBitrateKbits: info.Publisher.WriteBitrateKbits,
 		}
 	}
-	if len(info.Subscribers) > 0 {
-		status.Subscribers = make([]cameraSessionStatus, 0, len(info.Subscribers))
-		for _, sub := range info.Subscribers {
-			status.Subscribers = append(status.Subscribers, cameraSessionStatus{
-				SessionID:         sub.SessionID,
-				Protocol:          sub.Protocol,
-				Remote:            sub.Remote,
-				BitrateKbits:      sub.BitrateKbits,
-				ReadBitrateKbits:  sub.ReadBitrateKbits,
-				WriteBitrateKbits: sub.WriteBitrateKbits,
-			})
-		}
-	}
+	status.Subscribers = sessionStatusesFromInfo(info.Subscribers)
 	return status
 }
 

@@ -37,6 +37,7 @@ func (d *DB) ArchiveAllRecordings(ctx context.Context, cameraID string) (int64, 
 	if err != nil {
 		return 0, err
 	}
+	d.invalidateRecordingsCache()
 	return result.RowsAffected()
 }
 
@@ -48,6 +49,7 @@ func (d *DB) UnarchiveAllRecordings(ctx context.Context, cameraID string) (int64
 	if err != nil {
 		return 0, err
 	}
+	d.invalidateRecordingsCache()
 	return result.RowsAffected()
 }
 

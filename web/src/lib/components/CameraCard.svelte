@@ -4,7 +4,7 @@
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
   import type { PTZCapabilitiesDetailed } from '$lib/api/cameras';
-  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home, CalendarClock, CircleOff, KeyRound, Search, Copy, GitBranch } from 'lucide-svelte';
+  import { Pencil, Play, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home, CalendarClock, CircleOff, KeyRound, Search, Copy, GitBranch } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import CameraFlowTree from '$lib/components/CameraFlowTree.svelte';
 
@@ -21,8 +21,6 @@
     onrestart: (camera: Camera) => void;
     ontoggle: (camera: Camera) => void;
     onsaveName: (camera: Camera, name: string) => void;
-    onpause?: (camera: Camera) => void;
-    onresume?: (camera: Camera) => void;
     recordingPaused?: boolean;
     showSnapshot?: boolean;
   }
@@ -40,8 +38,6 @@
     onrestart,
     ontoggle,
     onsaveName,
-    onpause,
-    onresume,
     recordingPaused = false,
     showSnapshot = true,
   }: Props = $props();
@@ -61,14 +57,15 @@
   let showFlow = $state(false);
   let copyingRtsp = $state(false);
 
+  let ingestLive = $derived(
+    camera.status === 'recording' || camera.status === 'paused' || isRecordingPaused
+  );
   let variant = $derived(
     !camera.enabled
       ? 'disabled'
-      : isRecordingPaused || camera.status === 'paused'
-        ? 'paused'
-        : camera.status === 'recording'
-          ? 'active'
-          : 'stopped'
+      : ingestLive
+        ? 'active'
+        : 'stopped'
   );
 
   let isHls = $derived(
@@ -262,9 +259,7 @@
           <span class="badge badge-warning">{t('cameras.pendingActivation')}</span>
         {:else if variant === 'disabled'}
           <span class="badge badge-neutral">{t('cameras.status.disabled')}</span>
-        {:else if isRecordingPaused || camera.status === 'paused'}
-          <span class="badge badge-warning">{t('cameras.statusPaused')}</span>
-        {:else if camera.status === 'recording'}
+        {:else if ingestLive}
           <span class="badge badge-success">{t('cameras.statusRecording')}</span>
         {:else if camera.status === 'error'}
           <span class="badge badge-error">{t('cameras.statusError')}</span>
@@ -329,7 +324,11 @@
             快照
           </span>
         {/if}
-        {#if camera.recording_mode === 'scheduled'}
+        {#if camera.recording_mode === 'continuous'}
+          <span class="inline-flex items-center gap-1 text-xs text-rose-600 bg-rose-50 dark:text-rose-400 dark:bg-rose-900/30 px-2 py-0.5 rounded">
+            {t('cameras.recordingMode.continuous')}
+          </span>
+        {:else if camera.recording_mode === 'scheduled'}
           <span class="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/30 px-2 py-0.5 rounded">
             <CalendarClock size={10} />
             {t('cameras.recordingMode.scheduled')}
@@ -444,26 +443,6 @@
             </button>
           {/if}
 
-          {#if (camera.status === 'recording' || camera.status === 'reconnecting') && !isRecordingPaused}
-            <button
-              class="btn btn-ghost px-2 py-1 text-sm"
-              onclick={() => onpause?.(camera)}
-              title={t('cameras.pauseRecording')}
-            >
-              <Pause size={14} />
-            </button>
-          {/if}
-
-          {#if isRecordingPaused}
-            <button
-              class="btn btn-ghost px-2 py-1 text-sm"
-              onclick={() => onresume?.(camera)}
-              title={t('cameras.resumeRecording')}
-            >
-              <Play size={14} />
-            </button>
-          {/if}
-
           {#if camera.status === 'recording' || camera.status === 'paused' || camera.status === 'error' || camera.status === 'reconnecting' || isRecordingPaused}
             <button
               class="btn btn-ghost px-2 py-1 text-sm"
@@ -526,6 +505,10 @@
               <a href="#/recordings?camera_id={encodeURIComponent(camera.id)}" class="dropdown-item" onclick={closeMenu}>
                 <Image size={14} />
                 {t('cameras.recordings') || '查看录像'}
+              </a>
+              <a href="#/recording-plans?stream_id={encodeURIComponent(camera.stream_id || camera.id)}" class="dropdown-item" onclick={closeMenu}>
+                <CalendarClock size={14} />
+                {t('recordingPlans.manage')}
               </a>
               <button class="dropdown-item" onclick={() => { closeMenu(); onedit(camera); }}>
                 <Pencil size={14} />

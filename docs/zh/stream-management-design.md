@@ -165,7 +165,7 @@
 语义：
 
 - `bind-camera`：将外部流绑定到已有 camera
-- `promote`：把未管理流提升为正式业务对象
+- `promote`：把未管理流 **登记为设备**（名称、位置、大屏）。**不会开始录像**；录像由 [录像计划](recording-plans.md) 决定
 
 ### 第三阶段：控制能力
 
@@ -330,7 +330,7 @@
 
 ### Phase 3：流操作 ✅ 已完成
 
-- [x] `POST /api/streams/{stream_id}/promote` - 提升外部流为正式业务对象
+- [x] `POST /api/streams/{stream_id}/promote` - 把流登记为设备（不开始录像）
 - [x] `DELETE /api/streams/{stream_id}` - 断开流（踢出发布者 + 停止拉流）
 - [x] `POST /api/streams/{stream_id}/kick-publisher` - 踢出发布者
 
@@ -342,7 +342,7 @@
 | GET | `/api/streams/{stream_id}` | 获取单个流详情 |
 | POST | `/api/streams/{stream_id}/bind-camera` | 绑定流到摄像头 |
 | POST | `/api/streams/{stream_id}/unbind-camera` | 解绑流与摄像头 |
-| POST | `/api/streams/{stream_id}/promote` | 提升为正式业务对象 |
+| POST | `/api/streams/{stream_id}/promote` | 登记为设备（不开始录像） |
 | DELETE | `/api/streams/{stream_id}` | 断开流 |
 | POST | `/api/streams/{stream_id}/kick-publisher` | 踢出发布者 |
 

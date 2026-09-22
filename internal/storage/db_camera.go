@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
@@ -56,28 +57,32 @@ type CameraRow struct {
 	SourceType string `json:"source_type,omitempty"`
 	// RecordingPaused is injected at API response time (not stored in DB)
 	RecordingPaused bool `json:"recording_paused"`
-	// RecordingMode: continuous (default) | scheduled | off | event | adaptive
-	RecordingMode string `json:"recording_mode"`
 	// ActivationState: active (default) | pending_activation
 	ActivationState string `json:"activation_state,omitempty"`
 	// StableID is the ONVIF serial used for IP self-healing.
 	StableID string `json:"stable_id,omitempty"`
+	// StreamID is the lalmax stream this camera ingests from.
+	// Injected from the stream binding / extras at API response time.
+	StreamID string `json:"stream_id,omitempty"`
 	// SubStreamURL is injected from extras at API response time.
 	SubStreamURL string `json:"sub_stream_url,omitempty"`
 	// SubProfileToken is the ONVIF sub-stream profile token.
 	SubProfileToken string `json:"sub_profile_token,omitempty"`
 	// SubnetHints are extra /24 (or smaller) CIDRs for IP rediscovery.
 	SubnetHints []string `json:"subnet_hints,omitempty"`
-	// Adaptive holds sparse-recording settings when recording_mode=adaptive.
-	Adaptive *config.CameraAdaptiveConfig `json:"adaptive,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	// RecordingMode is derived from the stream's recording plan at API response
+	// time; it is not stored on the camera. Empty means "no plan".
+	RecordingMode string `json:"recording_mode,omitempty"`
+	// Adaptive holds sparse-recording settings when the plan mode is adaptive.
+	Adaptive  *config.CameraAdaptiveConfig `json:"adaptive,omitempty"`
+	CreatedAt time.Time                    `json:"created_at"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge, merge_rolling_enabled, merge_rolling_debounce,
 		onvif_endpoint, profile_token, profile_name, stream_encoding,
-		archived, archived_at, archive_retention_days, COALESCE(recording_mode,'continuous'),
+		archived, archived_at, archive_retention_days,
 		COALESCE(activation_state,'active'), COALESCE(stable_id,''), created_at
 		FROM cameras WHERE archived=0 ORDER BY id;`)
 	if err != nil {
@@ -94,7 +99,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.RTSPTransport, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge, &mergeRollingEnabled, &mergeRollingDebounce,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.ProfileName, &c.StreamEncoding,
-			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays, &c.RecordingMode, &c.ActivationState, &c.StableID, &createdAtStr); err != nil {
+			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays, &c.ActivationState, &c.StableID, &createdAtStr); err != nil {
 			return nil, err
 		}
 		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
@@ -122,7 +127,7 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge, merge_rolling_enabled, merge_rolling_debounce,
 		onvif_endpoint, profile_token, profile_name, stream_encoding,
-		archived, archived_at, archive_retention_days, COALESCE(recording_mode,'continuous'),
+		archived, archived_at, archive_retention_days,
 		COALESCE(activation_state,'active'), COALESCE(stable_id,''), created_at
 		FROM cameras WHERE archived=1 ORDER BY id;`)
 	if err != nil {
@@ -139,7 +144,7 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.RTSPTransport, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge, &mergeRollingEnabled, &mergeRollingDebounce,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.ProfileName, &c.StreamEncoding,
-			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays, &c.RecordingMode, &c.ActivationState, &c.StableID, &createdAtStr); err != nil {
+			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays, &c.ActivationState, &c.StableID, &createdAtStr); err != nil {
 			return nil, err
 		}
 		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
@@ -185,12 +190,6 @@ func (d *DB) UpdateCameraProfileName(ctx context.Context, id, profileName string
 	return err
 }
 
-// UpdateCameraRecordingMode updates the recording_mode for a camera.
-func (d *DB) UpdateCameraRecordingMode(ctx context.Context, id, mode string) error {
-	_, err := d.db.ExecContext(ctx, `UPDATE cameras SET recording_mode=? WHERE id=?;`, mode, id)
-	return err
-}
-
 func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error) {
 	var c CameraRow
 	var mergeEnabled, mergeRollingEnabled sql.NullBool
@@ -200,13 +199,13 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge, merge_rolling_enabled, merge_rolling_debounce,
 		onvif_endpoint, profile_token, profile_name, stream_encoding,
-		archived, archived_at, archive_retention_days, COALESCE(recording_mode,'continuous'),
+		archived, archived_at, archive_retention_days,
 		COALESCE(activation_state,'active'), COALESCE(stable_id,''), created_at
 		FROM cameras WHERE id = ?`, cameraID).Scan(
 		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.RTSPTransport, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge, &mergeRollingEnabled, &mergeRollingDebounce,
 		&c.ONVIFEndpoint, &c.ProfileToken, &c.ProfileName, &c.StreamEncoding,
-		&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays, &c.RecordingMode, &c.ActivationState, &c.StableID, &createdAtStr)
+		&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays, &c.ActivationState, &c.StableID, &createdAtStr)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -250,6 +249,44 @@ func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location
 	q := `UPDATE cameras SET description=?, location=?, brand=?, model=?, serial_number=?, retention_days=? WHERE id=?;`
 	_, err := d.db.ExecContext(ctx, q, description, location, brand, model, serialNumber, retentionDays, id)
 	return err
+}
+
+// SetCameraStream points a camera at a lalmax stream.
+// The camera's extras carry the authoritative stream_id; stream_bindings is kept
+// in sync as the stream -> camera index (a camera has at most one binding).
+func (d *DB) SetCameraStream(ctx context.Context, cameraID, streamID string) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM stream_bindings WHERE camera_id = ?;`, cameraID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stream_bindings (stream_id, camera_id) VALUES (?, ?);`, streamID, cameraID); err != nil {
+		return err
+	}
+
+	var raw sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT extras_json FROM cameras WHERE id=?;`, cameraID).Scan(&raw); err != nil {
+		return err
+	}
+	extras := cameraExtras{}
+	if raw.Valid && raw.String != "" && raw.String != "{}" {
+		if err := json.Unmarshal([]byte(raw.String), &extras); err != nil {
+			return err
+		}
+	}
+	extras.StreamID = streamID
+	buf, err := json.Marshal(extras)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE cameras SET extras_json=? WHERE id=?;`, string(buf), cameraID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // StreamBinding represents a binding between a stream and a camera.

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/stretchr/testify/require"
 )
 
 // --- NewManager() ---
@@ -925,7 +925,7 @@ func TestReconcileOrphanedFiles_MJPEGSkipsRandomDirs(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(camDir, "some-random-dir"), 0755))
 	require.NoError(t, os.MkdirAll(filepath.Join(camDir, "mjpeg-cam_onlydate"), 0755))
 	require.NoError(t, os.MkdirAll(filepath.Join(camDir, "mjpeg-cam_20260514_120000"), 0755)) // missing nano part
-	require.NoError(t, os.MkdirAll(filepath.Join(camDir, "1234567890.tmp"), 0755)) // has .tmp extension
+	require.NoError(t, os.MkdirAll(filepath.Join(camDir, "1234567890.tmp"), 0755))            // has .tmp extension
 
 	cameraIDs := map[string]bool{"mjpeg-cam": true}
 	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)

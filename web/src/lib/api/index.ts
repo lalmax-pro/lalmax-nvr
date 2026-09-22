@@ -72,8 +72,6 @@ export {
   testConnection,
   getMergeConfig,
   updateMergeConfig,
-  getRecordingSchedule,
-  setRecordingSchedule,
   getRecordingDays,
   deleteCameraMergeConfig,
   ptzMove,
@@ -166,6 +164,16 @@ export type {
   // Snapshot
   SnapshotInfo,
 } from './cameras';
+
+export {
+  listRecordingPlans,
+  getRecordingPlan,
+  createRecordingPlan,
+  updateRecordingPlan,
+  deleteRecordingPlan,
+} from './recording-plans';
+export type { RecordingPlan, RecordingPlanRequest } from './recording-plans';
+
 // Recordings — list, download, frames, stats, archives
 export {
   listRecordings,
@@ -210,13 +218,16 @@ export type {
 } from './recordings';
 
 // Events — unified event center
-export { listEvents, getEvent, acknowledgeEvent, deleteEvent, eventsStreamUrl } from './events';
+export { listEvents, getEvent, acknowledgeEvent, deleteEvent, eventsStreamUrl, subscribeNvrEvents } from './events';
 export { listAlarmRules, createAlarmRule, deleteAlarmRule } from './alarm-rules';
 export type { AlarmRule } from './alarm-rules';
 
 // Operation logs — user and system audit trail
 export { listOperationLogs } from './operation-logs';
 export type { OperationLog, OperationLogsResponse, OperationLogsParams } from './operation-logs';
+
+export { listServiceLogs, subscribeServiceLogs, serviceLogsStreamUrl } from './service-logs';
+export type { ServiceLogEntry, ServiceLogsResponse, ServiceLogsParams } from './service-logs';
 
 export type { NvrEvent, EventsResponse, EventsParams, EventSource, EventSeverity, EventStatus } from './events';
 
@@ -265,10 +276,14 @@ export type {
 // Streams — runtime stream inventory
 export {
   listStreams,
+  createStream,
+  updateStream,
   getStream,
   bindCamera,
   unbindCamera,
   promoteStream,
+  streamMediaURL,
+  cameraStreamID,
   deleteStream,
   kickPublisher,
   getStreamMetricsHistory,
@@ -280,6 +295,8 @@ export type {
   StreamSessionStatus,
   StreamsResponse,
   BindCameraRequest,
+  CreateStreamRequest,
+  UpdateStreamRequest,
   PromoteStreamRequest,
   StreamOperationResponse,
   StreamMetricSample,

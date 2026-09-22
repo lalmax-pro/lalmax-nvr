@@ -850,4 +850,3 @@ func TestPUTNestedPathReadWrite(t *testing.T) {
 	assert.True(t, resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent,
 		"expected 200/201/204, got %d", resp.StatusCode)
 }
-

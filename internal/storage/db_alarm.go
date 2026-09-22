@@ -6,15 +6,15 @@ import (
 )
 
 type AlarmRow struct {
-	ID         int64     `json:"id"`
-	DeviceID   string    `json:"device_id"`
-	ChannelID  string    `json:"channel_id"`
-	AlarmType  string    `json:"alarm_type"`
-	AlarmTime  time.Time `json:"alarm_time"`
-	Priority   int       `json:"priority"`
-	Method     string    `json:"method"`
-	Description string   `json:"description"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID          int64     `json:"id"`
+	DeviceID    string    `json:"device_id"`
+	ChannelID   string    `json:"channel_id"`
+	AlarmType   string    `json:"alarm_type"`
+	AlarmTime   time.Time `json:"alarm_time"`
+	Priority    int       `json:"priority"`
+	Method      string    `json:"method"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 func (d *DB) createAlarmTable(ctx context.Context) error {

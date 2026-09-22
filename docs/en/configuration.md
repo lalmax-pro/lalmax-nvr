@@ -683,7 +683,7 @@ auto_discover:
 
 ## Event recording
 
-Used when a camera's `recording_mode` is `event` (MQTT / ONVIF motion) or `adaptive` (sparse IDR while calm).
+Used when a stream recording plan `mode` is `event` (MQTT / ONVIF motion) or `adaptive` (sparse IDR while calm). Plans hang off `stream_id`; see [Recording plans](recording-plans.md).
 
 ```yaml
 event:

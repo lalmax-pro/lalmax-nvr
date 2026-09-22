@@ -14,8 +14,10 @@ logging_test.go # Logging tests
 security.go     # Security headers middleware (CSP, X-Frame-Options, etc.)
 security_test.go
 recorder.go     # StatusRecorder — wraps ResponseWriter to capture status code + bytes
-slogutil.go     # slog utilities — custom error handler for chi
+slogutil.go     # slog utilities — SetupLogger tees stdout + in-memory ring
 slogutil_test.go
+logring.go      # in-memory slog ring for the Web service-log viewer
+logring_test.go
 ```
 
 ## WHERE TO LOOK
@@ -27,6 +29,7 @@ slogutil_test.go
 | Auth cache | `authCacheEntry` in `auth.go` | Caches successful bcrypt result for 5 min |
 | Password hashing | `HashPassword()` | Exported, also used by CLI `hash-password` subcommand |
 | Request logging | `logging.go` | Logs method, path, status, duration, bytes, remote_addr |
+| Service log ring | `logring.go` | In-memory slog buffer for GET /api/service-logs |
 | Security headers | `security.go` | CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy |
 
 ## CONVENTIONS

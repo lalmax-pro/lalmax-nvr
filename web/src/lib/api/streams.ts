@@ -18,6 +18,7 @@ export interface StreamPlayURL {
 export interface StreamInfo {
   engine: string;
   stream_id: string;
+  name?: string;
   app_name?: string;
   managed: boolean;
   management_type?: 'bound' | 'promoted' | 'camera';
@@ -33,6 +34,8 @@ export interface StreamInfo {
   in_fps?: number;
   last_frame_time?: string;
   play_urls?: StreamPlayURL[];
+  ingest_urls?: StreamPlayURL[];
+  source_url?: string;
 }
 
 export interface StreamsResponse {
@@ -66,6 +69,33 @@ export interface PromoteStreamRequest {
   location?: string;
 }
 
+export interface CreateStreamRequest {
+  stream_id: string;
+  name?: string;
+  input_mode?: 'push' | 'pull';
+  source_url?: string;
+}
+
+export interface UpdateStreamRequest {
+  name: string;
+}
+
+export async function createStream(data: CreateStreamRequest, signal?: AbortSignal): Promise<StreamInfo> {
+  return apiRequest<StreamInfo>('/streams', {
+    method: 'POST',
+    body: JSON.stringify(data),
+    signal,
+  });
+}
+
+export async function updateStream(streamId: string, data: UpdateStreamRequest, signal?: AbortSignal): Promise<StreamInfo> {
+  return apiRequest<StreamInfo>(`/streams/${encodeURIComponent(streamId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+    signal,
+  });
+}
+
 export interface StreamOperationResponse {
   stream_id: string;
   camera_id?: string;
@@ -94,6 +124,31 @@ export async function listStreams(
     limit: response.limit ?? 20,
     offset: response.offset ?? 0,
   };
+}
+
+/** The lalmax stream ID backing a camera row. */
+export function cameraStreamID(camera: { id: string; stream_id?: string }): string {
+  return camera.stream_id || camera.id;
+}
+
+export function streamMediaURL(streamId: string, protocol: 'flv' | 'hls' | 'll-hls' | 'fmp4' | 'ws' | 'webrtc'): string {
+  const id = encodeURIComponent(streamId);
+  switch (protocol) {
+    case 'flv':
+      return `/api/streams/${id}/stream.flv`;
+    case 'hls':
+      return `/api/streams/${id}/stream/index.m3u8`;
+    case 'll-hls':
+      return `/api/streams/${id}/stream/index.m3u8?ll-hls=1`;
+    case 'fmp4':
+      return `/api/streams/${id}/stream.m4s`;
+    case 'ws':
+      return `/api/streams/${id}/stream/ws`;
+    case 'webrtc':
+      return `/api/streams/${id}/stream/webrtc`;
+    default:
+      return `/api/streams/${id}/stream.flv`;
+  }
 }
 
 export async function getStream(streamId: string, signal?: AbortSignal): Promise<StreamInfo> {

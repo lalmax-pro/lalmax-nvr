@@ -163,7 +163,7 @@ sequenceDiagram
   VOD->>Disk: 按 sample 切 fMP4（约 6s）
 ```
 
-- 录像模式：`continuous` / `scheduled` / `event` / `adaptive` / `off`。
+- 录像由 **计划** 驱动，计划挂在流（`stream_id`）上，不是摄像头上。模式：`continuous` / `scheduled` / `event` / `adaptive` / `off`。没有计划就不录；把流登记为设备也不会自动开录。详见 [录像计划](recording-plans.md)。
 - **滚动合并**：片段一关就 debounce（默认 5s）合进小时桶；周期合并仍做历史补齐。
 - **连续 VOD**：录像页按天拉 `playlist.m3u8`，段间缺口用 `#EXT-X-DISCONTINUITY`。MJPEG 仍走单文件播放。
 

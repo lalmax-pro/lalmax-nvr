@@ -116,7 +116,7 @@ func TestSplitAnnexBNALUsMixedStartCodes(t *testing.T) {
 	t.Helper()
 	data := []byte{
 		0x00, 0x00, 0x00, 0x01, 0x67, 0x01, // SPS (4-byte start code)
-		0x00, 0x00, 0x01, 0x68, 0x02,       // PPS (3-byte start code)
+		0x00, 0x00, 0x01, 0x68, 0x02, // PPS (3-byte start code)
 	}
 	nalus := splitAnnexBNALUs(data)
 	require.Len(t, nalus, 2)
@@ -165,7 +165,7 @@ func TestXiaomiRecorderInitialStatus(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		DID: "test-device",
+		DID:      "test-device",
 	}, &noopSegmentStore{})
 	require.Equal(t, model.StatusStopped, r.Status())
 }
@@ -174,7 +174,7 @@ func TestXiaomiRecorderStopWithoutStart(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		DID: "test-device",
+		DID:      "test-device",
 	}, &noopSegmentStore{})
 	// Stop without start should not panic.
 	err := r.Stop()
@@ -186,7 +186,7 @@ func TestXiaomiRecorderStartAndStop(t *testing.T) {
 	store := &noopSegmentStore{}
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:    "test-cam",
-		DID: "test-device", // Will fail to connect, that's expected
+		DID:         "test-device", // Will fail to connect, that's expected
 		SegmentDur:  1 * time.Minute,
 		MaxBackoff:  1 * time.Second,
 		InitBackoff: 1 * time.Second,
@@ -208,7 +208,7 @@ func TestXiaomiRecorderDoubleStart(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:    "test-cam",
-		DID: "test-device",
+		DID:         "test-device",
 		InitBackoff: 10 * time.Second, // Long backoff so status stays recording
 	}, &noopSegmentStore{})
 
@@ -227,7 +227,7 @@ func TestXiaomiRecorderContextCancel(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:    "test-cam",
-		DID: "test-device",
+		DID:         "test-device",
 		InitBackoff: 100 * time.Millisecond,
 		MaxBackoff:  100 * time.Millisecond,
 	}, &noopSegmentStore{})
@@ -244,17 +244,16 @@ func TestXiaomiRecorderContextCancel(t *testing.T) {
 	require.Equal(t, model.StatusStopped, r.Status())
 }
 
-
 func TestXiaomiRecorderMetrics(t *testing.T) {
 	t.Helper()
 	require.NotNil(t, NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		DID: "test-device",
+		DID:      "test-device",
 	}, &noopSegmentStore{}))
 	// Metrics is nil, should not panic on any operation.
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		DID: "test-device",
+		DID:      "test-device",
 	}, &noopSegmentStore{})
 	r.incActive()
 	r.decActive()
@@ -267,7 +266,7 @@ func TestXiaomiRecorderCodecDetectionH264(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		DID: "test-device",
+		DID:      "test-device",
 	}, &noopSegmentStore{})
 
 	require.False(t, r.codecOK)
@@ -293,7 +292,7 @@ func TestXiaomiRecorderCodecDetectionH265(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		DID: "test-device",
+		DID:      "test-device",
 	}, &noopSegmentStore{})
 
 	r.codec = model.FormatH265
@@ -321,7 +320,7 @@ func TestXiaomiRecorderCodecParamsProviderInterface(t *testing.T) {
 	// Runtime check that the interface methods work.
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		DID: "test-device",
+		DID:      "test-device",
 	}, &noopSegmentStore{})
 
 	// CodecParams should return empty/nil before codec is probed.
@@ -346,7 +345,7 @@ func TestXiaomiRecorderHLSFrameCallback(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		DID: "test-device",
+		DID:      "test-device",
 	}, &noopSegmentStore{})
 
 	r.codec = model.FormatH264
@@ -382,7 +381,7 @@ func TestXiaomiRecorderHLSFrameCallbackNil(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		DID: "test-device",
+		DID:      "test-device",
 	}, &noopSegmentStore{})
 
 	r.codec = model.FormatH264
@@ -402,15 +401,15 @@ func TestXiaomiRecorderWithMockMISS(t *testing.T) {
 
 	// Create a mock store that records segment operations.
 	store := &recordingSegmentStore{
-		t:        t,
-		created:  make(map[string]string), // tempPath → finalPath
-		closed:   make(map[string]string), // tempPath → finalPath (after close)
-		tempDir:  t.TempDir(),
+		t:       t,
+		created: make(map[string]string), // tempPath → finalPath
+		closed:  make(map[string]string), // tempPath → finalPath (after close)
+		tempDir: t.TempDir(),
 	}
 
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:   "test-cam",
-		DID: "test-device", // Won't be used, we inject packets directly
+		DID:        "test-device", // Won't be used, we inject packets directly
 		SegmentDur: 10 * time.Minute,
 		DB:         &noopDB{},
 	}, store)
@@ -483,10 +482,10 @@ type recordingSegmentStore struct {
 func newRecordingSegmentStore(t *testing.T) *recordingSegmentStore {
 	t.Helper()
 	return &recordingSegmentStore{
-		t:        t,
-		created:  make(map[string]string),
-		closed:   make(map[string]string),
-		tempDir:  t.TempDir(),
+		t:       t,
+		created: make(map[string]string),
+		closed:  make(map[string]string),
+		tempDir: t.TempDir(),
 	}
 }
 
@@ -591,9 +590,9 @@ func TestAnnexBToAVCCRoundTrip(t *testing.T) {
 	t.Helper()
 	// Verify that annexBToAVCC produces valid AVCC data that can be parsed back.
 	originalNALUs := [][]byte{
-		{0x67, 0x42, 0xc0, 0x1e},         // SPS
-		{0x68, 0xce, 0x38, 0x80},         // PPS
-		{0x65, 0x01, 0x02, 0x03, 0x04},   // IDR
+		{0x67, 0x42, 0xc0, 0x1e},       // SPS
+		{0x68, 0xce, 0x38, 0x80},       // PPS
+		{0x65, 0x01, 0x02, 0x03, 0x04}, // IDR
 	}
 
 	// Build Annex B data.
@@ -619,10 +618,10 @@ func TestAnnexBToAVCCRoundTrip(t *testing.T) {
 func TestMissCodecToAudio(t *testing.T) {
 	t.Helper()
 	tests := []struct {
-		name     string
-		codecID  uint32
-		want     model.AudioCodec
-		wantOK   bool
+		name    string
+		codecID uint32
+		want    model.AudioCodec
+		wantOK  bool
 	}{
 		{"PCMA (G.711 A-law)", missCodecPCMA, model.AudioG711, true},
 		{"PCMU (G.711 mu-law)", missCodecPCMU, model.AudioG711, true},

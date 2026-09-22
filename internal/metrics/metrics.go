@@ -17,13 +17,13 @@ type Metrics struct {
 	StorageUsedBytes               prometheus.Gauge
 	StorageTotalBytes              prometheus.Gauge
 	RecordingCount                 prometheus.Gauge
-	CameraErrors                   *prometheus.CounterVec   // labels: camera_id, error_type
-	WebRTCActivePeers              *prometheus.GaugeVec     // labels: camera_id
-	WebRTCFramesSent               *prometheus.CounterVec   // labels: camera_id
-	WebRTCFramesDropped            *prometheus.CounterVec   // labels: camera_id
-	WebRTCConnectionStateChanges   *prometheus.CounterVec   // labels: camera_id, state
-	XiaomiDisconnects              *prometheus.CounterVec   // labels: camera_id, reason
-	XiaomiReconnects               *prometheus.CounterVec   // labels: camera_id
+	CameraErrors                   *prometheus.CounterVec // labels: camera_id, error_type
+	WebRTCActivePeers              *prometheus.GaugeVec   // labels: camera_id
+	WebRTCFramesSent               *prometheus.CounterVec // labels: camera_id
+	WebRTCFramesDropped            *prometheus.CounterVec // labels: camera_id
+	WebRTCConnectionStateChanges   *prometheus.CounterVec // labels: camera_id, state
+	XiaomiDisconnects              *prometheus.CounterVec // labels: camera_id, reason
+	XiaomiReconnects               *prometheus.CounterVec // labels: camera_id
 	RemoteLogSentTotal             prometheus.Counter
 	RemoteLogDroppedTotal          prometheus.Counter
 	RemoteLogBatchSize             prometheus.Histogram

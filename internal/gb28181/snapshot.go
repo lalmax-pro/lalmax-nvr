@@ -41,25 +41,25 @@ type DeviceResetRequest struct {
 
 // RecordControlRequest 录像控制请求
 type RecordControlRequest struct {
-	XMLName  xml.Name `xml:"Control"`
-	CmdType  string   `xml:"CmdType"`
-	SN       int      `xml:"SN"`
-	DeviceID string   `xml:"DeviceID"`
-	RecordCmd string  `xml:"RecordCmd"`
-	Info     struct {
+	XMLName   xml.Name `xml:"Control"`
+	CmdType   string   `xml:"CmdType"`
+	SN        int      `xml:"SN"`
+	DeviceID  string   `xml:"DeviceID"`
+	RecordCmd string   `xml:"RecordCmd"`
+	Info      struct {
 		ControlPriority int `xml:"ControlPriority"`
 	} `xml:"Info"`
 }
 
 // HomePositionRequest 看守位控制请求
 type HomePositionRequest struct {
-	XMLName  xml.Name `xml:"Control"`
-	CmdType  string   `xml:"CmdType"`
-	SN       int      `xml:"SN"`
-	DeviceID string   `xml:"DeviceID"`
+	XMLName      xml.Name `xml:"Control"`
+	CmdType      string   `xml:"CmdType"`
+	SN           int      `xml:"SN"`
+	DeviceID     string   `xml:"DeviceID"`
 	HomePosition struct {
-		Enabled int     `xml:"Enabled"`
-		ResetTime int   `xml:"ResetTime"`
+		Enabled     int `xml:"Enabled"`
+		ResetTime   int `xml:"ResetTime"`
 		PresetIndex int `xml:"PresetIndex"`
 	} `xml:"HomePosition"`
 }

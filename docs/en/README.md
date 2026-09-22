@@ -7,6 +7,8 @@
 | Document | Description |
 |----------|-------------|
 | [Getting Started](getting-started.md) | Install, first camera, Web UI |
+| [Recording plans](recording-plans.md) | Plans hang off streams; registering as a device does not record |
+| [Recording flow](recording-flow.md) | When a record task starts, writes, and stops |
 | [Architecture](architecture.md) | Layers, live/recording paths, pull vs push, ports |
 | [Configuration](configuration.md) | Full YAML reference |
 | [Deployment](deployment.md) | Docker, reverse proxy, cross-compile |

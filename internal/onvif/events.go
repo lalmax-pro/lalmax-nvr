@@ -218,10 +218,10 @@ func (e *EventSubscriberImpl) pollAndPublish(ctx context.Context, cameraID strin
 
 	for _, msg := range messages {
 		event := ONVIFEvent{
-			Topic:    msg.Topic,
+			Topic:     msg.Topic,
 			Timestamp: msg.Timestamp,
-			Data:     msg.Data,
-			CameraID: cameraID,
+			Data:      msg.Data,
+			CameraID:  cameraID,
 		}
 
 		if event.Topic == "" {

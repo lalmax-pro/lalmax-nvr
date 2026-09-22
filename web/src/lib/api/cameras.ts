@@ -8,6 +8,8 @@ import { apiRequest, getAuthHeader, getAuthToken, API_BASE } from './client';
 export interface Camera {
   id: string;
   name: string;
+  /** lalmax stream backing this camera (play via /api/streams/{stream_id}). */
+  stream_id?: string;
   protocol: string;
   encoding?: string;
   rtsp_transport?: string;
@@ -72,7 +74,6 @@ export interface CreateCameraRequest {
   profile_name?: string;
   stream_encoding?: string;
   audio_enabled?: boolean;
-  recording_mode?: RecordingMode;
   sub_stream_url?: string;
   sub_profile_token?: string;
   subnet_hints?: string[];
@@ -99,7 +100,6 @@ export interface UpdateCameraRequest {
   profile_name?: string;
   stream_encoding?: string;
   audio_enabled?: boolean;
-  recording_mode?: RecordingMode;
   sub_stream_url?: string;
   sub_profile_token?: string;
   subnet_hints?: string[];
@@ -509,29 +509,6 @@ export async function updateMergeConfig(
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/merge-config`, {
     method: 'PUT',
     body: JSON.stringify(config),
-    signal,
-  });
-}
-
-export async function getRecordingSchedule(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<RecordingScheduleRange[]> {
-  const res = await apiRequest<{ ranges: RecordingScheduleRange[] }>(
-    `/cameras/${cameraId}/recording-schedule`,
-    { signal }
-  );
-  return res.ranges ?? [];
-}
-
-export async function setRecordingSchedule(
-  cameraId: string,
-  ranges: RecordingScheduleRange[],
-  signal?: AbortSignal
-): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`/cameras/${cameraId}/recording-schedule`, {
-    method: 'PUT',
-    body: JSON.stringify({ ranges }),
     signal,
   });
 }

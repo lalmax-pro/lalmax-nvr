@@ -28,6 +28,17 @@ type eventSession struct {
 	timer     *time.Timer
 }
 
+// SetControls replaces the start/stop callbacks. Used once record tasks exist.
+func (m *EventManager) SetControls(resume, pause func(ctx context.Context, cameraID string) error) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.resume = resume
+	m.pause = pause
+	m.mu.Unlock()
+}
+
 func NewEventManager(postRoll, maxDur time.Duration, resume, pause func(ctx context.Context, cameraID string) error, isEventMode func(cameraID string) bool) *EventManager {
 	if postRoll <= 0 {
 		postRoll = 30 * time.Second

@@ -11,17 +11,17 @@ import (
 )
 
 type flowCameraResponse struct {
-	CameraID   string            `json:"camera_id"`
-	Name       string            `json:"name"`
-	Status     string            `json:"status"`
-	Protocol   string            `json:"protocol"`
-	Encoding   string            `json:"encoding"`
-	Error      string            `json:"error,omitempty"`
-	Source     flowSource        `json:"source"`
-	Engine     *flowEngine       `json:"engine,omitempty"`
-	Recording  flowRecording     `json:"recording"`
-	Substream  flowSubstream     `json:"substream"`
-	Viewers    map[string]int    `json:"viewers_by_protocol"`
+	CameraID  string         `json:"camera_id"`
+	Name      string         `json:"name"`
+	Status    string         `json:"status"`
+	Protocol  string         `json:"protocol"`
+	Encoding  string         `json:"encoding"`
+	Error     string         `json:"error,omitempty"`
+	Source    flowSource     `json:"source"`
+	Engine    *flowEngine    `json:"engine,omitempty"`
+	Recording flowRecording  `json:"recording"`
+	Substream flowSubstream  `json:"substream"`
+	Viewers   map[string]int `json:"viewers_by_protocol"`
 }
 
 type flowSource struct {
@@ -86,7 +86,7 @@ func (h *Handler) buildFlow(r *http.Request, cam *storage.CameraRow) flowCameraR
 		Viewers:  map[string]int{},
 		Source: flowSource{
 			Transport: cam.RTSPTransport,
-			URLHost:   hostOfURL(cam.URL),
+			URLHost:   hostOfURL(flowFirstNonEmpty(cam.URL, cam.ONVIFEndpoint)),
 		},
 	}
 	if cam.ErrorDetail != nil {
@@ -95,8 +95,10 @@ func (h *Handler) buildFlow(r *http.Request, cam *storage.CameraRow) flowCameraR
 
 	status := string(cam.Status)
 	paused := cam.RecordingPaused
+	hasRecorder := false
 	if h.camMgr != nil {
 		if rec := h.camMgr.GetRecorder(cam.ID); rec != nil {
+			hasRecorder = true
 			status = string(rec.Status())
 			if p, ok := rec.(model.PausableRecorder); ok {
 				paused = p.IsPaused()
@@ -104,7 +106,11 @@ func (h *Handler) buildFlow(r *http.Request, cam *storage.CameraRow) flowCameraR
 		}
 	}
 	resp.Status = status
-	resp.Recording.Status = status
+	if hasRecorder && !paused {
+		resp.Recording.Status = "writing"
+	} else {
+		resp.Recording.Status = "idle"
+	}
 	resp.Recording.Paused = paused
 	if h.db != nil {
 		if n, err := h.db.CountPendingMerges(r.Context(), cam.ID); err == nil {
@@ -112,8 +118,9 @@ func (h *Handler) buildFlow(r *http.Request, cam *storage.CameraRow) flowCameraR
 		}
 	}
 
-	if h.mediaEngine != nil {
-		if info, err := h.mediaEngine.GetStream(r.Context(), cam.ID); err == nil && info != nil {
+	ingestStreamID := h.cameraIngestStreamID(r.Context(), cam.ID)
+	if h.mediaEngine != nil && ingestStreamID != "" {
+		if info, err := h.mediaEngine.GetStream(r.Context(), ingestStreamID); err == nil && info != nil {
 			resp.Source.Active = info.Active
 			engine := &flowEngine{
 				Active:     info.Active,
@@ -128,6 +135,9 @@ func (h *Handler) buildFlow(r *http.Request, cam *storage.CameraRow) flowCameraR
 				engine.LastFrameAgeS = time.Since(info.LastFrameTime).Seconds()
 			}
 			for _, sub := range info.Subscribers {
+				if media.IsInternalRecorderSession(sub.Protocol, sub.SessionID) {
+					continue
+				}
 				proto := strings.ToLower(strings.TrimSpace(sub.Protocol))
 				if proto == "" {
 					proto = "unknown"
@@ -136,7 +146,7 @@ func (h *Handler) buildFlow(r *http.Request, cam *storage.CameraRow) flowCameraR
 			}
 			resp.Engine = engine
 		}
-		if sub, err := h.mediaEngine.GetStream(r.Context(), media.SubStreamID(cam.ID)); err == nil && sub != nil {
+		if sub, err := h.mediaEngine.GetStream(r.Context(), media.SubStreamID(ingestStreamID)); err == nil && sub != nil {
 			resp.Substream.Active = sub.Active
 		}
 	}

@@ -507,7 +507,11 @@ func groupToStreamInfo(group groupPayload) StreamInfo {
 		info.Publisher = sessionInfoFromPayload(group.Pull, "pull")
 	}
 	for _, sub := range group.Subs {
-		info.Subscribers = append(info.Subscribers, *sessionInfoFromPayload(sub, "sub"))
+		session := *sessionInfoFromPayload(sub, "sub")
+		if IsInternalRecorderSession(session.Protocol, session.SessionID) {
+			continue
+		}
+		info.Subscribers = append(info.Subscribers, session)
 	}
 	if len(group.FPS) > 0 {
 		var totalFPS float64
@@ -772,4 +776,3 @@ func (e *LalmaxHTTP) AddCustomizePubSession(_ context.Context, _ string) (Custom
 func (e *LalmaxHTTP) DelCustomizePubSession(_ context.Context, _ CustomizePubSession) error {
 	return fmt.Errorf("DelCustomizePubSession not supported for HTTP-based lalmax engine")
 }
-

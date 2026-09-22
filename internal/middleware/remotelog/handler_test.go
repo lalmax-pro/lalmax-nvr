@@ -16,9 +16,9 @@ import (
 
 // testCollector tracks requests received by the test server.
 type testCollector struct {
- Bodies   []string
-	Count    atomic.Int64
-	mu       sync.Mutex // guards Bodies
+	Bodies []string
+	Count  atomic.Int64
+	mu     sync.Mutex // guards Bodies
 }
 
 func (tc *testCollector) handler() http.HandlerFunc {
@@ -33,7 +33,7 @@ func (tc *testCollector) handler() http.HandlerFunc {
 		// empty slice under CI load, causing "no valid JSON entry found" flakes.
 		tc.Count.Add(1)
 		w.WriteHeader(http.StatusNoContent)
-}
+	}
 }
 
 func (tc *testCollector) getBodies() []string {
@@ -313,7 +313,7 @@ func TestExtractFields(t *testing.T) {
 			name: "camera_id and component",
 			msg:  "ERROR connection error component=xiaomi-recorder camera_id=cam-123 backoff=2s",
 			want: map[string]any{
-				"component":  "xiaomi-recorder",
+				"component": "xiaomi-recorder",
 				"camera_id": "cam-123",
 				"backoff":   "2s",
 			},

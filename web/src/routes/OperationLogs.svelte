@@ -6,6 +6,11 @@
   import type { OperationLog, OperationLogsResponse } from '$lib/api';
   import { formatDate } from '$lib/format';
 
+  interface Props {
+    embedded?: boolean;
+  }
+  let { embedded = false }: Props = $props();
+
   let logs = $state<OperationLog[]>([]);
   let total = $state(0);
   let loading = $state(true);
@@ -174,8 +179,9 @@
   });
 </script>
 
-<div class="min-h-screen th-bg-primary">
-  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class={embedded ? '' : 'min-h-screen th-bg-primary'}>
+  <main class={embedded ? '' : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8'}>
+    {#if !embedded}
     <div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <h1 class="text-2xl font-semibold th-text-primary">操作日志</h1>
@@ -186,6 +192,14 @@
         <span>刷新</span>
       </button>
     </div>
+    {:else}
+    <div class="mb-4 flex justify-end">
+      <button class="btn btn-secondary btn-sm inline-flex items-center gap-2" onclick={loadLogs} disabled={loading}>
+        <RefreshCw size={16} class={loading ? 'animate-spin' : ''} />
+        <span>刷新</span>
+      </button>
+    </div>
+    {/if}
 
     <div class="card p-5 mb-6 border th-border">
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">

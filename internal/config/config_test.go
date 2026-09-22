@@ -228,6 +228,19 @@ func TestValidateGB28181Protocol(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestIngestStreamID(t *testing.T) {
+	require.Equal(t, "cam-1", IngestStreamID(CameraConfig{ID: "cam-1"}))
+	require.Equal(t, "obs-stream", IngestStreamID(CameraConfig{ID: "cam-1", StreamID: "obs-stream"}))
+}
+
+func TestWindowSizeDuration(t *testing.T) {
+	require.Equal(t, time.Hour, MergeConfig{}.WindowSizeDuration())
+	require.Equal(t, time.Hour, MergeConfig{WindowSize: "bad"}.WindowSizeDuration())
+	require.Equal(t, 30*time.Minute, MergeConfig{WindowSize: "30m"}.WindowSizeDuration())
+	require.Equal(t, 2*time.Hour, MergeConfig{WindowSize: "2h"}.WindowSizeDuration())
+	require.Equal(t, time.Minute, MergeConfig{WindowSize: "10s"}.WindowSizeDuration())
+}
+
 func TestResolveMergeConfig_NilReturnsGlobal(t *testing.T) {
 	global := MergeConfig{
 		Enabled:            true,

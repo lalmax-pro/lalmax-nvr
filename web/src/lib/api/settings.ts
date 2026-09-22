@@ -167,8 +167,8 @@ export async function getStreamingSettings(signal?: AbortSignal): Promise<Stream
 export async function updateStreamingSettings(
   config: StreamingConfig,
   signal?: AbortSignal
-): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>('/settings/streaming', {
+): Promise<{ status: string; restart_error?: string }> {
+  return apiRequest<{ status: string; restart_error?: string }>('/settings/streaming', {
     method: 'PUT',
     body: JSON.stringify(config),
     signal,

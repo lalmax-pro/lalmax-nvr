@@ -16,7 +16,7 @@ vi.mock('$lib/api', async (importOriginal) => {
 
 // Mock lucide-svelte icons
 vi.mock('lucide-svelte', () => {
-  const icons = ['Pencil', 'Play', 'Pause', 'Square', 'RotateCw', 'Eye', 'MoreVertical', 'Archive', 'Trash2', 'Image'];
+  const icons = ['Pencil', 'Play', 'Pause', 'Square', 'RotateCw', 'Eye', 'MoreVertical', 'Archive', 'Trash2', 'Image', 'Bell', 'Move', 'Mic', 'MicOff', 'Camera', 'ZoomIn', 'Home', 'CalendarClock', 'CircleOff', 'KeyRound', 'Search', 'Copy', 'GitBranch'];
   const mock: Record<string, () => HTMLElement> = {};
   for (const name of icons) {
     mock[name] = () => document.createElement('span');
@@ -65,7 +65,7 @@ describe('CameraCard', () => {
   it('shows recording badge for active camera with recording status', () => {
     const camera = makeCamera({ status: 'recording' });
     const { getByText } = render(CameraCard, { props: defaultProps(camera) });
-    expect(getByText('Recording')).toBeTruthy();
+    expect(getByText('Live')).toBeTruthy();
   });
 
   it('shows disabled badge for disabled camera', () => {

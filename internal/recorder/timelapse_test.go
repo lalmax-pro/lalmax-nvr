@@ -33,9 +33,9 @@ func (m *mockTimelapseDB) InsertRecordingWithRetry(_ context.Context, r *model.R
 // --- Mock segment store for timelapse tests ---
 
 type mockTimelapseStore struct {
-	dataDir     string
-	segmentSeq  atomic.Int64
-	frameFiles  []string // tracks all written frames
+	dataDir    string
+	segmentSeq atomic.Int64
+	frameFiles []string // tracks all written frames
 }
 
 func newMockTimelapseStore(dataDir string) *mockTimelapseStore {
@@ -360,8 +360,8 @@ func TestTimelapseRecorder_Defaults(t *testing.T) {
 
 	// Zero-value config — should apply defaults
 	rec := NewTimelapseRecorder(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-defaults",
-		DataDir:    t.TempDir(),
+		CameraID: "cam-tl-defaults",
+		DataDir:  t.TempDir(),
 	}, store)
 
 	require.Equal(t, model.StatusStopped, rec.Status())
@@ -375,9 +375,9 @@ func TestTimelapseRecorder_Defaults(t *testing.T) {
 
 func TestTimelapseRecorder_StreamHub(t *testing.T) {
 	rec := NewTimelapseRecorder(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-hub",
-		Interval:   1 * time.Second,
-		DataDir:    t.TempDir(),
+		CameraID: "cam-tl-hub",
+		Interval: 1 * time.Second,
+		DataDir:  t.TempDir(),
 	}, newMockTimelapseStore(t.TempDir()))
 
 	// Hub should be nil before Start (no streaming support needed for timelapse)

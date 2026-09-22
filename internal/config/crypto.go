@@ -278,21 +278,21 @@ func SensitiveFieldPaths(cfg *Config) []string {
 // snapshotSensitive captures the current plaintext values of sensitive fields
 // so they can be restored after an encrypted save.
 type sensitiveSnapshot struct {
-	AuthPassword    string
-	MQTTPassword    string
-	XiaomiUserID    string
-	XiaomiToken     string
-	CameraPasswords         []string
-	MetricsAuthPassword     string
-	AutoDiscoverPassword    string
+	AuthPassword         string
+	MQTTPassword         string
+	XiaomiUserID         string
+	XiaomiToken          string
+	CameraPasswords      []string
+	MetricsAuthPassword  string
+	AutoDiscoverPassword string
 }
 
 func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 	s := sensitiveSnapshot{
-		AuthPassword:    cfg.Auth.Password,
-		MQTTPassword:    cfg.MQTT.Password,
-		XiaomiUserID:    cfg.Xiaomi.UserID,
-		XiaomiToken:     cfg.Xiaomi.Token,
+		AuthPassword:         cfg.Auth.Password,
+		MQTTPassword:         cfg.MQTT.Password,
+		XiaomiUserID:         cfg.Xiaomi.UserID,
+		XiaomiToken:          cfg.Xiaomi.Token,
 		CameraPasswords:      make([]string, len(cfg.Cameras)),
 		MetricsAuthPassword:  cfg.MetricsAuth.Password,
 		AutoDiscoverPassword: cfg.AutoDiscover.DefaultPassword,

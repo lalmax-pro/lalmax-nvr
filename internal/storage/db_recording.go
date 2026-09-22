@@ -31,14 +31,26 @@ func scanRecording(r *model.Recording, startedAtStr, endedAtStr, mergeStatusStr 
 	return nil
 }
 
-const recordingSelectCols = `id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived, reconnected_at, gap_reason, COALESCE(locked, 0)`
+const recordingSelectCols = `id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived, reconnected_at, gap_reason, COALESCE(locked, 0), COALESCE(stream_id, '')`
+
+// recordingStreamID is the stream a recording belongs to. Camera-backed
+// recordings fall back to the camera ID so the column is never empty.
+func recordingStreamID(r *model.Recording) string {
+	if r == nil {
+		return ""
+	}
+	if s := strings.TrimSpace(r.StreamID); s != "" {
+		return s
+	}
+	return r.CameraID
+}
 
 func scanRecordingRow(rows interface {
 	Scan(dest ...any) error
 }, r *model.Recording) error {
 	var startedAtStr, endedAtStr, mergeStatusStr, reconnectedAtStr sql.NullString
 	var locked int
-	if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived, &reconnectedAtStr, &r.GapReason, &locked); err != nil {
+	if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived, &reconnectedAtStr, &r.GapReason, &locked, &r.StreamID); err != nil {
 		return err
 	}
 	if err := scanRecording(r, startedAtStr, endedAtStr, mergeStatusStr, reconnectedAtStr); err != nil {
@@ -49,13 +61,16 @@ func scanRecordingRow(rows interface {
 }
 
 func (d *DB) InsertRecording(ctx context.Context, r *model.Recording) error {
-	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, reconnected_at, gap_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);`
+	q := `INSERT INTO recordings(id, camera_id, stream_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, reconnected_at, gap_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
 	mergeStatus := mergeStatusFromBool(r.Merged)
 	var reconnectedAt interface{}
 	if !r.ReconnectedAt.IsZero() {
 		reconnectedAt = timeToDB(r.ReconnectedAt)
 	}
-	_, err := d.db.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatus, reconnectedAt, r.GapReason)
+	_, err := d.db.ExecContext(ctx, q, r.ID, r.CameraID, recordingStreamID(r), r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatus, reconnectedAt, r.GapReason)
+	if err == nil {
+		d.invalidateRecordingsCache()
+	}
 	return err
 }
 
@@ -94,12 +109,15 @@ func (d *DB) InsertRecordingWithRetry(ctx context.Context, r *model.Recording, m
 }
 
 func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
-	q := `UPDATE recordings SET camera_id=?, file_path=?, format=?, started_at=?, ended_at=?, duration=?, file_size=?, frame_count=?, merged=?, merge_status=?, reconnected_at=?, gap_reason=? WHERE id=?;`
+	q := `UPDATE recordings SET camera_id=?, stream_id=?, file_path=?, format=?, started_at=?, ended_at=?, duration=?, file_size=?, frame_count=?, merged=?, merge_status=?, reconnected_at=?, gap_reason=? WHERE id=?;`
 	var reconnectedAt interface{}
 	if !r.ReconnectedAt.IsZero() {
 		reconnectedAt = timeToDB(r.ReconnectedAt)
 	}
-	_, err := d.db.ExecContext(ctx, q, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, r.MergeStatus, reconnectedAt, r.GapReason, r.ID)
+	_, err := d.db.ExecContext(ctx, q, r.CameraID, recordingStreamID(r), r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, r.MergeStatus, reconnectedAt, r.GapReason, r.ID)
+	if err == nil {
+		d.invalidateRecordingsCache()
+	}
 	return err
 }
 
@@ -131,10 +149,25 @@ func (d *DB) SetRecordingLocked(ctx context.Context, id string, locked bool) err
 	if n == 0 {
 		return sql.ErrNoRows
 	}
+	d.invalidateRecordingsCache()
 	return nil
 }
 
 func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) ([]model.Recording, error) {
+	key := recordingFilterKey(filter, true)
+	if recs, ok := d.lookupListRecordings(key); ok {
+		return recs, nil
+	}
+	gen := d.recordingsCacheGen()
+	recs, err := d.listRecordingsUncached(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	d.storeListRecordings(key, recs, gen)
+	return recs, nil
+}
+
+func (d *DB) listRecordingsUncached(ctx context.Context, filter model.RecordingFilter) ([]model.Recording, error) {
 	where := []string{}
 	args := []any{}
 	if filter.CameraID != "" {
@@ -208,6 +241,20 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 }
 
 func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.RecordingFilter) (int, error) {
+	key := recordingFilterKey(filter, false)
+	if n, ok := d.lookupCountRecordings(key); ok {
+		return n, nil
+	}
+	gen := d.recordingsCacheGen()
+	n, err := d.countRecordingsUncached(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+	d.storeCountRecordings(key, n, gen)
+	return n, nil
+}
+
+func (d *DB) countRecordingsUncached(ctx context.Context, filter model.RecordingFilter) (int, error) {
 	where := []string{}
 	args := []any{}
 	if filter.CameraID != "" {
@@ -288,25 +335,34 @@ func (d *DB) InsertOrphanRecordings(ctx context.Context, recordings []*model.Rec
 	}
 	defer tx.Rollback()
 
-	q := `INSERT OR IGNORE INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, reconnected_at, gap_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);`
+	q := `INSERT OR IGNORE INTO recordings(id, camera_id, stream_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, reconnected_at, gap_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
 	inserted := 0
 	for _, r := range recordings {
 		var reconnectedAt interface{}
 		if !r.ReconnectedAt.IsZero() {
 			reconnectedAt = timeToDB(r.ReconnectedAt)
 		}
-		result, err := tx.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatusFromBool(r.Merged), reconnectedAt, r.GapReason)
+		result, err := tx.ExecContext(ctx, q, r.ID, r.CameraID, recordingStreamID(r), r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatusFromBool(r.Merged), reconnectedAt, r.GapReason)
 		if err != nil {
 			return 0, err
 		}
 		n, _ := result.RowsAffected()
 		inserted += int(n)
 	}
-	return inserted, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	if inserted > 0 {
+		d.invalidateRecordingsCache()
+	}
+	return inserted, nil
 }
 
 func (d *DB) DeleteRecording(ctx context.Context, id string) error {
 	_, err := d.db.ExecContext(ctx, `DELETE FROM recordings WHERE id=?;`, id)
+	if err == nil {
+		d.invalidateRecordingsCache()
+	}
 	return err
 }
 
@@ -316,6 +372,7 @@ func (d *DB) DeleteRecordingsByCamera(ctx context.Context, cameraID string) (int
 	if err != nil {
 		return 0, err
 	}
+	d.invalidateRecordingsCache()
 	return result.RowsAffected()
 }
 
@@ -346,6 +403,9 @@ func (d *DB) DeleteRecordingsBatch(ctx context.Context, ids []string) ([]string,
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	if len(deleted) > 0 {
+		d.invalidateRecordingsCache()
+	}
 	return deleted, nil
 }
 
@@ -356,11 +416,17 @@ func (d *DB) SetMerged(ctx context.Context, id string, merged bool) error {
 	}
 	mergeStatus := mergeStatusFromBool(merged)
 	_, err := d.db.ExecContext(ctx, `UPDATE recordings SET merged=?, merge_status=? WHERE id=?;`, val, mergeStatus, id)
+	if err == nil {
+		d.invalidateRecordingsCache()
+	}
 	return err
 }
 
 func (d *DB) CleanupIncomplete(ctx context.Context) error {
 	_, err := d.db.ExecContext(ctx, `DELETE FROM recordings WHERE ended_at IS NULL;`)
+	if err == nil {
+		d.invalidateRecordingsCache()
+	}
 	return err
 }
 
@@ -500,5 +566,8 @@ func (d *DB) RepairZeroDurationRecordings(ctx context.Context) ([]model.Recordin
 // UpdateRecordingDuration updates the duration and ended_at for a recording.
 func (d *DB) UpdateRecordingDuration(ctx context.Context, id string, duration float64, endedAt time.Time) error {
 	_, err := d.db.ExecContext(ctx, `UPDATE recordings SET duration=?, ended_at=? WHERE id=?;`, duration, timeToDB(endedAt), id)
+	if err == nil {
+		d.invalidateRecordingsCache()
+	}
 	return err
 }

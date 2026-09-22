@@ -19,6 +19,17 @@ func TestHourWindowUTC(t *testing.T) {
 	require.Equal(t, time.Date(2026, 5, 1, 15, 0, 0, 0, time.UTC), end)
 }
 
+func TestMergeWindowUTC(t *testing.T) {
+	at := time.Date(2026, 5, 1, 14, 37, 11, 0, time.UTC)
+	start, end := mergeWindowUTC(at, 30*time.Minute)
+	require.Equal(t, time.Date(2026, 5, 1, 14, 30, 0, 0, time.UTC), start)
+	require.Equal(t, time.Date(2026, 5, 1, 15, 0, 0, 0, time.UTC), end)
+
+	start, end = mergeWindowUTC(at, 2*time.Hour)
+	require.Equal(t, time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC), start)
+	require.Equal(t, time.Date(2026, 5, 1, 16, 0, 0, 0, time.UTC), end)
+}
+
 func TestMergeHour_AppendsPendingToBucket(t *testing.T) {
 	env := newMergeTestEnv(t)
 	defer env.close(t)
@@ -43,6 +54,15 @@ func TestMergeHour_AppendsPendingToBucket(t *testing.T) {
 	require.Len(t, recs, 1)
 	require.True(t, recs[0].Merged)
 	bucketID := recs[0].ID
+	bucketPath := recs[0].FilePath
+	infoBefore, err := ParseSegmentTables(bucketPath)
+	require.NoError(t, err)
+	require.Greater(t, infoBefore.MoovOffset, infoBefore.MdatOffset)
+	before, err := os.ReadFile(bucketPath)
+	require.NoError(t, err)
+	payloadStart := int(infoBefore.MdatOffset + 8)
+	payloadEnd := int(infoBefore.MdatOffset + infoBefore.MdatSize)
+	require.Greater(t, payloadEnd, payloadStart)
 
 	env.insertMergeableRecording(t, "p3", camID, hour.Add(4*time.Minute), hour.Add(270*time.Second))
 	require.NoError(t, mgr.MergeHour(ctx, camID, hour.Add(5*time.Minute)))
@@ -51,7 +71,13 @@ func TestMergeHour_AppendsPendingToBucket(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	require.True(t, recs[0].Merged)
-	require.NotEqual(t, bucketID, recs[0].ID)
+	require.Equal(t, bucketID, recs[0].ID)
+	require.Equal(t, bucketPath, recs[0].FilePath)
+	require.Equal(t, 6, recs[0].FrameCount)
+	after, err := os.ReadFile(bucketPath)
+	require.NoError(t, err)
+	require.Greater(t, len(after), len(before))
+	require.Equal(t, before[payloadStart:payloadEnd], after[payloadStart:payloadEnd])
 }
 
 func TestMergeHour_SPSChangeOpensNewBucket(t *testing.T) {
@@ -133,4 +159,38 @@ func TestRollingCoordinator_DebounceBatches(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+func TestMergeHour_HonorsWindowSize(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+	ctx := context.Background()
+
+	hour := time.Date(2026, 3, 10, 8, 0, 0, 0, time.UTC)
+	camID := "cam-win"
+	require.NoError(t, env.db.UpsertCamera(ctx, camID, "Win", "rtsp", "h264", "rtsp://x", "", "", true, "", "", "", "tcp"))
+
+	env.insertMergeableRecording(t, "w1", camID, hour.Add(1*time.Minute), hour.Add(90*time.Second))
+	env.insertMergeableRecording(t, "w2", camID, hour.Add(10*time.Minute), hour.Add(11*time.Minute))
+	env.insertMergeableRecording(t, "w3", camID, hour.Add(40*time.Minute), hour.Add(41*time.Minute))
+
+	cfg := config.MergeConfig{Enabled: true, WindowSize: "30m", MinSegmentsToMerge: 2, BatchLimit: 100}
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: camID, Enabled: true}})
+
+	require.NoError(t, mgr.MergeHour(ctx, camID, hour.Add(5*time.Minute)))
+
+	recs, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: camID})
+	require.NoError(t, err)
+	require.Len(t, recs, 2)
+	var merged, pending int
+	for _, r := range recs {
+		if r.Merged {
+			merged++
+		} else {
+			pending++
+			require.Equal(t, "w3", r.ID)
+		}
+	}
+	require.Equal(t, 1, merged)
+	require.Equal(t, 1, pending)
 }

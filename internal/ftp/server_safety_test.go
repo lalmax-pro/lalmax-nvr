@@ -44,7 +44,6 @@ func TestResolvePathSubdirectory(t *testing.T) {
 	require.Equal(t, filepath.Join(srv.storageMgr.RootDir(), "cam01", "video.mp4"), path)
 }
 
-
 func TestResolvePathEmptyString(t *testing.T) {
 	t.Helper()
 	srv, _ := newTestServer(t)

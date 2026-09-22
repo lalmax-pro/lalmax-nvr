@@ -14,7 +14,8 @@ export default defineConfig({
     conditions: ['browser'],
   },
   build: {
-    chunkSizeWarningLimit: 800, // Increase warning limit to 800 kB
+    // App entry is ~875 kB after vendor chunks are split out.
+    chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
         manualChunks(id) {

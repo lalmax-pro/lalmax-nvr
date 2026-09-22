@@ -683,7 +683,7 @@ auto_discover:
 
 ## 事件录像
 
-摄像头 `recording_mode` 为 `event`（MQTT / ONVIF 移动侦测）或 `adaptive`（平静时稀疏关键帧）时生效。
+流的录像计划 `mode` 为 `event`（MQTT / ONVIF 移动侦测）或 `adaptive`（平静时稀疏关键帧）时生效。计划挂在 `stream_id` 上，见 [录像计划](recording-plans.md)。
 
 ```yaml
 event:

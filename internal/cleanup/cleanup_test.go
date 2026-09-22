@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
-	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,7 +100,7 @@ func (e *testEnv) insertRecordingWithNullEnded(t *testing.T, id string) {
 	ctx := context.Background()
 	fullPath := filepath.Join(e.store.RootDir(), "still_recording.mp4")
 	_, err := e.db.DB().ExecContext(ctx,
-	`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?);`,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?);`,
 		id, "cam1", fullPath, model.FormatH264, time.Now(), 0, 0, 0, false,
 	)
 	require.NoError(t, err)
@@ -258,7 +258,7 @@ func TestRunOnce_DiskThresholdCleanup(t *testing.T) {
 
 	// Set a very low retention so time-based doesn't interfere
 	cfg := defaultCleanupConfig()
-	cfg.RetentionDays = 365 // keep everything by time
+	cfg.RetentionDays = 365      // keep everything by time
 	cfg.DiskThresholdPercent = 0 // trigger disk cleanup at 0% (always)
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
@@ -449,10 +449,10 @@ func TestRunOnce_HealthRetentionCleanup(t *testing.T) {
 	// Insert old health events (2 hours ago - past retention)
 	for i := 0; i < 3; i++ {
 		event := model.HealthEvent{
-			CameraID: "cam1",
+			CameraID:  "cam1",
 			EventType: "offline",
-			Status: "critical",
-			Message: "camera disconnected",
+			Status:    "critical",
+			Message:   "camera disconnected",
 			CreatedAt: now.Add(-2 * time.Hour),
 		}
 		require.NoError(t, env.db.InsertHealthEvent(ctx, event))
@@ -461,10 +461,10 @@ func TestRunOnce_HealthRetentionCleanup(t *testing.T) {
 	// Insert recent health events (30 min ago - within retention)
 	for i := 0; i < 2; i++ {
 		event := model.HealthEvent{
-			CameraID: "cam1",
+			CameraID:  "cam1",
 			EventType: "online",
-			Status: "ok",
-			Message: "camera reconnected",
+			Status:    "ok",
+			Message:   "camera reconnected",
 			CreatedAt: now.Add(-30 * time.Minute),
 		}
 		require.NoError(t, env.db.InsertHealthEvent(ctx, event))
@@ -502,10 +502,10 @@ func TestRunOnce_HealthRetentionCleanup_Disabled(t *testing.T) {
 	// Insert old health events
 	for i := 0; i < 3; i++ {
 		event := model.HealthEvent{
-			CameraID: "cam1",
+			CameraID:  "cam1",
 			EventType: "offline",
-			Status: "critical",
-			Message: "camera disconnected",
+			Status:    "critical",
+			Message:   "camera disconnected",
 			CreatedAt: now.Add(-48 * time.Hour),
 		}
 		require.NoError(t, env.db.InsertHealthEvent(ctx, event))

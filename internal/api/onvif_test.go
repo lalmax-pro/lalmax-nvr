@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/lalmax-pro/lalmax-nvr/internal/onvif"
+	"github.com/stretchr/testify/require"
 )
 
 type stubONVIFDeviceClient struct {

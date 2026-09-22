@@ -229,7 +229,7 @@ func LoginWithCaptcha(cloudID, captchaCode string) (*CloudSession, error) {
 		if errors.As(err, &loginErr) {
 			newID := storePendingCloud(c)
 			return nil, &CaptchaSessionError{
-				LoginError:        loginErr,
+				LoginError:       loginErr,
 				CaptchaSessionID: newID,
 			}
 		}
@@ -260,7 +260,7 @@ func LoginWithVerify(cloudID, ticket string) (*CloudSession, error) {
 		if errors.As(err, &loginErr) {
 			newID := storePendingCloud(c)
 			return nil, &CaptchaSessionError{
-				LoginError:        loginErr,
+				LoginError:       loginErr,
 				CaptchaSessionID: newID,
 			}
 		}

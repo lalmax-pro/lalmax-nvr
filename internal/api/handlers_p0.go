@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -110,12 +112,85 @@ func (h *Handler) handleRediscoverCamera(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"found": found})
 }
 
-func (h *Handler) resolvePlayStreamID(r *http.Request, cameraID string) (streamID, quality string) {
-	streamID = cameraID
+func playResourceID(r *http.Request) string {
+	if s := chi.URLParam(r, "stream_id"); s != "" {
+		return normalizeStreamID(s)
+	}
+	return getCameraID(r)
+}
+
+func isStreamPlayRoute(r *http.Request) bool {
+	return chi.URLParam(r, "stream_id") != ""
+}
+
+func playAPIPrefix(r *http.Request, resourceID string) string {
+	if isStreamPlayRoute(r) {
+		return "/api/streams/" + url.PathEscape(resourceID)
+	}
+	return "/api/cameras/" + resourceID
+}
+
+// cameraIngestStreamID returns the lalmax stream a camera ingests from.
+// Returns "" when the camera has no bound stream; callers must not fall back
+// to the camera ID (streams are separate entities).
+func (h *Handler) cameraIngestStreamID(ctx context.Context, cameraID string) string {
+	if h.db != nil {
+		if b, err := h.db.GetBindingByCameraID(ctx, cameraID); err == nil && b != nil && b.StreamID != "" {
+			return b.StreamID
+		}
+	}
+	if h.camMgr != nil {
+		if cam := h.camMgr.GetCameraConfig(cameraID); cam != nil {
+			if s := strings.TrimSpace(cam.StreamID); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func (h *Handler) cameraIDForStream(ctx context.Context, streamID string) string {
+	if h.db == nil {
+		return ""
+	}
+	b, err := h.db.GetStreamBinding(ctx, streamID)
+	if err != nil || b == nil {
+		return ""
+	}
+	return b.CameraID
+}
+
+// writePlayStreamNotFound reports a play request whose resource has no stream.
+func writePlayStreamNotFound(w http.ResponseWriter, r *http.Request) {
+	if isStreamPlayRoute(r) {
+		writeError(w, http.StatusNotFound, "stream not found")
+		return
+	}
+	writeError(w, http.StatusNotFound, "no stream bound to camera")
+}
+
+func (h *Handler) resolvePlayStreamID(r *http.Request, resourceID string) (streamID, quality string) {
 	quality = "main"
 	wantSub := r.URL.Query().Get("quality") == "sub"
-	if !wantSub {
-		return streamID, quality
+	cameraID := resourceID
+	if isStreamPlayRoute(r) {
+		streamID = resourceID
+		if media.IsSubStreamID(streamID) {
+			return streamID, "sub"
+		}
+		if !wantSub {
+			return streamID, quality
+		}
+		if bound := h.cameraIDForStream(r.Context(), streamID); bound != "" {
+			cameraID = bound
+		} else {
+			cameraID = media.MainStreamID(streamID)
+		}
+	} else {
+		streamID = h.cameraIngestStreamID(r.Context(), resourceID)
+		if !wantSub {
+			return streamID, quality
+		}
 	}
 	if h.camMgr == nil || !h.camMgr.HasSubStream(cameraID) {
 		return streamID, quality
@@ -124,7 +199,7 @@ func (h *Handler) resolvePlayStreamID(r *http.Request, cameraID string) (streamI
 		logger.Debug("sub-stream fallback to main", "camera_id", cameraID, "error", err)
 		return streamID, quality
 	}
-	return media.SubStreamID(cameraID), "sub"
+	return media.SubStreamID(streamID), "sub"
 }
 
 func (h *Handler) handleSubHLSStream(w http.ResponseWriter, r *http.Request) {
@@ -137,12 +212,16 @@ func (h *Handler) handleSubHLSStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "HLS not available")
 		return
 	}
-	streamID, quality := id, "main"
+	streamID, quality := h.cameraIngestStreamID(r.Context(), id), "main"
+	if streamID == "" {
+		writePlayStreamNotFound(w, r)
+		return
+	}
 	if h.camMgr != nil && h.camMgr.HasSubStream(id) {
 		if err := h.camMgr.EnsureSubStream(r.Context(), id); err != nil {
 			logger.Debug("sub HLS fallback to main", "camera_id", id, "error", err)
 		} else {
-			streamID = media.SubStreamID(id)
+			streamID = media.SubStreamID(streamID)
 			quality = "sub"
 		}
 	}

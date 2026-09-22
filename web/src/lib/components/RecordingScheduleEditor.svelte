@@ -1,52 +1,49 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import { getRecordingSchedule, setRecordingSchedule } from '$lib/api';
   import type { RecordingScheduleRange } from '$lib/api';
   import { showToast } from '$lib/toast';
   import { Plus, Trash2, Copy } from 'lucide-svelte';
 
   interface Props {
-    cameraId: string;
+    ranges?: RecordingScheduleRange[];
+    onchange?: (ranges: RecordingScheduleRange[]) => void;
+    showSave?: boolean;
+    onsave?: (ranges: RecordingScheduleRange[]) => void | Promise<void>;
+    saving?: boolean;
+    loading?: boolean;
   }
 
-  let { cameraId }: Props = $props();
-
-  let ranges = $state<RecordingScheduleRange[]>([]);
-  let loading = $state(true);
-  let saving = $state(false);
+  let {
+    ranges = [],
+    onchange,
+    showSave = false,
+    onsave,
+    saving = false,
+    loading = false,
+  }: Props = $props();
 
   const dayLabels = $derived([0, 1, 2, 3, 4, 5, 6].map((d) => t(`cameras.weekday.${d}`)));
 
-  async function load() {
-    loading = true;
-    try {
-      ranges = await getRecordingSchedule(cameraId);
-    } catch (e) {
-      console.warn('Failed to load recording schedule:', e);
-      ranges = [];
-    } finally {
-      loading = false;
-    }
+  function emit(next: RecordingScheduleRange[]) {
+    onchange?.(next);
   }
 
   function addRange(day: number) {
-    ranges = [...ranges, { day_of_week: day, start_time: '08:00', end_time: '18:00' }];
+    emit([...ranges, { day_of_week: day, start_time: '08:00', end_time: '18:00' }]);
   }
 
   function removeRange(index: number) {
-    ranges = ranges.filter((_, i) => i !== index);
+    emit(ranges.filter((_, i) => i !== index));
   }
 
   function setStart(index: number, value: string) {
-    ranges = ranges.map((r, i) => (i === index ? { ...r, start_time: value } : r));
+    emit(ranges.map((r, i) => (i === index ? { ...r, start_time: value } : r)));
   }
 
   function setEnd(index: number, value: string) {
-    ranges = ranges.map((r, i) => (i === index ? { ...r, end_time: value } : r));
+    emit(ranges.map((r, i) => (i === index ? { ...r, end_time: value } : r)));
   }
 
-  // Copy a range's time window to all 7 days (replacing any existing on those days is not done;
-  // it simply adds the same window to every other day that doesn't already have it).
   function copyToAll(index: number) {
     const src = ranges[index];
     if (!src) return;
@@ -57,7 +54,7 @@
       );
       if (!exists) additions.push({ day_of_week: d, start_time: src.start_time, end_time: src.end_time });
     }
-    ranges = [...ranges, ...additions];
+    emit([...ranges, ...additions]);
   }
 
   function copyToWeekdays(index: number) {
@@ -70,7 +67,7 @@
       );
       if (!exists) additions.push({ day_of_week: d, start_time: src.start_time, end_time: src.end_time });
     }
-    ranges = [...ranges, ...additions];
+    emit([...ranges, ...additions]);
   }
 
   function validate(): boolean {
@@ -84,31 +81,20 @@
   }
 
   async function save() {
-    if (saving) return;
+    if (saving || !onsave) return;
     if (!validate()) return;
-    saving = true;
-    try {
-      await setRecordingSchedule(cameraId, ranges);
-      showToast(t('cameras.recordingSchedule.saved'), 'success');
-    } catch (e) {
-      console.warn('Failed to save recording schedule:', e);
-      showToast(t('cameras.recordingSchedule.saveFailed'), 'error');
-    } finally {
-      saving = false;
-    }
+    await onsave(ranges);
   }
-
-  $effect(() => {
-    if (cameraId) load();
-  });
 </script>
 
 <div class="mt-4 border th-border rounded-lg p-4">
   <div class="flex items-center justify-between mb-3">
     <span class="th-text-secondary font-medium text-sm">{t('cameras.recordingSchedule.title')}</span>
-    <button class="btn btn-primary text-xs px-3 py-1.5" onclick={save} disabled={saving || loading}>
-      {saving ? t('common.saving') : t('cameras.recordingSchedule.save')}
-    </button>
+    {#if showSave}
+      <button class="btn btn-primary text-xs px-3 py-1.5" onclick={save} disabled={saving || loading}>
+        {saving ? t('common.saving') : t('cameras.recordingSchedule.save')}
+      </button>
+    {/if}
   </div>
 
   {#if loading}

@@ -67,14 +67,14 @@ const (
 
 // Task represents a relay push task.
 type Task struct {
-	ID         string     `json:"id"`
-	StreamID   string     `json:"stream_id"`
-	TargetURL  string     `json:"target_url"`
-	Status     TaskStatus `json:"status"`
-	ErrorMsg   string     `json:"error_msg,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	StoppedAt  *time.Time `json:"stopped_at,omitempty"`
+	ID        string     `json:"id"`
+	StreamID  string     `json:"stream_id"`
+	TargetURL string     `json:"target_url"`
+	Status    TaskStatus `json:"status"`
+	ErrorMsg  string     `json:"error_msg,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	StoppedAt *time.Time `json:"stopped_at,omitempty"`
 }
 
 // TaskStats represents relay push statistics.
@@ -216,7 +216,7 @@ func (m *Manager) collectTaskStats(ctx context.Context, task *Task, at *activeTa
 	if at.session != nil {
 		stat := at.session.GetStat()
 		sample.VideoBitrate = stat.WriteBitrateKbits * 1000 // convert to bps
-		sample.AudioBitrate = 0                               // lal doesn't separate audio/video bitrate
+		sample.AudioBitrate = 0                             // lal doesn't separate audio/video bitrate
 		sample.TotalBytes = int64(stat.WroteBytesSum)
 	}
 
@@ -238,7 +238,7 @@ func (m *Manager) CreateTask(ctx context.Context, streamID, targetURL string) (*
 	if err != nil {
 		return nil, fmt.Errorf("list streams: %w", err)
 	}
-	
+
 	found := false
 	for _, s := range streams {
 		if s.StreamID == streamID {
@@ -367,9 +367,9 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 
 	// Start relay in goroutine
 	go func() {
-		logger.Info("starting relay push", "task_id", taskID, "stream_id", task.StreamID, 
+		logger.Info("starting relay push", "task_id", taskID, "stream_id", task.StreamID,
 			"source", pullURL.URL, "target", task.TargetURL)
-		
+
 		// First, start push session
 		err := pushSession.Push(task.TargetURL)
 		if err != nil {
@@ -383,7 +383,7 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 		pullSession := rtmp.NewPullSession(func(option *rtmp.PullSessionOption) {
 			option.PullTimeoutMs = 5000
 		})
-		
+
 		pullSession.WithOnReadRtmpAvMsg(func(msg base.RtmpMsg) {
 			// Forward message to push session
 			if err := pushSession.WriteMsg(msg); err != nil {
@@ -560,7 +560,7 @@ func (m *Manager) updateTaskStoppedAt(taskID string, stoppedAt *time.Time) {
 func (m *Manager) saveTask(task *Task) error {
 	query := `INSERT OR REPLACE INTO relay_tasks (id, stream_id, target_url, status, error_msg, created_at, started_at, stopped_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	
+
 	_, err := m.db.DB().Exec(query,
 		task.ID,
 		task.StreamID,
@@ -577,11 +577,11 @@ func (m *Manager) saveTask(task *Task) error {
 func (m *Manager) loadTask(taskID string) (*Task, error) {
 	query := `SELECT id, stream_id, target_url, status, error_msg, created_at, started_at, stopped_at
 		FROM relay_tasks WHERE id = ?`
-	
+
 	task := &Task{}
 	var createdAt string
 	var startedAt, stoppedAt *string
-	
+
 	err := m.db.DB().QueryRow(query, taskID).Scan(
 		&task.ID,
 		&task.StreamID,
@@ -595,7 +595,7 @@ func (m *Manager) loadTask(taskID string) (*Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("task %s not found", taskID)
 	}
-	
+
 	task.CreatedAt, _ = parseTime(createdAt)
 	if startedAt != nil {
 		t, _ := parseTime(*startedAt)
@@ -605,26 +605,26 @@ func (m *Manager) loadTask(taskID string) (*Task, error) {
 		t, _ := parseTime(*stoppedAt)
 		task.StoppedAt = &t
 	}
-	
+
 	return task, nil
 }
 
 func (m *Manager) loadAllTasks() ([]*Task, error) {
 	query := `SELECT id, stream_id, target_url, status, error_msg, created_at, started_at, stopped_at
 		FROM relay_tasks ORDER BY created_at DESC`
-	
+
 	rows, err := m.db.DB().Query(query)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var tasks []*Task
 	for rows.Next() {
 		task := &Task{}
 		var createdAt string
 		var startedAt, stoppedAt *string
-		
+
 		err := rows.Scan(
 			&task.ID,
 			&task.StreamID,
@@ -638,7 +638,7 @@ func (m *Manager) loadAllTasks() ([]*Task, error) {
 		if err != nil {
 			continue
 		}
-		
+
 		task.CreatedAt, _ = parseTime(createdAt)
 		if startedAt != nil {
 			t, _ := parseTime(*startedAt)
@@ -648,10 +648,10 @@ func (m *Manager) loadAllTasks() ([]*Task, error) {
 			t, _ := parseTime(*stoppedAt)
 			task.StoppedAt = &t
 		}
-		
+
 		tasks = append(tasks, task)
 	}
-	
+
 	return tasks, nil
 }
 

@@ -58,4 +58,3 @@ func ValidatePath(baseDir, targetPath string) (string, error) {
 
 	return absPath, nil
 }
-

@@ -22,8 +22,8 @@ type Adder struct {
 	bus      *event.EventBus
 	infoFn   DeviceInfoFunc
 
-	mu    sync.Mutex
-	seen  map[string]time.Time
+	mu   sync.Mutex
+	seen map[string]time.Time
 }
 
 func NewAdder(cfg config.AutoDiscoverConfig, enroller AdderEnroller, db *storage.DB, bus *event.EventBus, infoFn DeviceInfoFunc) *Adder {
@@ -93,16 +93,15 @@ func (a *Adder) HandleDiscovered(ctx context.Context, d onvif.DiscoveredDevice) 
 	}
 
 	cam := config.CameraConfig{
-		Name:             name,
-		Protocol:         "onvif",
-		URL:              endpoint,
-		ONVIFEndpoint:    endpoint,
-		Enabled:          true,
-		Username:         a.cfg.DefaultUsername,
-		Password:         a.cfg.DefaultPassword,
-		ActivationState:  config.ActivationActive,
-		StableID:         serial,
-		RecordingMode:    storage.RecordingModeContinuous,
+		Name:            name,
+		Protocol:        "onvif",
+		URL:             endpoint,
+		ONVIFEndpoint:   endpoint,
+		Enabled:         true,
+		Username:        a.cfg.DefaultUsername,
+		Password:        a.cfg.DefaultPassword,
+		ActivationState: config.ActivationActive,
+		StableID:        serial,
 	}
 
 	if !profilesOK {

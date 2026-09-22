@@ -6,9 +6,9 @@ import "context"
 type Detection struct {
 	Label      string     `json:"label"`
 	Confidence float32    `json:"confidence"`
-	Box        [4]float32 `json:"box"`                   // [x, y, width, height] in normalized coordinates
-	TrackID    *int       `json:"track_id,omitempty"`    // Object tracking ID (from ByteTrack/supervision)
-	ZoneID     string     `json:"zone_id,omitempty"`     // Zone identifier for region-based detection
+	Box        [4]float32 `json:"box"`                // [x, y, width, height] in normalized coordinates
+	TrackID    *int       `json:"track_id,omitempty"` // Object tracking ID (from ByteTrack/supervision)
+	ZoneID     string     `json:"zone_id,omitempty"`  // Zone identifier for region-based detection
 }
 
 // DetectionResult is a complete detection event for a camera frame.

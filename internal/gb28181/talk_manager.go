@@ -15,19 +15,19 @@ const BroadcastNotifyTimeout = 10 * time.Second
 
 // TalkManager 管理所有对讲会话
 type TalkManager struct {
-	mu         sync.RWMutex
-	sessions   map[string]*TalkSession // key: deviceID_channelID
-	client     *sipgo.Client
-	cfg        *Config
+	mu          sync.RWMutex
+	sessions    map[string]*TalkSession // key: deviceID_channelID
+	client      *sipgo.Client
+	cfg         *Config
 	deviceStore *DeviceStore
 }
 
 // NewTalkManager 创建新的 TalkManager
 func NewTalkManager(client *sipgo.Client, cfg *Config, store *DeviceStore) *TalkManager {
 	return &TalkManager{
-		sessions:   make(map[string]*TalkSession),
-		client:     client,
-		cfg:        cfg,
+		sessions:    make(map[string]*TalkSession),
+		client:      client,
+		cfg:         cfg,
 		deviceStore: store,
 	}
 }

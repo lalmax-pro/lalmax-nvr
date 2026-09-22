@@ -3,17 +3,22 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
+	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
@@ -23,6 +28,8 @@ const (
 	streamIdleHistoryMaxAge   = 7 * 24 * time.Hour
 	streamIdleHistoryMaxItems = 200
 )
+
+var pushStreamIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
 // normalizeStreamID decodes percent-encoded stream IDs from URL path params.
 // GB28181 stream IDs contain ":" which may arrive as "%3A" or "%253A" when over-encoded.
@@ -51,21 +58,24 @@ type streamListResponse struct {
 type streamSummary struct {
 	Engine         string                `json:"engine"`
 	StreamID       string                `json:"stream_id"`
+	Name           string                `json:"name,omitempty"`
 	AppName        string                `json:"app_name,omitempty"`
 	Managed        bool                  `json:"managed"`
 	ManagementType string                `json:"management_type,omitempty"`
 	CameraID       string                `json:"camera_id,omitempty"`
 	CameraName     string                `json:"camera_name,omitempty"`
 	SourceType     string                `json:"source_type"`
-	Active          bool                  `json:"active"`
-	GB28181Playing  bool                  `json:"gb28181_playing,omitempty"`
-	Publisher       *cameraSessionStatus  `json:"publisher,omitempty"`
+	Active         bool                  `json:"active"`
+	GB28181Playing bool                  `json:"gb28181_playing,omitempty"`
+	Publisher      *cameraSessionStatus  `json:"publisher,omitempty"`
 	Subscribers    []cameraSessionStatus `json:"subscribers,omitempty"`
 	VideoCodec     string                `json:"video_codec,omitempty"`
 	AudioCodec     string                `json:"audio_codec,omitempty"`
 	InFPS          float64               `json:"in_fps,omitempty"`
 	LastFrameTime  *time.Time            `json:"last_frame_time,omitempty"`
 	PlayURLs       []streamPlayURL       `json:"play_urls,omitempty"`
+	IngestURLs     []streamPlayURL       `json:"ingest_urls,omitempty"`
+	SourceURL      string                `json:"source_url,omitempty"`
 }
 
 type streamPlayURL struct {
@@ -110,7 +120,7 @@ func (h *Handler) handleListStreams(w http.ResponseWriter, r *http.Request) {
 		bindingByStreamID[binding.StreamID] = binding.CameraID
 	}
 
-	items := h.buildMergedStreamList(r.Context(), streams, cameraRows, bindingByStreamID, cameraByID)
+	items := h.buildMergedStreamList(r.Context(), streams, cameraRows, bindingByStreamID, cameraByID, h.ownStreamByCamera(r.Context()))
 
 	search, managedFilter, limit, offset := parseStreamListParams(r)
 	filtered := filterStreamSummaries(items, search, managedFilter)
@@ -150,10 +160,24 @@ func parseStreamListParams(r *http.Request) (search string, managedFilter *bool,
 }
 
 func streamDisplayName(item streamSummary) string {
+	if item.Name != "" {
+		return item.Name
+	}
 	if item.Managed && item.CameraName != "" {
 		return item.CameraName
 	}
 	return item.StreamID
+}
+
+func normalizeStreamDisplayName(name, streamID string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = streamID
+	}
+	if runes := []rune(name); len(runes) > 128 {
+		name = string(runes[:128])
+	}
+	return name
 }
 
 func sortStreamSummaries(items []streamSummary) {
@@ -182,27 +206,53 @@ func sortStreamSummaries(items []streamSummary) {
 func (h *Handler) resolveStreamManagement(
 	streamID string,
 	info *media.StreamInfo,
-	bindingByStreamID, cameraByID map[string]string,
+	bindingByStreamID, cameraByID, ownStreamByCamera map[string]string,
 ) (cameraID, cameraName, managementType string, managed bool) {
-	if boundCameraID, ok := bindingByStreamID[streamID]; ok {
-		return boundCameraID, cameraByID[boundCameraID], "bound", true
+	boundCameraID, ok := bindingByStreamID[streamID]
+	if !ok {
+		return "", "", "", false
 	}
-	if promotedCameraName, promoted := cameraByID[streamID]; promoted {
-		managementType = "camera"
-		if info != nil {
-			managementType = inferCameraManagementType(*info)
+	return boundCameraID, cameraByID[boundCameraID], streamManagementType(ownStreamByCamera[boundCameraID], streamID, info), true
+}
+
+// streamManagementType classifies a bound stream.
+// The camera's own ingest stream is "camera" (or "promoted" for push sources);
+// a foreign stream bound onto a camera is "bound".
+func streamManagementType(ownStream, streamID string, info *media.StreamInfo) string {
+	if ownStream != streamID {
+		return "bound"
+	}
+	if info != nil && inferCameraManagementType(*info) == "promoted" {
+		return "promoted"
+	}
+	return "camera"
+}
+
+// ownStreamByCamera maps camera ID to the stream it ingests from.
+func (h *Handler) ownStreamByCamera(ctx context.Context) map[string]string {
+	out := make(map[string]string)
+	if h.db == nil {
+		return out
+	}
+	configs, err := h.db.ListCameraConfigs(ctx)
+	if err != nil {
+		logger.Warn("list camera configs for stream ownership failed", "error", err)
+		return out
+	}
+	for _, c := range configs {
+		if s := strings.TrimSpace(c.StreamID); s != "" {
+			out[c.ID] = s
 		}
-		return streamID, promotedCameraName, managementType, true
 	}
-	return "", "", "", false
+	return out
 }
 
 func (h *Handler) streamSummaryFromMediaInfo(
 	ctx context.Context,
 	info media.StreamInfo,
-	bindingByStreamID, cameraByID map[string]string,
+	bindingByStreamID, cameraByID, ownStreamByCamera map[string]string,
 ) streamSummary {
-	cameraID, cameraName, managementType, managed := h.resolveStreamManagement(info.StreamID, &info, bindingByStreamID, cameraByID)
+	cameraID, cameraName, managementType, managed := h.resolveStreamManagement(info.StreamID, &info, bindingByStreamID, cameraByID, ownStreamByCamera)
 	appName := info.AppName
 	if appName == "" {
 		appName = "live"
@@ -221,12 +271,12 @@ func (h *Handler) streamSummaryFromMediaInfo(
 		AudioCodec:     info.AudioCodec,
 		InFPS:          info.InFPS,
 		LastFrameTime:  timePointer(info.LastFrameTime),
-		PlayURLs:       h.buildStreamPlayURLs(ctx, info.StreamID, appName),
 	}
 	if managed {
 		item.CameraID = cameraID
 		item.CameraName = cameraName
 	}
+	h.attachStreamURLs(ctx, &item)
 	h.applyGB28181PlayingState(&item)
 	return item
 }
@@ -249,39 +299,15 @@ func (h *Handler) buildMergedStreamList(
 	ctx context.Context,
 	liveStreams []media.StreamInfo,
 	cameraRows []storage.CameraRow,
-	bindingByStreamID, cameraByID map[string]string,
+	bindingByStreamID, cameraByID, ownStreamByCamera map[string]string,
 ) []streamSummary {
-	byID := make(map[string]streamSummary, len(liveStreams)+len(cameraRows))
+	createdByID := h.createdStreamsByID(ctx)
+	byID := make(map[string]streamSummary, len(liveStreams)+len(cameraRows)+len(createdByID))
 
 	for _, info := range liveStreams {
-		byID[info.StreamID] = h.streamSummaryFromMediaInfo(ctx, info, bindingByStreamID, cameraByID)
-	}
-
-	for _, cam := range cameraRows {
-		if !cam.Enabled {
-			continue
-		}
-		if _, ok := byID[cam.ID]; ok {
-			continue
-		}
-		sourceType := "camera"
-		if cam.Protocol == "gb28181" {
-			sourceType = "gb28181"
-		}
-		item := streamSummary{
-			Engine:         "lalmax",
-			StreamID:       cam.ID,
-			AppName:        "live",
-			Managed:        true,
-			ManagementType: "camera",
-			CameraID:       cam.ID,
-			CameraName:     cam.Name,
-			SourceType:     sourceType,
-			Active:         false,
-			PlayURLs:       h.buildStreamPlayURLs(ctx, cam.ID, "live"),
-		}
-		h.applyGB28181PlayingState(&item)
-		byID[cam.ID] = item
+		item := h.streamSummaryFromMediaInfo(ctx, info, bindingByStreamID, cameraByID, ownStreamByCamera)
+		applyCreatedStream(&item, createdByID)
+		byID[info.StreamID] = item
 	}
 
 	for streamID, cameraID := range bindingByStreamID {
@@ -302,8 +328,10 @@ func (h *Handler) buildMergedStreamList(
 			CameraName:     cameraName,
 			SourceType:     "camera",
 			Active:         false,
-			PlayURLs:       h.buildStreamPlayURLs(ctx, streamID, "live"),
 		}
+		item := byID[streamID]
+		h.attachStreamURLs(ctx, &item)
+		byID[streamID] = item
 	}
 
 	since := time.Now().Add(-streamIdleHistoryMaxAge)
@@ -336,9 +364,22 @@ func (h *Handler) buildMergedStreamList(
 				SourceType:    inferStreamSourceTypeFromProtocol(snap.Protocol),
 				Active:        false,
 				LastFrameTime: timePointer(lastSeen),
-				PlayURLs:      h.buildStreamPlayURLs(ctx, snap.StreamID, appName),
 			}
+			item := byID[snap.StreamID]
+			h.attachStreamURLs(ctx, &item)
+			applyCreatedStream(&item, createdByID)
+			byID[snap.StreamID] = item
 		}
+	}
+
+	for id, created := range createdByID {
+		if _, ok := byID[id]; ok {
+			continue
+		}
+		if _, isCamera := cameraByID[id]; isCamera {
+			continue
+		}
+		byID[id] = h.summaryFromCreated(ctx, created)
 	}
 
 	items := make([]streamSummary, 0, len(byID))
@@ -369,7 +410,7 @@ func filterStreamSummaries(items []streamSummary, search string, managedFilter *
 }
 
 func streamSummaryMatchesSearch(item streamSummary, q string) bool {
-	for _, field := range []string{item.StreamID, item.CameraName, item.CameraID, item.AppName} {
+	for _, field := range []string{item.StreamID, item.Name, item.CameraName, item.CameraID, item.AppName} {
 		if field != "" && strings.Contains(strings.ToLower(field), q) {
 			return true
 		}
@@ -522,6 +563,9 @@ func sessionStatusesFromInfo(sessions []media.SessionInfo) []cameraSessionStatus
 	}
 	items := make([]cameraSessionStatus, 0, len(sessions))
 	for _, session := range sessions {
+		if media.IsInternalRecorderSession(session.Protocol, session.SessionID) {
+			continue
+		}
 		items = append(items, cameraSessionStatus{
 			SessionID:         session.SessionID,
 			Protocol:          session.Protocol,
@@ -530,6 +574,9 @@ func sessionStatusesFromInfo(sessions []media.SessionInfo) []cameraSessionStatus
 			ReadBitrateKbits:  session.ReadBitrateKbits,
 			WriteBitrateKbits: session.WriteBitrateKbits,
 		})
+	}
+	if len(items) == 0 {
+		return nil
 	}
 	return items
 }
@@ -541,16 +588,151 @@ func timePointer(v time.Time) *time.Time {
 	return &v
 }
 
+func (h *Handler) attachStreamURLs(ctx context.Context, item *streamSummary) {
+	if item == nil {
+		return
+	}
+	appName := item.AppName
+	if appName == "" {
+		appName = "live"
+	}
+	item.PlayURLs = h.buildStreamURLs(ctx, item.StreamID, appName, []string{"hls", "ll-hls", "flv", "ws-flv", "webrtc", "fmp4", "rtmp", "rtsp"})
+	if !item.Managed {
+		if item.SourceType == "relay_pull" {
+			return
+		}
+		item.IngestURLs = h.buildIngestURLs(ctx, item.StreamID, appName)
+		return
+	}
+	if h.config == nil || h.config.IsWHIPEnabled() {
+		item.IngestURLs = h.buildStreamURLs(ctx, item.StreamID, appName, []string{"whip"})
+	}
+}
+
+// externalIngestProtocols lists publish protocols advertised for an external push stream.
+// A nil config keeps the previous WHIP-only advertisement used by tests.
+func (h *Handler) externalIngestProtocols() []string {
+	if h.config == nil {
+		return []string{"whip"}
+	}
+	var protocols []string
+	if h.config.RTMP.Enabled != nil && *h.config.RTMP.Enabled {
+		protocols = append(protocols, "rtmp")
+	}
+	if h.config.SRT.Enabled != nil && *h.config.SRT.Enabled {
+		protocols = append(protocols, "srt")
+	}
+	if h.config.IsWHIPEnabled() {
+		protocols = append(protocols, "whip")
+	}
+	return protocols
+}
+
+func (h *Handler) buildIngestURLs(ctx context.Context, streamID, appName string) []streamPlayURL {
+	out := make([]streamPlayURL, 0, 3)
+	for _, protocol := range h.externalIngestProtocols() {
+		if protocol == "srt" {
+			if u := h.buildSRTIngestURL(ctx, streamID); u != "" {
+				out = append(out, streamPlayURL{Protocol: "srt", URL: u, Backend: "lalmax"})
+			}
+			continue
+		}
+		out = append(out, h.buildStreamURLs(ctx, streamID, appName, []string{protocol})...)
+	}
+	return out
+}
+
+func (h *Handler) buildSRTIngestURL(ctx context.Context, streamID string) string {
+	port := config.DefaultSRTPort
+	if h.config != nil && h.config.SRT.Port > 0 {
+		port = h.config.SRT.Port
+	}
+	host := "127.0.0.1"
+	if h.mediaEngine != nil {
+		play, err := h.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
+			StreamID: streamID,
+			AppName:  "live",
+			Protocol: "rtmp",
+		})
+		if err == nil && play != nil && play.URL != "" {
+			if u, parseErr := url.Parse(play.URL); parseErr == nil && u.Hostname() != "" {
+				host = u.Hostname()
+			}
+		}
+	}
+	u := url.URL{
+		Scheme:   "srt",
+		Host:     net.JoinHostPort(host, strconv.Itoa(port)),
+		RawQuery: fmt.Sprintf("streamid=#!::h=%s,m=publish", streamID),
+	}
+	return u.String()
+}
+
+func (h *Handler) createdStreamsByID(ctx context.Context) map[string]storage.CreatedStream {
+	rows, err := h.db.ListCreatedStreams(ctx)
+	if err != nil {
+		logger.Error("list created streams failed", "err", err)
+		return nil
+	}
+	out := make(map[string]storage.CreatedStream, len(rows))
+	for _, row := range rows {
+		out[row.StreamID] = row
+	}
+	return out
+}
+
+func applyCreatedStream(item *streamSummary, created map[string]storage.CreatedStream) {
+	if item == nil || created == nil {
+		return
+	}
+	row, ok := created[item.StreamID]
+	if !ok || row.StreamID == "" {
+		return
+	}
+	if row.Name != "" {
+		item.Name = row.Name
+	}
+	if row.InputMode == storage.CreatedStreamPull {
+		item.SourceType = "relay_pull"
+		item.SourceURL = row.SourceURL
+		item.IngestURLs = nil
+	}
+}
+
+func (h *Handler) summaryFromCreated(ctx context.Context, created storage.CreatedStream) streamSummary {
+	appName := created.AppName
+	if appName == "" {
+		appName = "live"
+	}
+	item := streamSummary{
+		Engine:     "lalmax",
+		StreamID:   created.StreamID,
+		Name:       created.Name,
+		AppName:    appName,
+		SourceType: "push",
+		Active:     false,
+	}
+	if created.InputMode == storage.CreatedStreamPull {
+		item.SourceType = "relay_pull"
+		item.SourceURL = created.SourceURL
+	}
+	h.attachStreamURLs(ctx, &item)
+	if created.InputMode == storage.CreatedStreamPull {
+		item.IngestURLs = nil
+	}
+	return item
+}
+
 func (h *Handler) buildStreamPlayURLs(ctx context.Context, streamID, appName string) []streamPlayURL {
+	return h.buildStreamURLs(ctx, streamID, appName, []string{"hls", "ll-hls", "flv", "ws-flv", "webrtc", "fmp4", "rtmp", "rtsp"})
+}
+
+func (h *Handler) buildStreamURLs(ctx context.Context, streamID, appName string, protocols []string) []streamPlayURL {
 	if h.mediaEngine == nil {
 		return nil
 	}
 	if appName == "" {
 		appName = "live"
-	}
-	protocols := []string{"hls", "ll-hls", "flv", "ws-flv", "webrtc", "fmp4", "rtmp", "rtsp"}
-	if h.config == nil || h.config.IsWHIPEnabled() {
-		protocols = append(protocols, "whip")
 	}
 	urls := make([]streamPlayURL, 0, len(protocols))
 	for _, protocol := range protocols {
@@ -583,39 +765,11 @@ func (h *Handler) handleGetStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := h.mediaEngine.GetStream(r.Context(), streamID)
+	item, ok, err := h.streamSummaryForID(r.Context(), streamID)
 	if err != nil {
-		logger.Error("get stream failed", "stream_id", streamID, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to get stream")
 		return
 	}
-
-	if info != nil {
-		cameraRows, err := h.db.ListCameras(r.Context())
-		if err != nil {
-			logger.Error("list cameras for stream failed", "err", err)
-			writeError(w, http.StatusInternalServerError, "failed to load camera mapping")
-			return
-		}
-		cameraByID := make(map[string]string, len(cameraRows))
-		for _, cam := range cameraRows {
-			cameraByID[cam.ID] = cam.Name
-		}
-		bindings, err := h.db.ListStreamBindings(r.Context())
-		if err != nil {
-			logger.Error("list stream bindings failed", "err", err)
-			writeError(w, http.StatusInternalServerError, "failed to load stream bindings")
-			return
-		}
-		bindingByStreamID := make(map[string]string, len(bindings))
-		for _, binding := range bindings {
-			bindingByStreamID[binding.StreamID] = binding.CameraID
-		}
-		writeJSON(w, http.StatusOK, h.streamSummaryFromMediaInfo(r.Context(), *info, bindingByStreamID, cameraByID))
-		return
-	}
-
-	item, ok := h.buildIdleStreamSummary(r.Context(), streamID)
 	if !ok {
 		writeError(w, http.StatusNotFound, "stream not found")
 		return
@@ -623,33 +777,142 @@ func (h *Handler) handleGetStream(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, item)
 }
 
-func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (streamSummary, bool) {
-	cam, err := h.db.GetCamera(ctx, streamID)
+func (h *Handler) streamSummaryForID(ctx context.Context, streamID string) (streamSummary, bool, error) {
+	info, err := h.mediaEngine.GetStream(ctx, streamID)
 	if err != nil {
-		logger.Error("get camera for idle stream failed", "stream_id", streamID, "err", err)
-		return streamSummary{}, false
-	}
-	if cam != nil && cam.Enabled && !cam.Archived {
-		sourceType := "camera"
-		if cam.Protocol == "gb28181" {
-			sourceType = "gb28181"
-		}
-		item := streamSummary{
-			Engine:         "lalmax",
-			StreamID:       cam.ID,
-			AppName:        "live",
-			Managed:        true,
-			ManagementType: "camera",
-			CameraID:       cam.ID,
-			CameraName:     cam.Name,
-			SourceType:     sourceType,
-			Active:         false,
-			PlayURLs:       h.buildStreamPlayURLs(ctx, cam.ID, "live"),
-		}
-		h.applyGB28181PlayingState(&item)
-		return item, true
+		logger.Error("get stream failed", "stream_id", streamID, "err", err)
+		return streamSummary{}, false, err
 	}
 
+	if info != nil {
+		cameraRows, err := h.db.ListCameras(ctx)
+		if err != nil {
+			logger.Error("list cameras for stream failed", "err", err)
+			return streamSummary{}, false, err
+		}
+		cameraByID := make(map[string]string, len(cameraRows))
+		for _, cam := range cameraRows {
+			cameraByID[cam.ID] = cam.Name
+		}
+		bindings, err := h.db.ListStreamBindings(ctx)
+		if err != nil {
+			logger.Error("list stream bindings failed", "err", err)
+			return streamSummary{}, false, err
+		}
+		bindingByStreamID := make(map[string]string, len(bindings))
+		for _, binding := range bindings {
+			bindingByStreamID[binding.StreamID] = binding.CameraID
+		}
+		item := h.streamSummaryFromMediaInfo(ctx, *info, bindingByStreamID, cameraByID, h.ownStreamByCamera(ctx))
+		if created, err := h.db.GetCreatedStream(ctx, streamID); err != nil {
+			logger.Error("get created stream failed", "stream_id", streamID, "err", err)
+		} else {
+			applyCreatedStream(&item, map[string]storage.CreatedStream{streamID: derefCreated(created)})
+		}
+		return item, true, nil
+	}
+
+	item, ok := h.buildIdleStreamSummary(ctx, streamID)
+	return item, ok, nil
+}
+
+type updateStreamRequest struct {
+	Name string `json:"name"`
+}
+
+// handleUpdateStream updates the display name of a stream.
+// Unmanaged streams persist the name on created_streams (inserting a row if needed).
+// Managed streams update the bound camera name.
+func (h *Handler) handleUpdateStream(w http.ResponseWriter, r *http.Request) {
+	if h.mediaEngine == nil {
+		writeError(w, http.StatusServiceUnavailable, "stream management unavailable")
+		return
+	}
+
+	streamID := streamIDFromRequest(r)
+	if streamID == "" {
+		writeError(w, http.StatusBadRequest, "stream_id is required")
+		return
+	}
+
+	var req updateStreamRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name := normalizeStreamDisplayName(req.Name, streamID)
+	ctx := r.Context()
+
+	cameraID, err := h.managedCameraIDForStream(ctx, streamID)
+	if err != nil {
+		logger.Error("lookup managed camera for stream update failed", "stream_id", streamID, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to update stream")
+		return
+	}
+	if cameraID != "" {
+		if h.camMgr == nil {
+			writeError(w, http.StatusServiceUnavailable, "camera manager not available")
+			return
+		}
+		if _, err := h.camMgr.UpdateCamera(ctx, cameraID, camera.CameraUpdate{Name: &name}); err != nil {
+			var cnf *model.CameraNotFoundError
+			if errors.As(err, &cnf) {
+				writeError(w, http.StatusNotFound, "stream not found")
+				return
+			}
+			logger.Error("update managed stream camera name failed", "stream_id", streamID, "camera_id", cameraID, "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to update stream")
+			return
+		}
+	} else {
+		_, ok, err := h.streamSummaryForID(ctx, streamID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update stream")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "stream not found")
+			return
+		}
+		if err := h.db.SetCreatedStreamName(ctx, streamID, name); err != nil {
+			logger.Error("set created stream name failed", "stream_id", streamID, "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to update stream")
+			return
+		}
+	}
+
+	item, ok, err := h.streamSummaryForID(ctx, streamID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get stream")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "stream not found")
+		return
+	}
+	h.logOperation(r, "stream.update", "stream", streamID, "success", "stream display name updated", map[string]any{"name": name})
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (h *Handler) managedCameraIDForStream(ctx context.Context, streamID string) (string, error) {
+	binding, err := h.db.GetStreamBinding(ctx, streamID)
+	if err != nil {
+		return "", err
+	}
+	if binding != nil {
+		return binding.CameraID, nil
+	}
+	cam, err := h.db.GetCamera(ctx, streamID)
+	if err != nil {
+		return "", err
+	}
+	if cam != nil && !cam.Archived {
+		return cam.ID, nil
+	}
+	return "", nil
+}
+
+func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (streamSummary, bool) {
 	binding, err := h.db.GetStreamBinding(ctx, streamID)
 	if err != nil {
 		logger.Error("get stream binding for idle stream failed", "stream_id", streamID, "err", err)
@@ -667,16 +930,25 @@ func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (
 				StreamID:       streamID,
 				AppName:        "live",
 				Managed:        true,
-				ManagementType: "bound",
+				ManagementType: streamManagementType(h.ownStreamByCamera(ctx)[binding.CameraID], streamID, nil),
 				CameraID:       binding.CameraID,
 				CameraName:     boundCam.Name,
 				SourceType:     "camera",
 				Active:         false,
-				PlayURLs:       h.buildStreamPlayURLs(ctx, streamID, "live"),
 			}
+			h.attachStreamURLs(ctx, &item)
 			h.applyGB28181PlayingState(&item)
 			return item, true
 		}
+	}
+
+	created, err := h.db.GetCreatedStream(ctx, streamID)
+	if err != nil {
+		logger.Error("get created stream for idle stream failed", "stream_id", streamID, "err", err)
+		return streamSummary{}, false
+	}
+	if created != nil {
+		return h.summaryFromCreated(ctx, *created), true
 	}
 
 	histories, _, err := h.db.ListStreamHistory(ctx, streamID, 1, 0)
@@ -709,8 +981,8 @@ func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (
 		SourceType:    inferStreamSourceTypeFromProtocol(latest.Protocol),
 		Active:        false,
 		LastFrameTime: timePointer(lastSeen),
-		PlayURLs:      h.buildStreamPlayURLs(ctx, latest.StreamID, appName),
 	}
+	h.attachStreamURLs(ctx, &item)
 	h.applyGB28181PlayingState(&item)
 	return item, true
 }
@@ -725,8 +997,8 @@ func (h *Handler) buildGB28181IdleStreamSummary(ctx context.Context, streamID st
 		AppName:    "live",
 		SourceType: "gb28181",
 		Active:     false,
-		PlayURLs:   h.buildStreamPlayURLs(ctx, streamID, "live"),
 	}
+	h.attachStreamURLs(ctx, &item)
 	if cam, err := h.db.GetCamera(ctx, streamID); err == nil && cam != nil && cam.Enabled && !cam.Archived {
 		item.Managed = true
 		item.ManagementType = "camera"
@@ -785,7 +1057,13 @@ func (h *Handler) handleBindCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.BindStreamToCamera(r.Context(), streamID, req.CameraID); err != nil {
+	if h.camMgr != nil {
+		if err := h.camMgr.SetCameraStream(r.Context(), req.CameraID, streamID); err != nil {
+			logger.Error("bind stream to camera failed", "stream_id", streamID, "camera_id", req.CameraID, "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to bind stream to camera")
+			return
+		}
+	} else if err := h.db.SetCameraStream(r.Context(), req.CameraID, streamID); err != nil {
 		logger.Error("bind stream to camera failed", "stream_id", streamID, "camera_id", req.CameraID, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to bind stream to camera")
 		return
@@ -821,7 +1099,14 @@ func (h *Handler) handleUnbindCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.UnbindStreamFromCamera(r.Context(), streamID); err != nil {
+	// Revert the camera to its own stream (a pull camera ingests live/{camera_id}).
+	if h.camMgr != nil {
+		if err := h.camMgr.SetCameraStream(r.Context(), binding.CameraID, binding.CameraID); err != nil {
+			logger.Error("unbind stream from camera failed", "stream_id", streamID, "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to unbind stream from camera")
+			return
+		}
+	} else if err := h.db.SetCameraStream(r.Context(), binding.CameraID, binding.CameraID); err != nil {
 		logger.Error("unbind stream from camera failed", "stream_id", streamID, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to unbind stream from camera")
 		return
@@ -872,13 +1157,13 @@ func (h *Handler) handlePromoteStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existingCam, err := h.db.GetCamera(r.Context(), streamID)
+	existingBinding, err := h.db.GetStreamBinding(r.Context(), streamID)
 	if err != nil {
-		logger.Error("check existing camera failed", "stream_id", streamID, "err", err)
-		writeError(w, http.StatusInternalServerError, "failed to check existing camera")
+		logger.Error("check existing stream binding failed", "stream_id", streamID, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to check stream binding")
 		return
 	}
-	if existingCam != nil && !existingCam.Archived {
+	if existingBinding != nil {
 		writeError(w, http.StatusConflict, "stream already mapped to a camera")
 		return
 	}
@@ -917,73 +1202,51 @@ func (h *Handler) handlePromoteStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	protocol := "rtsp"
+	cameraID := camera.GenerateCameraID()
 
-	// Create camera config for CameraManager
 	cam := config.CameraConfig{
-		ID:         streamID,
+		ID:         cameraID,
 		Name:       req.Name,
 		Protocol:   protocol,
 		Encoding:   encoding,
 		URL:        cameraURL,
 		Enabled:    true,
 		SourceType: sourceType,
+		StreamID:   streamID,
 	}
 	config.ApplyCameraAudioDefault(&cam)
 
-	// If camera exists but is archived, unarchive and update it
-	if existingCam != nil && existingCam.Archived {
-		if err := h.db.UnarchiveCameraDB(r.Context(), streamID); err != nil {
-			logger.Error("unarchive camera failed", "stream_id", streamID, "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to unarchive camera")
+	if h.camMgr != nil {
+		id, err := h.camMgr.AddCamera(r.Context(), cam)
+		if err != nil {
+			logger.Error("promote stream to camera via CameraManager failed", "stream_id", streamID, "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to promote stream to camera")
 			return
 		}
-		// Update camera fields
-		if err := h.db.UpsertCamera(r.Context(), streamID, req.Name, sourceType, encoding, cameraURL, "", "", true, req.Description, req.Location, ""); err != nil {
-			logger.Error("update archived camera failed", "stream_id", streamID, "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to update camera")
-			return
-		}
-		// Re-add to CameraManager if available
-		if h.camMgr != nil {
-			if _, err := h.camMgr.AddCamera(r.Context(), cam); err != nil {
-				logger.Warn("re-add archived camera to manager failed", "stream_id", streamID, "error", err)
-			}
-		}
-	} else {
-		// Add camera to CameraManager (this will also insert into DB)
-		if h.camMgr != nil {
-			if _, err := h.camMgr.AddCamera(r.Context(), cam); err != nil {
-				logger.Error("promote stream to camera via CameraManager failed", "stream_id", streamID, "err", err)
-				writeError(w, http.StatusInternalServerError, "failed to promote stream to camera")
-				return
-			}
-		} else {
-			// Fallback to direct DB insert if CameraManager is not available
-			if err := h.db.UpsertCamera(r.Context(), streamID, req.Name, sourceType, encoding, cameraURL, "", "", true, req.Description, req.Location, ""); err != nil {
-				logger.Error("promote stream to camera failed", "stream_id", streamID, "err", err)
-				writeError(w, http.StatusInternalServerError, "failed to promote stream to camera")
-				return
-			}
-		}
+		cameraID = id
+	} else if err := h.db.UpsertCamera(r.Context(), cameraID, req.Name, sourceType, encoding, cameraURL, "", "", true, req.Description, req.Location, ""); err != nil {
+		logger.Error("promote stream to camera failed", "stream_id", streamID, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to promote stream to camera")
+		return
+	} else if err := h.db.SaveCameraExtras(r.Context(), cam); err != nil {
+		logger.Warn("failed to save promoted camera extras", "camera_id", cameraID, "error", err)
 	}
 
-	// Record that this camera is backed by an existing lalmax stream group.
-	if err := h.db.BindStreamToCamera(r.Context(), streamID, streamID); err != nil {
-		logger.Error("create stream binding for promoted camera failed", "stream_id", streamID, "err", err)
+	if err := h.db.BindStreamToCamera(r.Context(), streamID, cameraID); err != nil {
+		logger.Error("create stream binding for promoted camera failed", "stream_id", streamID, "camera_id", cameraID, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to create stream binding")
 		return
 	}
 
-	// Update metadata if provided
 	if req.Description != "" || req.Location != "" {
-		if err := h.db.UpdateCameraMetadata(r.Context(), streamID, req.Description, req.Location, "", "", "", 0); err != nil {
-			logger.Warn("failed to set camera metadata", "camera_id", streamID, "error", err)
+		if err := h.db.UpdateCameraMetadata(r.Context(), cameraID, req.Description, req.Location, "", "", "", 0); err != nil {
+			logger.Warn("failed to set camera metadata", "camera_id", cameraID, "error", err)
 		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"stream_id":   streamID,
-		"camera_id":   streamID,
+		"camera_id":   cameraID,
 		"source_type": sourceType,
 		"status":      "promoted",
 	})
@@ -1002,6 +1265,13 @@ func (h *Handler) handleDeleteStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if created, err := h.db.GetCreatedStream(ctx, streamID); err != nil {
+		logger.Error("get created stream for delete failed", "stream_id", streamID, "err", err)
+	} else if created != nil && created.InputMode == storage.CreatedStreamPull {
+		if err := h.mediaEngine.StopPull(ctx, streamID); err != nil {
+			logger.Debug("stop created pull failed", "stream_id", streamID, "err", err)
+		}
+	}
 	info, err := h.mediaEngine.GetStream(ctx, streamID)
 	if err != nil {
 		logger.Error("get stream for delete failed", "stream_id", streamID, "err", err)
@@ -1028,6 +1298,10 @@ func (h *Handler) handleDeleteStream(w http.ResponseWriter, r *http.Request) {
 	} else if !ok {
 		writeError(w, http.StatusNotFound, "stream not found")
 		return
+	}
+
+	if _, err := h.db.DeleteCreatedStream(ctx, streamID); err != nil {
+		logger.Warn("failed to delete created stream", "stream_id", streamID, "error", err)
 	}
 
 	if err := h.db.DeleteStreamHistory(ctx, streamID); err != nil {
@@ -1070,11 +1344,199 @@ func (h *Handler) deleteOfflineStream(ctx context.Context, streamID string) (boo
 		return true, nil
 	}
 
+	removed, err := h.db.DeleteCreatedStream(ctx, streamID)
+	if err != nil {
+		return false, err
+	}
+	if removed {
+		return true, nil
+	}
+
 	histories, _, err := h.db.ListStreamHistory(ctx, streamID, 1, 0)
 	if err != nil {
 		return false, err
 	}
 	return len(histories) > 0, nil
+}
+
+func derefCreated(stream *storage.CreatedStream) storage.CreatedStream {
+	if stream == nil {
+		return storage.CreatedStream{}
+	}
+	return *stream
+}
+
+type createStreamRequest struct {
+	StreamID  string `json:"stream_id"`
+	Name      string `json:"name"`
+	InputMode string `json:"input_mode"`
+	SourceURL string `json:"source_url"`
+}
+
+// handleCreateStream creates an external stream.
+// Push reserves a slot and returns copyable publish URLs.
+// Pull starts a lalmax relay pull from source_url.
+func (h *Handler) handleCreateStream(w http.ResponseWriter, r *http.Request) {
+	if h.mediaEngine == nil {
+		writeError(w, http.StatusServiceUnavailable, "stream management unavailable")
+		return
+	}
+	var req createStreamRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	streamID := strings.TrimSpace(req.StreamID)
+	if !pushStreamIDPattern.MatchString(streamID) {
+		writeError(w, http.StatusBadRequest, "stream_id must be 1-64 characters of letters, numbers, '_' or '-'")
+		return
+	}
+	inputMode := strings.ToLower(strings.TrimSpace(req.InputMode))
+	if inputMode == "" {
+		inputMode = storage.CreatedStreamPush
+	}
+	if inputMode != storage.CreatedStreamPush && inputMode != storage.CreatedStreamPull {
+		writeError(w, http.StatusBadRequest, "input_mode must be push or pull")
+		return
+	}
+	sourceURL := strings.TrimSpace(req.SourceURL)
+	if inputMode == storage.CreatedStreamPull {
+		if !validPullSourceURL(sourceURL) {
+			writeError(w, http.StatusBadRequest, "source_url must be an rtsp, rtmp, http, srt, or udp URL")
+			return
+		}
+	} else if len(h.externalIngestProtocols()) == 0 {
+		writeError(w, http.StatusBadRequest, "no ingest protocol is enabled")
+		return
+	}
+
+	ctx := r.Context()
+	existing, err := h.db.GetCreatedStream(ctx, streamID)
+	if err != nil {
+		logger.Error("get created stream failed", "stream_id", streamID, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to create stream")
+		return
+	}
+	if existing != nil {
+		writeError(w, http.StatusConflict, "stream already exists")
+		return
+	}
+	cam, err := h.db.GetCamera(ctx, streamID)
+	if err != nil {
+		logger.Error("get camera for create stream failed", "stream_id", streamID, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to create stream")
+		return
+	}
+	if cam != nil && !cam.Archived {
+		writeError(w, http.StatusConflict, "stream id is already used by a camera")
+		return
+	}
+	binding, err := h.db.GetStreamBinding(ctx, streamID)
+	if err != nil {
+		logger.Error("get stream binding for create stream failed", "stream_id", streamID, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to create stream")
+		return
+	}
+	if binding != nil {
+		writeError(w, http.StatusConflict, "stream id is already used by a camera")
+		return
+	}
+	if inputMode == storage.CreatedStreamPull {
+		info, err := h.mediaEngine.GetStream(ctx, streamID)
+		if err != nil {
+			logger.Error("get stream for create pull failed", "stream_id", streamID, "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to create stream")
+			return
+		}
+		if info != nil {
+			writeError(w, http.StatusConflict, "stream already exists")
+			return
+		}
+	}
+
+	name := normalizeStreamDisplayName(req.Name, streamID)
+	created := storage.CreatedStream{
+		StreamID:  streamID,
+		Name:      name,
+		AppName:   "live",
+		InputMode: inputMode,
+		SourceURL: sourceURL,
+	}
+	if inputMode == storage.CreatedStreamPull {
+		if _, err := h.startCreatedPull(ctx, created); err != nil {
+			logger.Error("start created pull failed", "stream_id", streamID, "err", err)
+			writeError(w, http.StatusBadGateway, "failed to start pull")
+			return
+		}
+	}
+	if err := h.db.InsertCreatedStream(ctx, created); err != nil {
+		if inputMode == storage.CreatedStreamPull {
+			_ = h.mediaEngine.StopPull(ctx, streamID)
+		}
+		if storage.IsUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "stream already exists")
+			return
+		}
+		logger.Error("insert created stream failed", "stream_id", streamID, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to create stream")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, h.summaryFromCreated(ctx, created))
+}
+
+// RestoreCreatedPulls restarts relay pulls created from the stream page after lalmax is ready.
+func (h *Handler) RestoreCreatedPulls(ctx context.Context) {
+	if h == nil || h.mediaEngine == nil || h.db == nil {
+		return
+	}
+	rows, err := h.db.ListCreatedStreams(ctx)
+	if err != nil {
+		logger.Error("list created pulls failed", "err", err)
+		return
+	}
+	for _, row := range rows {
+		if row.InputMode != storage.CreatedStreamPull || strings.TrimSpace(row.SourceURL) == "" {
+			continue
+		}
+		if _, err := h.startCreatedPull(ctx, row); err != nil {
+			logger.Error("restore created pull failed", "stream_id", row.StreamID, "err", err)
+		}
+	}
+}
+
+func (h *Handler) startCreatedPull(ctx context.Context, stream storage.CreatedStream) (*media.StreamSession, error) {
+	appName := stream.AppName
+	if appName == "" {
+		appName = "live"
+	}
+	session, err := h.mediaEngine.StartPull(ctx, media.StartPullRequest{
+		StreamID:     stream.StreamID,
+		AppName:      appName,
+		SourceURL:    stream.SourceURL,
+		PullRetryNum: -1,
+	})
+	if err != nil && isDupInStreamError(err) {
+		return &media.StreamSession{StreamID: stream.StreamID, AppName: appName, Protocol: "relay_pull"}, nil
+	}
+	return session, err
+}
+
+func validPullSourceURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "rtmp", "rtmps", "rtsp", "rtsps", "http", "https", "srt", "udp":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDupInStreamError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "in stream already exist")
 }
 
 func (h *Handler) handleKickPublisher(w http.ResponseWriter, r *http.Request) {

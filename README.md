@@ -45,7 +45,7 @@ flowchart LR
 ```
 
 - **lalmax** — ingest, protocol conversion, live fan-out (including `rtsp://host:15544/live/{id}`)
-- **NVR** — cameras, ONVIF/GB28181, recording modes, rolling hour merge, health, Web UI
+- **NVR** — cameras, ONVIF/GB28181, **stream-keyed recording plans**, rolling hour merge, health, Web UI
 - **`media.mode: embedded`** — engine in-process; `http` talks to an external lalmax
 - MJPEG / HTTP JPEG still pull directly (lalmax limitation)
 
@@ -67,13 +67,13 @@ Full diagrams, ports, and module map: **[Architecture](docs/en/architecture.md)*
 - **Media Engine**: lalmax-powered relay — unified ingest, no duplicate camera pulls
 - **Camera Protocols**: RTSP (H.264/H.265/MJPEG), HTTP JPEG, ONVIF discovery & management
 - **GB28181**: SIP platform (上级); devices REGISTER then **push PS/RTP** after INVITE; cascade, recording query & playback with timeline, multi-protocol streaming (ws-flv, flv, hls, webrtc, etc.), playback control (pause/resume/speed/seek), batch download, platform event history, voice broadcast/intercom (SIP INVITE, UDP/TCP)
-- **Recording**: MP4 segments, concurrent cameras, modes (continuous / scheduled / event / adaptive / off), retention, AAC + G.711 audio
+- **Recording**: MP4 segments driven by **plans on streams** (continuous / scheduled / event / adaptive / off). Promoting a stream to a device does not start recording. Retention, AAC + G.711 audio
 - **Recording Playback**: 24h timeline, hour zoom, single-file player, or **continuous VOD** (HLS fMP4 across a day, seek across gaps)
 - **Live View**: WebCodecs, fMP4, WebRTC, HTTP-FLV, HLS, LL-HLS, copyable **RTSP** (`:15544`)
 - **RTMP / SRT / WHIP Ingest**: Accept pushed streams from cameras or encoders (WHIP: `http://host:12090/webrtc/whip?streamid={id}`)
 - **Segment Merge**: Periodic backfill plus **rolling merge** into the current UTC hour file
 - **ONVIF**: WS-Discovery / Hello, PTZ, imaging, stream URI, encoding detect, IP self-heal, optional sub-stream
-- **Stream Management**: Runtime stream inventory, camera binding, stream promotion
+- **Stream Management**: Runtime stream inventory, camera binding, optional **register as device** (does not start recording)
 - **Web UI**: Dark/light theme, responsive, i18n (EN/ZH), Chart.js dashboards
 - **Smart Home**: MQTT trigger-based recording, WebDAV/FTP file access
 - **Health Monitoring**: Multi-layer camera health detection, auto-remediation, connection quality metrics (uptime, MTBF)

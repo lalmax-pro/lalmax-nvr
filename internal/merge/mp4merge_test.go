@@ -57,9 +57,11 @@ func TestMergeMP4Segments_SameSPS(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, fi.Size(), int64(0))
 
-	// Verify merged file is parseable
+	// Verify merged file is parseable and moov sits after mdat so later appends can extend it.
 	merged, err := ParseSegment(outputPath)
 	require.NoError(t, err)
+	require.Greater(t, merged.MoovOffset, merged.MdatOffset)
+	require.Equal(t, merged.MdatOffset+merged.MdatSize, merged.MoovOffset)
 	require.Equal(t, "h264", merged.Codec)
 	// 2 + 3 = 5 total samples
 	require.Equal(t, 5, merged.SampleCount)
@@ -465,4 +467,38 @@ func TestMergeMP4Segments_H265WithAudio(t *testing.T) {
 	require.True(t, merged.HasAudio)
 	require.Equal(t, 3, merged.AudioSampleCount) // 2 + 1 audio
 	require.Equal(t, testAudioConfig, merged.AudioConfig)
+}
+
+func TestAppendMP4Samples_KeepsExistingSamples(t *testing.T) {
+	dir := t.TempDir()
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
+	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
+
+	seg1 := createH264SegmentWithSamples(t, dir, "seg1.mp4", sps, pps, [][]byte{idrNAL, pNAL})
+	seg2 := createH264SegmentWithSamples(t, dir, "seg2.mp4", sps, pps, [][]byte{idrNAL, pNAL})
+	seg3 := createH264SegmentWithSamples(t, dir, "seg3.mp4", sps, pps, [][]byte{idrNAL, pNAL})
+	info1, err := ParseSegment(seg1)
+	require.NoError(t, err)
+	info2, err := ParseSegment(seg2)
+	require.NoError(t, err)
+	info3, err := ParseSegment(seg3)
+	require.NoError(t, err)
+
+	hour := filepath.Join(dir, "hour.mp4")
+	require.NoError(t, MergeMP4Segments([]*SegmentInfo{info1, info2}, hour))
+	base, err := ParseSegmentTables(hour)
+	require.NoError(t, err)
+	firstOffset := base.Samples[0].Offset
+	firstSize := base.Samples[0].Size
+
+	require.NoError(t, AppendMP4Samples(base, []*SegmentInfo{info3}))
+
+	grown, err := ParseSegment(hour)
+	require.NoError(t, err)
+	require.Equal(t, base.SampleCount+info3.SampleCount, grown.SampleCount)
+	require.Equal(t, firstOffset, grown.Samples[0].Offset)
+	require.Equal(t, firstSize, grown.Samples[0].Size)
+	require.Greater(t, grown.MoovOffset, base.MoovOffset)
 }

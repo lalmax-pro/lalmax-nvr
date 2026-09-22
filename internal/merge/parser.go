@@ -23,6 +23,8 @@ type SegmentInfo struct {
 	TotalDuration time.Duration
 	MdatOffset    int64 // file offset of mdat box header
 	MdatSize      int64 // total mdat box size including header
+	MoovOffset    int64 // file offset of the top-level moov box
+	MoovSize      int64 // moov box size including header
 	Samples       []SampleEntry
 	FilePath      string // source file path for data reading
 
@@ -69,6 +71,17 @@ type trackAccum struct {
 // ParseSegment reads an MP4 file and extracts codec config, sample tables,
 // and mdat location. Uses file seeking — does not load the entire file.
 func ParseSegment(filePath string) (*SegmentInfo, error) {
+	return parseSegment(filePath, true)
+}
+
+// ParseSegmentTables reads codec config and sample tables without scanning
+// each sample for keyframes. Merge uses this on hour files, where the media
+// payload is not copied and keyframe flags are not written into the output.
+func ParseSegmentTables(filePath string) (*SegmentInfo, error) {
+	return parseSegment(filePath, false)
+}
+
+func parseSegment(filePath string, detectKeys bool) (*SegmentInfo, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
@@ -86,6 +99,8 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 	var (
 		mdatOffset int64
 		mdatSize   int64
+		moovOffset int64
+		moovSize   int64
 		tracks     []*trackAccum
 		current    *trackAccum
 	)
@@ -101,6 +116,10 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 				mdatSize = int64(h.BoxInfo.Size)
 			}
 			return nil, nil
+		}
+		if boxType == "moov" && len(h.Path) == 1 {
+			moovOffset = int64(h.BoxInfo.Offset)
+			moovSize = int64(h.BoxInfo.Size)
 		}
 
 		// Track new trak boxes — creates a new accumulator per trak.
@@ -237,9 +256,10 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		return nil, fmt.Errorf("build video samples: %w", err)
 	}
 
-	// Detect keyframes in video samples.
-	if err := detectKeyframes(f, videoSamples, videoTrack.codec); err != nil {
-		return nil, fmt.Errorf("detect keyframes: %w", err)
+	if detectKeys {
+		if err := detectKeyframes(f, videoSamples, videoTrack.codec); err != nil {
+			return nil, fmt.Errorf("detect keyframes: %w", err)
+		}
 	}
 
 	// Calculate total video duration from stts.
@@ -260,6 +280,8 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		TotalDuration: totalDur,
 		MdatOffset:    mdatOffset,
 		MdatSize:      mdatSize,
+		MoovOffset:    moovOffset,
+		MoovSize:      moovSize,
 		Samples:       videoSamples,
 		FilePath:      filePath,
 	}

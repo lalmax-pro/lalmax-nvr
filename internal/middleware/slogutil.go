@@ -25,20 +25,18 @@ func SetupLogger(level, format string) *slog.Logger {
 	}
 
 	// Create handler based on format
-	var handler slog.Handler
+	var stdout slog.Handler
+	opts := &slog.HandlerOptions{
+		Level:     logLevel,
+		AddSource: false,
+	}
 	if strings.ToLower(format) == "json" {
-		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level:     logLevel,
-			AddSource: false,
-		})
+		stdout = slog.NewJSONHandler(os.Stdout, opts)
 	} else {
-		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level:     logLevel,
-			AddSource: false,
-		})
+		stdout = slog.NewTextHandler(os.Stdout, opts)
 	}
 
-	return slog.New(handler)
+	return slog.New(newTeeHandler(stdout, NewRingHandler(DefaultLogRing(), logLevel)))
 }
 
 // ComponentLogger creates a logger with a component attribute.

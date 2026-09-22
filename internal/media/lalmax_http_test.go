@@ -90,6 +90,23 @@ func TestGroupToStreamInfo_InactiveStream(t *testing.T) {
 	require.Nil(t, info.Publisher)
 }
 
+func TestGroupToStreamInfo_OmitsInternalRecorder(t *testing.T) {
+	t.Parallel()
+
+	info := groupToStreamInfo(groupPayload{
+		StreamName: "cam1",
+		AppName:    "live",
+		Pub:        sessionPayload{SessionID: "pub-1", Protocol: "RTSP"},
+		Subs: []sessionPayload{
+			{SessionID: "nvr-record-cam1-1", Protocol: "NVR-RECORD", Remote: "in-process"},
+			{SessionID: "sub-hls", Protocol: "HLS", Remote: "10.0.0.2"},
+		},
+	})
+	require.Len(t, info.Subscribers, 1)
+	require.Equal(t, "HLS", info.Subscribers[0].Protocol)
+	require.Equal(t, "sub-hls", info.Subscribers[0].SessionID)
+}
+
 func TestLalmaxHTTPBuildPlayURL_WSFLV(t *testing.T) {
 	t.Parallel()
 

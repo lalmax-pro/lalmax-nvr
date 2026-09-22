@@ -850,8 +850,11 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 			defer cancel()
 			if err := restarter.Restart(ctx, h.config.RTMP.Port, h.config.SRT.Port, rtmpEnabled, srtEnabled); err != nil {
-				logger.Warn("lalmax restart failed", "error", err)
-				writeError(w, http.StatusInternalServerError, "lalmax restart failed")
+				logger.Warn("lalmax restart failed after config save", "error", err)
+				writeJSON(w, http.StatusOK, map[string]any{
+					"status":        "updated",
+					"restart_error": err.Error(),
+				})
 				return
 			}
 		}

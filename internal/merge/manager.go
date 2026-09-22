@@ -2,6 +2,7 @@ package merge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,15 +26,15 @@ type MergeStatus struct {
 
 // MergeManager handles periodic merging of consecutive MP4 segments.
 type MergeManager struct {
-	mu          sync.RWMutex
-	status      MergeStatus
-	db          *storage.DB
-	store       *storage.Manager
+	mu           sync.RWMutex
+	status       MergeStatus
+	db           *storage.DB
+	store        *storage.Manager
 	getGlobalCfg func() config.MergeConfig
 	getCameraCfg func(cameraID string) *config.MergeConfig
-	cameras     func() []config.CameraConfig
-	cameraMu    sync.Mutex
-	cameraLocks map[string]*sync.Mutex
+	cameras      func() []config.CameraConfig
+	cameraMu     sync.Mutex
+	cameraLocks  map[string]*sync.Mutex
 }
 
 // NewMergeManager creates a new MergeManager with the given dependencies.
@@ -83,25 +84,72 @@ func (m *MergeManager) PendingCounts(ctx context.Context) map[string]int {
 		minAge = 10 * time.Minute
 	}
 
-	cameras := m.cameras()
-	counts := make(map[string]int, len(cameras))
-	for _, cam := range cameras {
-		if !cam.Enabled {
-			continue
-		}
-		effectiveCfg := config.ResolveMergeConfig(cfg, m.getCameraCfg(cam.ID))
+	ids, err := m.mergeCandidateIDs(ctx)
+	if err != nil {
+		return map[string]int{}
+	}
+	counts := make(map[string]int, len(ids))
+	for _, id := range ids {
+		effectiveCfg := config.ResolveMergeConfig(cfg, m.getCameraCfg(id))
 		if !effectiveCfg.Enabled {
 			continue
 		}
-		windows, err := m.db.ListCameraMergeWindows(ctx, cam.ID, minAge)
+		windows, err := m.db.ListCameraMergeWindows(ctx, id, minAge, effectiveCfg.WindowSizeDuration())
 		if err != nil {
 			continue
 		}
 		for _, w := range windows {
-			counts[cam.ID] += w.SegmentCount
+			counts[id] += w.SegmentCount
 		}
 	}
 	return counts
+}
+
+// mergeCandidateIDs lists recordings that still have pending segments.
+// Disabled devices are skipped. A stream that was never registered as a device is included.
+func (m *MergeManager) mergeCandidateIDs(ctx context.Context) ([]string, error) {
+	pending, err := m.db.ListPendingMergeCameraIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	disabled := make(map[string]struct{})
+	if m.cameras != nil {
+		for _, cam := range m.cameras() {
+			if !cam.Enabled {
+				disabled[cam.ID] = struct{}{}
+			}
+		}
+	}
+	ids := make([]string, 0, len(pending))
+	for _, id := range pending {
+		if _, skip := disabled[id]; skip {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+type diskBudget struct {
+	free int64
+	ok   bool
+}
+
+func (m *MergeManager) loadDiskBudget() *diskBudget {
+	total, used, err := m.store.GetDiskUsage()
+	if err != nil {
+		logger.Warn("failed to get disk usage", "error", err)
+		return &diskBudget{}
+	}
+	return &diskBudget{free: total - used, ok: true}
+}
+
+func (b *diskBudget) reserve(n int64) bool {
+	if b == nil || !b.ok || n < 0 || b.free < n {
+		return false
+	}
+	b.free -= n
+	return true
 }
 
 func (m *MergeManager) Run(ctx context.Context) {
@@ -138,30 +186,37 @@ func (m *MergeManager) RunOnce(ctx context.Context) error {
 		minAge = 10 * time.Minute
 	}
 
-	cameras := m.cameras()
+	ids, listErr := m.mergeCandidateIDs(ctx)
+	if listErr != nil {
+		logger.Error("list pending merge cameras", "error", listErr)
+		if m.cameras != nil {
+			for _, cam := range m.cameras() {
+				if cam.Enabled {
+					ids = append(ids, cam.ID)
+				}
+			}
+		}
+	}
 	var totalMerged int
 	var totalSegments int
 	var totalFreed int64
 	var totalErrors int
 	var processedSegments int
 
-	for _, cam := range cameras {
-		if !cam.Enabled {
-			continue
-		}
+	for _, id := range ids {
 		if ctx.Err() != nil {
 			break
 		}
 
 		// Resolve per-camera config via hot-reload callbacks.
-		effectiveCfg := config.ResolveMergeConfig(cfg, m.getCameraCfg(cam.ID))
+		effectiveCfg := config.ResolveMergeConfig(cfg, m.getCameraCfg(id))
 		if !effectiveCfg.Enabled {
 			continue
 		}
 
-		merged, segments, freed, mergeErr := m.processCamera(ctx, cam.ID, minAge, effectiveCfg)
+		merged, segments, freed, mergeErr := m.processCamera(ctx, id, minAge, effectiveCfg)
 		if mergeErr != nil {
-			logger.Error("merge pass error for camera", "camera_id", cam.ID, "error", mergeErr)
+			logger.Error("merge pass error for camera", "camera_id", id, "error", mergeErr)
 			totalErrors++
 			continue
 		}
@@ -224,7 +279,8 @@ func (m *MergeManager) processCamera(ctx context.Context, cameraID string, minAg
 	unlock := m.lockCamera(cameraID)
 	defer unlock()
 	remainingLimit := cfg.BatchLimit
-	windows, err := m.db.ListCameraMergeWindows(ctx, cameraID, minAge)
+	budget := m.loadDiskBudget()
+	windows, err := m.db.ListCameraMergeWindows(ctx, cameraID, minAge, cfg.WindowSizeDuration())
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("list merge windows: %w", err)
 	}
@@ -252,7 +308,7 @@ func (m *MergeManager) processCamera(ctx context.Context, cameraID string, minAg
 			if remainingLimit > 0 && len(formatRecs) > remainingLimit {
 				formatRecs = formatRecs[:remainingLimit]
 			}
-			g, s, f := m.mergeFormatGroup(ctx, cameraID, format, formatRecs, cfg)
+			g, s, f := m.mergeFormatGroup(ctx, cameraID, format, formatRecs, cfg, budget)
 			merged += g
 			segments += s
 			freed += f
@@ -265,9 +321,9 @@ func (m *MergeManager) processCamera(ctx context.Context, cameraID string, minAg
 		}
 	}
 
-	// Mark singleton pending segments as merged — they're hour-boundary orphans
+	// Mark singleton pending segments as merged — they're window-boundary orphans
 	// that will never be merged because their window has only 1 segment.
-	singletons, err := m.db.ListSingletonPendingRecordings(ctx, cameraID, minAge)
+	singletons, err := m.db.ListSingletonPendingRecordings(ctx, cameraID, minAge, cfg.WindowSizeDuration())
 	if err != nil {
 		logger.Warn("failed to list singleton pending recordings", "camera_id", cameraID, "error", err)
 	} else if len(singletons) > 0 {
@@ -306,10 +362,10 @@ func mergeGroupKey(info *SegmentInfo) string {
 
 // mergeFormatGroup parses segments, groups by compatibility, and merges eligible groups.
 // For MJPEG format, it skips ParseSegment and calls MergeMJPEGSegments directly.
-func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format string, recs []*model.Recording, cfg config.MergeConfig) (merged, segments int, freed int64) {
+func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format string, recs []*model.Recording, cfg config.MergeConfig, budget *diskBudget) (merged, segments int, freed int64) {
 	// MJPEG segments are directories containing JPEG files — ParseSegment only handles MP4.
 	if format == string(model.FormatMJPEG) {
-		return m.mergeMJPEGGroup(ctx, cameraID, recs, cfg)
+		return m.mergeMJPEGGroup(ctx, cameraID, recs, cfg, budget)
 	}
 
 	// Parse all segments.
@@ -351,12 +407,9 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		groups[mergeGroupKey(p.info)] = append(groups[mergeGroupKey(p.info)], p)
 	}
 
-	var smallGroupIDs []string
 	for _, group := range groups {
 		if len(group) < cfg.MinSegmentsToMerge {
-			for _, g := range group {
-				smallGroupIDs = append(smallGroupIDs, g.rec.ID)
-			}
+			// Leave them pending so a later segment with the same parameters can join.
 			continue
 		}
 
@@ -367,7 +420,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 			recordings = append(recordings, g.rec)
 		}
 
-		ok, oldSize := m.writeMergedGroup(ctx, cameraID, format, recordings, segmentInfos)
+		ok, oldSize := m.writeMergedGroup(ctx, cameraID, format, recordings, segmentInfos, budget)
 		if !ok {
 			continue
 		}
@@ -376,21 +429,12 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		freed += oldSize
 	}
 
-	// Mark undersized SPS/PPS groups as permanently failed.
-	if len(smallGroupIDs) > 0 {
-		if err := m.db.SetMergeStatus(ctx, smallGroupIDs, model.MergeStatusFailed); err != nil {
-			logger.Warn("failed to mark undersized group segments", "error", err)
-		} else {
-			logger.Info("marked undersized SPS/PPS group segments as merge_status=failed", "count", len(smallGroupIDs))
-		}
-	}
-
 	return merged, segments, freed
 }
 
 // writeMergedGroup remuxes recordings+infos into one file and replaces the DB rows.
 // Caller must hold the per-camera lock. recordings must be ordered by started_at.
-func (m *MergeManager) writeMergedGroup(ctx context.Context, cameraID, format string, recordings []*model.Recording, segmentInfos []*SegmentInfo) (ok bool, freed int64) {
+func (m *MergeManager) writeMergedGroup(ctx context.Context, cameraID, format string, recordings []*model.Recording, segmentInfos []*SegmentInfo, budget *diskBudget) (ok bool, freed int64) {
 	if len(recordings) == 0 || len(recordings) != len(segmentInfos) {
 		return false, 0
 	}
@@ -398,15 +442,12 @@ func (m *MergeManager) writeMergedGroup(ctx context.Context, cameraID, format st
 	for _, r := range recordings {
 		estSize += r.FileSize
 	}
-	total, used, err := m.store.GetDiskUsage()
-	if err != nil {
-		logger.Warn("failed to get disk usage", "error", err)
-		return false, 0
+	if budget == nil {
+		budget = m.loadDiskBudget()
 	}
-	freeSpace := total - used
 	required := estSize * 11 / 10
-	if freeSpace < required {
-		logger.Warn("insufficient disk space for merge", "camera_id", cameraID, "needed", required, "free", freeSpace)
+	if !budget.reserve(required) {
+		logger.Warn("insufficient disk space for merge", "camera_id", cameraID, "needed", required)
 		return false, 0
 	}
 
@@ -483,7 +524,7 @@ func (m *MergeManager) writeMergedGroup(ctx context.Context, cameraID, format st
 	return true, oldSize
 }
 
-// MergeHour appends pending segments in the UTC hour of `at` onto the hour bucket.
+// MergeHour appends pending segments in the configured UTC window of `at` onto that window's bucket.
 // Rolling merge uses this with min_age=0. Caller should not hold the camera lock.
 func (m *MergeManager) MergeHour(ctx context.Context, cameraID string, at time.Time) error {
 	cfg := m.getGlobalCfg()
@@ -497,31 +538,44 @@ func (m *MergeManager) MergeHour(ctx context.Context, cameraID string, at time.T
 }
 
 func hourWindowUTC(t time.Time) (start, end time.Time) {
+	return mergeWindowUTC(t, time.Hour)
+}
+
+func mergeWindowUTC(t time.Time, window time.Duration) (start, end time.Time) {
+	if window <= 0 {
+		window = time.Hour
+	}
 	t = t.UTC()
-	start = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.UTC)
-	return start, start.Add(time.Hour)
+	start = t.Truncate(window)
+	return start, start.Add(window)
 }
 
 func (m *MergeManager) mergeHourLocked(ctx context.Context, cameraID string, at time.Time, cfg config.MergeConfig) error {
-	hourStart, hourEnd := hourWindowUTC(at)
-	pending, err := m.db.ListMergeableSegments(ctx, cameraID, hourStart, hourEnd)
+	windowStart, windowEnd := mergeWindowUTC(at, cfg.WindowSizeDuration())
+	pending, err := m.db.ListMergeableSegments(ctx, cameraID, windowStart, windowEnd)
 	if err != nil {
 		return fmt.Errorf("list pending: %w", err)
 	}
 	if len(pending) == 0 {
 		return nil
 	}
-	buckets, err := m.db.ListHourMergedRecordings(ctx, cameraID, hourStart, hourEnd)
+	buckets, err := m.db.ListWindowMergedRecordings(ctx, cameraID, windowStart, windowEnd)
 	if err != nil {
 		return fmt.Errorf("list hour buckets: %w", err)
 	}
+	for _, rec := range buckets {
+		if err := reconcileMergeJournal(ctx, m.db, rec.FilePath); err != nil {
+			logger.Warn("merge journal reconcile failed", "file", rec.FilePath, "error", err)
+		}
+	}
+	budget := m.loadDiskBudget()
 
 	byFormat := groupByFormat(pending)
 	for format, pendingRecs := range byFormat {
 		if format == string(model.FormatMJPEG) || format == "jpeg" {
 			rollCfg := cfg
 			rollCfg.MinSegmentsToMerge = 2
-			m.mergeMJPEGGroup(ctx, cameraID, pendingRecs, rollCfg)
+			m.mergeMJPEGGroup(ctx, cameraID, pendingRecs, rollCfg, budget)
 			continue
 		}
 
@@ -532,7 +586,7 @@ func (m *MergeManager) mergeHourLocked(ctx context.Context, cameraID string, at 
 		parseAll := func(recs []*model.Recording) []parsedRec {
 			var out []parsedRec
 			for _, rec := range recs {
-				info, err := ParseSegment(rec.FilePath)
+				info, err := ParseSegmentTables(rec.FilePath)
 				if err != nil {
 					logger.Warn("rolling skip unreadable segment", "recording_id", rec.ID, "error", err)
 					continue
@@ -555,22 +609,159 @@ func (m *MergeManager) mergeHourLocked(ctx context.Context, cameraID string, at 
 		}
 
 		for key, group := range pendingGroups {
-			var recordings []*model.Recording
-			var infos []*SegmentInfo
-			if bucket, ok := bucketByKey[key]; ok {
-				recordings = append(recordings, bucket.rec)
-				infos = append(infos, bucket.info)
-			}
+			addRecs := make([]*model.Recording, 0, len(group))
+			addInfos := make([]*SegmentInfo, 0, len(group))
 			for _, g := range group {
-				recordings = append(recordings, g.rec)
-				infos = append(infos, g.info)
+				addRecs = append(addRecs, g.rec)
+				addInfos = append(addInfos, g.info)
 			}
-			if len(recordings) < 2 {
+			if bucket, ok := bucketByKey[key]; ok {
+				err := m.appendOntoBucket(ctx, cameraID, bucket.rec, addRecs, addInfos, budget)
+				if err == nil {
+					continue
+				}
+				if errors.Is(err, errMergeNeedSpace) {
+					logger.Warn("insufficient disk space to append hour file", "camera_id", cameraID)
+					continue
+				}
+				if errors.Is(err, errAppendNotPossible) {
+					recs := make([]*model.Recording, 0, 1+len(addRecs))
+					infos := make([]*SegmentInfo, 0, 1+len(addInfos))
+					recs = append(recs, bucket.rec)
+					infos = append(infos, bucket.info)
+					recs = append(recs, addRecs...)
+					infos = append(infos, addInfos...)
+					m.writeMergedGroup(ctx, cameraID, format, recs, infos, budget)
+					continue
+				}
+				logger.Warn("append onto hour file failed", "camera_id", cameraID, "error", err)
 				continue
 			}
-			m.writeMergedGroup(ctx, cameraID, format, recordings, infos)
+			if len(addRecs) < 2 {
+				continue
+			}
+			m.writeMergedGroup(ctx, cameraID, format, addRecs, addInfos, budget)
 		}
 	}
+	return nil
+}
+
+// appendOntoBucket copies only the new segments onto an existing hour file and keeps that recording row.
+func (m *MergeManager) appendOntoBucket(ctx context.Context, cameraID string, bucket *model.Recording, addRecs []*model.Recording, addInfos []*SegmentInfo, budget *diskBudget) error {
+	if bucket == nil || len(addRecs) == 0 || len(addRecs) != len(addInfos) {
+		return fmt.Errorf("nothing to append")
+	}
+	if err := reconcileMergeJournal(ctx, m.db, bucket.FilePath); err != nil {
+		return err
+	}
+	info, err := ParseSegmentTables(bucket.FilePath)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Stat(bucket.FilePath)
+	if err != nil {
+		return err
+	}
+	if !segmentAppendable(info, fi.Size()) {
+		return errAppendNotPossible
+	}
+	var need int64
+	ids := make([]string, len(addRecs))
+	paths := make([]string, len(addRecs))
+	for i, r := range addRecs {
+		need += r.FileSize
+		ids[i] = r.ID
+		paths[i] = r.FilePath
+	}
+	if budget == nil {
+		budget = m.loadDiskBudget()
+	}
+	if !budget.reserve(need) {
+		return errMergeNeedSpace
+	}
+
+	moov := make([]byte, info.MoovSize)
+	mf, err := os.Open(info.FilePath)
+	if err != nil {
+		return err
+	}
+	_, err = mf.ReadAt(moov, info.MoovOffset)
+	mf.Close()
+	if err != nil {
+		return err
+	}
+	journal := mergeJournal{
+		mdatOffset: info.MdatOffset,
+		moovOffset: info.MoovOffset,
+		moovSize:   info.MoovSize,
+		mdatSize:   uint32(info.MdatSize),
+		ids:        ids,
+		paths:      paths,
+		oldMoov:    moov,
+	}
+	if err := writeMergeJournal(info.FilePath, journal); err != nil {
+		return err
+	}
+	if err := AppendMP4Samples(info, addInfos); err != nil {
+		// The journal is already on disk. Do not report errAppendNotPossible here:
+		// the caller would remux a file that the next pass should restore instead.
+		return fmt.Errorf("append samples: %v", err)
+	}
+
+	for _, p := range paths {
+		if err := hideConsumed(p); err != nil {
+			unhideConsumed(paths)
+			_ = restoreJournalFile(info.FilePath, journal)
+			_ = os.Remove(journalPath(info.FilePath))
+			return err
+		}
+	}
+
+	fi, err = os.Stat(info.FilePath)
+	if err != nil {
+		unhideConsumed(paths)
+		_ = restoreJournalFile(info.FilePath, journal)
+		_ = os.Remove(journalPath(info.FilePath))
+		return err
+	}
+	end := bucket.EndedAt
+	duration := info.TotalDuration.Seconds()
+	frames := info.SampleCount
+	for i, rec := range addRecs {
+		if rec.EndedAt.After(end) {
+			end = rec.EndedAt
+		}
+		duration += addInfos[i].TotalDuration.Seconds()
+		frames += addInfos[i].SampleCount
+	}
+	updated := *bucket
+	updated.EndedAt = end
+	updated.Duration = duration
+	updated.FileSize = fi.Size()
+	updated.FrameCount = frames
+	if err := m.db.GrowMergedRecording(ctx, &updated, ids); err != nil {
+		unhideConsumed(paths)
+		_ = restoreJournalFile(info.FilePath, journal)
+		_ = os.Remove(journalPath(info.FilePath))
+		return err
+	}
+	if err := os.Remove(journalPath(info.FilePath)); err != nil {
+		logger.Warn("remove merge journal", "file", info.FilePath, "error", err)
+	}
+	var freed int64
+	for i, p := range paths {
+		if err := os.Remove(consumedPath(p)); err != nil && !os.IsNotExist(err) {
+			logger.Warn("remove consumed segment", "path", p, "error", err)
+		}
+		freed += addRecs[i].FileSize
+	}
+	logger.Info("appended segments onto hour file",
+		"camera_id", cameraID,
+		"recording_id", bucket.ID,
+		"segments", len(addRecs),
+		"size_bytes", fi.Size(),
+		"freed_bytes", freed,
+	)
 	return nil
 }
 
@@ -597,7 +788,7 @@ func groupByFormat(recs []*model.Recording) map[string][]*model.Recording {
 // mergeMJPEGGroup merges MJPEG segment directories into a single merged directory.
 // MJPEG segments cannot be parsed by ParseSegment (MP4-only), so this path
 // collects all MJPEG recordings and delegates to MergeMJPEGSegments.
-func (m *MergeManager) mergeMJPEGGroup(ctx context.Context, cameraID string, recs []*model.Recording, cfg config.MergeConfig) (merged, segments int, freed int64) {
+func (m *MergeManager) mergeMJPEGGroup(ctx context.Context, cameraID string, recs []*model.Recording, cfg config.MergeConfig, budget *diskBudget) (merged, segments int, freed int64) {
 	if len(recs) < cfg.MinSegmentsToMerge {
 		return 0, 0, 0
 	}
@@ -608,16 +799,12 @@ func (m *MergeManager) mergeMJPEGGroup(ctx context.Context, cameraID string, rec
 		estSize += r.FileSize
 	}
 
-	// Check disk space.
-	total, used, err := m.store.GetDiskUsage()
-	if err != nil {
-		logger.Warn("failed to get disk usage", "error", err)
-		return 0, 0, 0
+	if budget == nil {
+		budget = m.loadDiskBudget()
 	}
-	freeSpace := total - used
 	required := estSize * 11 / 10
-	if freeSpace < required {
-		logger.Warn("insufficient disk space for MJPEG merge", "camera_id", cameraID, "needed", required, "free", freeSpace)
+	if !budget.reserve(required) {
+		logger.Warn("insufficient disk space for MJPEG merge", "camera_id", cameraID, "needed", required)
 		return 0, 0, 0
 	}
 

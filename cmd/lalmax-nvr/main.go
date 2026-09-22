@@ -388,9 +388,12 @@ type App struct {
 	eventBus     *event.EventBus
 	eventArchive *event.Archiver
 	recSched     *recorder.RecordingScheduler
+	recPlanner   *recorder.RecordingPlanner
+	recTasks     *recorder.TaskManager
 	eventMgr     *recorder.EventManager
 	autoDiscover *autodiscover.Service
 	startCtx     context.Context
+	apiHandler   *api.Handler
 
 	// Optional network services (nil when disabled)
 	mqttClient *mqtt.Client
@@ -702,6 +705,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		return nil, fmt.Errorf("observability: %w", err)
 	}
 
+	// Recording plans drive recording; create the shared planner before the
+	// router so the API can refresh it on edits.
+	a.recPlanner = recorder.NewRecordingPlanner(a.db)
+	a.wireRecordTasks()
+
 	// Step 12: Build HTTP router
 	a.httpServer = &http.Server{
 		Addr:    cfg.Server.Listen,
@@ -766,6 +774,8 @@ func (a *App) buildRouter() http.Handler {
 
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.configPath, a.mergeMgr, cloudProxy)
+	handler.SetServiceLogPath(authmw.ResolveServiceLogPath())
+	a.apiHandler = handler
 	handler.SetMultiUserAuthMW(a.multiUserMW)
 	handler.SetRestartFunc(func() {
 		go a.restartProcess()
@@ -773,6 +783,7 @@ func (a *App) buildRouter() http.Handler {
 
 	// Wire streaming managers
 	handler.SetMediaEngine(a.mediaEngine)
+	handler.SetRecordingPlanner(a.recPlanner)
 	if a.gb28181Svr != nil {
 		handler.SetGB28181Server(a.gb28181Svr)
 		handler.SetGB28181ServerInstance(a.gb28181Svr)
@@ -892,7 +903,7 @@ func (a *App) buildRouter() http.Handler {
 	chi.RegisterMethod("MOVE")
 
 	r := chi.NewRouter()
-	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz", "/api/observability/api"))
+	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz", "/api/observability/api", "/api/service-logs", "/api/service-logs/stream"))
 	r.Use(middleware.Recoverer)
 	r.Use(authmw.SecurityHeaders)
 	r.Use(authmw.COOPHeaders)
@@ -959,12 +970,172 @@ func (a *App) restartProcess() {
 	}
 }
 
+// aliveRecordingStreams lists lalmax inputs that can be recorded.
+func (a *App) aliveRecordingStreams(ctx context.Context) ([]string, error) {
+	if a.mediaEngine == nil {
+		return nil, nil
+	}
+	infos, err := a.mediaEngine.ListStreams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(infos))
+	for _, info := range infos {
+		if info.StreamID == "" || media.IsSubStreamID(info.StreamID) {
+			continue
+		}
+		if info.Active || info.VideoCodec != "" {
+			ids = append(ids, info.StreamID)
+		}
+	}
+	return ids, nil
+}
+
+// eventActive reports whether a stream has an open event-recording window.
+func (a *App) eventActive(streamID string) bool {
+	if a.eventMgr == nil {
+		return false
+	}
+	if a.eventMgr.IsActive(streamID) {
+		return true
+	}
+	cam := a.camMgr.CameraByStream(streamID)
+	return cam != nil && a.eventMgr.IsActive(cam.ID)
+}
+
+// wireRecordTasks makes record tasks the writer for lalmax H264/H265 streams.
+func (a *App) wireRecordTasks() {
+	if a.mediaEngine == nil || a.camMgr == nil {
+		return
+	}
+	segDur, err := time.ParseDuration(a.cfg.Storage.SegmentDuration)
+	if err != nil || segDur <= 0 {
+		segDur = recorder.DefaultSegmentDur
+	}
+	tasks := recorder.NewTaskManager(a.mediaEngine, a.store, a.db, a.metrics, a.eventBus, segDur)
+	tasks.SetOwnerFunc(func(streamID string) recorder.StreamOwner {
+		cam := a.camMgr.CameraByStream(streamID)
+		if cam == nil {
+			return recorder.StreamOwner{CameraID: streamID, Name: streamID}
+		}
+		return recorder.StreamOwner{
+			CameraID:     cam.ID,
+			Name:         cam.Name,
+			Encoding:     cam.Encoding,
+			AudioEnabled: cam.AudioEnabled,
+		}
+	})
+	tasks.SetPlayURL(func(ctx context.Context, streamID string) string {
+		playURL, err := a.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
+			StreamID: streamID,
+			AppName:  "live",
+			Protocol: "rtsp",
+		})
+		if err != nil || playURL == nil {
+			return ""
+		}
+		return playURL.URL
+	})
+	tasks.SetPlanMode(a.recPlanner.Mode)
+	tasks.SetAdaptiveInterval(func(streamID string) time.Duration {
+		cam := a.camMgr.CameraByStream(streamID)
+		if cam == nil {
+			return 0
+		}
+		return cam.Adaptive.TimelapseIntervalDuration()
+	})
+	tasks.SetSkip(func(streamID string) bool {
+		if media.IsSubStreamID(streamID) {
+			return true
+		}
+		cam := a.camMgr.CameraByStream(streamID)
+		if cam == nil {
+			return false
+		}
+		switch cam.Protocol {
+		case "xiaomi", "timelapse", string(model.ProtoHTTP):
+			return true
+		}
+		switch strings.ToLower(strings.TrimSpace(cam.Encoding)) {
+		case string(model.FormatMJPEG), string(model.EncJPEG):
+			return true
+		default:
+			return false
+		}
+	})
+	tasks.SetShouldRecord(func(streamID string) bool {
+		if a.recPlanner != nil {
+			if rec, known := a.recPlanner.ShouldRecord(streamID); known && rec {
+				return true
+			}
+		}
+		return a.eventActive(streamID)
+	})
+	tasks.SetLifecycleHooks(a.onRecordTaskStart, a.onRecordTaskStop)
+	a.recTasks = tasks
+	a.camMgr.SetRecordTasks(tasks)
+	if a.eventMgr != nil {
+		a.eventMgr.SetControls(a.resumeEventRecording, a.pauseEventRecording)
+	}
+}
+
+func (a *App) onRecordTaskStart(streamID string, rec model.Recorder) {
+	if a.healthMgr == nil {
+		return
+	}
+	cam := a.camMgr.CameraByStream(streamID)
+	if cam == nil {
+		return
+	}
+	var overrides *config.ResolvedHealthOverrides
+	if a.cfg.Health.Enabled {
+		resolved := config.ResolveHealthOverrides(a.cfg.Health, cam.HealthOverrides)
+		overrides = &resolved
+	}
+	a.healthMgr.OnCameraAdded(cam.ID, rec, overrides)
+}
+
+func (a *App) onRecordTaskStop(streamID string, rec model.Recorder) {
+	if a.healthMgr == nil {
+		return
+	}
+	cam := a.camMgr.CameraByStream(streamID)
+	if cam == nil {
+		return
+	}
+	a.healthMgr.OnCameraRemoved(cam.ID, rec)
+}
+
+func (a *App) resumeEventRecording(ctx context.Context, cameraID string) error {
+	cam := a.camMgr.GetCameraConfig(cameraID)
+	if cam != nil && a.recTasks != nil && a.camMgr.RecordsViaTask(*cam) {
+		return a.recTasks.Ensure(ctx, config.IngestStreamID(*cam))
+	}
+	return a.camMgr.ResumeRecording(ctx, cameraID)
+}
+
+func (a *App) pauseEventRecording(ctx context.Context, cameraID string) error {
+	cam := a.camMgr.GetCameraConfig(cameraID)
+	if cam != nil && a.recTasks != nil && a.camMgr.RecordsViaTask(*cam) {
+		return a.recTasks.Stop(ctx, config.IngestStreamID(*cam), recorder.ReasonPlanInactive)
+	}
+	return a.camMgr.PauseRecording(ctx, cameraID)
+}
+
 // Start launches all service goroutines and blocks until a shutdown signal
 // is received or the context is cancelled.
 func (a *App) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
 	a.startCtx = ctx
+
+	// Recording plans are the only thing that starts recording. Load them before
+	// the camera manager starts so its first decision already sees them.
+	if err := a.recPlanner.Refresh(ctx); err != nil {
+		slog.Error("failed to load recording plans", "error", err)
+	}
+	a.camMgr.SetRecordingDecision(a.recPlanner.ShouldRecord)
+	a.camMgr.SetRecordingModeSource(a.recPlanner.Mode)
 
 	// Start camera manager
 	go func() {
@@ -973,12 +1144,16 @@ func (a *App) Start() error {
 		}
 	}()
 
-	// Start recording scheduler (recording plans)
+	// Start recording scheduler: any lalmax stream with an active plan gets a record task.
 	a.recSched = recorder.NewRecordingScheduler(a.db)
-	a.recSched.SetKeepRecording(func(cameraID string) bool {
-		return a.eventMgr != nil && a.eventMgr.IsActive(cameraID)
-	})
-	a.recSched.Start(ctx, a.camMgr.PauseRecording, a.camMgr.ResumeRecording)
+	a.recSched.SetPlanner(a.recPlanner)
+	a.recSched.SetTasks(a.recTasks)
+	a.recSched.SetEventActive(a.eventActive)
+	a.recSched.SetAliveStreams(a.aliveRecordingStreams)
+	a.recSched.Start(ctx)
+	if a.apiHandler != nil {
+		a.apiHandler.SetRecordingReconciler(func(context.Context) { a.recSched.ReconcileNow() })
+	}
 
 	if a.autoDiscover != nil {
 		go func() {
@@ -1047,6 +1222,10 @@ func (a *App) Start() error {
 		go func() {
 			if err := a.mediaEngine.Start(ctx); err != nil {
 				slog.Error("media engine", "error", err)
+				return
+			}
+			if a.apiHandler != nil {
+				a.apiHandler.RestoreCreatedPulls(ctx)
 			}
 		}()
 
@@ -1192,6 +1371,15 @@ func (a *App) Stop() error {
 			log.Info("stopping relay manager")
 			a.relayMgr.Stop()
 		}
+		if a.recSched != nil {
+			log.Info("stopping recording scheduler")
+			a.recSched.Stop()
+			a.recSched = nil
+		}
+		if a.recTasks != nil {
+			log.Info("stopping record tasks")
+			a.recTasks.StopAll()
+		}
 		if a.rtmpIngest != nil {
 			log.Info("stopping RTMP ingest handler")
 			a.rtmpIngest.Stop()
@@ -1244,13 +1432,8 @@ func (a *App) Stop() error {
 			a.autoDiscover.Stop()
 		}
 
-		// 7.9. Recording scheduler
-		if a.recSched != nil {
-			log.Info("stopping recording scheduler")
-			a.recSched.Stop()
-		}
-
 		log.Info("stopping camera manager")
+		a.camMgr.StopAllStreamRecordings()
 		if err := a.camMgr.Stop(); err != nil {
 			log.Warn("camera manager stop error", "error", err)
 		}

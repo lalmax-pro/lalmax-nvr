@@ -8,7 +8,8 @@ import (
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
-	"github.com/stretchr/testify/require")
+	"github.com/stretchr/testify/require"
+)
 
 // newCollector creates a StreamStatsCollector for testing with reasonable defaults.
 func newCollector(t *testing.T, windowSize time.Duration) (*StreamStatsCollector, *[]model.HealthEvent) {

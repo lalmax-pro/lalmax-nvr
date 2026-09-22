@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 )
@@ -166,15 +167,40 @@ func fetchRemoteSnapshot(ctx context.Context, rawURL, username, password string)
 }
 
 func (h *Handler) fetchONVIFSnapshot(ctx context.Context, cameraID string, cam *config.CameraConfig) ([]byte, error) {
-	provider, err := h.camMgr.GetSnapshotProvider(ctx, cameraID)
+	client, err := h.camMgr.GetONVIFClient(ctx, cameraID)
 	if err != nil {
 		return nil, err
 	}
-	uri, err := provider.GetSnapshotUri(ctx)
+	profiles, err := client.GetProfiles(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return fetchRemoteSnapshot(ctx, uri, cam.Username, cam.Password)
+	tokens := camera.OrderedSnapshotTokens(cam.ProfileToken, profiles)
+	var lastErr error
+	for _, token := range tokens {
+		provider := client.NewSnapshotProvider(token)
+		if provider == nil {
+			continue
+		}
+		uri, err := provider.GetSnapshotUri(ctx)
+		if err != nil || strings.TrimSpace(uri) == "" {
+			if err != nil {
+				lastErr = err
+			}
+			logger.Debug("onvif snapshot uri unavailable", "camera_id", cameraID, "profile_token", token, "error", err)
+			continue
+		}
+		data, err := fetchRemoteSnapshot(ctx, uri, cam.Username, cam.Password)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		logger.Debug("onvif snapshot fetch failed", "camera_id", cameraID, "profile_token", token, "error", err)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("snapshot not available")
+	}
+	return nil, lastErr
 }
 
 func (h *Handler) captureStreamSnapshot(ctx context.Context, cameraID string) ([]byte, error) {

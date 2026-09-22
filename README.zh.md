@@ -45,7 +45,7 @@ flowchart LR
 ```
 
 - **lalmax** — 收流、转协议、直播分发（含 `rtsp://host:15544/live/{id}`）
-- **NVR** — 相机、ONVIF/GB28181、录像模式、滚动小时合并、健康、Web UI
+- **NVR** — 相机、ONVIF/GB28181、**挂在流上的录像计划**、滚动小时合并、健康、Web UI
 - **`media.mode: embedded`** — 引擎同进程；`http` 则连外部 lalmax
 - MJPEG / HTTP JPEG 仍直拉（lalmax 限制）
 
@@ -67,13 +67,13 @@ flowchart LR
 - **媒体引擎**：基于 lalmax 的统一中继——摄录分离，无重复拉流
 - **摄像头协议**：RTSP（H.264/H.265/MJPEG）、HTTP JPEG、ONVIF 设备发现与管理
 - **国标 GB28181**：作为 SIP **上级平台**；设备 REGISTER，INVITE 后 **推送 PS/RTP**；级联、录像查询与回放（带时间轴）、多协议流媒体（ws-flv、flv、hls、webrtc 等）、播放控制（暂停/恢复/倍速/拖动）、批量下载、平台事件历史、语音对讲（SIP INVITE，UDP/TCP）
-- **视频录像**：MP4 切片、多路并发、模式（连续 / 计划 / 事件 / 自适应 / 关闭）、按相机保留天数、AAC + G.711 音频
+- **视频录像**：MP4 切片由 **流上的录像计划** 驱动（连续 / 定时 / 事件 / 自适应 / 关闭）。把流登记为设备不会自动开录。按相机保留天数、AAC + G.711 音频
 - **录像回放**：24 小时时间轴、小时缩放、单文件播放，或 **连续 VOD**（按天 HLS fMP4，缺口可 seek）
 - **实时直播**：WebCodecs、fMP4、WebRTC、HTTP-FLV、HLS、LL-HLS，可复制 **RTSP**（`:15544`）
 - **RTMP / SRT / WHIP 接入**：接收摄像头或编码器推送的流（WHIP：`http://host:12090/webrtc/whip?streamid={id}`）
 - **片段合并**：周期补齐，加上 **滚动合并** 写入当前 UTC 小时文件
 - **ONVIF**：WS-Discovery / Hello、云台、成像、流地址、编码检测、IP 自愈、可选子码流
-- **流管理**：运行时流清单、摄像头绑定、流提升
+- **流管理**：运行时流清单、摄像头绑定、可选 **登记为设备**（不会开始录像）
 - **Web 界面**：深色/浅色主题、响应式、中英文切换、Chart.js 图表
 - **智能家居**：MQTT 触发录像、WebDAV/FTP 文件访问
 - **健康监控**：多层摄像头健康检测、自动修复、质量评分

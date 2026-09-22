@@ -12,13 +12,13 @@ import (
 
 // AlarmMessage represents a parsed alarm notification from a device.
 type AlarmMessage struct {
-	CmdType    string `xml:"CmdType"`
-	SN         int    `xml:"SN"`
-	DeviceID   string `xml:"DeviceID"`
-	AlarmType  string `xml:"AlarmType"`
-	AlarmTime  string `xml:"AlarmTime"`
-	Priority   int    `xml:"Priority"`
-	Method     string `xml:"Method"`
+	CmdType     string `xml:"CmdType"`
+	SN          int    `xml:"SN"`
+	DeviceID    string `xml:"DeviceID"`
+	AlarmType   string `xml:"AlarmType"`
+	AlarmTime   string `xml:"AlarmTime"`
+	Priority    int    `xml:"Priority"`
+	Method      string `xml:"Method"`
 	Description string `xml:"Description"`
 }
 

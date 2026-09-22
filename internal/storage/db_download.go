@@ -6,16 +6,16 @@ import (
 )
 
 type DownloadRecordRow struct {
-	ID         int64     `json:"id"`
-	DeviceID   string    `json:"device_id"`
-	ChannelID  string    `json:"channel_id"`
-	FilePath   string    `json:"file_path"`
-	StartTime  time.Time `json:"start_time"`
-	EndTime    time.Time `json:"end_time"`
-	FileSize   int64     `json:"file_size"`
-	Status     string    `json:"status"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID        int64     `json:"id"`
+	DeviceID  string    `json:"device_id"`
+	ChannelID string    `json:"channel_id"`
+	FilePath  string    `json:"file_path"`
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+	FileSize  int64     `json:"file_size"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (d *DB) createDownloadTable(ctx context.Context) error {

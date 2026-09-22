@@ -13,7 +13,7 @@ import (
 // handleCreateWHEPSession handles POST /api/cameras/{id}/stream/webrtc
 // It accepts an SDP offer and returns an SDP answer with a session URL.
 func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request) {
-	id := getCameraID(r)
+	id := playResourceID(r)
 	streamID, quality := h.resolvePlayStreamID(r, id)
 	w.Header().Set("X-Stream-Quality", quality)
 
@@ -27,21 +27,37 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cam, err := h.db.GetCamera(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get camera")
+	if streamID == "" {
+		writePlayStreamNotFound(w, r)
 		return
 	}
 
-	if cam == nil {
-		info, err := h.mediaEngine.GetStream(r.Context(), id)
+	if isStreamPlayRoute(r) {
+		info, err := h.mediaEngine.GetStream(r.Context(), streamID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to get stream")
 			return
 		}
 		if info == nil {
-			writeError(w, http.StatusNotFound, "camera not found")
+			writeError(w, http.StatusNotFound, "stream not found")
 			return
+		}
+	} else {
+		cam, err := h.db.GetCamera(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get camera")
+			return
+		}
+		if cam == nil {
+			info, err := h.mediaEngine.GetStream(r.Context(), streamID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to get stream")
+				return
+			}
+			if info == nil {
+				writeError(w, http.StatusNotFound, "camera not found")
+				return
+			}
 		}
 	}
 
@@ -56,7 +72,7 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	req.Header = r.Header.Clone()
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := h.playProxyClient().Do(req)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to proxy WebRTC session")
 		return
@@ -67,7 +83,7 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 	if location != "" {
 		if resolved := resolveUpstreamLocation(upstream, location); resolved != "" {
 			token := encodeUpstreamSessionLocation(resolved)
-			w.Header().Set("Location", "/api/cameras/"+id+"/stream/webrtc/"+token)
+			w.Header().Set("Location", playAPIPrefix(r, id)+"/stream/webrtc/"+token)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
@@ -95,7 +111,7 @@ func (h *Handler) handleDeleteWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	req.Header = r.Header.Clone()
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := h.playProxyClient().Do(req)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to proxy delete session")
 		return

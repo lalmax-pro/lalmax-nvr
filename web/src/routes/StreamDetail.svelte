@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
-  import { getStream, unbindCamera, promoteStream, deleteStream, kickPublisher, deleteCamera, getStreamMetricsHistory, getStreamingSettings } from '$lib/api';
+  import { getStream, unbindCamera, promoteStream, deleteStream, kickPublisher, deleteCamera, getStreamMetricsHistory, getStreamingSettings, subscribeNvrEvents, streamMediaURL, updateStream } from '$lib/api';
   import type { StreamInfo, StreamMetricSample, StreamMetricsPeriod } from '$lib/api';
   import { loadChart, createStreamMetricChart, updateStreamMetricChart } from '$lib/charts';
   import { t } from '$lib/i18n';
@@ -20,12 +20,15 @@
     Link,
     Unlink,
     ArrowUpCircle,
+    CalendarClock,
     Trash2,
     UserMinus,
+    Copy,
     ExternalLink,
     Clock,
     Wifi,
     WifiOff,
+    Pencil,
   } from 'lucide-svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
@@ -37,6 +40,7 @@
   let loading = $state(true);
   let error = $state('');
   let refreshTimer: number | undefined;
+  let stopEvents: (() => void) | undefined;
 
   // Tabs
   type DetailTab = 'detail' | 'metrics' | 'urls' | 'actions';
@@ -67,6 +71,12 @@
   let promoteDescription = $state('');
   let promoteLocation = $state('');
   let operating = $state(false);
+  let editingName = $state(false);
+  let nameInput = $state('');
+  let nameInputEl: HTMLInputElement | undefined = $state();
+  let savingName = $state(false);
+
+  let displayName = $derived(stream ? (stream.name || stream.camera_name || stream.stream_id) : '');
 
   // Lazy-loaded players
   let WasmPlayerComponent = $state<any>(null);
@@ -113,8 +123,12 @@
     // triggering unnecessary player re-renders via the {#key} block.
     const currentPlayUrls = current.play_urls;
     const incomingPlayUrls = incoming.play_urls;
+    const currentIngestUrls = current.ingest_urls;
+    const incomingIngestUrls = incoming.ingest_urls;
     delete current.play_urls;
     delete incoming.play_urls;
+    delete current.ingest_urls;
+    delete incoming.ingest_urls;
 
     for (const key of Object.keys(current)) {
       if (!(key in incoming)) {
@@ -129,6 +143,12 @@
       current.play_urls = currentPlayUrls;
     } else {
       current.play_urls = incomingPlayUrls;
+    }
+    if (currentIngestUrls && incomingIngestUrls &&
+        JSON.stringify(currentIngestUrls) === JSON.stringify(incomingIngestUrls)) {
+      current.ingest_urls = currentIngestUrls;
+    } else {
+      current.ingest_urls = incomingIngestUrls;
     }
   }
 
@@ -232,11 +252,12 @@
 
   function getPlayerURL(protocol: string): string {
     if (!stream) return '';
-    const streamID = encodeURIComponent(stream.stream_id);
-    if (protocol === 'flv') return `/api/cameras/${streamID}/stream.flv`;
-    if (protocol === 'hls') return `/api/cameras/${streamID}/stream/index.m3u8`;
-    if (protocol === 'll-hls') return `/api/cameras/${streamID}/stream/index.m3u8?ll-hls=1`;
-    if (protocol === 'fmp4') return `/api/cameras/${streamID}/stream.m4s`;
+    if (protocol === 'flv') return streamMediaURL(stream.stream_id, 'flv');
+    if (protocol === 'hls') return streamMediaURL(stream.stream_id, 'hls');
+    if (protocol === 'll-hls') return streamMediaURL(stream.stream_id, 'll-hls');
+    if (protocol === 'fmp4') return streamMediaURL(stream.stream_id, 'fmp4');
+    if (protocol === 'webrtc') return streamMediaURL(stream.stream_id, 'webrtc');
+    if (protocol === 'wasm') return streamMediaURL(stream.stream_id, 'ws');
     return getPlayURL(protocol);
   }
 
@@ -257,13 +278,22 @@
     return backend;
   }
 
+  async function copyIngestURL(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast(t('streams.copied'), 'success');
+    } catch {
+      showToast(t('streams.copyFailed'), 'error');
+    }
+  }
+
   function protocolLabel(protocol: string): string {
     switch (protocol) {
       case 'hls': return 'HLS';
       case 'll-hls': return 'LL-HLS';
       case 'flv': return 'FLV';
       case 'ws-flv': return 'WS-FLV';
-      case 'webrtc': return 'WebRTC';
+      case 'webrtc': return 'WHEP';
       case 'fmp4': return 'fMP4';
       case 'wasm': return 'WebCodecs';
       case 'rtmp': return 'RTMP';
@@ -281,6 +311,7 @@
       case 'srt_push': return t('streams.sourceSRTPush');
       case 'whip_push': return t('streams.sourceWHIPPush');
       case 'relay_pull': return t('streams.sourceRelayPull');
+      case 'push': return t('streams.sourcePush');
       default: return t('streams.sourceStream');
     }
   }
@@ -392,6 +423,46 @@
     }
   }
 
+  function startEditName() {
+    nameInput = displayName;
+    editingName = true;
+  }
+
+  function cancelEditName() {
+    editingName = false;
+    nameInput = displayName;
+  }
+
+  async function saveDisplayName() {
+    if (!stream || savingName) {
+      editingName = false;
+      return;
+    }
+    const trimmed = nameInput.trim();
+    if (trimmed === displayName) {
+      editingName = false;
+      return;
+    }
+    savingName = true;
+    try {
+      const next = await updateStream(stream.stream_id, { name: trimmed });
+      updateStreamState(next);
+      showToast(t('streams.nameUpdated'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('streams.nameUpdateFailed'), 'error');
+    } finally {
+      savingName = false;
+      editingName = false;
+    }
+  }
+
+  $effect(() => {
+    if (editingName && nameInputEl) {
+      nameInputEl.focus();
+      nameInputEl.select();
+    }
+  });
+
   async function handleKickPublisher() {
     if (!stream) return;
     if (!confirm(t('streams.confirmKick'))) return;
@@ -480,12 +551,14 @@
         if (config.default_protocol) configuredDefaultProtocol = config.default_protocol;
       })
       .catch(() => { /* keep fallback default */ });
+    stopEvents = subscribeNvrEvents({ camera_id: streamId }, () => { void loadStream(); }, { debounceMs: 400 });
     refreshTimer = window.setInterval(() => {
       void loadStream();
-    }, 5000);
+    }, 15000);
   });
 
   onDestroy(() => {
+    stopEvents?.();
     if (refreshTimer) {
       window.clearInterval(refreshTimer);
     }
@@ -529,7 +602,41 @@
             {t('streams.title')}
           </button>
           <div class="header-info">
-            <h1>{stream.camera_name || stream.stream_id}</h1>
+            {#if editingName}
+              <input
+                bind:this={nameInputEl}
+                type="text"
+                class="header-name-input"
+                bind:value={nameInput}
+                maxlength="128"
+                aria-label={t('streams.displayName')}
+                disabled={savingName}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void saveDisplayName();
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelEditName();
+                  }
+                }}
+                onblur={() => { void saveDisplayName(); }}
+              />
+            {:else}
+              <div class="header-title-row">
+                <h1>{displayName}</h1>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs"
+                  title={t('streams.editName')}
+                  aria-label={t('streams.editName')}
+                  onclick={startEditName}
+                >
+                  <Pencil size={14} />
+                </button>
+              </div>
+            {/if}
             <div class="header-meta">
               <span class="stream-id-badge">{stream.stream_id}</span>
               <span class:status-active={stream.active} class:status-inactive={!stream.active} class="status-badge">
@@ -601,13 +708,14 @@
                   {#if selectedProtocol === 'webrtc'}
                     <WebRTCPlayer
                       cameraId={encodedStreamId}
-                      cameraName={stream.camera_name || stream.stream_id}
+                      cameraName={displayName}
+                      whepUrl={streamMediaURL(stream.stream_id, 'webrtc')}
                       expanded={true}
                     />
                   {:else if selectedProtocol === 'flv' || selectedProtocol === 'ws-flv'}
                     <FlvPlayer
                       cameraId={encodedStreamId}
-                      cameraName={stream.camera_name || stream.stream_id}
+                      cameraName={displayName}
                       streamUrl={getPlayerURL(selectedProtocol)}
                       protocol={selectedProtocol === 'ws-flv' ? 'ws-flv' : 'flv'}
                       expanded={true}
@@ -616,7 +724,8 @@
                     {@const WasmPlayer = WasmPlayerComponent}
                     <WasmPlayer
                       cameraId={encodedStreamId}
-                      cameraName={stream.camera_name || stream.stream_id}
+                      cameraName={displayName}
+                      wsPath={streamMediaURL(stream.stream_id, 'ws')}
                       expanded={true}
                       onFallbackNeeded={() => {
                         const fallback = getAvailableProtocols().find(p => p !== 'wasm');
@@ -632,13 +741,14 @@
                     {@const FMP4Player = FMP4PlayerComponent}
                     <FMP4Player
                       cameraId={encodedStreamId}
-                      cameraName={stream.camera_name || stream.stream_id}
+                      cameraName={displayName}
+                      streamUrl={streamMediaURL(stream.stream_id, 'fmp4')}
                       expanded={true}
                     />
                   {:else}
                     <VideoPlayer
                       cameraId={encodedStreamId}
-                      cameraName={stream.camera_name || stream.stream_id}
+                      cameraName={displayName}
                       streamUrl={getPlayerURL(selectedProtocol) || getPlayerURL('hls')}
                       cameraProtocol={selectedProtocol}
                       protocol={selectedProtocol}
@@ -871,6 +981,64 @@
               <p>{t('streams.noPlayURLs')}</p>
             </div>
           {/if}
+
+          {#if stream.source_type === 'relay_pull'}
+            <div class="section-header" style="margin-top: 1.5rem;">
+              <h2>
+                <ExternalLink size={18} />
+                {t('streams.pullSource')}
+              </h2>
+            </div>
+            <p class="th-text-muted text-sm" style="margin: 0 0 0.75rem;">{t('streams.pullSourceHint')}</p>
+            {#if stream.source_url}
+              <div class="urls-list">
+                <div class="url-item">
+                  <div class="url-info">
+                    <span class="url-protocol">{t('streams.inputPull')}</span>
+                    <code>{stream.source_url}</code>
+                  </div>
+                  <button type="button" class="btn btn-ghost btn-xs" onclick={() => copyIngestURL(stream.source_url || '')}>
+                    <Copy size={14} />
+                    <span>{t('streams.copy')}</span>
+                  </button>
+                </div>
+              </div>
+            {:else}
+              <div class="empty-urls">
+                <p>{t('streams.noPlayURLs')}</p>
+              </div>
+            {/if}
+          {:else}
+          <div class="section-header" style="margin-top: 1.5rem;">
+            <h2>
+              <ExternalLink size={18} />
+              {t('streams.ingestUrls')}
+            </h2>
+          </div>
+          <p class="th-text-muted text-sm" style="margin: 0 0 0.75rem;">
+            {stream.managed ? t('streams.ingestUrlsHint') : t('streams.ingestUrlsExternalHint')}
+          </p>
+          {#if stream.ingest_urls?.length}
+            <div class="urls-list">
+              {#each stream.ingest_urls as ingest}
+                <div class="url-item">
+                  <div class="url-info">
+                    <span class="url-protocol">{protocolLabel(ingest.protocol)}</span>
+                    <code>{ingest.url}</code>
+                  </div>
+                  <button type="button" class="btn btn-ghost btn-xs" onclick={() => copyIngestURL(ingest.url)}>
+                    <Copy size={14} />
+                    <span>{t('streams.copy')}</span>
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <div class="empty-urls">
+              <p>{stream.managed ? t('streams.noIngestURLs') : t('streams.noIngestEnabled')}</p>
+            </div>
+          {/if}
+          {/if}
         </section>
         {:else if activeTab === 'actions'}
         <!-- Actions section -->
@@ -880,6 +1048,11 @@
           </div>
 
           <div class="actions-grid">
+            <button class="action-btn" onclick={() => { window.location.hash = `#/recording-plans?stream_id=${encodeURIComponent(stream.stream_id)}`; }}>
+              <CalendarClock size={20} />
+              <span>{t('streams.recordPlan')}</span>
+              <p>{t('streams.recordPlanDesc')}</p>
+            </button>
             {#if !stream.managed}
               <button class="action-btn" onclick={() => { showPromoteDialog = true; }}>
                 <ArrowUpCircle size={20} />
@@ -1029,6 +1202,25 @@
     margin: 0;
     font-size: 1.5rem;
     font-weight: 700;
+  }
+
+  .header-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+
+  .header-name-input {
+    width: min(100%, 28rem);
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.2;
+    padding: 0.2rem 0.5rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
   }
 
   .header-meta {

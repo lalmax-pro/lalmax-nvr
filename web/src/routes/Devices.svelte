@@ -3,7 +3,7 @@
   import { 
     listGB28181Devices, playGB28181Stream, stopGB28181Stream, 
     listStreams, listCameras, deleteCamera, permanentlyDeleteCamera,
-    startCamera, stopCamera, batchCameras, updateCamera, pauseRecording, resumeRecording,
+    startCamera, stopCamera, updateCamera, pauseRecording, resumeRecording,
     xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap,
     enableCamera, disableCamera, getHealthStatus, getSnapshotUrl,
     ApiRequestError, queryDeviceRecords, startDevicePlayback,
@@ -11,6 +11,7 @@
     listGB28181Alarms, startBroadcast, stopBroadcast,
     listArchives, restoreArchiveGroup, setArchiveRetention, deleteArchiveGroup,
     listArchiveRecordings, deleteArchiveRecording, getCameraRecordingStats,
+    subscribeNvrEvents,
     transformRecords, startDownload, batchDownload,
     listGB28181Platforms, addGB28181Platform, deleteGB28181Platform,
     listPlatformEvents, getPlatformStatus, getTimelineData
@@ -1211,8 +1212,12 @@
       }
     }).catch(e => console.warn('Xiaomi not authenticated:', e));
 
-    const healthInterval = window.setInterval(() => loadHealth(), 30000);
-    return () => clearInterval(healthInterval);
+    const stopHealth = subscribeNvrEvents({ source: 'health' }, () => { void loadHealth(); }, { debounceMs: 300 });
+    const healthFallback = window.setInterval(() => loadHealth(), 120000);
+    return () => {
+      stopHealth();
+      clearInterval(healthFallback);
+    };
   });
 </script>
 
@@ -1362,14 +1367,6 @@
             <p class="text-sm th-text-tertiary mt-1">点击上方「扫描设备」按钮发现局域网中的 ONVIF 摄像头</p>
           </div>
         {:else}
-          <div class="flex gap-2 mb-3">
-            <button class="btn btn-secondary btn-sm" onclick={async () => { const r = await batchCameras('start', onvifCameras.map(c => c.id)); showToast(`${t('devices.batchStart')}: ${r.ok.length}`, 'success'); }}>
-              {t('devices.batchStart')}
-            </button>
-            <button class="btn btn-secondary btn-sm" onclick={async () => { const r = await batchCameras('stop', onvifCameras.map(c => c.id)); showToast(`${t('devices.batchStop')}: ${r.ok.length}`, 'success'); }}>
-              {t('devices.batchStop')}
-            </button>
-          </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {#each onvifCameras as camera (camera.id)}
               <CameraCard
@@ -1384,8 +1381,6 @@
                 onrestart={handleRestartCamera}
                 ontoggle={handleToggleCamera}
                 onsaveName={handleSaveName}
-                onpause={handlePauseRecording}
-                onresume={handleResumeRecording}
                 recordingPaused={camera.recording_paused || pausedCameras.has(camera.id)}
               />
             {/each}
@@ -1510,7 +1505,7 @@
                               <span class="text-sm font-medium th-text-primary">{channel.name || channel.channel_id}</span>
                               {#if channelCamera}
                         <span class="px-1.5 py-0.5 text-xs rounded {isChannelPaused ? 'bg-yellow-100 text-yellow-800' : channelCamera.status === 'recording' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}">
-                          {isChannelPaused ? '已暂停' : channelCamera.status === 'recording' ? '录制中' : '已停止'}
+                          {channelCamera.status === 'recording' || channelCamera.status === 'paused' || isChannelPaused ? t('cameras.statusRecording') : t('cameras.statusStopped')}
                         </span>
                       {/if}
                             </div>
@@ -2171,8 +2166,6 @@
               onrestart={handleRestartCamera}
               ontoggle={handleToggleCamera}
               onsaveName={handleSaveName}
-              onpause={handlePauseRecording}
-              onresume={handleResumeRecording}
               recordingPaused={camera.recording_paused || pausedCameras.has(camera.id)}
             />
           {/each}
@@ -2231,10 +2224,8 @@
 
               <!-- Status Badge -->
               <div class="mb-3">
-                {#if camera.recording_paused || pausedCameras.has(camera.id)}
-                  <span class="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800">已暂停</span>
-                {:else if camera.status === 'recording'}
-                  <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">录制中</span>
+                {#if camera.status === 'recording' || camera.status === 'paused' || camera.recording_paused || pausedCameras.has(camera.id)}
+                  <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">{t('cameras.statusRecording')}</span>
                 {:else if camera.status === 'error'}
                   <span class="px-2 py-1 text-xs rounded-full bg-red-100 text-red-800">错误</span>
                 {:else}
@@ -2245,44 +2236,19 @@
               <!-- Action Buttons -->
               <div class="flex items-center justify-between pt-3 border-t th-border">
                 <div class="flex items-center gap-2">
-                  {#if camera.recording_paused || pausedCameras.has(camera.id)}
-                    <!-- Paused state: show resume and stop -->
-                    <button
-                      class="btn btn-ghost px-2 py-1 text-sm"
-                      onclick={() => handleResumeRecording(camera)}
-                      title="恢复录制"
-                    >
-                      <Play size={14} />
-                    </button>
+                  {#if camera.status === 'recording' || camera.status === 'reconnecting' || camera.status === 'paused' || camera.recording_paused}
                     <button
                       class="btn btn-ghost px-2 py-1 text-sm"
                       onclick={() => handleStopCamera(camera)}
-                      title="停止录制"
-                    >
-                      <Square size={14} />
-                    </button>
-                  {:else if camera.status === 'recording'}
-                    <!-- Recording state: show pause and stop -->
-                    <button
-                      class="btn btn-ghost px-2 py-1 text-sm"
-                      onclick={() => handlePauseRecording(camera)}
-                      title="暂停录制"
-                    >
-                      <Pause size={14} />
-                    </button>
-                    <button
-                      class="btn btn-ghost px-2 py-1 text-sm"
-                      onclick={() => handleStopCamera(camera)}
-                      title="停止录制"
+                      title={t('cameras.stop')}
                     >
                       <Square size={14} />
                     </button>
                   {:else}
-                    <!-- Stopped state: show start -->
                     <button
                       class="btn btn-ghost px-2 py-1 text-sm"
                       onclick={() => handleStartCamera(camera)}
-                      title="开始录制"
+                      title={t('cameras.start')}
                     >
                       <Play size={14} />
                     </button>

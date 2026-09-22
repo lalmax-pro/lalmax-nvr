@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream, getONVIFProfiles, ptzMove, buildPTZRelativeMove } from '$lib/api';
+  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream, getONVIFProfiles, ptzMove, buildPTZRelativeMove, streamMediaURL, cameraStreamID } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff, Info, Settings, Video, Copy } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
@@ -241,9 +241,10 @@
 
   function getStreamPlayURL(protocol: StreamingProtocol): string {
     if (streamPlayURLs[protocol]) return streamPlayURLs[protocol];
-    if (protocol === 'flv') return `/api/cameras/${cameraId}/stream.flv`;
-    if (protocol === 'hls') return `/api/cameras/${cameraId}/stream/index.m3u8`;
-    if (protocol === 'll-hls') return `/api/cameras/${cameraId}/stream/index.m3u8?ll-hls=1`;
+    const streamId = camera ? cameraStreamID(camera) : cameraId;
+    if (protocol === 'flv') return streamMediaURL(streamId, 'flv');
+    if (protocol === 'hls') return streamMediaURL(streamId, 'hls');
+    if (protocol === 'll-hls') return streamMediaURL(streamId, 'll-hls');
     return '';
   }
 

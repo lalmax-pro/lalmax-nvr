@@ -3,8 +3,8 @@ package media
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewRuntime_AlwaysInitializesWS(t *testing.T) {

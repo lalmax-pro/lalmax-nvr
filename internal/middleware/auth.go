@@ -83,7 +83,6 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string) (func(ht
 				return
 			}
 
-
 			user, pass, ok := r.BasicAuth()
 			if !ok {
 				// Fallback: check ?token= query parameter (for WebSocket which cannot set headers)

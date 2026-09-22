@@ -118,7 +118,7 @@ Add:
 Meaning:
 
 - bind an external stream to an existing camera
-- promote an unmanaged stream into a formal managed source
+- register an unmanaged stream as a device (name, location, dashboard). **Does not start recording**; recording is driven by [recording plans](recording-plans.md)
 
 ### Phase 3: Control operations
 
@@ -146,7 +146,7 @@ Each stream should support:
 - preview
 - publisher/subscriber state
 - bind to camera
-- promote to managed source
+- register as a device (does not start recording)
 - disconnect
 
 ## Recommendation for Media Ingest Mapping

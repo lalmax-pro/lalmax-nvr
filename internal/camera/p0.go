@@ -20,28 +20,46 @@ type adaptiveTriggerer interface {
 	TriggerAdaptive(hold time.Duration)
 }
 
+// recordingModeOf is the planned recording mode for a camera's stream.
+// With no plan source wired (embedded/unit use) everything records continuously;
+// otherwise a stream with no plan has no mode and does not record.
+// No manager lock: callers may already hold cm.mu.
 func (cm *CameraManager) recordingModeOf(cameraID string) string {
-	if cm.db != nil {
-		row, err := cm.db.GetCamera(context.Background(), cameraID)
-		if err == nil && row != nil && row.RecordingMode != "" {
-			return row.RecordingMode
+	if cm.recordingModeForStream == nil {
+		return storage.RecordingModeContinuous
+	}
+	cam := cm.getCameraConfigByID(cameraID)
+	if cam == nil {
+		return storage.RecordingModeOff
+	}
+	if mode, known := cm.recordingModeForStream(cm.ingestStreamID(*cam)); known {
+		return mode
+	}
+	return storage.RecordingModeOff
+}
+
+// shouldRecordCamera reports whether a camera should be writing segments now.
+// A wired recording plan wins; otherwise the legacy per-camera mode decides.
+func (cm *CameraManager) shouldRecordCamera(cameraID string) bool {
+	cam := cm.getCameraConfigByID(cameraID)
+	if cam == nil {
+		return false
+	}
+	if cm.shouldRecordStream != nil {
+		if record, known := cm.shouldRecordStream(cm.ingestStreamID(*cam)); known {
+			return record
 		}
 	}
-	// No manager lock: callers may already hold cm.mu.
-	if cm.cfg != nil {
-		for _, cam := range cm.cfg.Cameras {
-			if cam.ID == cameraID && cam.RecordingMode != "" {
-				return cam.RecordingMode
-			}
-		}
+	switch cm.recordingModeOf(cameraID) {
+	case storage.RecordingModeEvent, storage.RecordingModeOff:
+		return false
+	default:
+		return true
 	}
-	return storage.RecordingModeContinuous
 }
 
 func (cm *CameraManager) pauseRecordingLockedIfNeeded(cameraID string) {
-	switch cm.recordingModeOf(cameraID) {
-	case storage.RecordingModeEvent, storage.RecordingModeOff:
-	default:
+	if cm.shouldRecordCamera(cameraID) {
 		return
 	}
 	rec, ok := cm.recorders[cameraID]
@@ -70,11 +88,11 @@ func (cm *CameraManager) IsPendingActivation(cam config.CameraConfig) bool {
 }
 
 func (cm *CameraManager) maybePauseOnStart(ctx context.Context, cameraID string) {
-	switch cm.recordingModeOf(cameraID) {
-	case storage.RecordingModeEvent, storage.RecordingModeOff:
-		if err := cm.PauseRecording(ctx, cameraID); err != nil {
-			logger.Debug("initial pause skipped", "camera_id", cameraID, "error", err)
-		}
+	if cm.shouldRecordCamera(cameraID) {
+		return
+	}
+	if err := cm.PauseRecording(ctx, cameraID); err != nil {
+		logger.Debug("initial pause skipped", "camera_id", cameraID, "error", err)
 	}
 }
 
@@ -94,22 +112,49 @@ func (cm *CameraManager) attachAdaptiveGate(cam config.CameraConfig, h264 *recor
 
 func (cm *CameraManager) newH264Recorder(cam config.CameraConfig, cfg recorder.H264Config) model.Recorder {
 	cm.attachAdaptiveGate(cam, &cfg, nil)
+	cm.attachFrameSource(cam, &cfg, nil)
 	return recorder.NewH264Recorder(cfg, cm.store, cm.metrics)
 }
 
 func (cm *CameraManager) newH265Recorder(cam config.CameraConfig, cfg recorder.H265Config) model.Recorder {
 	cm.attachAdaptiveGate(cam, nil, &cfg)
+	cm.attachFrameSource(cam, nil, &cfg)
 	return recorder.NewH265Recorder(cfg, cm.store, cm.metrics)
 }
 
-// afterRecorderStartLocked pauses event/off cameras and schedules ONVIF follow-up
-// after the caller releases cm.mu (via unlocked).
-func (cm *CameraManager) afterRecorderStartLocked(cam config.CameraConfig, unlocked <-chan struct{}) {
-	cm.pauseRecordingLockedIfNeeded(cam.ID)
+func (cm *CameraManager) attachFrameSource(cam config.CameraConfig, h264 *recorder.H264Config, h265 *recorder.H265Config) {
+	if cm.mediaEngine == nil || cam.ID == "" {
+		return
+	}
+	streamID := cm.ingestStreamID(cam)
+	src := func(ctx context.Context) (media.FrameSubscription, error) {
+		return cm.mediaEngine.SubscribeFrames(ctx, media.SubscribeFramesRequest{
+			StreamID: streamID,
+			AppName:  "live",
+		})
+	}
+	if h264 != nil {
+		h264.FrameSource = src
+	}
+	if h265 != nil {
+		h265.FrameSource = src
+	}
+}
+
+// afterRecorderStart pauses event/off cameras and schedules ONVIF follow-up.
+// Safe to call while holding the per-camera lifecycle lock; does not take lockCamera.
+func (cm *CameraManager) afterRecorderStart(cam config.CameraConfig) {
+	if cm.RecordsViaTask(cam) && !cm.shouldRecordCamera(cam.ID) {
+		cm.stopRecordTask(context.Background(), cam, recorder.ReasonPlanInactive)
+		cm.mu.Lock()
+		cm.pausedRecorders[cam.ID] = true
+		cm.mu.Unlock()
+	} else {
+		cm.mu.Lock()
+		cm.pauseRecordingLockedIfNeeded(cam.ID)
+		cm.mu.Unlock()
+	}
 	go func() {
-		if unlocked != nil {
-			<-unlocked
-		}
 		cm.ensureStableID(context.Background(), cam)
 		cm.subscribeMotionIfNeeded(context.Background(), cam.ID)
 	}()
@@ -118,9 +163,17 @@ func (cm *CameraManager) afterRecorderStartLocked(cam config.CameraConfig, unloc
 func (cm *CameraManager) TriggerAdaptive(cameraID string, hold time.Duration) {
 	cm.mu.RLock()
 	rec := cm.recorders[cameraID]
+	tasks := cm.recordTasks
+	var streamID string
+	if cam := cm.getCameraConfigByID(cameraID); cam != nil {
+		streamID = config.IngestStreamID(*cam)
+	}
 	cm.mu.RUnlock()
 	if t, ok := rec.(adaptiveTriggerer); ok {
 		t.TriggerAdaptive(hold)
+	}
+	if tasks != nil && streamID != "" {
+		tasks.TriggerAdaptive(streamID, hold)
 	}
 }
 
@@ -172,7 +225,7 @@ func (cm *CameraManager) EnsureSubStream(ctx context.Context, cameraID string) e
 		autoStop = 60 * time.Second
 	}
 	_, err = cm.mediaEngine.StartPull(ctx, media.StartPullRequest{
-		StreamID:       media.SubStreamID(cameraID),
+		StreamID:       media.SubStreamID(cm.ingestStreamID(*cam)),
 		AppName:        "live",
 		SourceURL:      source,
 		Transport:      cameraRTSPTransport(*cam),

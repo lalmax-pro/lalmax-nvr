@@ -163,7 +163,7 @@ sequenceDiagram
   VOD->>Disk: slice fMP4 on demand (~6s)
 ```
 
-- Recording modes: `continuous` / `scheduled` / `event` / `adaptive` / `off`.
+- Recording is driven by **plans** on streams (`stream_id`), not cameras. Modes: `continuous` / `scheduled` / `event` / `adaptive` / `off`. No plan means no recording; registering a stream as a device does not start recording. See [Recording plans](recording-plans.md).
 - **Rolling merge** appends a closed segment into the hour bucket after a short debounce (default 5s). Periodic merge still backfills history.
 - **Continuous VOD** loads a day playlist (`playlist.m3u8`); gaps use `#EXT-X-DISCONTINUITY`. MJPEG stays on the single-file player.
 

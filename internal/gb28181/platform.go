@@ -554,8 +554,8 @@ func (p *Platform) OnMessage(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	var msg struct {
-		CmdType string `xml:"CmdType"`
-		SN      int    `xml:"SN"`
+		CmdType  string `xml:"CmdType"`
+		SN       int    `xml:"SN"`
 		DeviceID string `xml:"DeviceID"`
 	}
 	if err := xmlUnmarshal(body, &msg); err != nil {

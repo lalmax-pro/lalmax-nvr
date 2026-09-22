@@ -16,6 +16,7 @@ Layers and ports: [Architecture](architecture.md). The Web UI usually proxies li
   - [ONVIF Camera Management](#onvif-camera-management)
   - [Camera Merge Configuration](#camera-merge-configuration)
   - [ONVIF API](#onvif-api)
+- [Recording plans API](#recording-plans-api)
 - [Recordings API](#recordings-api)
 - [Events & alarm linkage](#events--alarm-linkage)
 - [Continuous VOD](#continuous-vod)
@@ -1192,6 +1193,49 @@ Source, lalmax group, recording, sub-stream, viewers by protocol. Used by the ca
 **Endpoint:** `GET /api/flow/streams`
 
 Same payload for every camera: `{ "cameras": [ ... ] }`.
+
+## Recording plans API
+
+Recording is driven by plans on `stream_id`. No plan means no recording. `POST /api/streams/{id}/promote` registers a device and does **not** start recording. See [Recording plans](recording-plans.md).
+
+### List plans
+
+**Endpoint:** `GET /api/recording-plans`
+
+```json
+{
+  "plans": [
+    {
+      "id": "plan-ab12cd34",
+      "stream_id": "obs-1",
+      "name": "OBS",
+      "mode": "scheduled",
+      "enabled": true,
+      "windows": [{"day_of_week": 1, "start_time": "09:00", "end_time": "17:00"}]
+    }
+  ]
+}
+```
+
+### Create plan
+
+**Endpoint:** `POST /api/recording-plans`
+
+409 if the stream already has a plan. `mode`: `continuous` | `scheduled` | `off` | `event` | `adaptive`.
+
+```bash
+curl -u username:password -X POST http://localhost:9090/api/recording-plans \
+  -H 'Content-Type: application/json' \
+  -d '{"stream_id":"obs-1","name":"OBS","mode":"continuous","enabled":true}'
+```
+
+### Get / update / delete
+
+- `GET /api/recording-plans/{id}`
+- `PUT /api/recording-plans/{id}` (omitted fields kept; `stream_id` may be omitted)
+- `DELETE /api/recording-plans/{id}`
+
+Camera JSON `recording_mode` is read-only (the bound stream’s plan, or `off`). `POST /api/cameras/{id}/pause-recording` sets that plan to `enabled: false`.
 
 ## Recordings API
 

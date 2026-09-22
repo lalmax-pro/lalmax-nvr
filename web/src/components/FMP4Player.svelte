@@ -11,12 +11,14 @@
     cameraName,
     expanded = false,
     tabVisible = true,
+    streamUrl = '',
     onFallbackNeeded,
   }: {
     cameraId: string;
     cameraName: string;
     expanded?: boolean;
     tabVisible?: boolean;
+    streamUrl?: string;
     onFallbackNeeded?: (fallback: 'hls') => void;
   } = $props();
 
@@ -231,7 +233,7 @@
   async function startStream(generation: number) {
     if (destroyed || generation !== streamGeneration) return;
 
-    const url = `/api/cameras/${cameraId}/stream.m4s`;
+    const url = streamUrl || `/api/cameras/${cameraId}/stream.m4s`;
 
     try {
       streamState = 'loading';

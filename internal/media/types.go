@@ -2,6 +2,8 @@ package media
 
 import (
 	"context"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/q191201771/lal/pkg/base"
@@ -45,6 +47,17 @@ type Engine interface {
 
 	// SubscribeWHIPEvents subscribes to WHIP (customize/WebRTC) publish events.
 	SubscribeWHIPEvents(ctx context.Context) (<-chan WHIPEvent, error)
+
+	// SubscribeFrames attaches an in-process consumer to a live stream group.
+	// Embedded lalmax delivers cloned AV frames without an RTSP loopback.
+	// HTTP-mode engines return ErrFramesNotSupported.
+	SubscribeFrames(ctx context.Context, req SubscribeFramesRequest) (FrameSubscription, error)
+}
+
+// PlayHandlerProvider is implemented by engines that can serve lalmax HTTP
+// play routes (LL-HLS, fMP4, WHEP) in-process without TCP loopback.
+type PlayHandlerProvider interface {
+	PlayHTTPHandler() http.Handler
 }
 
 // Restarter is implemented by engines that support dynamic protocol reconfiguration.
@@ -127,6 +140,17 @@ type SessionInfo struct {
 	WriteBitrateKbits int
 	ReadBytesSum      uint64
 	WroteBytesSum     uint64
+}
+
+// IsInternalRecorderSession reports whether a subscriber is the in-process
+// NVR recorder (protocol NVR-RECORD / session id nvr-record-*). These must
+// not appear on public stream APIs as play viewers.
+func IsInternalRecorderSession(protocol, sessionID string) bool {
+	p := strings.ToLower(strings.TrimSpace(protocol))
+	if p == "nvr-record" || strings.HasPrefix(p, "nvr-record") {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(sessionID)), "nvr-record")
 }
 
 type PlayURLRequest struct {

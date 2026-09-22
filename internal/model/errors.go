@@ -35,6 +35,7 @@ type CameraAlreadyExistsError struct {
 
 func (e *CameraAlreadyExistsError) Error() string { return "camera already exists: " + e.CameraID }
 func (e *CameraAlreadyExistsError) Code() string  { return "CAMERA_ALREADY_EXISTS" }
+
 // --- Recording errors ---
 
 // RecordingNotFoundError indicates the requested recording does not exist.
@@ -117,14 +118,14 @@ func (e *ONVIFNotCameraError) Code() string { return "ONVIF_NOT_CAMERA" }
 // ONVIFConnectionError indicates a failure to connect to an ONVIF device.
 type ONVIFConnectionError struct {
 	CameraID string
-	Err     error
+	Err      error
 }
 
 func (e *ONVIFConnectionError) Error() string {
 	return "connect to ONVIF camera " + e.CameraID + ": " + e.Err.Error()
 }
-func (e *ONVIFConnectionError) Code() string { return "ONVIF_CONNECTION_FAILED" }
-func (e *ONVIFConnectionError) Unwrap() error  { return e.Err }
+func (e *ONVIFConnectionError) Code() string  { return "ONVIF_CONNECTION_FAILED" }
+func (e *ONVIFConnectionError) Unwrap() error { return e.Err }
 
 // ONVIFNoProfilesError indicates no media profiles were found for the camera.
 type ONVIFNoProfilesError struct {

@@ -1,6 +1,6 @@
 # MQTT Integration
 
-lalmax-nvr supports MQTT-based recording triggers for smart home automation and event-driven recording. When an MQTT message is received, the system can start recording on a specific camera for a configurable duration.
+lalmax-nvr supports MQTT-based recording triggers for smart home automation and event-driven recording. When an MQTT message is received, the system can start recording on a specific camera for a configurable duration. The camera’s bound stream needs an `mode=event` [recording plan](recording-plans.md).
 
 ## Overview
 

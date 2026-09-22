@@ -2,19 +2,21 @@ package api
 
 import (
 	"net/http"
-
-	"github.com/go-chi/chi/v5"
 )
 
 // --- HTTP-FLV streaming endpoint ---
 
 // handleFLVStream handles GET /api/cameras/{id}/stream.flv
 func (h *Handler) handleFLVStream(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := playResourceID(r)
 	streamID, quality := h.resolvePlayStreamID(r, id)
 	w.Header().Set("X-Stream-Quality", quality)
 	if h.mediaEngine == nil {
 		writeError(w, http.StatusServiceUnavailable, "FLV streaming not available")
+		return
+	}
+	if streamID == "" {
+		writePlayStreamNotFound(w, r)
 		return
 	}
 	upstream, err := h.mediaPlayURL(r.Context(), streamID, "flv")

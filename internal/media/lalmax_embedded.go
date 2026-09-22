@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -140,6 +141,17 @@ func (e *EmbeddedLalmax) Server() *lalmaxserver.LalMaxServer {
 	return e.server
 }
 
+// PlayHTTPHandler returns the in-process lalmax HTTP handler for play proxying.
+func (e *EmbeddedLalmax) PlayHTTPHandler() http.Handler {
+	e.mu.Lock()
+	server := e.server
+	e.mu.Unlock()
+	if server == nil {
+		return nil
+	}
+	return server.HTTPHandler()
+}
+
 // AddCustomizePubSession registers a custom publish session for feeding frames directly into lal.
 func (e *EmbeddedLalmax) AddCustomizePubSession(_ context.Context, streamName string) (CustomizePubSession, error) {
 	e.mu.Lock()
@@ -227,25 +239,21 @@ func (e *EmbeddedLalmax) Shutdown(ctx context.Context) error {
 
 func (e *EmbeddedLalmax) Restart(ctx context.Context, rtmpPort, srtPort int, rtmpEnabled, srtEnabled bool) error {
 	e.mu.Lock()
-	// Shutdown existing server
-	if e.server != nil {
-		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := e.server.Shutdown(shutdownCtx)
-		cancel()
-		if err != nil {
-			e.mu.Unlock()
-			return fmt.Errorf("shutdown failed: %w", err)
-		}
-		e.server = nil
-	}
-
-	// Update embedded config
+	old := e.server
+	e.server = nil
 	e.cfg.RTMPPort = rtmpPort
 	e.cfg.SRTPort = srtPort
 	e.cfg.RTMPEnabled = rtmpEnabled
 	e.cfg.SRTEnabled = srtEnabled
 	cfgPath := e.cfg.ConfigPath
 	e.mu.Unlock()
+
+	// Drop live HTTP/RTMP sessions immediately. Graceful Shutdown waits for
+	// in-flight viewers and times out while holding the engine lock.
+	if old != nil {
+		old.Close()
+		time.Sleep(200 * time.Millisecond)
+	}
 
 	// Patch existing config file (preserves user customizations) or generate new one
 	rtmpAddr := fmt.Sprintf(":%d", rtmpPort)

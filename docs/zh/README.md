@@ -7,6 +7,8 @@
 | 文档 | 说明 |
 |------|------|
 | [快速入门](getting-started.md) | 安装、第一个摄像头、Web UI |
+| [录像计划](recording-plans.md) | 计划挂在流上；登记为设备不会开录 |
+| [录制流程](recording-flow.md) | record task 的开录、写盘与停录 |
 | [架构](architecture.md) | 分层、直播/录像数据流、拉流 vs 推流、端口 |
 | [配置说明](configuration.md) | YAML 全量参考 |
 | [部署指南](deployment.md) | Docker、反向代理、交叉编译 |

@@ -6,39 +6,39 @@ import (
 )
 
 type PlatformRow struct {
-	ID              int64     `json:"id"`
-	Name            string    `json:"name"`
-	Enable          bool      `json:"enable"`
-	ServerGBID      string    `json:"server_gb_id"`
-	ServerGBDomain  string    `json:"server_gb_domain"`
-	ServerIP        string    `json:"server_ip"`
-	ServerPort      int       `json:"server_port"`
-	DeviceGBID      string    `json:"device_gb_id"`
-	DeviceGBDomain  string    `json:"device_gb_domain"`
-	DeviceIP        string    `json:"device_ip"`
-	DevicePort      int       `json:"device_port"`
-	Username        string    `json:"username"`
-	Password        string    `json:"password"`
-	Transport       string    `json:"transport"`
-	CharacterSet    string    `json:"character_set"`
-	Expires         int       `json:"expires"`
-	KeepTimeout     int       `json:"keep_timeout"`
-	MaxTimeoutCount int       `json:"max_timeout_count"`
-	Status          bool      `json:"status"`
+	ID              int64      `json:"id"`
+	Name            string     `json:"name"`
+	Enable          bool       `json:"enable"`
+	ServerGBID      string     `json:"server_gb_id"`
+	ServerGBDomain  string     `json:"server_gb_domain"`
+	ServerIP        string     `json:"server_ip"`
+	ServerPort      int        `json:"server_port"`
+	DeviceGBID      string     `json:"device_gb_id"`
+	DeviceGBDomain  string     `json:"device_gb_domain"`
+	DeviceIP        string     `json:"device_ip"`
+	DevicePort      int        `json:"device_port"`
+	Username        string     `json:"username"`
+	Password        string     `json:"password"`
+	Transport       string     `json:"transport"`
+	CharacterSet    string     `json:"character_set"`
+	Expires         int        `json:"expires"`
+	KeepTimeout     int        `json:"keep_timeout"`
+	MaxTimeoutCount int        `json:"max_timeout_count"`
+	Status          bool       `json:"status"`
 	LastRegisterAt  *time.Time `json:"last_register_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type PlatformChannelRow struct {
-	ID             int64  `json:"id"`
-	PlatformID     int64  `json:"platform_id"`
-	ChannelID      string `json:"channel_id"`
-	DeviceID       string `json:"device_id"`
-	CustomID       string `json:"custom_id"`
-	CustomName     string `json:"custom_name"`
-	StreamPath     string `json:"stream_path"`
-	IsShared       bool   `json:"is_shared"`
+	ID         int64  `json:"id"`
+	PlatformID int64  `json:"platform_id"`
+	ChannelID  string `json:"channel_id"`
+	DeviceID   string `json:"device_id"`
+	CustomID   string `json:"custom_id"`
+	CustomName string `json:"custom_name"`
+	StreamPath string `json:"stream_path"`
+	IsShared   bool   `json:"is_shared"`
 }
 
 func (d *DB) createPlatformTables(ctx context.Context) error {

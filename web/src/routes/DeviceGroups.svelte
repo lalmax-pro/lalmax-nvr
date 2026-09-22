@@ -15,6 +15,7 @@
     getSnapshotUrl,
     getStream,
     getStreamingSettings,
+    streamMediaURL,
   } from '$lib/api';
   import type {
     DeviceGroup,
@@ -115,11 +116,10 @@
   }
 
   function getProxyPlayURL(streamId: string, protocol: GroupPlaybackProtocol): string {
-    const encodedStreamId = encodeURIComponent(streamId);
-    if (protocol === 'webrtc') return ''; // WebRTC uses dedicated component
-    if (protocol === 'hls') return `/api/cameras/${encodedStreamId}/stream/index.m3u8`;
-    if (protocol === 'll-hls') return `/api/cameras/${encodedStreamId}/stream/index.m3u8?ll-hls=1`;
-    if (protocol === 'flv') return `/api/cameras/${encodedStreamId}/stream.flv`;
+    if (protocol === 'webrtc') return '';
+    if (protocol === 'hls') return streamMediaURL(streamId, 'hls');
+    if (protocol === 'll-hls') return streamMediaURL(streamId, 'll-hls');
+    if (protocol === 'flv') return streamMediaURL(streamId, 'flv');
     return '';
   }
 
@@ -565,6 +565,7 @@
                         <WebRTCPlayer
                           cameraId={slot.streamId}
                           cameraName={slot.channel.channel_name || slot.channel.channel_id}
+                          whepUrl={streamMediaURL(slot.streamId, 'webrtc')}
                           expanded={gridLayout === 1}
                           tabVisible={true}
                         />
