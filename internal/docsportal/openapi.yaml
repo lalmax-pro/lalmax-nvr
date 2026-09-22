@@ -34,6 +34,10 @@ tags:
     description: |
       摄像头增删改查、启停录像、云台与地图坐标。
       Camera CRUD, recorder start/stop, PTZ, and map coordinates.
+  - name: RecordingPlans
+    description: |
+      挂在流上的录像计划。没有计划就不录；把流登记为设备也不会开录。
+      Stream-keyed recording plans. No plan means no recording; registering a stream as a device does not start recording.
   - name: Recordings
     description: |
       录像列表、锁定、下载与删除。
@@ -62,6 +66,10 @@ tags:
     description: |
       磁盘占用与录像数量统计。
       Storage usage and recording counts.
+  - name: Logs
+    description: |
+      进程服务日志环形缓冲（快照 + SSE）。
+      In-memory process service logs (snapshot + SSE).
 paths:
   /api/health:
     get:
@@ -186,6 +194,7 @@ paths:
                   username: admin
                   has_password: true
                   retention_days: 30
+                  stream_id: front-door
                   recording_mode: continuous
                   recording_paused: false
                   archived: false
@@ -219,7 +228,6 @@ paths:
                   password: secret
                   enabled: true
                   retention_days: 30
-                  recording_mode: continuous
                   longitude: 121.4737
                   latitude: 31.2304
               onvif:
@@ -313,7 +321,6 @@ paths:
             example:
               name: Front Door (west)
               enabled: true
-              recording_mode: event
               longitude: 121.4737
               latitude: 31.2304
       responses:
@@ -492,6 +499,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
               example: { error: "no recordings in export window" }
+  /api/recording-plans:
+    get:
+      tags: [RecordingPlans]
+      summary: 列出录像计划 · List recording plans
+      description: |
+        计划挂在 `stream_id` 上。没有计划的流不会录制。
+        Plans hang off `stream_id`. A stream with no plan is not recorded.
+      operationId: listRecordingPlans
+      responses:
+        "200":
+          description: 计划列表 / Plan list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plans:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RecordingPlan"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [RecordingPlans]
+      summary: 创建录像计划 · Create recording plan
+      description: |
+        同一 `stream_id` 已有计划时返回 409。不会因为登记设备而自动创建。
+        409 if the stream already has a plan. Registering a stream as a device does not create one.
+      operationId: createRecordingPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordingPlanRequest"
+            example:
+              stream_id: obs-1
+              name: OBS
+              mode: continuous
+              enabled: true
+      responses:
+        "201":
+          description: 已创建 / Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordingPlan"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: 该流已有计划 / Stream already has a plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/recording-plans/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    get:
+      tags: [RecordingPlans]
+      summary: 获取录像计划 · Get recording plan
+      operationId: getRecordingPlan
+      responses:
+        "200":
+          description: 计划 / Plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordingPlan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [RecordingPlans]
+      summary: 更新录像计划 · Update recording plan
+      operationId: updateRecordingPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordingPlanRequest"
+      responses:
+        "200":
+          description: 已更新 / Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordingPlan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [RecordingPlans]
+      summary: 删除录像计划 · Delete recording plan
+      operationId: deleteRecordingPlan
+      responses:
+        "200":
+          description: 已删除 / Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: deleted }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/recordings:
     get:
       tags: [Recordings]
@@ -733,6 +850,71 @@ paths:
           description: 分片内容（Range）/ Partial content (Range)
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/service-logs:
+    get:
+      tags: [Logs]
+      summary: 服务日志快照 · Service log snapshot
+      description: |
+        返回进程内存环形缓冲里最近的 slog 记录。重启后清空。需要操作权限。
+        Recent slog records from the in-process ring buffer. Cleared on restart. Requires operate permission.
+      operationId: listServiceLogs
+      parameters:
+        - in: query
+          name: level
+          schema: { type: string, enum: [debug, info, warn, error], default: info }
+        - in: query
+          name: q
+          schema: { type: string }
+          description: 匹配消息或属性 / Match message or attributes
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 0, default: 200 }
+        - in: query
+          name: after_seq
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: 服务日志列表 / Service logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceLogEntry"
+                  count: { type: integer }
+                  capacity: { type: integer }
+                  buffered: { type: integer }
+                  truncated: { type: boolean }
+  /api/service-logs/stream:
+    get:
+      tags: [Logs]
+      summary: 服务日志实时推送 · Service log SSE stream
+      description: |
+        `Content-Type: text/event-stream`。事件名为 `log`。浏览器 `EventSource` 用 `?token=`。
+        Named event is `log`. Use `?token=` when Basic Auth cannot be set.
+      operationId: serviceLogsStream
+      parameters:
+        - in: query
+          name: level
+          schema: { type: string, enum: [debug, info, warn, error] }
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: token
+          schema: { type: string }
+      responses:
+        "200":
+          description: SSE 流 / SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
   /api/events:
     get:
       tags: [Events]
@@ -1359,10 +1541,14 @@ components:
         recording_paused:
           type: boolean
           description: 录像是否暂停（拉流仍可能在）/ Recording paused (stream may still be up)
+        stream_id:
+          type: string
+          description: 绑定的 lalmax 流。播放走 `/api/streams/{stream_id}` / Bound lalmax stream. Play via `/api/streams/{stream_id}`
         recording_mode:
           type: string
           enum: [continuous, scheduled, off, event, adaptive]
-          description: 录像模式：连续 / 定时 / 关闭 / 事件 / 自适应 / Recording mode
+          description: 只读，来自该流的录像计划；没有计划则为 `off` / Read-only, from the stream plan; `off` if none
+          readOnly: true
         activation_state:
           type: string
           enum: [active, pending_activation]
@@ -1382,7 +1568,7 @@ components:
           description: IP 重发现用的额外网段 / Extra CIDRs for IP rediscovery
         adaptive:
           type: object
-          description: "`recording_mode=adaptive` 时的稀疏录像参数 / Sparse-recording settings when adaptive"
+          description: 计划 `mode=adaptive` 时的稀疏录像参数 / Sparse-recording settings when the plan mode is adaptive
           properties:
             timelapse_interval:
               type: string
@@ -1451,9 +1637,6 @@ components:
         subnet_hints:
           type: array
           items: { type: string }
-        recording_mode:
-          type: string
-          enum: [continuous, scheduled, off, event, adaptive]
         adaptive:
           type: object
           properties:
@@ -1485,9 +1668,6 @@ components:
         profile_token: { type: string }
         stream_encoding: { type: string }
         audio_enabled: { type: boolean }
-        recording_mode:
-          type: string
-          enum: [continuous, scheduled, off, event, adaptive]
         sub_stream_url: { type: string }
         sub_profile_token: { type: string }
         subnet_hints:
@@ -1552,6 +1732,9 @@ components:
       properties:
         id: { type: string }
         camera_id: { type: string }
+        stream_id:
+          type: string
+          description: 被录的 lalmax 流。无设备时与 `camera_id` 相同 / Recorded lalmax stream. Equals `camera_id` when there is no device
         file_path: { type: string }
         format:
           type: string
@@ -1591,6 +1774,57 @@ components:
             $ref: "#/components/schemas/Recording"
         total:
           type: integer
+    RecordingPlan:
+      title: 录像计划 · Recording plan
+      description: |
+        挂在 lalmax 流上的录像策略。没有计划就不录。
+        Recording policy attached to a lalmax stream. No plan means no recording.
+      type: object
+      required: [id, stream_id, mode, enabled]
+      properties:
+        id: { type: string }
+        stream_id: { type: string }
+        name: { type: string }
+        mode:
+          type: string
+          enum: [continuous, scheduled, off, event, adaptive]
+        enabled: { type: boolean }
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScheduleWindow"
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RecordingPlanRequest:
+      title: 录像计划请求 · Recording plan request
+      type: object
+      properties:
+        stream_id: { type: string }
+        name: { type: string }
+        mode:
+          type: string
+          enum: [continuous, scheduled, off, event, adaptive]
+        enabled: { type: boolean }
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScheduleWindow"
+    ScheduleWindow:
+      title: 周计划窗口 · Weekly window
+      type: object
+      required: [day_of_week, start_time, end_time]
+      properties:
+        day_of_week:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 0=周日 … 6=周六 / 0=Sunday … 6=Saturday
+        start_time:
+          type: string
+          example: "09:00"
+        end_time:
+          type: string
+          example: "17:00"
     TimelineEntry:
       title: 时间轴条目 · Timeline entry
       type: object
@@ -1867,3 +2101,14 @@ components:
           format: int64
         recording_count: { type: integer }
         camera_count: { type: integer }
+    ServiceLogEntry:
+      title: 服务日志 · Service log entry
+      type: object
+      properties:
+        seq: { type: integer, format: int64 }
+        time: { type: string, format: date-time }
+        level: { type: string, example: INFO }
+        msg: { type: string }
+        attrs:
+          type: object
+          additionalProperties: true

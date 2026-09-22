@@ -14,11 +14,13 @@
     cameraName,
     expanded = false,
     tabVisible = true,
+    whepUrl = '',
   }: {
     cameraId: string;
     cameraName: string;
     expanded?: boolean;
     tabVisible?: boolean;
+    whepUrl?: string;
   } = $props();
 
   // Reconnection coordinator from Dashboard context
@@ -367,7 +369,8 @@ let destroyed = false;
       };
       if (authHeader) headers['Authorization'] = authHeader;
 
-      const response = await fetch(`/api/cameras/${cameraId}/stream/webrtc`, {
+      const endpoint = whepUrl || `/api/cameras/${cameraId}/stream/webrtc`;
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers,
         body: peerConnection.localDescription!.sdp,

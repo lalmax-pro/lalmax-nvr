@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
-	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/q191201771/lal/pkg/base"
 )
 
@@ -47,8 +47,8 @@ type ErrorReporter interface {
 
 const (
 	defaultSegmentDur  = 10 * time.Minute
-	defaultMaxBackoff  = 60 * time.Second  // Deprecated: no longer used, kept for config backward compatibility
-	defaultInitBackoff = 1 * time.Second   // Deprecated: no longer used, kept for config backward compatibility
+	defaultMaxBackoff  = 60 * time.Second // Deprecated: no longer used, kept for config backward compatibility
+	defaultInitBackoff = 1 * time.Second  // Deprecated: no longer used, kept for config backward compatibility
 )
 
 // XiaomiCloudConfig holds Xiaomi cloud API credentials for URL resolution.
@@ -71,8 +71,8 @@ type XiaomiRecorderConfig struct {
 	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
 	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
 	IdleTimeout  time.Duration
-	EventBus    *event.EventBus
-	MediaEngine  media.Engine  // For feeding frames into lal
+	EventBus     *event.EventBus
+	MediaEngine  media.Engine // For feeding frames into lal
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.

@@ -19,6 +19,7 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/merge"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
@@ -570,9 +571,9 @@ func (h *reconnHandler) OnPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (
 // testRTSPServerWithAudio wraps testRTSPServer with an additional AAC audio media.
 type testRTSPServerWithAudio struct {
 	*testRTSPServer
-	audioMedia  *description.Media
-	audioForma  *format.MPEG4Audio
-	audioEnc    *rtpmpeg4audio.Encoder
+	audioMedia *description.Media
+	audioForma *format.MPEG4Audio
+	audioEnc   *rtpmpeg4audio.Encoder
 }
 
 func newTestRTSPServerWithAudio(t *testing.T) *testRTSPServerWithAudio {
@@ -827,4 +828,82 @@ func TestH264Recorder_AudioEnabled_NoAudioInStream(t *testing.T) {
 	files, err := mgr.ListFiles("cam-videoonly")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected video recording even when no audio in stream")
+}
+
+type fakeFrameSub struct {
+	ch     chan media.MediaFrame
+	errc   chan error
+	closed sync.Once
+}
+
+func (f *fakeFrameSub) Frames() <-chan media.MediaFrame { return f.ch }
+func (f *fakeFrameSub) Err() <-chan error               { return f.errc }
+func (f *fakeFrameSub) Close() error {
+	f.closed.Do(func() { close(f.ch) })
+	return nil
+}
+
+func annexB(nal []byte) []byte {
+	return append([]byte{0x00, 0x00, 0x00, 0x01}, nal...)
+}
+
+func TestH264Recorder_RecordsFromFrameSource(t *testing.T) {
+	mgr := newTestManager(t)
+	ch := make(chan media.MediaFrame, 16)
+	errc := make(chan error, 1)
+	rec := NewH264Recorder(H264Config{
+		CameraID:             "cam-frames",
+		SegmentDur:           5 * time.Minute,
+		RingBufCap:           50,
+		FrameWatchdogTimeout: 5 * time.Second,
+		FrameSource: func(context.Context) (media.FrameSubscription, error) {
+			return &fakeFrameSub{ch: ch, errc: errc}, nil
+		},
+	}, mgr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, rec.Start(ctx))
+	time.Sleep(50 * time.Millisecond)
+
+	ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", IsSeqHeader: true, Data: annexB(testSPS)}
+	ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", IsSeqHeader: true, Data: annexB(testPPS)}
+	ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", IsKey: true, Data: annexB(testIDR)}
+	ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", Data: annexB(testP)}
+	time.Sleep(300 * time.Millisecond)
+
+	require.NoError(t, rec.Stop())
+	files, err := mgr.ListFiles("cam-frames")
+	require.NoError(t, err)
+	require.NotEmpty(t, files, "expected MP4 from in-process frames")
+	require.True(t, fileIsMP4(t, files[0]))
+}
+
+func TestH264Recorder_FrameSourceUnsupportedFallsBackToRTSP(t *testing.T) {
+	srv := newTestRTSPServer(t)
+	defer srv.close()
+
+	mgr := newTestManager(t)
+	rec := NewH264Recorder(H264Config{
+		CameraID:   "cam-fallback",
+		RTSPURL:    srv.rtspURL,
+		SegmentDur: 5 * time.Minute,
+		RingBufCap: 100,
+		FrameSource: func(context.Context) (media.FrameSubscription, error) {
+			return nil, media.ErrFramesNotSupported
+		},
+	}, mgr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, rec.Start(ctx))
+	srv.waitPlay(t, 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+	srv.sendFrames(5, 30*time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
+	require.NoError(t, rec.Stop())
+
+	files, err := mgr.ListFiles("cam-fallback")
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
 }

@@ -84,6 +84,7 @@ func (e *mergeTestEnv) insertMergeableRecording(t *testing.T, id string, cameraI
 
 	return finalPath
 }
+
 // newTestMergeManager creates a MergeManager with the given config for testing.
 func newTestMergeManager(db *storage.DB, store *storage.Manager, cfg config.MergeConfig, cameras []config.CameraConfig) *MergeManager {
 	return NewMergeManager(db, store, func() config.MergeConfig { return cfg }, func(string) *config.MergeConfig { return nil }, func() []config.CameraConfig { return cameras })
@@ -673,7 +674,7 @@ func TestRunOnce_ParseFailedMarkedAsFailed(t *testing.T) {
 	}
 }
 
-func TestRunOnce_UndersizedGroupMarkedAsFailed(t *testing.T) {
+func TestRunOnce_UndersizedGroupStaysPending(t *testing.T) {
 	env := newMergeTestEnv(t)
 	defer env.close(t)
 
@@ -699,20 +700,20 @@ func TestRunOnce_UndersizedGroupMarkedAsFailed(t *testing.T) {
 	}
 	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
 
-	// First pass: both should be marked failed (undersized SPS/PPS groups).
+	// Different SPS/PPS groups are each too small to merge. They stay pending
+	// so a later segment with the same parameters can still join.
 	require.NoError(t, mgr.RunOnce(ctx))
 
 	for _, id := range []string{"rec1", "rec2"} {
 		rec, err := env.db.GetRecording(ctx, id)
 		require.NoError(t, err)
 		require.NotNil(t, rec)
-		require.Equal(t, model.MergeStatusFailed, rec.MergeStatus, "segment %s should be marked failed", id)
+		require.Equal(t, model.MergeStatusPending, rec.MergeStatus, "segment %s should stay pending", id)
 	}
 
-	// Second pass: none should be mergeable.
 	recs, err := env.db.ListMergeableSegments(ctx, cameraID, oldTime.Add(-time.Hour), now.Add(time.Hour))
 	require.NoError(t, err)
-	require.Empty(t, recs, "failed segments should not be mergeable")
+	require.Len(t, recs, 2)
 }
 
 func TestMergeGroupKey_GroupsByCompatibility(t *testing.T) {
@@ -750,4 +751,76 @@ func TestMergeGroupKey_GroupsByCompatibility(t *testing.T) {
 		HasAudio: true, AudioConfig: []byte{0x11, 0x90}, AudioTimescale: 44100,
 	}
 	require.NotEqual(t, mergeGroupKey(audioA), mergeGroupKey(audioB))
+}
+
+func TestRunOnce_MergesPendingStreamWithoutCamera(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	streamID := "stream-only"
+	ctx := context.Background()
+	now := time.Now()
+	oldTime := now.Truncate(time.Hour).Add(-2 * time.Hour)
+	env.insertMergeableRecording(t, "s1", streamID, oldTime, oldTime.Add(30*time.Second))
+	env.insertMergeableRecording(t, "s2", streamID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+	mgr := newTestMergeManager(env.db, env.store, cfg, nil)
+
+	require.NoError(t, mgr.RunOnce(ctx))
+
+	recs, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: streamID})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.True(t, recs[0].Merged)
+}
+
+func TestReconcileJournal_RestoresWhenSegmentPending(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+	ctx := context.Background()
+
+	hour := time.Date(2026, 3, 10, 8, 0, 0, 0, time.UTC)
+	camID := "cam-journal"
+	require.NoError(t, env.db.UpsertCamera(ctx, camID, "J", "rtsp", "h264", "rtsp://x", "", "", true, "", "", "", "tcp"))
+	env.insertMergeableRecording(t, "j1", camID, hour.Add(time.Minute), hour.Add(90*time.Second))
+	env.insertMergeableRecording(t, "j2", camID, hour.Add(2*time.Minute), hour.Add(150*time.Second))
+
+	cfg := config.MergeConfig{Enabled: true, MinSegmentsToMerge: 2, BatchLimit: 100, MinSegmentAge: "0s"}
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: camID, Enabled: true}})
+	require.NoError(t, mgr.MergeHour(ctx, camID, hour.Add(3*time.Minute)))
+
+	recs, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: camID})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	path := recs[0].FilePath
+	snap, err := os.ReadFile(path)
+	require.NoError(t, err)
+	info, err := ParseSegmentTables(path)
+	require.NoError(t, err)
+
+	pendingPath := env.insertMergeableRecording(t, "j3", camID, hour.Add(4*time.Minute), hour.Add(270*time.Second))
+	require.NoError(t, writeMergeJournal(path, mergeJournal{
+		mdatOffset: info.MdatOffset,
+		moovOffset: info.MoovOffset,
+		moovSize:   info.MoovSize,
+		mdatSize:   uint32(info.MdatSize),
+		ids:        []string{"j3"},
+		paths:      []string{pendingPath},
+		oldMoov:    append([]byte(nil), snap[info.MoovOffset:info.MoovOffset+info.MoovSize]...),
+	}))
+	require.NoError(t, os.Truncate(path, info.MoovOffset))
+
+	require.NoError(t, reconcileMergeJournal(ctx, env.db, path))
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, snap, got)
+	_, err = os.Stat(journalPath(path))
+	require.True(t, os.IsNotExist(err))
 }

@@ -9,7 +9,7 @@ import (
 // --- HLS streaming endpoints ---
 
 func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
-	id := getCameraID(r)
+	id := playResourceID(r)
 	streamID, quality := h.resolvePlayStreamID(r, id)
 	w.Header().Set("X-Stream-Quality", quality)
 	if h.config != nil && !h.config.IsHLSEnabled() {
@@ -18,6 +18,10 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.mediaEngine == nil {
 		writeError(w, http.StatusInternalServerError, "HLS not available")
+		return
+	}
+	if streamID == "" {
+		writePlayStreamNotFound(w, r)
 		return
 	}
 	tail := chi.URLParam(r, "*")

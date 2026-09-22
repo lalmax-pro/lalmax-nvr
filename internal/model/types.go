@@ -46,8 +46,12 @@ type Camera struct {
 }
 
 type Recording struct {
-	ID            string    `json:"id"`
-	CameraID      string    `json:"camera_id"`
+	ID string `json:"id"`
+	// CameraID is the recording owner: the camera that produced it, or the
+	// stream ID when a recording plan records a stream with no device.
+	CameraID string `json:"camera_id"`
+	// StreamID is the lalmax stream that was recorded.
+	StreamID      string    `json:"stream_id,omitempty"`
 	FilePath      string    `json:"file_path"`
 	Format        Format    `json:"format"`
 	StartedAt     time.Time `json:"started_at"`
@@ -339,7 +343,7 @@ type CameraHealth struct {
 
 // HourlyStats represents recording activity aggregated per hour.
 type HourlyStats struct {
-	Hour       string `json:"hour"`        // RFC3339, e.g. "2024-01-01T14:00:00Z"
+	Hour       string `json:"hour"` // RFC3339, e.g. "2024-01-01T14:00:00Z"
 	Recordings int    `json:"recordings"`
 	TotalSize  int64  `json:"total_size"`
 }

@@ -76,71 +76,9 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 		return fmt.Errorf("write ftyp: %w", err)
 	}
 
-	// Step 2: Calculate moov size by writing to a buffer with placeholder offsets.
-	// Count total video samples across all segments.
-	var totalVideoSamples int
-	for _, seg := range segments {
-		totalVideoSamples += seg.SampleCount
-	}
-
-	videoTrack := &mergeTrack{
-		isH265:       codec == "h265",
-		sps:          first.SPS,
-		pps:          first.PPS,
-		vps:          first.VPS,
-		timescale:    first.Timescale,
-		width:        first.Width,
-		height:       first.Height,
-		totalSamples: totalVideoSamples,
-	}
-	// Populate placeholder samples so the size calculation includes per-sample tables.
-	videoTrack.samples = make([]mergedSample, totalVideoSamples)
-	for i := range videoTrack.samples {
-		videoTrack.samples[i].duration = 33 // placeholder
-	}
-
-	// Build audio track placeholder for size calculation.
-	var audioTrack *mergeTrack
-	if hasAudio {
-		var totalAudioSamples int
-		for _, seg := range segments {
-			totalAudioSamples += seg.AudioSampleCount
-		}
-		audioTrack = &mergeTrack{
-			isAudio:      true,
-			audioConfig:  audioConfig,
-			timescale:    first.AudioTimescale,
-			totalSamples: totalAudioSamples,
-		}
-		audioTrack.samples = make([]mergedSample, totalAudioSamples)
-		for i := range audioTrack.samples {
-			audioTrack.samples[i].duration = 23 // placeholder
-		}
-	}
-
-	// Write moov to a buffer to get its exact size.
-	moovBuf := &bytesWriter{}
-	moovW := mp4.NewWriter(moovBuf)
-	if err := writeMergeMoov(moovW, videoTrack, audioTrack, 0, 0); err != nil {
-		return fmt.Errorf("calculate moov size: %w", err)
-	}
-	moovSize := moovBuf.len()
-
-	// Clear placeholder samples; real ones will be set after streaming mdat.
-	videoTrack.samples = nil
-	if audioTrack != nil {
-		audioTrack.samples = nil
-	}
-
-	// Step 3: Write placeholder moov at the correct position.
-	moovOffset := ftypSize
-	moovPlaceholder := make([]byte, moovSize)
-	if _, err := out.Write(moovPlaceholder); err != nil {
-		return fmt.Errorf("write moov placeholder: %w", err)
-	}
-
-	// Step 4: Write mdat box header (size placeholder + "mdat").
-	mdatHeaderOffset := moovOffset + moovSize
+	// mdat follows ftyp. moov is written after the samples so a later append can
+	// extend mdat and replace only the moov, without copying media already stored.
+	mdatHeaderOffset := ftypSize
 	var mdatHeader [8]byte
 	copy(mdatHeader[4:8], "mdat")
 	if _, err := out.Write(mdatHeader[:]); err != nil {
@@ -217,7 +155,7 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 		}
 	}
 
-	// Step 6: Patch mdat box size.
+	// Patch mdat box size, then write moov at the end of the file.
 	mdatBoxSize := uint32(8 + currentOffset)
 	if _, err := out.Seek(mdatHeaderOffset, io.SeekStart); err != nil {
 		return fmt.Errorf("seek to mdat header: %w", err)
@@ -227,48 +165,48 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 	if _, err := out.Write(sizeBuf[:]); err != nil {
 		return fmt.Errorf("write mdat size: %w", err)
 	}
-
-	// Step 7: Go back and write the real moov box at the placeholder position.
-	if _, err := out.Seek(moovOffset, io.SeekStart); err != nil {
+	if _, err := out.Seek(mdatDataStart+currentOffset, io.SeekStart); err != nil {
 		return fmt.Errorf("seek to moov: %w", err)
 	}
 
-	// Calculate total video duration in timescale units.
 	var totalVideoDuration uint32
 	for _, s := range allVideoSamples {
 		totalVideoDuration += s.duration
 	}
-	videoTrack.duration = totalVideoDuration
-	videoTrack.samples = allVideoSamples
+	videoTrack := &mergeTrack{
+		isH265:    codec == "h265",
+		sps:       first.SPS,
+		pps:       first.PPS,
+		vps:       first.VPS,
+		timescale: first.Timescale,
+		width:     first.Width,
+		height:    first.Height,
+		duration:  totalVideoDuration,
+		chunks:    []mergeChunk{{offset: mdatDataStart, samples: allVideoSamples}},
+	}
 
-	// Set real audio track data.
+	var audioTrack *mergeTrack
 	if hasAudio {
 		var totalAudioDuration uint32
+		audioOff := mdatDataStart
+		for _, s := range allVideoSamples {
+			audioOff += int64(s.size)
+		}
 		for _, s := range allAudioSamples {
 			totalAudioDuration += s.duration
 		}
-		audioTrack.duration = totalAudioDuration
-		audioTrack.samples = allAudioSamples
-	}
-
-	// Use a limited writer to prevent overflow into mdat.
-	moovOut := &limitedWriter{w: out, remaining: moovSize, pos: moovOffset}
-	moovWriter := mp4.NewWriter(moovOut)
-	// Video chunk starts at mdatDataStart; audio chunk starts after video data.
-	videoChunkOffset := mdatDataStart
-	var audioChunkOffset int64
-	if hasAudio {
-		audioChunkOffset = mdatDataStart
-		for _, s := range allVideoSamples {
-			audioChunkOffset += int64(s.size)
+		audioTrack = &mergeTrack{
+			isAudio:     true,
+			audioConfig: audioConfig,
+			timescale:   first.AudioTimescale,
+			duration:    totalAudioDuration,
+			chunks:      []mergeChunk{{offset: audioOff, samples: allAudioSamples}},
 		}
 	}
-	if err := writeMergeMoov(moovWriter, videoTrack, audioTrack, videoChunkOffset, audioChunkOffset); err != nil {
-		return fmt.Errorf("write moov: %w", err)
-	}
 
-	if moovOut.remaining < 0 {
-		return fmt.Errorf("moov box overflow: calculated %d, actual %d", moovSize, moovSize-moovOut.remaining)
+	moovWriter := mp4.NewWriter(out)
+	if err := writeMergeMoov(moovWriter, videoTrack, audioTrack); err != nil {
+		return fmt.Errorf("write moov: %w", err)
 	}
 
 	// Sync and close.
@@ -308,6 +246,12 @@ func copySampleData(src *os.File, dst io.Writer, offset, size int64, buf []byte)
 	return written, nil
 }
 
+// mergeChunk is a contiguous run of samples at one file offset.
+type mergeChunk struct {
+	offset  int64
+	samples []mergedSample
+}
+
 // mergeTrack holds track info for building the merged moov box.
 type mergeTrack struct {
 	isH265        bool
@@ -318,13 +262,27 @@ type mergeTrack struct {
 	audioConfig   []byte
 	timescale     uint32
 	width, height uint16
-	totalSamples  int
 	duration      uint32
-	samples       []mergedSample
+	chunks        []mergeChunk
+}
+
+func (tr *mergeTrack) sampleList() []mergedSample {
+	if tr == nil {
+		return nil
+	}
+	n := 0
+	for _, c := range tr.chunks {
+		n += len(c.samples)
+	}
+	out := make([]mergedSample, 0, n)
+	for _, c := range tr.chunks {
+		out = append(out, c.samples...)
+	}
+	return out
 }
 
 // writeMergeMoov writes a complete moov box for the merged output.
-func writeMergeMoov(w *mp4.Writer, videoTrack *mergeTrack, audioTrack *mergeTrack, videoChunkOffset, audioChunkOffset int64) error {
+func writeMergeMoov(w *mp4.Writer, videoTrack *mergeTrack, audioTrack *mergeTrack) error {
 	_, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("moov")})
 	if err != nil {
 		return err
@@ -332,11 +290,11 @@ func writeMergeMoov(w *mp4.Writer, videoTrack *mergeTrack, audioTrack *mergeTrac
 	if err := writeMergeMvhd(w, videoTrack, audioTrack != nil); err != nil {
 		return err
 	}
-	if err := writeMergeTrak(w, videoTrack, videoChunkOffset); err != nil {
+	if err := writeMergeTrak(w, videoTrack); err != nil {
 		return err
 	}
 	if audioTrack != nil {
-		if err := writeMergeTrak(w, audioTrack, audioChunkOffset); err != nil {
+		if err := writeMergeTrak(w, audioTrack); err != nil {
 			return err
 		}
 	}
@@ -373,7 +331,7 @@ func writeMergeMvhd(w *mp4.Writer, tr *mergeTrack, hasAudio bool) error {
 	return err
 }
 
-func writeMergeTrak(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
+func writeMergeTrak(w *mp4.Writer, tr *mergeTrack) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("trak")})
 	if err != nil {
 		return err
@@ -405,7 +363,7 @@ func writeMergeTrak(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 		return err
 	}
 	_ = bi2
-	if err := writeMergeMdia(w, tr, chunkOffset); err != nil {
+	if err := writeMergeMdia(w, tr); err != nil {
 		return err
 	}
 	_, err = w.EndBox()
@@ -413,7 +371,7 @@ func writeMergeTrak(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	return err
 }
 
-func writeMergeMdia(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
+func writeMergeMdia(w *mp4.Writer, tr *mergeTrack) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdia")})
 	if err != nil {
 		return err
@@ -460,7 +418,7 @@ func writeMergeMdia(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	}
 	_ = bi3
 	// minf > stbl
-	if err := writeMergeMinf(w, tr, chunkOffset); err != nil {
+	if err := writeMergeMinf(w, tr); err != nil {
 		return err
 	}
 	_, err = w.EndBox()
@@ -468,7 +426,7 @@ func writeMergeMdia(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	return err
 }
 
-func writeMergeMinf(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
+func writeMergeMinf(w *mp4.Writer, tr *mergeTrack) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("minf")})
 	if err != nil {
 		return err
@@ -533,7 +491,7 @@ func writeMergeMinf(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	}
 	_ = bi3
 	// stbl
-	if err := writeMergeStbl(w, tr, chunkOffset); err != nil {
+	if err := writeMergeStbl(w, tr); err != nil {
 		return err
 	}
 	_, err = w.EndBox()
@@ -541,12 +499,12 @@ func writeMergeMinf(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	return err
 }
 
-func writeMergeStbl(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
+func writeMergeStbl(w *mp4.Writer, tr *mergeTrack) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stbl")})
 	if err != nil {
 		return err
 	}
-	samples := tr.samples
+	samples := tr.sampleList()
 	n := len(samples)
 
 	// stsd
@@ -595,16 +553,28 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	}
 	_ = bi6
 
-	// stsc — all samples in one chunk, SampleDescriptionIndex MUST be 1.
+	// stsc — one entry per chunk. SampleDescriptionIndex MUST be 1.
 	bi7, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stsc")})
 	if err != nil {
 		return err
 	}
-	stscEntries := []mp4.StscEntry{
-		{FirstChunk: 1, SamplesPerChunk: uint32(n), SampleDescriptionIndex: 1},
-	}
-	if n == 0 {
-		stscEntries = nil
+	var stscEntries []mp4.StscEntry
+	var chunkOffsets []uint32
+	var chunkIndex uint32 = 1
+	for _, c := range tr.chunks {
+		if len(c.samples) == 0 {
+			continue
+		}
+		if c.offset < 0 || c.offset > 0xFFFFFFFF {
+			return fmt.Errorf("chunk offset %d overflows stco", c.offset)
+		}
+		stscEntries = append(stscEntries, mp4.StscEntry{
+			FirstChunk:             chunkIndex,
+			SamplesPerChunk:        uint32(len(c.samples)),
+			SampleDescriptionIndex: 1,
+		})
+		chunkOffsets = append(chunkOffsets, uint32(c.offset))
+		chunkIndex++
 	}
 	if _, err := mp4.Marshal(w, &mp4.Stsc{EntryCount: uint32(len(stscEntries)), Entries: stscEntries}, mp4.Context{}); err != nil {
 		return err
@@ -631,16 +601,11 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	}
 	_ = bi8
 
-	// stco — single chunk at chunkOffset.
 	bi9, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stco")})
 	if err != nil {
 		return err
 	}
-	stco := &mp4.Stco{EntryCount: 0, ChunkOffset: nil}
-	if n > 0 {
-		stco.EntryCount = 1
-		stco.ChunkOffset = []uint32{uint32(chunkOffset)}
-	}
+	stco := &mp4.Stco{EntryCount: uint32(len(chunkOffsets)), ChunkOffset: chunkOffsets}
 	if _, err := mp4.Marshal(w, stco, mp4.Context{}); err != nil {
 		return err
 	}
@@ -977,38 +942,6 @@ func (b *bytesWriter) len() int64 {
 	return int64(len(b.data))
 }
 
-// limitedWriter wraps an io.WriteSeeker and limits the total bytes written.
-// Used to write moov box in-place without overflowing into mdat.
-// It tracks the actual file position so seeks are properly accounted for.
-type limitedWriter struct {
-	w         io.WriteSeeker
-	remaining int64
-	pos       int64 // tracks actual file position
-}
-
-func (l *limitedWriter) Write(p []byte) (int, error) {
-	if l.remaining <= 0 {
-		return 0, io.EOF
-	}
-	if int64(len(p)) > l.remaining {
-		p = p[:l.remaining]
-	}
-	n, err := l.w.Write(p)
-	l.remaining -= int64(n)
-	l.pos += int64(n)
-	return n, err
-}
-
-// Seek delegates to the underlying writer.
-// Adjusts remaining based on position changes to prevent overflow.
-func (l *limitedWriter) Seek(offset int64, whence int) (int64, error) {
-	newPos, err := l.w.Seek(offset, whence)
-	if err != nil {
-		return newPos, err
-	}
-	// Adjust remaining: forward seek reduces, backward seek increases.
-	delta := newPos - l.pos
-	l.remaining -= delta
-	l.pos = newPos
-	return newPos, nil
+func (b *bytesWriter) Bytes() []byte {
+	return b.data
 }

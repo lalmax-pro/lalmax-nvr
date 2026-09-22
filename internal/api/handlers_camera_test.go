@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -60,7 +61,32 @@ func TestResolveCameraSourceType_FromBinding(t *testing.T) {
 	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	row := &storage.CameraRow{ID: "push-cam-1", Protocol: "rtsp"}
 	h.resolveCameraSourceType(ctx, row)
-	require.Equal(t, "rtmp_push", row.SourceType)
+	require.Equal(t, "", row.SourceType, "an RTSP pull camera must not be classified as a push source")
+}
+
+func TestResolveCameraSourceType_ONVIFIsNotPush(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	require.NoError(t, db.UpsertCamera(ctx, "cam-onvif", "Lobby", "onvif", "h264", "", "admin", "pass", true, "http://192.168.1.50/onvif/device_service", "", ""))
+	require.NoError(t, db.BindStreamToCamera(ctx, "cam-onvif", "cam-onvif"))
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
+	row := &storage.CameraRow{ID: "cam-onvif", Protocol: "onvif"}
+	h.resolveCameraSourceType(ctx, row)
+	require.Equal(t, "", row.SourceType)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var cameras []storage.CameraRow
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &cameras))
+	require.Len(t, cameras, 1)
+	require.Equal(t, "onvif", cameras[0].Protocol)
+	require.NotEqual(t, "rtmp_push", cameras[0].SourceType)
 }
 
 func TestInferCustomizePushSource_WHIP(t *testing.T) {

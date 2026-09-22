@@ -28,9 +28,9 @@ const (
 
 // Errors returned by the Manager.
 var (
-	ErrStreamExists   = errors.New("wsstream: stream already registered")
+	ErrStreamExists    = errors.New("wsstream: stream already registered")
 	ErrStreamNotActive = errors.New("wsstream: stream not active")
-	ErrMaxViewers     = errors.New("wsstream: max viewers reached")
+	ErrMaxViewers      = errors.New("wsstream: max viewers reached")
 )
 
 // frameMsg is an internal frame representation passed through the per-stream channel.
@@ -50,18 +50,18 @@ type viewerConn struct {
 
 // streamEntry holds per-camera WebSocket streaming state.
 type streamEntry struct {
-	codec      model.Format
-	sps        []byte
-	pps        []byte
-	vps        []byte
-	viewers    map[int64]*viewerConn
-	viewerSeq  atomic.Int64
-	viewerMu   sync.Mutex
-	frameCh    chan frameMsg
-	cancel     context.CancelFunc
-	hub        *model.StreamHub
-	hubSubID   string
-	dropCount  atomic.Int64
+	codec     model.Format
+	sps       []byte
+	pps       []byte
+	vps       []byte
+	viewers   map[int64]*viewerConn
+	viewerSeq atomic.Int64
+	viewerMu  sync.Mutex
+	frameCh   chan frameMsg
+	cancel    context.CancelFunc
+	hub       *model.StreamHub
+	hubSubID  string
+	dropCount atomic.Int64
 
 	// Audio (optional). audioInfo is nil until SetAudioConfig is called.
 	audioInfo     atomic.Pointer[AudioCodecInfo]
@@ -143,14 +143,14 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 
 	ctx, cancel := context.WithCancel(context.Background())
 	entry := &streamEntry{
-		codec:    codec,
-		sps:       sps,
-		pps:       pps,
-		vps:       vps,
-		viewers:   make(map[int64]*viewerConn),
-		frameCh:   make(chan frameMsg, m.writeBufSize),
-		cancel:    cancel,
-		hub:       hub,
+		codec:   codec,
+		sps:     sps,
+		pps:     pps,
+		vps:     vps,
+		viewers: make(map[int64]*viewerConn),
+		frameCh: make(chan frameMsg, m.writeBufSize),
+		cancel:  cancel,
+		hub:     hub,
 	}
 
 	// Subscribe to recorder's StreamHub for live frames
@@ -339,8 +339,8 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 		cnt := entry.dropCount.Add(1)
 		if cnt%100 == 0 {
 			wsLogger.Load().Warn("frames dropped", "camera_id", camID, "total_drops", cnt)
-	}
 		}
+	}
 }
 
 // writeLoop drains frames from the channel and distributes to all viewers.
@@ -380,8 +380,8 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 				}
 			}
 			entry.viewerMu.Unlock()
+		}
 	}
-}
 }
 
 // ServeWS handles a WebSocket upgrade request for a camera stream.
@@ -560,8 +560,7 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 				}
 			}
 		}
-		}()
-
+	}()
 
 	// Write frames to WebSocket until disconnect
 	for {

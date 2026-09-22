@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/go-chi/chi/v5"
+	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 )
 
 // --- Timelapse configuration endpoints ---

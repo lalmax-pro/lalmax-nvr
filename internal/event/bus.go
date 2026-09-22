@@ -8,7 +8,7 @@ import (
 
 // Topic constants for event types.
 const (
-	TopicSegmentCompleted   = "segment.completed"
+	TopicSegmentCompleted    = "segment.completed"
 	TopicRecorderReconnected = "recorder.reconnected"
 )
 

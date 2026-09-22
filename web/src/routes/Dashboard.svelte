@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, setContext } from 'svelte';
-  import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, apiRequest, eventsStreamUrl } from '$lib/api';
+  import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, apiRequest, subscribeNvrEvents, streamMediaURL, listStreams } from '$lib/api';
   import type { NvrEvent } from '$lib/api';
-  import type { Camera, ProtocolInfo } from '$lib/api';
+  import type { Camera, ProtocolInfo, StreamInfo } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert, RefreshCw, WifiOff, LayoutGrid, Plus, Search, Play } from 'lucide-svelte';
@@ -43,6 +43,49 @@
   let ptzOpenIndex = $state(-1);
 
   let allCameras = $state<Camera[]>([]);
+  let allStreams = $state<StreamInfo[]>([]);
+
+  interface WallSource {
+    id: string;
+    name: string;
+    kind: 'camera' | 'stream';
+    camera?: Camera;
+    stream?: StreamInfo;
+  }
+
+  function buildWallSources(cameras: Camera[], streams: StreamInfo[]): WallSource[] {
+    const covered = new Set<string>();
+    const cameraIds = new Set(cameras.map((cam) => cam.id));
+    for (const cam of cameras) {
+      covered.add(cam.id);
+      if (cam.stream_id) covered.add(cam.stream_id);
+    }
+    const items: WallSource[] = cameras.map((cam) => ({
+      id: cam.id,
+      name: cam.name || cam.id,
+      kind: 'camera',
+      camera: cam,
+    }));
+    const seen = new Set<string>();
+    for (const stream of streams) {
+      if (!stream.stream_id || covered.has(stream.stream_id) || seen.has(stream.stream_id)) continue;
+      if (stream.camera_id && cameraIds.has(stream.camera_id)) continue;
+      seen.add(stream.stream_id);
+      items.push({
+        id: stream.stream_id,
+        name: stream.name || stream.camera_name || stream.stream_id,
+        kind: 'stream',
+        stream,
+      });
+    }
+    return items;
+  }
+
+  let wallSources = $derived(buildWallSources(allCameras, allStreams));
+  let sourceById = $derived(new Map(wallSources.map((source) => [source.id, source])));
+  let streamById = $derived(new Map(
+    wallSources.filter((source) => source.kind === 'stream' && source.stream).map((source) => [source.id, source.stream!]),
+  ));
   let configOpen = $state(false);
   let gridLayout = $state<GridLayout>(4);
   let slotAssignments = $state<(string | null)[]>([null, null, null, null]);
@@ -263,14 +306,46 @@
     editingSlotIndex = null;
   }
 
-  function filteredConfigCameras(): Camera[] {
+  function wallSourceLabel(source: WallSource): string {
+    if (source.kind === 'camera') return source.camera?.protocol || '';
+    switch (source.stream?.source_type) {
+      case 'camera':
+        return t('streams.sourceCamera');
+      case 'rtmp_push':
+        return t('streams.sourceRTMPPush');
+      case 'srt_push':
+        return t('streams.sourceSRTPush');
+      case 'whip_push':
+        return t('streams.sourceWHIPPush');
+      case 'relay_pull':
+        return t('streams.sourceRelayPull');
+      case 'push':
+        return t('streams.sourcePush');
+      default:
+        return t('streams.sourceStream');
+    }
+  }
+
+  function filteredConfigSources(): WallSource[] {
     const q = configSearchQuery.trim().toLowerCase();
-    if (!q) return allCameras;
-    return allCameras.filter(cam =>
-      (cam.name || '').toLowerCase().includes(q) ||
-      cam.id.toLowerCase().includes(q) ||
-      (cam.protocol || '').toLowerCase().includes(q)
+    if (!q) return wallSources;
+    return wallSources.filter((source) =>
+      source.name.toLowerCase().includes(q) ||
+      source.id.toLowerCase().includes(q) ||
+      wallSourceLabel(source).toLowerCase().includes(q)
     );
+  }
+
+  async function loadWallStreams(): Promise<StreamInfo[]> {
+    const pageSize = 100;
+    const first = await listStreams({ limit: pageSize, offset: 0 });
+    const all = [...first.streams];
+    const total = Math.min(first.total, 500);
+    for (let offset = pageSize; offset < total; offset += pageSize) {
+      const page = await listStreams({ limit: pageSize, offset });
+      all.push(...page.streams);
+    }
+    return all;
   }
 
   interface CameraProtocolDetail {
@@ -281,7 +356,8 @@
     Backend?: string;
   }
 
-  async function loadCameraPlayURLs(cameraIds: string[]) {
+  async function loadCameraPlayURLs(ids: string[]) {
+    const cameraIds = ids.filter((id) => cameraById.has(id));
     const results = await Promise.all(cameraIds.map(async (cameraId) => {
       try {
         const response = await apiRequest<{ protocols: CameraProtocolDetail[] }>(`/cameras/${cameraId}/protocols?quality=sub`);
@@ -305,18 +381,22 @@
     streamPlayURLs = next;
   }
 
+  // Camera-scoped routes still work, but prefer the bound stream when known.
+  function streamIdFor(cameraId: string): string {
+    const cam = allCameras.find((c) => c.id === cameraId);
+    return cam?.stream_id || cameraId;
+  }
+
   function getStreamUrl(cameraId: string): string {
-    const baseUrl = `/api/cameras/${cameraId}/stream/index.m3u8`;
-    if (defaultProtocol === 'll-hls') {
-      return `${baseUrl}?ll-hls=1`;
-    }
-    return baseUrl;
+    return defaultProtocol === 'll-hls'
+      ? streamMediaURL(streamIdFor(cameraId), 'll-hls')
+      : streamMediaURL(streamIdFor(cameraId), 'hls');
   }
 
   function getProtocolPlayURL(cameraId: string, protocol: 'flv' | 'ws-flv'): string {
     const cameraUrls = streamPlayURLs[cameraId] || {};
     if (cameraUrls[protocol]) return cameraUrls[protocol];
-    if (protocol === 'flv') return `/api/cameras/${cameraId}/stream.flv`;
+    if (protocol === 'flv') return streamMediaURL(streamIdFor(cameraId), 'flv');
     return '';
   }
 
@@ -366,36 +446,49 @@
 
   type CameraMode = 'wasm' | 'fmp4' | 'webrtc' | 'flv' | 'ws-flv' | 'hls' | 'snapshot' | 'unsupported';
 
-  function getCameraMode(camera: Camera): CameraMode {
-    if (!isHlsSupported(camera)) {
-      if (snapshotMgr.isUnsupported(camera.id)) return 'unsupported';
-      return 'snapshot';
-    }
+  function videoMode(): CameraMode {
     if (defaultProtocol === 'wasm') return 'wasm';
     if (defaultProtocol === 'fmp4') return 'fmp4';
     if (defaultProtocol === 'webrtc') return 'webrtc';
     if (defaultProtocol === 'flv') return 'flv';
     if (defaultProtocol === 'ws-flv') return 'ws-flv';
-    // hls, ll-hls, or default
     return 'hls';
   }
 
-  // Preload WasmPlayer when any assigned camera would use 'wasm' mode
+  function getCameraMode(camera: Camera): CameraMode {
+    if (!isHlsSupported(camera)) {
+      if (snapshotMgr.isUnsupported(camera.id)) return 'unsupported';
+      return 'snapshot';
+    }
+    return videoMode();
+  }
+
+  function assignedUsesVideo(id: string): boolean {
+    const cam = cameraById.get(id);
+    if (cam) return isHlsSupported(cam);
+    return streamById.has(id);
+  }
+
+  function streamPageURL(streamId: string, mode: CameraMode): string {
+    if (mode === 'flv') return streamMediaURL(streamId, 'flv');
+    if (mode === 'ws-flv' || mode === 'wasm') return streamMediaURL(streamId, 'ws');
+    if (mode === 'webrtc') return streamMediaURL(streamId, 'webrtc');
+    if (mode === 'fmp4') return streamMediaURL(streamId, 'fmp4');
+    return defaultProtocol === 'll-hls'
+      ? streamMediaURL(streamId, 'll-hls')
+      : streamMediaURL(streamId, 'hls');
+  }
+
+  // Preload WasmPlayer when any assigned cell would use 'wasm' mode
   $effect(() => {
-    if (defaultProtocol === 'wasm' && assignedCameraIds.some(id => {
-      const cam = cameraById.get(id);
-      return cam && isHlsSupported(cam);
-    })) {
+    if (defaultProtocol === 'wasm' && assignedCameraIds.some(assignedUsesVideo)) {
       loadWasmPlayer();
     }
   });
 
-  // Preload FMP4Player when any assigned camera would use 'fmp4' mode
+  // Preload FMP4Player when any assigned cell would use 'fmp4' mode
   $effect(() => {
-    if (defaultProtocol === 'fmp4' && assignedCameraIds.some(id => {
-      const cam = cameraById.get(id);
-      return cam && isHlsSupported(cam);
-    })) {
+    if (defaultProtocol === 'fmp4' && assignedCameraIds.some(assignedUsesVideo)) {
       loadFMP4Player();
     }
   });
@@ -423,6 +516,13 @@
     if (isHlsSupported(camera)) {
       expandToHls(camera.id);
     }
+  }
+  function handleStreamClick(streamId: string) {
+    if (expandedCameraId === streamId) {
+      shrinkToGrid();
+      return;
+    }
+    expandToHls(streamId);
   }
   function handleCellDblClick(camera: Camera) {
     if (expandedCameraId === camera.id) {
@@ -454,20 +554,41 @@
   // --- Lifecycle ---
 
   onMount(async () => {
+    let cameras: Camera[] = [];
+    let streams: StreamInfo[] = [];
+    let cameraErr = '';
+    let streamErr = '';
     try {
-      const fetched = await getDashboardCameras();
-      allCameras = fetched.filter(c => c.enabled !== false);
-      const saved = loadSavedLayout();
-      const availableIds = new Set(allCameras.map(c => c.id));
-      gridLayout = saved.layout;
-      slotAssignments = saved.slots.map(id => (id && availableIds.has(id) ? id : null));
-      pendingGridLayout = gridLayout;
-      pendingSlotAssignments = [...slotAssignments];
+      cameras = (await getDashboardCameras()).filter(c => c.enabled !== false);
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      loading = false;
+      cameraErr = e instanceof Error ? e.message : String(e);
     }
+    try {
+      streams = await loadWallStreams();
+    } catch (e) {
+      streamErr = e instanceof Error ? e.message : String(e);
+      console.warn('Failed to load streams for the dashboard:', e);
+    }
+    if (cameraErr && streamErr) {
+      error = cameraErr;
+    } else if (cameraErr) {
+      console.warn('Failed to load cameras for the dashboard:', cameraErr);
+    }
+    allCameras = cameras;
+    allStreams = streams;
+    const saved = loadSavedLayout();
+    const availableIds = new Set(buildWallSources(cameras, streams).map((source) => source.id));
+    const cameraIds = new Set(cameras.map((cam) => cam.id));
+    gridLayout = saved.layout;
+    slotAssignments = saved.slots.map((id) => {
+      if (!id) return null;
+      if (availableIds.has(id)) return id;
+      if (streamErr && !cameraIds.has(id)) return id;
+      return null;
+    });
+    pendingGridLayout = gridLayout;
+    pendingSlotAssignments = [...slotAssignments];
+    loading = false;
     await loadCameraPlayURLs(getAssignedIds(slotAssignments));
     // Fetch camera health status (public, no auth)
     try {
@@ -512,22 +633,16 @@
       expandedCameraId = assignedCameraIds[tourIndex];
     }, 8000);
 
-    const es = new EventSource(eventsStreamUrl());
-    es.addEventListener('nvr', (e) => {
-      try {
-        const ev = JSON.parse((e as MessageEvent).data) as NvrEvent;
-        if (!ev.camera_id) return;
-        alarmFlash = { ...alarmFlash, [ev.camera_id]: Date.now() };
-        window.setTimeout(() => {
-          if (alarmFlash[ev.camera_id]) {
-            const next = { ...alarmFlash };
-            delete next[ev.camera_id];
-            alarmFlash = next;
-          }
-        }, 4000);
-      } catch {
-        // ignore
-      }
+    const stopEvents = subscribeNvrEvents({}, (ev: NvrEvent) => {
+      if (!ev.camera_id) return;
+      alarmFlash = { ...alarmFlash, [ev.camera_id]: Date.now() };
+      window.setTimeout(() => {
+        if (alarmFlash[ev.camera_id]) {
+          const next = { ...alarmFlash };
+          delete next[ev.camera_id];
+          alarmFlash = next;
+        }
+      }, 4000);
     });
 
     // Intercept fetch to detect backend pressure (HTTP 503 → global cooldown)
@@ -544,7 +659,7 @@
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('visibilitychange', visibilityHandler);
-      es.close();
+      stopEvents();
       window.clearInterval(tourTimer);
       window.fetch = originalFetch;
       reconnectCoordinator.dispose();
@@ -644,7 +759,7 @@
 
         <div class="grid gap-2 mb-4 {GRID_COLS_CLASS[pendingGridLayout]}">
           {#each pendingSlotAssignments as cameraId, slotIndex}
-            {@const assigned = cameraId ? cameraById.get(cameraId) : null}
+            {@const assigned = cameraId ? sourceById.get(cameraId) : null}
             <button
               type="button"
               class="slot-config rounded-lg border th-border p-2 min-h-[72px] text-left w-full {editingSlotIndex === slotIndex ? 'slot-config-active' : ''} {pendingGridLayout === 6 && slotIndex === 0 ? 'col-span-2 row-span-2' : ''}"
@@ -667,7 +782,7 @@
                 {/if}
               </div>
               {#if assigned}
-                <p class="text-sm th-text-primary truncate font-medium">{assigned.name || assigned.id}</p>
+                <p class="text-sm th-text-primary truncate font-medium">{assigned.name}</p>
                 <p class="text-[10px] th-text-muted font-mono truncate">{assigned.id}</p>
               {:else}
                 <p class="text-xs th-text-muted">{t('dashboard.emptySlot')}</p>
@@ -687,24 +802,24 @@
         </div>
 
         <div class="space-y-1 max-h-52 overflow-y-auto mb-4 border th-border rounded-lg p-1">
-          {#if allCameras.length === 0}
+          {#if wallSources.length === 0}
             <p class="text-sm th-text-muted text-center py-6">{t('dashboard.noCamerasAvailable')}</p>
-          {:else if filteredConfigCameras().length === 0}
+          {:else if filteredConfigSources().length === 0}
             <p class="text-sm th-text-muted text-center py-6">{t('dashboard.noSearchResults')}</p>
           {:else}
-            {#each filteredConfigCameras() as camera}
+            {#each filteredConfigSources() as source}
               <button
                 class="w-full flex items-center gap-2 px-2 py-2 rounded-md hover:bg-[var(--bg-tertiary)] transition-colors text-left"
                 onclick={() => {
                   const target = editingSlotIndex ?? pendingSlotAssignments.findIndex(id => !id);
                   const slotIndex = target >= 0 ? target : 0;
-                  assignCameraToSlot(slotIndex, camera.id);
+                  assignCameraToSlot(slotIndex, source.id);
                   editingSlotIndex = slotIndex;
                 }}
               >
                 <LayoutGrid size={14} class="th-text-muted shrink-0" />
-                <span class="text-sm th-text-primary truncate">{camera.name || camera.id}</span>
-                <span class="text-xs th-text-muted ml-auto shrink-0">{camera.protocol}</span>
+                <span class="text-sm th-text-primary truncate">{source.name}</span>
+                <span class="text-xs th-text-muted ml-auto shrink-0">{wallSourceLabel(source)}</span>
               </button>
             {/each}
           {/if}
@@ -735,7 +850,7 @@
         <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
         <p class="th-text-secondary mb-4">{error}</p>
       </div>
-    {:else if allCameras.length === 0}
+    {:else if wallSources.length === 0}
       <div class="card p-8 sm:p-12 text-center">
         <div class="th-text-muted mb-4 flex justify-center"><VideoOff size={48} /></div>
         <h3 class="text-lg font-medium th-text-primary mb-2">{t('dashboard.noCameras')}</h3>
@@ -758,6 +873,7 @@
       >
         {#each slotAssignments as cameraId, slotIndex}
           {@const camera = cameraId ? cameraById.get(cameraId) : null}
+          {@const stream = cameraId && !camera ? streamById.get(cameraId) : undefined}
           {#if camera}
             {@const status = getStatusBadge(camera)}
             {@const mode = getCameraMode(camera)}
@@ -981,6 +1097,98 @@
                 </div>
               </div>
             {/if}
+            </div>
+          {:else if stream}
+            {@const mode = videoMode()}
+            {@const title = stream.name || stream.stream_id}
+            {@const mediaURL = streamPageURL(stream.stream_id, mode)}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="relative bg-black rounded-lg overflow-hidden group camera-grid-cell {getCellClass(cameraId, slotIndex)}"
+              class:cell-expanded={expandedCameraId === stream.stream_id}
+              style="min-height: {getCellMinHeight(gridLayout)};"
+              role="button"
+              tabindex="0"
+              aria-label={title}
+              onclick={() => handleStreamClick(stream.stream_id)}
+              onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleStreamClick(stream.stream_id); } }}
+              ondblclick={() => { if (expandedCameraId === stream.stream_id) shrinkToGrid(); }}
+            >
+              {#if mode === 'hls'}
+                <VideoPlayer
+                  cameraId={stream.stream_id}
+                  cameraName={title}
+                  streamUrl={mediaURL}
+                  cameraProtocol="stream"
+                  protocol={defaultProtocol}
+                  expanded={expandedCameraId === stream.stream_id}
+                  {tabVisible}
+                />
+              {:else if mode === 'webrtc'}
+                <WebRTCPlayer
+                  cameraId={stream.stream_id}
+                  cameraName={title}
+                  whepUrl={mediaURL}
+                  expanded={expandedCameraId === stream.stream_id}
+                  {tabVisible}
+                />
+              {:else if mode === 'flv' || mode === 'ws-flv'}
+                <FlvPlayer
+                  cameraId={stream.stream_id}
+                  cameraName={title}
+                  streamUrl={mediaURL}
+                  protocol={mode === 'ws-flv' ? 'ws-flv' : 'flv'}
+                  expanded={expandedCameraId === stream.stream_id}
+                  {tabVisible}
+                />
+              {:else if mode === 'wasm'}
+                {#if WasmPlayerComponent}
+                  {@const WasmPlayer = WasmPlayerComponent}
+                  <WasmPlayer
+                    cameraId={stream.stream_id}
+                    cameraName={title}
+                    wsPath={mediaURL}
+                    expanded={expandedCameraId === stream.stream_id}
+                    {tabVisible}
+                  />
+                {:else if wasmPlayerLoading}
+                  <div class="absolute inset-0 flex items-center justify-center bg-black/80">
+                    <span class="text-white/50 text-xs">{t('dashboard.loadingWasmPlayer')}</span>
+                  </div>
+                {:else}
+                  <div class="absolute inset-0 flex items-center justify-center bg-black/80">
+                    <span class="text-white/50 text-xs">{t('dashboard.wasmPlayerLoadError')}</span>
+                  </div>
+                {/if}
+              {:else if mode === 'fmp4'}
+                {#if FMP4PlayerComponent}
+                  {@const FMP4Player = FMP4PlayerComponent}
+                  <FMP4Player
+                    cameraId={stream.stream_id}
+                    cameraName={title}
+                    streamUrl={mediaURL}
+                    expanded={expandedCameraId === stream.stream_id}
+                    {tabVisible}
+                  />
+                {:else if fmp4PlayerLoading}
+                  <div class="absolute inset-0 flex items-center justify-center bg-black/80">
+                    <span class="text-white/50 text-xs">{t('common.loading')}</span>
+                  </div>
+                {:else}
+                  <div class="absolute inset-0 flex items-center justify-center bg-black/80">
+                    <span class="text-white/50 text-xs">{t('common.error')}</span>
+                  </div>
+                {/if}
+              {/if}
+              <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2 pointer-events-none">
+                <div class="flex items-center gap-2">
+                  <span class="badge {stream.active ? 'badge-success' : 'badge-neutral'} text-[10px] px-1.5 py-0.5">
+                    {stream.active ? t('dashboard.live') : t('dashboard.healthOffline')}
+                  </span>
+                  <span class="text-white text-sm font-medium truncate">{title}</span>
+                </div>
+              </div>
             </div>
           {:else}
             <!-- Empty slot placeholder -->

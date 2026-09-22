@@ -18,12 +18,14 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
     cameraName,
     expanded = false,
     tabVisible = true,
+    wsPath = '',
     onFallbackNeeded,
   }: {
     cameraId: string;
     cameraName: string;
     expanded?: boolean;
     tabVisible?: boolean;
+    wsPath?: string;
     onFallbackNeeded?: (fallback: 'hls') => void;
   } = $props();
 
@@ -338,7 +340,8 @@ function handleWebGpuLost() {
 
   function buildWsUrl(): string {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let url = `${proto}//${location.host}/api/cameras/${cameraId}/stream/ws`;
+    const path = wsPath || `/api/cameras/${cameraId}/stream/ws`;
+    let url = `${proto}//${location.host}${path}`;
     const authHeader = getAuthHeader();
     if (authHeader) {
       const token = authHeader.startsWith('Basic ') ? authHeader.slice(6) : authHeader;

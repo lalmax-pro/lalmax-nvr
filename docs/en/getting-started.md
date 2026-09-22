@@ -8,7 +8,7 @@ lalmax-nvr is a business NVR on top of an embedded lal / lalmax media engine. H.
 
 - RTSP (H.264, H.265, MJPEG), HTTP JPEG, ONVIF, GB28181, Xiaomi CS2
 - Web UI: multi-protocol live view, 24h timeline, continuous VOD (HLS fMP4)
-- Recording modes: continuous / scheduled / event / adaptive / off; rolling hour merge
+- Recording plans on streams (continuous / scheduled / event / adaptive / off); no plan means no recording; rolling hour merge
 - WebDAV and FTP for recordings; MQTT event-triggered recording
 - Single static binary with embedded web UI — no runtime dependencies
 

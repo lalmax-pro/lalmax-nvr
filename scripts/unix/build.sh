@@ -10,6 +10,8 @@ DATE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 # Suppress Node.js deprecation warnings (e.g., module.register)
 export NODE_OPTIONS="${NODE_OPTIONS:-} --no-deprecation"
+# Cursor sets npm_config_devdir, which npm 11 prints as an unknown config.
+unset npm_config_devdir NPM_CONFIG_DEVDIR || true
 
 # Cross-compilation: auto-detect or override via GOOS/GOARCH
 # Examples:

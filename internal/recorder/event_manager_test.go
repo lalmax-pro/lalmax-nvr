@@ -5,6 +5,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/lalmax-pro/lalmax-nvr/internal/media"
+	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEventManagerTriggerAndEnd(t *testing.T) {
@@ -41,21 +45,35 @@ func TestEventManagerTriggerAndEnd(t *testing.T) {
 }
 
 func TestSchedulerSkipsActiveEvent(t *testing.T) {
-	var paused []string
-	s := NewRecordingScheduler(nil)
-	s.keepRecording = func(id string) bool { return id == "cam-event" }
-	// inject check internals by calling keepRecording path directly
-	desired := map[string]bool{"cam-event": false, "cam-off": false}
-	for cameraID, shouldRecord := range desired {
-		if shouldRecord {
-			continue
-		}
-		if s.keepRecording != nil && s.keepRecording(cameraID) {
-			continue
-		}
-		paused = append(paused, cameraID)
-	}
-	if len(paused) != 1 || paused[0] != "cam-off" {
-		t.Fatalf("paused=%v", paused)
-	}
+	db := newSchedulerTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertRecordingPlan(ctx, &storage.RecordingPlan{
+		StreamID: "cam-event", Mode: storage.RecordingModeEvent, Enabled: true,
+	}))
+	require.NoError(t, db.UpsertRecordingPlan(ctx, &storage.RecordingPlan{
+		StreamID: "cam-off", Mode: storage.RecordingModeOff, Enabled: true,
+	}))
+	planner := NewRecordingPlanner(db)
+	require.NoError(t, planner.Refresh(ctx))
+
+	engine := &stubTaskEngine{byID: map[string]*media.StreamInfo{
+		"cam-event": {StreamID: "cam-event", VideoCodec: "h264", Active: true},
+		"cam-off":   {StreamID: "cam-off", VideoCodec: "h264", Active: true},
+	}}
+	tasks := NewTaskManager(engine, nil, nil, nil, nil, time.Second)
+	t.Cleanup(tasks.StopAll)
+	require.NoError(t, tasks.Ensure(ctx, "cam-event"))
+	require.NoError(t, tasks.Ensure(ctx, "cam-off"))
+
+	s := NewRecordingScheduler(db)
+	s.SetPlanner(planner)
+	s.SetTasks(tasks)
+	s.SetAliveStreams(func(context.Context) ([]string, error) {
+		return []string{"cam-event", "cam-off"}, nil
+	})
+	s.SetEventActive(func(id string) bool { return id == "cam-event" })
+	s.check(ctx)
+
+	require.True(t, tasks.Running("cam-event"))
+	require.False(t, tasks.Running("cam-off"))
 }

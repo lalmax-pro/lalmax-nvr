@@ -87,8 +87,11 @@ type MediaConfig struct {
 }
 
 type CameraConfig struct {
-	ID                   string                 `yaml:"id"`
-	Name                 string                 `yaml:"name"`
+	ID   string `yaml:"id"`
+	Name string `yaml:"name"`
+	// StreamID is the lalmax group name when it differs from the camera ID
+	// (promoted push streams, explicit bindings). Empty means camera ID.
+	StreamID             string                 `yaml:"stream_id,omitempty" json:"stream_id,omitempty"`
 	Protocol             string                 `yaml:"protocol"`                 // rtsp_h264, rtsp_mjpeg, http_jpeg
 	Encoding             string                 `yaml:"encoding"`                 // h264, h265, mjpeg, jpeg (independent of protocol)
 	RTSPTransport        string                 `yaml:"rtsp_transport,omitempty"` // tcp or udp; default tcp
@@ -119,10 +122,17 @@ type CameraConfig struct {
 	StableID        string                `yaml:"stable_id,omitempty" json:"stable_id,omitempty"`
 	SubProfileToken string                `yaml:"sub_profile_token,omitempty" json:"sub_profile_token,omitempty"`
 	SubnetHints     []string              `yaml:"subnet_hints,omitempty" json:"subnet_hints,omitempty"`
-	RecordingMode   string                `yaml:"recording_mode,omitempty" json:"recording_mode,omitempty"`
 	Adaptive        *CameraAdaptiveConfig `yaml:"adaptive,omitempty" json:"adaptive,omitempty"`
 	Longitude       float64               `yaml:"longitude,omitempty" json:"longitude,omitempty"`
 	Latitude        float64               `yaml:"latitude,omitempty" json:"latitude,omitempty"`
+}
+
+// IngestStreamID is the lalmax group name for this camera.
+func IngestStreamID(cam CameraConfig) string {
+	if s := strings.TrimSpace(cam.StreamID); s != "" {
+		return s
+	}
+	return cam.ID
 }
 
 // HealthOverrides allows per-camera health monitoring threshold overrides.
@@ -217,6 +227,18 @@ func (c MergeConfig) RollingDebounceDuration() time.Duration {
 	d, err := time.ParseDuration(strings.TrimSpace(c.RollingDebounce))
 	if err != nil || d <= 0 {
 		return 5 * time.Second
+	}
+	return d
+}
+
+// WindowSizeDuration is the merge bucket length. Invalid or empty values default to 1h.
+func (c MergeConfig) WindowSizeDuration() time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(c.WindowSize))
+	if err != nil || d <= 0 {
+		return time.Hour
+	}
+	if d < time.Minute {
+		return time.Minute
 	}
 	return d
 }

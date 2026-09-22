@@ -30,6 +30,45 @@ func cameraRowForAPI(row *storage.CameraRow) {
 	}
 }
 
+// streamIDForCamera is the lalmax stream backing a camera row.
+// Returns "" when the camera has no bound stream.
+func streamIDForCamera(row storage.CameraRow) string {
+	return strings.TrimSpace(row.StreamID)
+}
+
+// applyPlanModes sets each camera's read-only recording_mode from the plan for
+// its bound stream. Call after StreamID has been injected.
+func (h *Handler) applyPlanModes(ctx context.Context, cameras []storage.CameraRow) {
+	if h.db == nil || len(cameras) == 0 {
+		return
+	}
+	plans, err := h.db.ListRecordingPlans(ctx)
+	if err != nil {
+		logger.Warn("failed to list recording plans for cameras", "error", err)
+		return
+	}
+	modeByStream := make(map[string]string, len(plans))
+	for _, p := range plans {
+		if !p.Enabled {
+			modeByStream[p.StreamID] = storage.RecordingModeOff
+			continue
+		}
+		modeByStream[p.StreamID] = p.Mode
+	}
+	for i := range cameras {
+		streamID := cameras[i].StreamID
+		if streamID == "" {
+			cameras[i].RecordingMode = storage.RecordingModeOff
+			continue
+		}
+		if mode, ok := modeByStream[streamID]; ok {
+			cameras[i].RecordingMode = mode
+		} else {
+			cameras[i].RecordingMode = storage.RecordingModeOff
+		}
+	}
+}
+
 func (h *Handler) injectCameraConfigFields(row *storage.CameraRow) {
 	if row == nil {
 		return
@@ -78,6 +117,10 @@ func (h *Handler) resolveCameraSourceType(ctx context.Context, row *storage.Came
 	case "rtmp-pull", "http-flv-pull", "udp-ts-pull":
 		row.SourceType = "relay_pull"
 		return
+	case "onvif", "rtsp", "http", "gb28181", "xiaomi":
+		// Pull cameras ingest as live/{camera_id}. That matching stream ID is not
+		// evidence of an RTMP/SRT/WHIP publish — do not hide them from the device tab.
+		return
 	}
 	if h.db == nil {
 		return
@@ -102,7 +145,6 @@ func (h *Handler) resolveCameraSourceType(ctx context.Context, row *storage.Came
 			}
 		}
 	}
-	row.SourceType = "rtmp_push"
 }
 
 func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +204,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 		if h.mediaEngine != nil {
 			for i := range cameras {
 				if cameras[i].Status == model.StatusRecording || cameras[i].Status == model.StatusReconnecting {
-					streamInfo, err := h.mediaEngine.GetStream(r.Context(), cameras[i].ID)
+					streamInfo, err := h.mediaEngine.GetStream(r.Context(), streamIDForCamera(cameras[i]))
 					if err == nil && streamInfo != nil {
 						if streamInfo.Active {
 							cameras[i].Status = model.StatusRecording
@@ -180,11 +222,29 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Expose the bound lalmax stream so clients play via /api/streams/{stream_id}.
+	if bindings, err := h.db.ListStreamBindings(r.Context()); err != nil {
+		logger.Warn("failed to list stream bindings for cameras", "error", err)
+	} else {
+		streamByCamera := make(map[string]string, len(bindings))
+		for _, b := range bindings {
+			streamByCamera[b.CameraID] = b.StreamID
+		}
+		for i := range cameras {
+			cameras[i].StreamID = streamByCamera[cameras[i].ID]
+		}
+	}
 	for i := range cameras {
 		h.injectCameraConfigFields(&cameras[i])
+		if cameras[i].StreamID == "" && h.camMgr != nil {
+			if cam := h.camMgr.GetCameraConfig(cameras[i].ID); cam != nil {
+				cameras[i].StreamID = strings.TrimSpace(cam.StreamID)
+			}
+		}
 		h.resolveCameraSourceType(r.Context(), &cameras[i])
 		cameraRowForAPI(&cameras[i])
 	}
+	h.applyPlanModes(r.Context(), cameras)
 	writeJSON(w, http.StatusOK, cameras)
 }
 
@@ -231,7 +291,6 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		SubStreamURL    string                       `json:"sub_stream_url"`
 		SubProfileToken string                       `json:"sub_profile_token"`
 		SubnetHints     []string                     `json:"subnet_hints"`
-		RecordingMode   string                       `json:"recording_mode"`
 		Adaptive        *config.CameraAdaptiveConfig `json:"adaptive"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -285,10 +344,6 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid URL format")
 		return
 	}
-	if body.RecordingMode != "" && !isValidRecordingMode(body.RecordingMode) {
-		writeError(w, http.StatusBadRequest, "recording_mode must be continuous, scheduled, off, event, or adaptive")
-		return
-	}
 	// Normalize protocol — handle legacy combined formats
 	proto := body.Protocol
 	enc := body.Encoding
@@ -338,7 +393,6 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		SubStreamURL:    body.SubStreamURL,
 		SubProfileToken: body.SubProfileToken,
 		SubnetHints:     body.SubnetHints,
-		RecordingMode:   body.RecordingMode,
 		Adaptive:        body.Adaptive,
 	}
 	if body.Enabled != nil {
@@ -411,12 +465,24 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "camera not found")
 		return
 	}
+	// Inject the bound stream so clients can play via /api/streams/{stream_id}.
+	row.StreamID = h.cameraIngestStreamID(r.Context(), id)
+	// Recording mode comes from the stream plan (read-only on the camera).
+	row.RecordingMode = storage.RecordingModeOff
+	if plan, err := h.db.GetRecordingPlanByStream(r.Context(), row.StreamID); err != nil {
+		logger.Warn("failed to load recording plan for camera", "camera_id", id, "error", err)
+	} else if plan != nil {
+		row.RecordingMode = plan.Mode
+		if !plan.Enabled {
+			row.RecordingMode = storage.RecordingModeOff
+		}
+	}
 	// Inject recorder status
 	if h.camMgr != nil {
 		row.Status = h.camMgr.CameraStatus(id)
 		// Override status for cameras backed by lalmax streams that are idle
-		if h.mediaEngine != nil && (row.Status == model.StatusRecording || row.Status == model.StatusReconnecting) {
-			streamInfo, err := h.mediaEngine.GetStream(r.Context(), id)
+		if h.mediaEngine != nil && row.StreamID != "" && (row.Status == model.StatusRecording || row.Status == model.StatusReconnecting) {
+			streamInfo, err := h.mediaEngine.GetStream(r.Context(), row.StreamID)
 			if err == nil && streamInfo != nil {
 				if streamInfo.Active {
 					row.Status = model.StatusRecording
@@ -433,8 +499,8 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// For GB28181 cameras, check if the stream is active in lalmax
-	if row.Protocol == "gb28181" && h.mediaEngine != nil {
-		streamInfo, err := h.mediaEngine.GetStream(r.Context(), id)
+	if row.Protocol == "gb28181" && h.mediaEngine != nil && row.StreamID != "" {
+		streamInfo, err := h.mediaEngine.GetStream(r.Context(), row.StreamID)
 		if err == nil && streamInfo != nil && streamInfo.Active {
 			row.Status = model.StatusRecording
 		} else if row.Status == model.StatusError {
@@ -490,9 +556,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RetentionDays   *int                         `json:"retention_days"`
 		ONVIFEndpoint   *string                      `json:"onvif_endpoint"`
 		ProfileToken    *string                      `json:"profile_token"`
+		ProfileName     *string                      `json:"profile_name"`
 		StreamEncoding  *string                      `json:"stream_encoding"`
 		AudioEnabled    *bool                        `json:"audio_enabled"`
-		RecordingMode   *string                      `json:"recording_mode"`
 		SubStreamURL    *string                      `json:"sub_stream_url"`
 		SubProfileToken *string                      `json:"sub_profile_token"`
 		SubnetHints     *[]string                    `json:"subnet_hints"`
@@ -502,10 +568,6 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if body.RecordingMode != nil && !isValidRecordingMode(*body.RecordingMode) {
-		writeError(w, http.StatusBadRequest, "recording_mode must be continuous, scheduled, off, event, or adaptive")
 		return
 	}
 
@@ -538,7 +600,6 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ProfileToken:    body.ProfileToken,
 		StreamEncoding:  body.StreamEncoding,
 		AudioEnabled:    body.AudioEnabled,
-		RecordingMode:   body.RecordingMode,
 		SubStreamURL:    body.SubStreamURL,
 		SubProfileToken: body.SubProfileToken,
 		SubnetHints:     body.SubnetHints,
@@ -581,6 +642,11 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update camera: %v", err))
 		return
+	}
+	if body.ProfileName != nil && strings.TrimSpace(*body.ProfileName) != "" && h.db != nil {
+		if err := h.db.UpdateCameraProfileName(r.Context(), id, strings.TrimSpace(*body.ProfileName)); err != nil {
+			logger.Warn("failed to update profile name", "camera_id", id, "error", err)
+		}
 	}
 	h.logOperation(r, "camera.update", "camera", id, "success", "camera configuration updated", nil)
 	// Return updated CameraRow with status
@@ -821,11 +887,9 @@ func (h *Handler) handlePauseRecording(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
-	// Persist intent as recording_mode='off' so the scheduler doesn't resume it on the next tick.
-	if h.db != nil {
-		if err := h.db.UpdateCameraRecordingMode(r.Context(), id, storage.RecordingModeOff); err != nil {
-			logger.Warn("failed to persist recording_mode=off", "camera_id", id, "error", err)
-		}
+	// Pausing disables the stream's recording plan so the scheduler keeps it paused.
+	if err := h.setStreamRecordingEnabled(r, id, false); err != nil {
+		logger.Warn("failed to disable recording plan", "camera_id", id, "error", err)
 	}
 	if err := h.camMgr.PauseRecording(r.Context(), id); err != nil {
 		var cnf *model.CameraNotFoundError
@@ -845,11 +909,9 @@ func (h *Handler) handleResumeRecording(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
-	// Manual resume sets the camera back to continuous recording.
-	if h.db != nil {
-		if err := h.db.UpdateCameraRecordingMode(r.Context(), id, storage.RecordingModeContinuous); err != nil {
-			logger.Warn("failed to persist recording_mode=continuous", "camera_id", id, "error", err)
-		}
+	// Resuming re-enables the stream's recording plan.
+	if err := h.setStreamRecordingEnabled(r, id, true); err != nil {
+		logger.Warn("failed to enable recording plan", "camera_id", id, "error", err)
 	}
 	if err := h.camMgr.ResumeRecording(r.Context(), id); err != nil {
 		var cnf *model.CameraNotFoundError
@@ -863,69 +925,33 @@ func (h *Handler) handleResumeRecording(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recording"})
 }
 
-// isValidRecordingMode reports whether mode is an accepted recording_mode value.
-func isValidRecordingMode(mode string) bool {
-	switch mode {
-	case storage.RecordingModeContinuous, storage.RecordingModeScheduled, storage.RecordingModeOff, storage.RecordingModeEvent, storage.RecordingModeAdaptive:
-		return true
-	default:
-		return false
-	}
-}
-
-// handleGetRecordingSchedule returns a camera's weekly recording schedule.
-func (h *Handler) handleGetRecordingSchedule(w http.ResponseWriter, r *http.Request) {
-	id := getCameraID(r)
+// setStreamRecordingEnabled flips the recording plan for a camera's stream.
+// A plan is created on demand so pause/resume works for unplanned streams.
+func (h *Handler) setStreamRecordingEnabled(r *http.Request, cameraID string, enabled bool) error {
 	if h.db == nil {
-		writeError(w, http.StatusServiceUnavailable, "database not available")
-		return
+		return nil
 	}
-	ranges, err := h.db.GetCameraSchedule(r.Context(), id)
+	streamID := h.cameraIngestStreamID(r.Context(), cameraID)
+	if streamID == "" {
+		return fmt.Errorf("camera %q has no stream", cameraID)
+	}
+	plan, err := h.db.GetRecordingPlanByStream(r.Context(), streamID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording schedule")
-		return
+		return err
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"ranges": ranges})
-}
-
-// handleSetRecordingSchedule replaces a camera's weekly recording schedule.
-func (h *Handler) handleSetRecordingSchedule(w http.ResponseWriter, r *http.Request) {
-	id := getCameraID(r)
-	if h.db == nil {
-		writeError(w, http.StatusServiceUnavailable, "database not available")
-		return
-	}
-	var body struct {
-		Ranges []storage.CameraScheduleRange `json:"ranges"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	for _, rg := range body.Ranges {
-		if rg.DayOfWeek < 0 || rg.DayOfWeek > 6 || !isValidHHMM(rg.StartTime) || !isValidHHMM(rg.EndTime) || rg.StartTime >= rg.EndTime {
-			writeError(w, http.StatusBadRequest, "invalid schedule range (day 0-6, HH:MM, start < end)")
-			return
+	if plan == nil {
+		plan = &storage.RecordingPlan{
+			StreamID: streamID,
+			Name:     streamID,
+			Mode:     storage.RecordingModeContinuous,
 		}
 	}
-	if err := h.db.SetCameraSchedule(r.Context(), id, body.Ranges); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save recording schedule")
-		return
+	plan.Enabled = enabled
+	if err := h.db.UpsertRecordingPlan(r.Context(), plan); err != nil {
+		return err
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
-}
-
-// isValidHHMM validates a "HH:MM" 24-hour time string.
-func isValidHHMM(s string) bool {
-	if len(s) != 5 || s[2] != ':' {
-		return false
-	}
-	hh := s[0:2]
-	mm := s[3:5]
-	if hh < "00" || hh > "23" || mm < "00" || mm > "59" {
-		return false
-	}
-	return true
+	h.refreshRecordingPlans(r)
+	return nil
 }
 
 // handleTestConnection attempts to connect to a camera URL with a short timeout.

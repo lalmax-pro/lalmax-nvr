@@ -1,16 +1,55 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
   import type { StreamInfo } from '$lib/api';
-  import { Eye, Users } from 'lucide-svelte';
+  import { Eye, Pencil, Users } from 'lucide-svelte';
 
   interface Props {
     stream: StreamInfo;
     managed?: boolean;
+    onsaveName?: (stream: StreamInfo, name: string) => void;
   }
 
-  let { stream, managed = false }: Props = $props();
+  let { stream, managed = false, onsaveName }: Props = $props();
 
-  let title = $derived(managed ? (stream.camera_name || stream.stream_id) : stream.stream_id);
+  let editingName = $state(false);
+  let nameInput = $state('');
+  let nameInputEl: HTMLInputElement | undefined = $state();
+
+  let title = $derived(stream.name || (managed ? (stream.camera_name || stream.stream_id) : stream.stream_id));
+
+  $effect(() => {
+    if (editingName && nameInputEl) {
+      nameInputEl.focus();
+      nameInputEl.select();
+    }
+  });
+
+  function startEditName(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    nameInput = title;
+    editingName = true;
+  }
+
+  function saveName() {
+    const trimmed = nameInput.trim();
+    if (trimmed !== title) {
+      onsaveName?.(stream, trimmed);
+    }
+    editingName = false;
+  }
+
+  function cancelEditName() {
+    editingName = false;
+    nameInput = title;
+  }
+
+  function stopCardNavigation(event: MouseEvent) {
+    if (editingName) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }
 
   let sourceLabel = $derived.by(() => {
     switch (stream.source_type) {
@@ -24,6 +63,8 @@
         return t('streams.sourceWHIPPush');
       case 'relay_pull':
         return t('streams.sourceRelayPull');
+      case 'push':
+        return t('streams.sourcePush');
       default:
         return t('streams.sourceStream');
     }
@@ -43,10 +84,47 @@
 <a
   href={`#/streams/${encodeURIComponent(stream.stream_id)}`}
   class="card stream-card border th-border p-4 transition-all hover:border-[var(--color-primary)]"
+  onclick={stopCardNavigation}
 >
   <div class="flex items-start justify-between gap-2 mb-3">
     <div class="min-w-0 flex-1">
-      <span class="font-medium th-text-primary truncate block">{title}</span>
+      {#if editingName}
+        <input
+          bind:this={nameInputEl}
+          type="text"
+          class="input py-1 px-2 text-sm w-full"
+          bind:value={nameInput}
+          maxlength="128"
+          aria-label={t('streams.displayName')}
+          onclick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              saveName();
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              cancelEditName();
+            }
+          }}
+          onblur={saveName}
+        />
+      {:else}
+        <span class="font-medium th-text-primary truncate flex items-center gap-1.5">
+          <span class="truncate">{title}</span>
+          {#if onsaveName}
+            <button
+              type="button"
+              class="btn btn-ghost p-0.5 shrink-0"
+              title={t('streams.editName')}
+              aria-label={t('streams.editName')}
+              onclick={startEditName}
+            >
+              <Pencil size={12} class="th-text-tertiary" />
+            </button>
+          {/if}
+        </span>
+      {/if}
     </div>
     <div class="shrink-0">
       {#if stream.active}

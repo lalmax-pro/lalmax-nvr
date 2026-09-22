@@ -277,10 +277,10 @@ func (c *MISSClient) ReadPacket() (*MISSPacket, error) {
 	}
 
 	pkt := &MISSPacket{
-		CodecID:   binary.LittleEndian.Uint32(hdr[4:]),
-		Sequence:  binary.LittleEndian.Uint32(hdr[8:]),
-		Flags:     binary.LittleEndian.Uint32(hdr[12:]),
-		Payload:   payload,
+		CodecID:  binary.LittleEndian.Uint32(hdr[4:]),
+		Sequence: binary.LittleEndian.Uint32(hdr[8:]),
+		Flags:    binary.LittleEndian.Uint32(hdr[12:]),
+		Payload:  payload,
 	}
 
 	// Model-specific timestamp handling.

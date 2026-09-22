@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
-	"github.com/google/uuid"
 	"golang.org/x/net/webdav"
 )
 
@@ -23,11 +23,11 @@ var webdavLogger = slog.Default().With("component", "webdav")
 
 // Server provides a WebDAV server for browsing and optionally uploading camera recordings.
 type Server struct {
-	store     *storage.Manager
+	store      *storage.Manager
 	pathPrefix string
-	authMW    func(http.Handler) http.Handler
-	db        *storage.DB
-	readWrite bool
+	authMW     func(http.Handler) http.Handler
+	db         *storage.DB
+	readWrite  bool
 }
 
 // NewServer creates a new WebDAV server.

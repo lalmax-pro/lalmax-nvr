@@ -1,6 +1,5 @@
 package onvif
 
-
 import "time"
 
 // DiscoveredDevice represents an ONVIF device found via WS-Discovery.
@@ -24,7 +23,7 @@ type DiscoveryError struct {
 // Error is nil on success, non-nil when a categorized error occurred.
 type DiscoveryResult struct {
 	Devices []DiscoveredDevice `json:"devices"`
-	Error   *DiscoveryError     `json:"error"`
+	Error   *DiscoveryError    `json:"error"`
 }
 
 // DeviceProfile represents a media profile from an ONVIF device.
@@ -69,34 +68,34 @@ type StreamInfo struct {
 
 // ImagingSettings represents camera imaging parameters.
 type ImagingSettings struct {
-	Brightness  float64           `json:"brightness"`
-	Contrast    float64           `json:"contrast"`
-	Saturation  float64           `json:"saturation"`
-	Sharpness   float64           `json:"sharpness"`
-	Exposure    ExposureSettings  `json:"exposure"`
+	Brightness   float64              `json:"brightness"`
+	Contrast     float64              `json:"contrast"`
+	Saturation   float64              `json:"saturation"`
+	Sharpness    float64              `json:"sharpness"`
+	Exposure     ExposureSettings     `json:"exposure"`
 	WhiteBalance WhiteBalanceSettings `json:"white_balance"`
 }
 
 // ExposureSettings represents exposure configuration.
 type ExposureSettings struct {
-	Mode         string  `json:"mode"`          // "auto" or "manual"
+	Mode         string  `json:"mode"` // "auto" or "manual"
 	ExposureTime float64 `json:"exposure_time"`
 	Gain         float64 `json:"gain"`
 }
 
 // WhiteBalanceSettings represents white balance configuration.
 type WhiteBalanceSettings struct {
-	Mode              string  `json:"mode"`               // "auto" or "manual"
+	Mode             string  `json:"mode"` // "auto" or "manual"
 	ColorTemperature float64 `json:"color_temperature"`
 }
 
 // ImagingOptions represents supported ranges for imaging parameters.
 type ImagingOptions struct {
-	Brightness  *Range `json:"brightness,omitempty"`
-	Contrast    *Range `json:"contrast,omitempty"`
-	Saturation  *Range `json:"saturation,omitempty"`
-	Sharpness   *Range `json:"sharpness,omitempty"`
-	Exposure    *ExposureOptions  `json:"exposure,omitempty"`
+	Brightness   *Range               `json:"brightness,omitempty"`
+	Contrast     *Range               `json:"contrast,omitempty"`
+	Saturation   *Range               `json:"saturation,omitempty"`
+	Sharpness    *Range               `json:"sharpness,omitempty"`
+	Exposure     *ExposureOptions     `json:"exposure,omitempty"`
 	WhiteBalance *WhiteBalanceOptions `json:"white_balance,omitempty"`
 }
 
@@ -115,14 +114,14 @@ type ExposureOptions struct {
 
 // WhiteBalanceOptions represents supported white balance ranges.
 type WhiteBalanceOptions struct {
-	Mode              []string `json:"modes"`
-	ColorTemperature *Range    `json:"color_temperature,omitempty"`
+	Mode             []string `json:"modes"`
+	ColorTemperature *Range   `json:"color_temperature,omitempty"`
 }
 
 // PTZPreset represents a saved PTZ position.
 type PTZPreset struct {
-	Token    string   `json:"token"`
-	Name     string   `json:"name"`
+	Token    string    `json:"token"`
+	Name     string    `json:"name"`
 	Position PTZVector `json:"position"`
 }
 
@@ -136,30 +135,30 @@ type ONVIFEvent struct {
 
 // NetworkInterface represents network configuration for an ONVIF device.
 type NetworkInterface struct {
-	Name      string            `json:"name"`
-	Enabled   bool              `json:"enabled"`
-	IPv4      NetworkIPv4       `json:"ipv4"`
-	IPv6      NetworkIPv6       `json:"ipv6,omitempty"`
-	DNS       []string          `json:"dns,omitempty"`
-	NTP       NetworkNTP        `json:"ntp,omitempty"`
+	Name    string      `json:"name"`
+	Enabled bool        `json:"enabled"`
+	IPv4    NetworkIPv4 `json:"ipv4"`
+	IPv6    NetworkIPv6 `json:"ipv6,omitempty"`
+	DNS     []string    `json:"dns,omitempty"`
+	NTP     NetworkNTP  `json:"ntp,omitempty"`
 }
 
 // NetworkIPv4 represents IPv4 network configuration.
 type NetworkIPv4 struct {
-	Enabled  bool   `json:"enabled"`
-	DHCP     bool   `json:"dhcp"`
-	Address  string `json:"address,omitempty"`
-	Netmask  string `json:"netmask,omitempty"`
-	Gateway  string `json:"gateway,omitempty"`
+	Enabled bool   `json:"enabled"`
+	DHCP    bool   `json:"dhcp"`
+	Address string `json:"address,omitempty"`
+	Netmask string `json:"netmask,omitempty"`
+	Gateway string `json:"gateway,omitempty"`
 }
 
 // NetworkIPv6 represents IPv6 network configuration.
 type NetworkIPv6 struct {
-	Enabled  bool   `json:"enabled"`
-	DHCP     bool   `json:"dhcp"`
-	Address  string `json:"address,omitempty"`
-	Prefix   int    `json:"prefix,omitempty"`
-	Gateway  string `json:"gateway,omitempty"`
+	Enabled bool   `json:"enabled"`
+	DHCP    bool   `json:"dhcp"`
+	Address string `json:"address,omitempty"`
+	Prefix  int    `json:"prefix,omitempty"`
+	Gateway string `json:"gateway,omitempty"`
 }
 
 // NetworkNTP represents NTP server configuration.
@@ -177,21 +176,21 @@ type ONVIFUser struct {
 
 // PTZCapabilitiesDetailed describes detailed PTZ capabilities.
 type PTZCapabilitiesDetailed struct {
-	Supported  bool `json:"supported"`
-	PanTilt    bool `json:"pan_tilt"`    // Supports horizontal/vertical movement
-	Zoom       bool `json:"zoom"`        // Supports zoom
-	Presets    bool `json:"presets"`      // Supports presets
-	Home       bool `json:"home"`        // Supports home position
+	Supported bool `json:"supported"`
+	PanTilt   bool `json:"pan_tilt"` // Supports horizontal/vertical movement
+	Zoom      bool `json:"zoom"`     // Supports zoom
+	Presets   bool `json:"presets"`  // Supports presets
+	Home      bool `json:"home"`     // Supports home position
 }
 
 // DeviceCapabilitiesDetailed extends DeviceCapabilities with per-service capability details.
 type DeviceCapabilitiesDetailed struct {
-	PTZ       bool `json:"ptz"`
-	PTZDetail PTZCapabilitiesDetailed `json:"ptz_detail"`
-	Imaging   bool `json:"imaging"`
-	Events    bool `json:"events"`
-	Snapshot  bool `json:"snapshot"`
-	Streaming bool `json:"streaming"`
-	Device    bool `json:"device"` // Device management (reboot, network, users)
-	DeviceInfo *DeviceInfo `json:"device_info,omitempty"` // Device information
+	PTZ        bool                    `json:"ptz"`
+	PTZDetail  PTZCapabilitiesDetailed `json:"ptz_detail"`
+	Imaging    bool                    `json:"imaging"`
+	Events     bool                    `json:"events"`
+	Snapshot   bool                    `json:"snapshot"`
+	Streaming  bool                    `json:"streaming"`
+	Device     bool                    `json:"device"`                // Device management (reboot, network, users)
+	DeviceInfo *DeviceInfo             `json:"device_info,omitempty"` // Device information
 }

@@ -7,10 +7,11 @@ SQLite metadata (DB) + file operations (Manager). All recording/camera CRUD, UTC
 ## STRUCTURE
 
 ```
-db.go          # DB struct — SQLite WAL mode, recordings/cameras CRUD, time format handling
-db_test.go     # DB tests — time parsing, CRUD operations, query builder
-manager.go     # Manager struct — file create/write/close with temp→atomic rename
-manager_test.go # Manager tests — segment lifecycle, disk usage, crash recovery
+db.go                  # DB struct — SQLite WAL mode, recordings/cameras CRUD, time format handling
+db_recording_plan.go   # Stream-keyed recording_plans + weekly windows
+db_test.go             # DB tests — time parsing, CRUD operations, query builder
+manager.go             # Manager struct — file create/write/close with temp→atomic rename
+manager_test.go        # Manager tests — segment lifecycle, disk usage, crash recovery
 ```
 
 ## WHERE TO LOOK
@@ -32,6 +33,7 @@ manager_test.go # Manager tests — segment lifecycle, disk usage, crash recover
 - **Timestamps**: All stored as UTC strings `2006-01-02 15:04:05.999999999`. `parseTime()` handles 5+ legacy formats
 - **Atomic writes**: `CreateSegment()` creates temp file → `CloseSegment()` renames to final path. Prevents partial files on crash
 - **Dynamic query builder**: `ListRecordings()` builds SQL from filter params. Uses `WHERE 1=1` base + conditional `AND` clauses
+- **Recordings query cache**: in-process generation cache for `ListRecordings` / `CountRecordingsWithFilter`. Invalidate via `invalidateRecordingsCache()` after every recordings write; do not cache merge/timeline queries
 - **Nullable fields**: `CameraRow.MergeEnabled` uses `*bool` (nil = use global). Scanned with `NullBool` helper
 - **Error handling**: Non-fatal errors log warning and continue (e.g., file deletion after DB delete)
 

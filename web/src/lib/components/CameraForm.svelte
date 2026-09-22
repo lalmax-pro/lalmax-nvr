@@ -26,7 +26,6 @@
   import { showToast } from '$lib/toast';
   import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
   import TimelapseConfigEditor from '$lib/components/TimelapseConfigEditor.svelte';
-  import RecordingScheduleEditor from '$lib/components/RecordingScheduleEditor.svelte';
   import DeviceCapabilities from '$lib/components/DeviceCapabilities.svelte';
   import ImagingPanel from '$lib/components/ImagingPanel.svelte';
   import PresetManager from '$lib/components/PresetManager.svelte';
@@ -70,7 +69,6 @@
   let formRetentionDays = $state(0);
   let formStreamEncoding = $state('');
   let formAudioEnabled = $state(false);
-  let formRecordingMode = $state<'continuous' | 'scheduled' | 'off' | 'event' | 'adaptive'>('continuous');
   let formSubStreamURL = $state('');
   let formSubnetHints = $state('');
   let formAdaptiveInterval = $state('30s');
@@ -149,7 +147,6 @@
     formRetentionDays = 0;
     formStreamEncoding = '';
     formAudioEnabled = false;
-    formRecordingMode = 'continuous';
     formSubStreamURL = '';
     formSubnetHints = '';
     formAdaptiveInterval = '30s';
@@ -182,7 +179,6 @@
     formRetentionDays = camera.retention_days || 0;
     formStreamEncoding = camera.stream_encoding || '';
     formAudioEnabled = camera.audio_enabled ?? false;
-    formRecordingMode = camera.recording_mode ?? 'continuous';
     formSubStreamURL = camera.sub_stream_url || '';
     formSubnetHints = (camera.subnet_hints || []).join(', ');
     formAdaptiveInterval = camera.adaptive?.timelapse_interval || '30s';
@@ -320,10 +316,9 @@
           profile_token: formProtocol === 'onvif' ? (formProfileToken || undefined) : undefined,
           profile_name: formProtocol === 'onvif' ? (selectedProfile?.name || undefined) : undefined,
           audio_enabled: supportsAudioRecording() ? formAudioEnabled : false,
-          recording_mode: formRecordingMode,
           sub_stream_url: formSubStreamURL || undefined,
           subnet_hints: formSubnetHints.split(',').map(s => s.trim()).filter(Boolean),
-          adaptive: formRecordingMode === 'adaptive' ? { timelapse_interval: formAdaptiveInterval || '30s' } : undefined,
+          adaptive: { timelapse_interval: formAdaptiveInterval || '30s' },
         };
         if (formUsername && formUsername !== editingCamera.username) {
           data.username = formUsername;
@@ -360,10 +355,9 @@
           profile_token: formProtocol === 'onvif' ? (formProfileToken || undefined) : undefined,
           profile_name: formProtocol === 'onvif' ? (selectedProfile?.name || undefined) : undefined,
           audio_enabled: supportsAudioRecording() ? formAudioEnabled : false,
-          recording_mode: formRecordingMode,
           sub_stream_url: formSubStreamURL || undefined,
           subnet_hints: formSubnetHints.split(',').map(s => s.trim()).filter(Boolean),
-          adaptive: formRecordingMode === 'adaptive' ? { timelapse_interval: formAdaptiveInterval || '30s' } : undefined,
+          adaptive: { timelapse_interval: formAdaptiveInterval || '30s' },
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -641,34 +635,21 @@
     </div>
   </div>
 
-  <!-- Recording mode (edit mode only) -->
   {#if editingCamera}
     <div class="mt-6 border th-border rounded-lg p-4">
       <div class="mb-3">
         <span class="th-text-secondary font-medium text-sm">{t('cameras.recordingMode.title')}</span>
-        <p class="th-text-muted text-xs mt-1">{t('cameras.recordingMode.hint')}</p>
+        <p class="th-text-muted text-xs mt-1">{t('recordingPlans.cameraHint')}</p>
       </div>
-      <div class="flex flex-wrap gap-2">
-        {#each (['continuous', 'scheduled', 'event', 'adaptive', 'off'] as const) as mode}
-          <button
-            type="button"
-            class="btn px-3 py-1.5 text-sm {formRecordingMode === mode ? 'btn-primary' : 'btn-ghost'}"
-            onclick={() => formRecordingMode = mode}
-          >
-            {t(`cameras.recordingMode.${mode}`)}
-          </button>
-        {/each}
+      <div class="flex items-center gap-3 flex-wrap">
+        <span class="badge">{t(`cameras.recordingMode.${editingCamera.recording_mode || 'off'}`)}</span>
+        <a class="btn btn-ghost text-sm px-3 py-1.5" href="#/recording-plans?stream_id={encodeURIComponent(editingCamera.stream_id || editingCamera.id)}">{t('recordingPlans.manage')}</a>
       </div>
-      {#if formRecordingMode === 'scheduled'}
-        <RecordingScheduleEditor cameraId={editingCamera.id} />
-      {/if}
-      {#if formRecordingMode === 'adaptive'}
-        <div class="mt-3">
-          <label for="cam-adaptive-interval" class="input-label">{t('cameras.adaptive.interval')}</label>
-          <input id="cam-adaptive-interval" type="text" class="input" bind:value={formAdaptiveInterval} placeholder="30s" />
-          <p class="th-text-muted text-xs mt-1">{t('cameras.adaptive.intervalHint')}</p>
-        </div>
-      {/if}
+      <div class="mt-3">
+        <label for="cam-adaptive-interval" class="input-label">{t('cameras.adaptive.interval')}</label>
+        <input id="cam-adaptive-interval" type="text" class="input" bind:value={formAdaptiveInterval} placeholder="30s" />
+        <p class="th-text-muted text-xs mt-1">{t('cameras.adaptive.intervalHint')}</p>
+      </div>
     </div>
   {/if}
 

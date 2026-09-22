@@ -15,7 +15,12 @@ import (
 // It upgrades the HTTP connection to a WebSocket and streams binary-encoded
 // video frames (CodecInfo first, then VideoFrame messages).
 func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
-	id := getCameraID(r)
+	id := playResourceID(r)
+	if isStreamPlayRoute(r) {
+		if camID := h.cameraIDForStream(r.Context(), id); camID != "" {
+			id = camID
+		}
+	}
 
 	if h.wsMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "WebSocket streaming not available")

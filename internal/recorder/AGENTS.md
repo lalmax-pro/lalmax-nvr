@@ -7,6 +7,9 @@ Six recorder implementations of `model.Recorder` interface. Each manages RTSP/HT
 ## STRUCTURE
 
 ```
+planner.go       # RecordingPlanner — desired state from stream-keyed plans
+scheduler.go     # RecordingScheduler — reconcile plans ∩ live lalmax streams onto TaskManager
+task.go          # TaskManager — one H264/H265 record task per stream_id
 h264.go          # H264Recorder — RTSP→RTP→ring buffer→MP4, SPS change detection
 h265.go          # H265Recorder — RTSP HEVC, VPS/SPS/PPS tracking, IRAP sync
 mjpeg.go         # MJPEGRecorder — RTSP MJPEG→JPEG frames to directory segments
@@ -48,4 +51,4 @@ backoff.go       # Shared exponential backoff with jitter
 - **DO NOT** block on `frameCh` send — use non-blocking `select` to avoid stalling RTP reader
 - **DO NOT** start segment without IDR frame — produces black/gray frames until first keyframe
 - **DO NOT** forget to clean up temp files on muxer init failure — `os.Remove(tempPath)` on error path
-- **DO NOT** set `SegmentDur` > 30s on RPi 3B — MP4Muxer holds all samples in RAM, 2min = 60MB+
+- **DO NOT** set `SegmentDur` > 30s on RPi 3B without measuring disk/CPU — muxer streams mdat and keeps only sample-table metadata in RAM, but long segments still grow the stts/stsz/stco tables and delay moov finalization

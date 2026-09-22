@@ -1,13 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listStreams } from '$lib/api';
+  import { createStream, listStreams, subscribeNvrEvents, updateStream } from '$lib/api';
   import type { StreamInfo } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { showToast } from '$lib/toast';
   import StreamCard from '$lib/components/StreamCard.svelte';
   import Pagination from '../components/Pagination.svelte';
   import {
     AlertCircle,
     Camera,
+    Copy,
+    Plus,
     RefreshCw,
     SatelliteDish,
     Search,
@@ -15,6 +18,7 @@
   } from 'lucide-svelte';
 
   const PAGE_SIZE = 12;
+  const streamIDPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
   let loading = $state(true);
   let error = $state('');
@@ -29,6 +33,15 @@
   let managedPage = $state(1);
   let externalPage = $state(1);
   let refreshTimer: number | undefined;
+  let stopEvents: (() => void) | undefined;
+  let createOpen = $state(false);
+  let createMode = $state<'push' | 'pull'>('push');
+  let createStreamID = $state('');
+  let createName = $state('');
+  let createSourceURL = $state('');
+  let creating = $state(false);
+  let createError = $state('');
+  let createdResult = $state<StreamInfo | null>(null);
 
   let managedTotalPages = $derived(Math.max(1, Math.ceil(managedTotal / PAGE_SIZE)));
   let externalTotalPages = $derived(Math.max(1, Math.ceil(externalTotal / PAGE_SIZE)));
@@ -120,14 +133,83 @@
     return managed ? t('streams.managedEmpty') : t('streams.externalEmpty');
   }
 
+  function openCreateDialog() {
+    createOpen = true;
+    createMode = 'push';
+    createStreamID = '';
+    createName = '';
+    createSourceURL = '';
+    creating = false;
+    createError = '';
+    createdResult = null;
+  }
+
+  function closeCreateDialog() {
+    createOpen = false;
+  }
+
+  async function submitCreate() {
+    const streamID = createStreamID.trim();
+    if (!streamIDPattern.test(streamID)) {
+      createError = t('streams.streamIdHint');
+      return;
+    }
+    const sourceURL = createSourceURL.trim();
+    if (createMode === 'pull' && !sourceURL) {
+      createError = t('streams.sourceURLHint');
+      return;
+    }
+    creating = true;
+    createError = '';
+    try {
+      const info = await createStream({
+        stream_id: streamID,
+        name: createName.trim() || undefined,
+        input_mode: createMode,
+        source_url: createMode === 'pull' ? sourceURL : undefined,
+      });
+      createdResult = info;
+      if (createMode === 'push' && !(info.ingest_urls?.length)) {
+        createError = t('streams.noIngestEnabled');
+      }
+      externalPage = 1;
+      await loadStreams({ silent: true });
+    } catch (e) {
+      createError = e instanceof Error ? e.message : t('streams.createFailed');
+    } finally {
+      creating = false;
+    }
+  }
+
+  async function handleSaveName(stream: StreamInfo, name: string) {
+    try {
+      await updateStream(stream.stream_id, { name });
+      showToast(t('streams.nameUpdated'), 'success');
+      await loadStreams({ silent: true });
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('streams.nameUpdateFailed'), 'error');
+    }
+  }
+
+  async function copyPublishURL(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast(t('streams.copied'), 'success');
+    } catch {
+      showToast(t('streams.copyFailed'), 'error');
+    }
+  }
+
   onMount(() => {
     void loadStreams();
+    stopEvents = subscribeNvrEvents({}, () => { void loadStreams({ silent: true }); }, { debounceMs: 500 });
     refreshTimer = window.setInterval(() => {
       void loadStreams({ silent: true });
-    }, 5000);
+    }, 15000);
   });
 
   onDestroy(() => {
+    stopEvents?.();
     if (refreshTimer) {
       window.clearInterval(refreshTimer);
     }
@@ -151,7 +233,7 @@
     </div>
   {:else}
     {#each items as stream (stream.stream_id)}
-      <StreamCard {stream} {managed} />
+      <StreamCard {stream} {managed} onsaveName={handleSaveName} />
     {/each}
   {/if}
 {/snippet}
@@ -270,7 +352,13 @@
             <h3 class="text-lg font-semibold th-text-primary">{t('streams.externalTitle')}</h3>
             <p class="text-xs th-text-tertiary mt-0.5">{t('streams.externalHint')}</p>
           </div>
-          <span class="badge badge-neutral shrink-0">{externalTotal}</span>
+          <div class="flex items-center gap-2 shrink-0">
+            <button type="button" class="btn btn-primary btn-xs" onclick={openCreateDialog}>
+              <Plus size={14} />
+              <span>{t('streams.createStream')}</span>
+            </button>
+            <span class="badge badge-neutral">{externalTotal}</span>
+          </div>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -297,6 +385,113 @@
     {/if}
   </main>
 </div>
+
+{#if createOpen}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <button type="button" class="fixed inset-0 bg-black/60" aria-label={t('streams.done')} onclick={closeCreateDialog}></button>
+    <div class="relative th-bg-secondary rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6" role="dialog" aria-modal="true" aria-labelledby="create-stream-title">
+      <h3 id="create-stream-title" class="text-lg font-semibold th-text-primary">{t('streams.createStreamTitle')}</h3>
+      <p class="text-sm th-text-muted mt-1">{t('streams.createStreamDesc')}</p>
+
+      {#if createdResult}
+        {#if createdResult.source_type === 'relay_pull'}
+          <p class="text-sm th-text-secondary mt-4">{t('streams.pullReady')}</p>
+          <div class="border th-border rounded-lg p-3 mt-3">
+            <div class="flex items-center justify-between gap-2 mb-1">
+              <span class="text-xs font-semibold th-text-primary">{t('streams.pullSource')}</span>
+              <button type="button" class="btn btn-ghost btn-xs" onclick={() => copyPublishURL(createdResult?.source_url || '')}>
+                <Copy size={14} />
+                <span>{t('streams.copy')}</span>
+              </button>
+            </div>
+            <code class="block text-xs break-all th-text-secondary">{createdResult.source_url}</code>
+          </div>
+        {:else}
+          <p class="text-sm th-text-secondary mt-4">{t('streams.pushUrlsReady')}</p>
+          {#if createdResult.ingest_urls?.length}
+            <div class="mt-3 space-y-2">
+              {#each createdResult.ingest_urls as ingest (ingest.protocol)}
+                <div class="border th-border rounded-lg p-3">
+                  <div class="flex items-center justify-between gap-2 mb-1">
+                    <span class="text-xs font-semibold th-text-primary">{ingest.protocol.toUpperCase()}</span>
+                    <button type="button" class="btn btn-ghost btn-xs" onclick={() => copyPublishURL(ingest.url)}>
+                      <Copy size={14} />
+                      <span>{t('streams.copy')}</span>
+                    </button>
+                  </div>
+                  <code class="block text-xs break-all th-text-secondary">{ingest.url}</code>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {/if}
+        {#if createError}
+          <p class="text-sm th-color-danger mt-3">{createError}</p>
+        {/if}
+        <div class="flex justify-end mt-5">
+          <button type="button" class="btn btn-primary btn-sm" onclick={closeCreateDialog}>{t('streams.done')}</button>
+        </div>
+      {:else}
+        <form class="mt-4 space-y-4" onsubmit={(e) => { e.preventDefault(); void submitCreate(); }}>
+          <div class="flex gap-2" role="group" aria-label={t('streams.createStreamTitle')}>
+            <button type="button" class="btn btn-sm {createMode === 'push' ? 'btn-primary' : 'btn-secondary'}" onclick={() => createMode = 'push'} disabled={creating}>
+              {t('streams.inputPush')}
+            </button>
+            <button type="button" class="btn btn-sm {createMode === 'pull' ? 'btn-primary' : 'btn-secondary'}" onclick={() => createMode = 'pull'} disabled={creating}>
+              {t('streams.inputPull')}
+            </button>
+          </div>
+          <div>
+            <label for="create-stream-id" class="input-label">{t('streams.streamId')}</label>
+            <input
+              id="create-stream-id"
+              class="input mt-1"
+              autocomplete="off"
+              placeholder={t('streams.streamIdPlaceholder')}
+              bind:value={createStreamID}
+              disabled={creating}
+            />
+            <p class="text-xs th-text-tertiary mt-1">{t('streams.streamIdHint')}</p>
+          </div>
+          <div>
+            <label for="create-stream-name" class="input-label">{t('streams.displayName')}</label>
+            <input
+              id="create-stream-name"
+              class="input mt-1"
+              autocomplete="off"
+              placeholder={t('streams.displayNamePlaceholder')}
+              bind:value={createName}
+              disabled={creating}
+            />
+          </div>
+          {#if createMode === 'pull'}
+            <div>
+              <label for="create-source-url" class="input-label">{t('streams.sourceURL')}</label>
+              <input
+                id="create-source-url"
+                class="input mt-1"
+                autocomplete="off"
+                placeholder={t('streams.sourceURLPlaceholder')}
+                bind:value={createSourceURL}
+                disabled={creating}
+              />
+              <p class="text-xs th-text-tertiary mt-1">{t('streams.sourceURLHint')}</p>
+            </div>
+          {/if}
+          {#if createError}
+            <p class="text-sm th-color-danger">{createError}</p>
+          {/if}
+          <div class="flex justify-end gap-2">
+            <button type="button" class="btn btn-secondary btn-sm" onclick={closeCreateDialog} disabled={creating}>{t('common.cancel')}</button>
+            <button type="submit" class="btn btn-primary btn-sm" disabled={creating || !createStreamID.trim() || (createMode === 'pull' && !createSourceURL.trim())}>
+              {creating ? t('streams.creating') : t('streams.create')}
+            </button>
+          </div>
+        </form>
+      {/if}
+    </div>
+  </div>
+{/if}
 
 <style>
   .spin {

@@ -19,6 +19,8 @@ ptz_test.go          # PTZ control tests
 | Task | Location | Notes |
 |------|----------|-------|
 | Add endpoint | `handler.go` | Add method on Handler, register in `Routes()` |
+| Service logs | `handlers_service_logs.go` | In-memory slog ring snapshot + SSE. Operate permission |
+| Recording plans | `handlers_recording_plans.go` | Plans keyed by `stream_id`. Promote does not start recording |
 | Change auth | `Routes()` | `authMW` wraps authenticated routes |
 | File download | `serveRecording()` | Uses `http.ServeFile()` for Content-Length + range support |
 | Snapshot caching | `handleSnapshot()` | In-memory cache per camera, TTL-based invalidation |

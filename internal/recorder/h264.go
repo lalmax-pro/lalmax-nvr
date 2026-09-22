@@ -3,6 +3,7 @@ package recorder
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 	"github.com/pion/rtp"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/event"
+	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model/nalutil"
@@ -54,7 +56,9 @@ const (
 
 // H264Config holds configuration for the H264 recorder.
 type H264Config struct {
-	CameraID             string
+	CameraID string
+	// StreamID is the lalmax stream being recorded. Empty means CameraID.
+	StreamID             string
 	RTSPURL              string
 	RTSPTransport        string
 	Username             string
@@ -68,6 +72,8 @@ type H264Config struct {
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
 	EventBus             *event.EventBus
 	Adaptive             *AdaptiveGate
+	// FrameSource, when set, records from in-process lalmax frames instead of RTSP.
+	FrameSource func(ctx context.Context) (media.FrameSubscription, error)
 }
 
 // H264Recorder records H.264 video from an RTSP source.
@@ -76,10 +82,10 @@ type H264Recorder struct {
 	store   SegmentStore
 	metrics *metrics.Metrics
 
-	mu     sync.Mutex
-	status model.RecorderStatus
-	cancel context.CancelFunc
-	done   chan struct{}
+	mu      sync.Mutex
+	status  model.RecorderStatus
+	cancel  context.CancelFunc
+	done    chan struct{}
 	paused  atomic.Bool // when true, frames are consumed but not written to disk
 	preroll *prerollRing
 
@@ -107,12 +113,12 @@ type H264Recorder struct {
 	Hub *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
 
 	// Reconnect tracking — populated on disconnect, consumed on first segment after recovery.
-	disconnectedAt time.Time     // when the connection was lost (zero = not reconnecting)
-	reconnectTime  time.Time     // when the connection was restored
-	retryCount     int           // number of reconnect attempts at recovery point
-	gapReason      string        // why the disconnect happened
-	hasPendingReconnect bool // true if next segment should carry reconnection metadata
-	pendingRotate       bool // rotate at next IDR after segment duration is reached
+	disconnectedAt      time.Time // when the connection was lost (zero = not reconnecting)
+	reconnectTime       time.Time // when the connection was restored
+	retryCount          int       // number of reconnect attempts at recovery point
+	gapReason           string    // why the disconnect happened
+	hasPendingReconnect bool      // true if next segment should carry reconnection metadata
+	pendingRotate       bool      // rotate at next IDR after segment duration is reached
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -325,6 +331,182 @@ func (r *H264Recorder) run(ctx context.Context) {
 }
 
 func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
+	if r.cfg.FrameSource != nil {
+		err, connected := r.connectAndRecordFrames(ctx)
+		if connected || r.cfg.RTSPURL == "" || ctx.Err() != nil {
+			return err, connected
+		}
+		if errors.Is(err, media.ErrFramesNotSupported) {
+			h264Logger.Info("in-process frames unavailable, falling back to RTSP", "camera_id", r.cfg.CameraID)
+			return r.connectAndRecordRTSP(ctx)
+		}
+		return err, connected
+	}
+	return r.connectAndRecordRTSP(ctx)
+}
+
+func (r *H264Recorder) connectAndRecordFrames(ctx context.Context) (error, bool) {
+	sub, err := r.cfg.FrameSource(ctx)
+	if err != nil {
+		return err, false
+	}
+	defer sub.Close()
+
+	h264Logger.Info("recording via in-process lalmax frames", "camera_id", r.cfg.CameraID)
+
+	frameAlive := make(chan struct{}, 1)
+	r.frameCh = make(chan []byte, r.cfg.RingBufCap)
+	r.dropped.Store(0)
+	writerDone := make(chan struct{})
+	go r.writeFrames(writerDone)
+
+	if !r.disconnectedAt.IsZero() {
+		r.reconnectTime = time.Now()
+		r.hasPendingReconnect = true
+		h264Logger.Info("connection restored after reconnection",
+			"camera_id", r.cfg.CameraID,
+			"downtime", r.reconnectTime.Sub(r.disconnectedAt).String(),
+			"retry_count", r.retryCount)
+	}
+	r.setStatus(model.StatusRecording)
+
+	stopWatchdog := make(chan struct{})
+	watchdogDone := make(chan struct{})
+	go runFrameWatchdog(ctx, r.cfg.FrameWatchdogTimeout, frameAlive, stopWatchdog, watchdogDone, func() {
+		h264Logger.Warn("frame watchdog timeout, closing in-process subscription",
+			"camera_id", r.cfg.CameraID, "timeout", r.cfg.FrameWatchdogTimeout)
+		_ = sub.Close()
+	})
+
+	connected := false
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- r.consumeVideoFrames(ctx, sub, "h264", frameAlive, &connected)
+	}()
+
+	select {
+	case err := <-errCh:
+		close(stopWatchdog)
+		<-watchdogDone
+		close(r.frameCh)
+		<-writerDone
+		r.closeCurrentSegment()
+		return err, connected
+	case <-ctx.Done():
+		_ = sub.Close()
+		<-errCh
+		close(stopWatchdog)
+		<-watchdogDone
+		close(r.frameCh)
+		<-writerDone
+		r.closeCurrentSegment()
+		return ctx.Err(), connected
+	}
+}
+
+func (r *H264Recorder) consumeVideoFrames(ctx context.Context, sub media.FrameSubscription, wantCodec string, alive chan struct{}, connected *bool) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err, ok := <-sub.Err():
+			if ok && err != nil {
+				return err
+			}
+		case frame, ok := <-sub.Frames():
+			if !ok {
+				if *connected {
+					return fmt.Errorf("frame subscription ended")
+				}
+				return fmt.Errorf("frame subscription ended before first frame")
+			}
+			if frame.Kind == media.FrameAudio {
+				if r.cfg.AudioEnabled {
+					r.handleMediaAudioFrame(frame)
+				}
+				continue
+			}
+			if frame.Kind != media.FrameVideo || len(frame.Data) < 5 {
+				continue
+			}
+			if frame.Codec != "" && frame.Codec != wantCodec {
+				continue
+			}
+			*connected = true
+			select {
+			case alive <- struct{}{}:
+			default:
+			}
+			if r.Hub != nil {
+				nalu := frame.Data[4:]
+				r.Hub.Broadcast(frame.PTS.Milliseconds(), [][]byte{nalu}, frame.IsKey || nalutil.IsKeyframeNALU(nalu, wantCodec == "h265"))
+			}
+			select {
+			case r.frameCh <- frame.Data:
+			default:
+				d := r.dropped.Add(1)
+				if r.metrics != nil {
+					r.metrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
+				}
+				if d%100 == 1 {
+					h264Logger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
+				}
+			}
+		}
+	}
+}
+
+func (r *H264Recorder) handleMediaAudioFrame(frame media.MediaFrame) {
+	switch frame.Codec {
+	case "aac":
+		if frame.IsSeqHeader {
+			r.audioCodec = "aac"
+			r.audioMuxerConfig = append([]byte(nil), frame.Data...)
+			return
+		}
+		if r.Hub != nil {
+			r.Hub.BroadcastAudio(frame.PTS.Milliseconds(), model.AudioAAC, frame.Data)
+		}
+		r.writeMediaAudioSample(frame.Data, 1024*time.Second/44100)
+	case "g711", "g711a", "g711u":
+		if r.audioCodec == "" {
+			r.audioCodec = "g711"
+			r.g711MULaw = frame.Codec == "g711u"
+			r.g711SampleRate = 8000
+			muLawByte := byte(0)
+			if r.g711MULaw {
+				muLawByte = 1
+			}
+			rate := r.g711SampleRate
+			r.audioMuxerConfig = []byte{muLawByte, byte(rate >> 24), byte(rate >> 16), byte(rate >> 8), byte(rate)}
+		}
+		if r.Hub != nil {
+			r.Hub.BroadcastAudio(frame.PTS.Milliseconds(), model.AudioG711, frame.Data)
+		}
+		dur := time.Duration(len(frame.Data)) * time.Second / time.Duration(r.g711SampleRate)
+		if dur < time.Millisecond {
+			dur = time.Millisecond
+		}
+		r.writeMediaAudioSample(frame.Data, dur)
+	}
+}
+
+func (r *H264Recorder) writeMediaAudioSample(data []byte, dur time.Duration) {
+	r.mu.Lock()
+	m := r.muxer
+	aid := r.audioTrackID
+	start := r.segStart
+	r.mu.Unlock()
+	if m == nil || aid <= 0 {
+		return
+	}
+	pts := time.Since(start)
+	if err := m.WriteAudioSample(aid, data, pts, dur); err != nil && err.Error() != "muxer is closed" {
+		h264Logger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
+	}
+}
+
+func (r *H264Recorder) connectAndRecordRTSP(ctx context.Context) (error, bool) {
 	u, err := base.ParseURL(r.cfg.RTSPURL)
 	if err != nil {
 		return fmt.Errorf("invalid RTSP URL: %w", err), false
@@ -767,6 +949,7 @@ func (r *H264Recorder) closeCurrentSegmentLocked() {
 		rec := &model.Recording{
 			ID:         fmt.Sprintf("%d", now.UnixNano()),
 			CameraID:   r.cfg.CameraID,
+			StreamID:   streamIDOrCameraID(r.cfg.StreamID, r.cfg.CameraID),
 			FilePath:   r.curFinalPath,
 			Format:     model.FormatH264,
 			StartedAt:  r.segStart,

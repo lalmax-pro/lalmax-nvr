@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,11 +23,12 @@ import (
 )
 
 type stubMediaEngine struct {
-	startPulls   []media.StartPullRequest
-	stopPulls    []string
-	startErr     error
-	stopErr      error
+	startPulls    []media.StartPullRequest
+	stopPulls     []string
+	startErr      error
+	stopErr       error
 	activeStreams map[string]bool
+	streamCodec   string
 }
 
 func (s *stubMediaEngine) Start(context.Context) error    { return nil }
@@ -54,7 +56,7 @@ func (s *stubMediaEngine) KickSession(context.Context, string) error {
 }
 func (s *stubMediaEngine) GetStream(_ context.Context, streamID string) (*media.StreamInfo, error) {
 	if s.activeStreams != nil && s.activeStreams[streamID] {
-		return &media.StreamInfo{StreamID: streamID, AppName: "live", Active: true}, nil
+		return &media.StreamInfo{StreamID: streamID, AppName: "live", Active: true, VideoCodec: s.streamCodec}, nil
 	}
 	return nil, nil
 }
@@ -78,6 +80,9 @@ func (s *stubMediaEngine) SubscribeSRTEvents(context.Context) (<-chan media.SRTE
 }
 func (s *stubMediaEngine) SubscribeWHIPEvents(context.Context) (<-chan media.WHIPEvent, error) {
 	return nil, errors.New("not implemented")
+}
+func (s *stubMediaEngine) SubscribeFrames(context.Context, media.SubscribeFramesRequest) (media.FrameSubscription, error) {
+	return nil, media.ErrFramesNotSupported
 }
 func (s *stubMediaEngine) AddCustomizePubSession(_ context.Context, _ string) (media.CustomizePubSession, error) {
 	return nil, errors.New("not implemented")
@@ -553,6 +558,148 @@ func TestAddCamera_EnabledH264(t *testing.T) {
 	assert.Len(t, mgr.cfg.Cameras, 5) // 4 original + 1 new
 }
 
+func TestAddCamera_PersistsStreamIDAndBinding(t *testing.T) {
+	mgr, _, db, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	id, err := mgr.AddCamera(ctx, config.CameraConfig{
+		ID:       "cam-bind-1",
+		Name:     "Bound",
+		Protocol: "rtsp",
+		Encoding: "h264",
+		Enabled:  false,
+	})
+	require.NoError(t, err)
+
+	binding, err := db.GetStreamBinding(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, binding, "AddCamera must create a stream binding")
+	require.Equal(t, id, binding.CameraID)
+
+	configs, err := db.ListCameraConfigs(ctx)
+	require.NoError(t, err)
+	found := false
+	for _, c := range configs {
+		if c.ID == id {
+			require.Equal(t, id, c.StreamID, "AddCamera must persist StreamID")
+			found = true
+		}
+	}
+	require.True(t, found)
+}
+
+func TestCameraStreamIdentity_SeparateFromCameraID(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	id, err := mgr.AddCamera(ctx, config.CameraConfig{
+		ID:       "cam-split",
+		Name:     "Split",
+		Protocol: "rtsp",
+		Encoding: "h264",
+		StreamID: "obs-split",
+		Enabled:  false,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, "obs-split", mgr.ingestStreamID(*mgr.GetCameraConfig(id)))
+	require.NotNil(t, mgr.getCameraConfigByStream("obs-split"))
+	require.Equal(t, id, mgr.getCameraConfigByStream("obs-split").ID)
+	require.Nil(t, mgr.getCameraConfigByStream(id), "camera ID must not be used as a stream name")
+}
+
+func TestStartStreamRecording_PlanOnlyStream(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.mediaEngine = &stubMediaEngine{
+		activeStreams: map[string]bool{"bare-push": true},
+		streamCodec:   "h264",
+	}
+
+	require.NoError(t, mgr.StartStreamRecording(ctx, "bare-push"))
+	require.True(t, mgr.StreamRecordingActive("bare-push"))
+
+	// Idempotent: a second start is a no-op.
+	require.NoError(t, mgr.StartStreamRecording(ctx, "bare-push"))
+
+	require.NoError(t, mgr.StopStreamRecording(ctx, "bare-push"))
+	require.False(t, mgr.StreamRecordingActive("bare-push"))
+
+	// Unknown stream and non-recordable codec are rejected.
+	require.Error(t, mgr.StartStreamRecording(ctx, "missing-stream"))
+
+	mgr.mediaEngine = &stubMediaEngine{
+		activeStreams: map[string]bool{"audio-only": true},
+		streamCodec:   "opus",
+	}
+	require.Error(t, mgr.StartStreamRecording(ctx, "audio-only"))
+	require.False(t, mgr.StreamRecordingActive("audio-only"))
+}
+
+func TestAddCamera_RecordingPlanDecision(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// A loaded plan state says "do not record": a new camera is paused at start.
+	mgr.SetRecordingDecision(func(string) (bool, bool) { return false, true })
+	_, err := mgr.AddCamera(ctx, config.CameraConfig{
+		ID: "cam-noplan", Name: "NoPlan", Protocol: "rtsp", Encoding: "h264", Enabled: true,
+	})
+	require.NoError(t, err)
+	require.True(t, mgr.RecordingPaused("cam-noplan"), "no active plan must leave recording paused")
+
+	// An active plan records.
+	mgr.SetRecordingDecision(func(string) (bool, bool) { return true, true })
+	_, err = mgr.AddCamera(ctx, config.CameraConfig{
+		ID: "cam-plan", Name: "Plan", Protocol: "rtsp", Encoding: "h264", Enabled: true,
+	})
+	require.NoError(t, err)
+	require.False(t, mgr.RecordingPaused("cam-plan"))
+
+	// Unknown plan state falls back to per-camera mode.
+	mgr.SetRecordingDecision(func(string) (bool, bool) { return false, false })
+	_, err = mgr.AddCamera(ctx, config.CameraConfig{
+		ID: "cam-unknown", Name: "Unknown", Protocol: "rtsp", Encoding: "h264", Enabled: true,
+	})
+	require.NoError(t, err)
+	require.False(t, mgr.RecordingPaused("cam-unknown"))
+}
+
+func TestSetCameraStream_RebindsAndPersists(t *testing.T) {
+	mgr, _, db, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	id, err := mgr.AddCamera(ctx, config.CameraConfig{
+		ID: "cam-rebind", Name: "Rebind", Protocol: "rtsp", Encoding: "h264", Enabled: false,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.SetCameraStream(ctx, id, "obs-foreign"))
+
+	binding, err := db.GetStreamBinding(ctx, "obs-foreign")
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	require.Equal(t, id, binding.CameraID)
+
+	old, err := db.GetStreamBinding(ctx, id)
+	require.NoError(t, err)
+	require.Nil(t, old, "previous binding must be replaced")
+
+	configs, err := db.ListCameraConfigs(ctx)
+	require.NoError(t, err)
+	for _, c := range configs {
+		if c.ID == id {
+			require.Equal(t, "obs-foreign", c.StreamID)
+		}
+	}
+}
+
 func TestAddCamera_Disabled(t *testing.T) {
 	mgr, _, _, _ := newTestManager(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -694,6 +841,26 @@ func TestRemoveCamera_Persists(t *testing.T) {
 	for _, cam := range loaded.Cameras {
 		assert.NotEqual(t, "cam-jpeg", cam.ID, "removed camera should not be in config")
 	}
+}
+
+func TestOrderedSnapshotTokens_SubstreamFallsBackToMain(t *testing.T) {
+	tokens := OrderedSnapshotTokens("Profile_2", []onvif.DeviceProfile{
+		{Token: "Profile_1", Name: "mainStream"},
+		{Token: "Profile_2", Name: "subStream"},
+	})
+	assert.Equal(t, []string{"Profile_2", "Profile_1"}, tokens)
+}
+
+func TestUpdateCamera_ProfileToken(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	token := "Profile_2"
+	updated, err := mgr.UpdateCamera(ctx, "cam-h264", CameraUpdate{ProfileToken: &token})
+	require.NoError(t, err)
+	assert.Equal(t, "Profile_2", updated.ProfileToken)
+	assert.Equal(t, 0, mgr.RecorderCount())
 }
 
 func TestUpdateCamera_Name(t *testing.T) {
@@ -1582,4 +1749,99 @@ func TestResumeRecordingNotPaused(t *testing.T) {
 	err = mgr.ResumeRecording(ctx, "cam-h264")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not paused")
+}
+
+func TestRecordingSourceURL_GB28181UsesLalmaxPlayURL(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	mgr.SetMediaEngine(&stubMediaEngine{})
+	cam := config.CameraConfig{ID: "gb1", Protocol: "gb28181", Encoding: "h264"}
+	require.Equal(t, "rtsp://127.0.0.1/live/gb1", mgr.recordingSourceURL(cam))
+}
+
+func TestRecordingSourceURL_GB28181EmptyEncodingStillRelays(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	mgr.SetMediaEngine(&stubMediaEngine{})
+	cam := config.CameraConfig{ID: "gb2", Protocol: "gb28181"}
+	require.Equal(t, "rtsp://127.0.0.1/live/gb2", mgr.recordingSourceURL(cam))
+}
+
+type blockingPullEngine struct {
+	stubMediaEngine
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingPullEngine) StartPull(ctx context.Context, req media.StartPullRequest) (*media.StreamSession, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return s.stubMediaEngine.StartPull(ctx, req)
+}
+
+func TestStartCamera_DoesNotHoldGlobalLockDuringPull(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	engine := &blockingPullEngine{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	mgr.SetMediaEngine(engine)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- mgr.StartCamera(ctx, "cam-h264")
+	}()
+
+	select {
+	case <-engine.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartPull was not reached")
+	}
+
+	statusDone := make(chan struct{})
+	go func() {
+		_ = mgr.Status()
+		close(statusDone)
+	}()
+	select {
+	case <-statusDone:
+	case <-time.After(time.Second):
+		t.Fatal("Status blocked while another camera was starting")
+	}
+
+	close(engine.release)
+	require.NoError(t, <-done)
+}
+
+func TestConcurrentStartCameras(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	mgr.SetMediaEngine(&stubMediaEngine{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	ids := []string{"cam-h264", "cam-mjpeg", "cam-jpeg"}
+	errCh := make(chan error, len(ids))
+	for _, id := range ids {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			errCh <- mgr.StartCamera(ctx, id)
+		}(id)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 3, mgr.RecorderCount())
 }

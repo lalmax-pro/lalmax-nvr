@@ -2,10 +2,10 @@ package health
 
 import (
 	"context"
+	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"log/slog"
 	"sync"
 	"time"
-	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 )
 
 // HealthStorage interface for health events (for testability).

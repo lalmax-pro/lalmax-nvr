@@ -16,8 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/afero"
 
-	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
 var logger = slog.Default().With("component", "ftp")

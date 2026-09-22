@@ -21,7 +21,13 @@ func SyncCamerasFromStorage(ctx context.Context, cfg *config.Config, db *storage
 			if err := db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, config.NormalizeRTSPTransport(cam.RTSPTransport)); err != nil {
 				return err
 			}
+			if cam.StreamID == "" {
+				cam.StreamID = cam.ID
+			}
 			if err := db.SaveCameraExtras(ctx, cam); err != nil {
+				return err
+			}
+			if err := db.BindStreamToCamera(ctx, cam.StreamID, cam.ID); err != nil {
 				return err
 			}
 		}

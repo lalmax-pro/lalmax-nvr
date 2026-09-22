@@ -38,12 +38,6 @@ func TestAutoDiscoverSettings_Get(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 }
 
-func TestIsValidRecordingModeEventAdaptive(t *testing.T) {
-	require.True(t, isValidRecordingMode("event"))
-	require.True(t, isValidRecordingMode("adaptive"))
-	require.False(t, isValidRecordingMode("nope"))
-}
-
 func TestCameraProtocols_IncludesRTSP(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
@@ -165,6 +159,36 @@ func TestCameraFlow_CountsSubscribersByProtocol(t *testing.T) {
 	require.Equal(t, 2, body.Viewers["rtsp"])
 	require.Equal(t, 1, body.Viewers["hls"])
 	require.True(t, body.Substream.Active)
+}
+
+func TestCameraFlow_OmitsInternalRecorderSubscriber(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	seedCameraWithEncoding(t, db, "cam1", "h264")
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
+	h.SetMediaEngine(&stubMediaEngine{
+		streamsByID: map[string]*media.StreamInfo{
+			"cam1": {
+				StreamID:   "cam1",
+				Active:     true,
+				VideoCodec: "H264",
+				Subscribers: []media.SessionInfo{
+					{Protocol: "NVR-RECORD"},
+					{Protocol: "hls"},
+				},
+			},
+		},
+	})
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/flow", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var body flowCameraResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	require.Equal(t, 1, body.Viewers["hls"])
+	require.Zero(t, body.Viewers["nvr-record"])
+	require.Equal(t, "idle", body.Recording.Status)
 }
 
 func TestRecordingsTimeline_RequiresCamera(t *testing.T) {

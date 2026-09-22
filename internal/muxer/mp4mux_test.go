@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lalmax-pro/lalmax-nvr/internal/merge"
 )
 
 // Minimal valid H.264 SPS (baseline profile 66, level 30)
@@ -392,4 +394,64 @@ func TestAudioOnlyMP4(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	assert.Greater(t, info.Size(), int64(0))
+}
+
+func TestStreamingMuxerDoesNotRetainPayload(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stream.mp4")
+	m := NewMP4Muxer(path)
+	trackID, err := m.AddH264Track(testSPS, testPPS)
+	require.NoError(t, err)
+
+	payload := make([]byte, 64*1024)
+	payload[0], payload[1], payload[2], payload[3], payload[4] = 0x00, 0x00, 0x00, 0x01, 0x65
+	require.NoError(t, m.WriteSample(trackID, payload, 0, 33*time.Millisecond))
+	require.Len(t, m.tracks[0].samples, 1)
+	assert.Greater(t, m.tracks[0].samples[0].size, uint32(0))
+	assert.Greater(t, m.tracks[0].samples[0].offset, int64(0))
+
+	require.NoError(t, m.Close())
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Greater(t, info.Size(), int64(len(payload)))
+}
+
+func TestStreamingMuxerParseSegment(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "parse.mp4")
+	m := NewMP4Muxer(path)
+	videoID, err := m.AddH264Track(testSPS, testPPS)
+	require.NoError(t, err)
+	audioID, err := m.AddAudioTrack("aac", []byte{0x12, 0x10})
+	require.NoError(t, err)
+
+	idr := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80, 0x40}
+	p := []byte{0x00, 0x00, 0x00, 0x01, 0x41, 0x9a, 0x24}
+	aac := []byte{0x21, 0x10, 0x05, 0x00}
+	require.NoError(t, m.WriteSample(videoID, idr, 0, 33*time.Millisecond))
+	require.NoError(t, m.WriteAudioSample(audioID, aac, 0, 23*time.Millisecond))
+	require.NoError(t, m.WriteSample(videoID, p, 33*time.Millisecond, 33*time.Millisecond))
+	require.NoError(t, m.WriteAudioSample(audioID, aac, 23*time.Millisecond, 23*time.Millisecond))
+	require.NoError(t, m.Close())
+
+	info, err := merge.ParseSegment(path)
+	require.NoError(t, err)
+	require.Equal(t, "h264", info.Codec)
+	require.Equal(t, 2, info.SampleCount)
+	require.True(t, info.HasAudio)
+	require.Equal(t, 2, info.AudioSampleCount)
+	require.True(t, info.Samples[0].IsKeyFrame)
+	require.False(t, info.Samples[1].IsKeyFrame)
+	require.Greater(t, info.Samples[0].Size, uint32(0))
+	require.Greater(t, info.AudioSamples[0].Size, uint32(0))
+}
+
+func TestStripAnnexBPrefix(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []byte{0x65, 0x88}, stripAnnexBPrefix([]byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x88}))
+	assert.Equal(t, []byte{0x65, 0x88}, stripAnnexBPrefix([]byte{0x00, 0x00, 0x01, 0x65, 0x88}))
+	assert.Equal(t, []byte{0x65, 0x88}, stripAnnexBPrefix([]byte{0x65, 0x88}))
+	assert.Empty(t, stripAnnexBPrefix([]byte{0x00, 0x00, 0x00, 0x01}))
 }

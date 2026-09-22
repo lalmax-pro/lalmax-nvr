@@ -8,6 +8,7 @@ import { apiRequest, apiRequestBlob, getAuthHeader, getCredentials } from './cli
 export interface Recording {
   id: string;
   camera_id: string;
+  stream_id?: string;
   file_path: string;
   format: 'h264' | 'mjpeg' | 'h265' | 'timelapse';
   started_at: string;

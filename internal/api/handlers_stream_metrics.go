@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 )
 
@@ -157,8 +158,13 @@ func (h *Handler) sampleStreamMetrics(ctx context.Context) {
 			}
 		}
 		// Fall back to max subscriber bitrate.
-		if bitrate == 0 {
-			for _, sub := range s.Subscribers {
+		externalSubs := 0
+		for _, sub := range s.Subscribers {
+			if media.IsInternalRecorderSession(sub.Protocol, sub.SessionID) {
+				continue
+			}
+			externalSubs++
+			if bitrate == 0 {
 				br := sub.ReadBitrateKbits
 				if br == 0 {
 					br = sub.WriteBitrateKbits
@@ -187,7 +193,7 @@ func (h *Handler) sampleStreamMetrics(ctx context.Context) {
 			Timestamp:    now,
 			InFPS:        s.InFPS,
 			BitrateKbits: bitrate,
-			Subscribers:  len(s.Subscribers),
+			Subscribers:  externalSubs,
 		})
 	}
 

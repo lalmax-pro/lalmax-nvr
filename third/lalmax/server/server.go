@@ -318,10 +318,61 @@ func (s *LalMaxServer) Shutdown(ctx context.Context) error {
 	}
 }
 
+// Close stops listeners immediately. Unlike Shutdown it does not wait for
+// in-flight HTTP requests or lal Dispose, so protocol restarts are not
+// blocked by live viewers.
+func (s *LalMaxServer) Close() {
+	s.mu.Lock()
+	if !s.started {
+		s.mu.Unlock()
+		return
+	}
+	cancel := s.cancel
+	httpServer := s.httpServer
+	httpsServer := s.httpsServer
+	s.started = false
+	s.ready = false
+	s.httpServer = nil
+	s.httpsServer = nil
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if httpServer != nil {
+		_ = httpServer.Close()
+	}
+	if httpsServer != nil {
+		_ = httpsServer.Close()
+	}
+	if s.srtsvr != nil {
+		s.srtsvr.Shutdown()
+	}
+	if s.rtcsvr != nil {
+		_ = s.rtcsvr.Close()
+	}
+	if s.rtpPubMgr != nil {
+		s.rtpPubMgr.StopAll()
+	}
+	if s.udptsMgr != nil {
+		s.udptsMgr.StopAll()
+	}
+	go s.lalsvr.Dispose()
+}
+
 func (s *LalMaxServer) Ready() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ready
+}
+
+// HTTPHandler returns the in-process gin handler for lalmax HTTP play/API routes.
+// Callers can ServeHTTP without looping back through TCP.
+func (s *LalMaxServer) HTTPHandler() http.Handler {
+	if s == nil {
+		return nil
+	}
+	return s.router
 }
 
 func (s *LalMaxServer) Wait() error {

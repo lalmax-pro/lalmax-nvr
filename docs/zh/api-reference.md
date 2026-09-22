@@ -14,6 +14,7 @@
   - [HLS 流媒体](#hls-流媒体)
   - [ONVIF 摄像头控制](#onvif-摄像头控制)
   - [摄像头合并配置](#摄像头合并配置)
+- [录像计划 API](#录像计划-api)
 - [录像 API](#录像-api)
 - [连续 VOD](#连续-vod)
 - [流诊断](#流诊断)
@@ -1182,6 +1183,49 @@ curl -u username:password \
 **端点：** `GET /api/flow/streams`
 
 所有相机的同一结构列表：`{ "cameras": [ ... ] }`。
+
+## 录像计划 API
+
+录像由计划驱动，计划挂在 `stream_id` 上。没有计划就不录。把流 `promote` 成设备也不会自动开录。详见 [录像计划](recording-plans.md)。
+
+### 列出计划
+
+**端点：** `GET /api/recording-plans`
+
+```json
+{
+  "plans": [
+    {
+      "id": "plan-ab12cd34",
+      "stream_id": "obs-1",
+      "name": "OBS",
+      "mode": "scheduled",
+      "enabled": true,
+      "windows": [{"day_of_week": 1, "start_time": "09:00", "end_time": "17:00"}]
+    }
+  ]
+}
+```
+
+### 创建计划
+
+**端点：** `POST /api/recording-plans`
+
+同一 `stream_id` 已有计划时返回 409。`mode`：`continuous` | `scheduled` | `off` | `event` | `adaptive`。
+
+```bash
+curl -u username:password -X POST http://localhost:9090/api/recording-plans \
+  -H 'Content-Type: application/json' \
+  -d '{"stream_id":"obs-1","name":"OBS","mode":"continuous","enabled":true}'
+```
+
+### 获取 / 更新 / 删除
+
+- `GET /api/recording-plans/{id}`
+- `PUT /api/recording-plans/{id}`（省略的字段保持不变；`stream_id` 可省略）
+- `DELETE /api/recording-plans/{id}`
+
+摄像头 JSON 的 `recording_mode` 是只读派生（绑定流的计划，没有则为 `off`）。`POST /api/cameras/{id}/pause-recording` 会把该流计划设为 `enabled: false`。
 
 ## 录像 API
 

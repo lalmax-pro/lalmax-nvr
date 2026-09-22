@@ -416,7 +416,7 @@ function getAffectedCameraCount(protocol: string): number {
       });
 
       // Save streaming settings
-      await updateStreamingSettings({
+      const streamingResult = await updateStreamingSettings({
         default_protocol: streamingDefaultProtocol,
         webrtc: {
           enabled: streamingWebrtcEnabled,
@@ -483,7 +483,11 @@ function getAffectedCameraCount(protocol: string): number {
       // Refresh state
       settings = await getSettings();
       captureSnapshot();
-      showToast(t('settings.saved'), 'success');
+      if (streamingResult.restart_error) {
+        showToast(t('settings.streaming.restartFailed'), 'error');
+      } else {
+        showToast(t('settings.saved'), 'success');
+      }
     } catch (e) {
       showToast(e instanceof Error ? e.message : t('common.failedSaveSettings'), 'error');
     } finally {
@@ -670,7 +674,7 @@ function getAffectedCameraCount(protocol: string): number {
   async function saveStreamingSettings() {
     streamingSaving = true;
     try {
-      await updateStreamingSettings({
+      const result = await updateStreamingSettings({
         default_protocol: streamingDefaultProtocol,
         auto_stop_no_view_sec: streamingAutoStopNoViewSec,
         webrtc: {
@@ -703,7 +707,11 @@ function getAffectedCameraCount(protocol: string): number {
           enabled: streamingWhipEnabled,
         },
       });
-      showToast(t('settings.streaming.saved'), 'success');
+      if (result.restart_error) {
+        showToast(t('settings.streaming.restartFailed'), 'error');
+      } else {
+        showToast(t('settings.streaming.saved'), 'success');
+      }
     } catch (e) {
       showToast(e instanceof Error ? e.message : t('settings.streaming.error'), 'error');
     } finally {

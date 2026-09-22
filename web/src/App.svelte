@@ -5,6 +5,7 @@
   import { WifiOff } from 'lucide-svelte';
   import Login from './routes/Login.svelte';
   import Recordings from './routes/Recordings.svelte';
+  import RecordingPlans from './routes/RecordingPlans.svelte';
   import RecordingDetail from './routes/RecordingDetail.svelte';
   import Events from './routes/Events.svelte';
   import Stats from './routes/Stats.svelte';
@@ -19,7 +20,7 @@
   import DeviceGroups from './routes/DeviceGroups.svelte';
   import GB28181Channels from './routes/GB28181Channels.svelte';
   import Users from './routes/Users.svelte';
-  import OperationLogs from './routes/OperationLogs.svelte';
+  import Logs from './routes/Logs.svelte';
   import AIDetection from './routes/AIDetection.svelte';
   import Relay from './routes/Relay.svelte';
   import MapView from './routes/MapView.svelte';
@@ -94,6 +95,10 @@
       return { route: 'recordings', params: { cameraId: query.get('camera_id') || '' } };
     }
 
+    if (segments[0] === 'recording-plans') {
+      return { route: 'recording-plans', params: { streamId: query.get('stream_id') || '' } };
+    }
+
     if (segments[0] === 'events') {
       return { route: 'events', params: { cameraId: query.get('camera_id') || '' } };
     }
@@ -161,7 +166,11 @@
     }
 
     if (segments[0] === 'operation-logs') {
-      return { route: 'operation-logs', params: {} };
+      return { route: 'logs', params: { tab: 'operations' } };
+    }
+
+    if (segments[0] === 'logs') {
+      return { route: 'logs', params: { tab: segments[1] === 'service' ? 'service' : 'operations' } };
     }
 
     if (segments[0] === 'ai' || segments[0] === 'ai-detection') {
@@ -254,6 +263,8 @@
     <main class="main-content" class:fill-viewport={currentRoute === 'map'}>
       {#if currentRoute === 'recordings'}
         <Recordings initialCameraId={params.cameraId} />
+      {:else if currentRoute === 'recording-plans'}
+        <RecordingPlans initialStreamId={params.streamId} />
       {:else if currentRoute === 'recording-detail'}
         <RecordingDetail recordingId={params.id} />
       {:else if currentRoute === 'events'}
@@ -278,8 +289,8 @@
         <GB28181Channels />
       {:else if currentRoute === 'users'}
         <Users />
-      {:else if currentRoute === 'operation-logs'}
-        <OperationLogs />
+      {:else if currentRoute === 'logs'}
+        <Logs initialTab={params.tab || 'operations'} />
       {:else if currentRoute === 'ai-detection'}
         <AIDetection />
       {:else if currentRoute === 'relay'}

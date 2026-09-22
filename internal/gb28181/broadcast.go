@@ -51,19 +51,19 @@ type BroadcastSession struct {
 
 // BroadcastManager manages broadcast sessions.
 type BroadcastManager struct {
-	mu         sync.RWMutex
-	sessions   map[string]*BroadcastSession // key: deviceID_channelID
-	client     *sipgo.Client
-	cfg        *Config
+	mu          sync.RWMutex
+	sessions    map[string]*BroadcastSession // key: deviceID_channelID
+	client      *sipgo.Client
+	cfg         *Config
 	deviceStore *DeviceStore
 }
 
 // NewBroadcastManager creates a new broadcast manager.
 func NewBroadcastManager(client *sipgo.Client, cfg *Config, store *DeviceStore) *BroadcastManager {
 	return &BroadcastManager{
-		sessions:   make(map[string]*BroadcastSession),
-		client:     client,
-		cfg:        cfg,
+		sessions:    make(map[string]*BroadcastSession),
+		client:      client,
+		cfg:         cfg,
 		deviceStore: store,
 	}
 }

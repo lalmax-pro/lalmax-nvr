@@ -13,11 +13,11 @@ import (
 )
 
 const (
-	PayloadTypePCMA      uint8 = 8
-	AudioChanBuffer      int   = 100
-	TCPDialTimeout             = 10 * time.Second
-	RTPSamplesPer20ms    uint32 = 160
-	RTPVersion2          byte  = 0x80
+	PayloadTypePCMA   uint8  = 8
+	AudioChanBuffer   int    = 100
+	TCPDialTimeout           = 10 * time.Second
+	RTPSamplesPer20ms uint32 = 160
+	RTPVersion2       byte   = 0x80
 )
 
 // TalkSession 表示一个对讲会话
@@ -30,22 +30,22 @@ type TalkSession struct {
 	PayloadType   uint8
 
 	// 网络连接
-	RTPConn     *net.UDPConn     // UDP 模式
-	TCPConn     net.Conn         // TCP 主动模式
-	TCPListener net.Listener     // TCP 被动模式
+	RTPConn     *net.UDPConn // UDP 模式
+	TCPConn     net.Conn     // TCP 主动模式
+	TCPListener net.Listener // TCP 被动模式
 	RTPPort     int
 	RTPPeerIP   string
 	RTPPeerPort int
 
 	// 音频通道
-	AudioChan  chan []byte
-	ReadyCh    chan struct{}
-	ReadyOnce  sync.Once
-	StopOnce   sync.Once
+	AudioChan chan []byte
+	ReadyCh   chan struct{}
+	ReadyOnce sync.Once
+	StopOnce  sync.Once
 
 	// RTP 状态
-	SeqNum     uint16
-	Timestamp  uint32
+	SeqNum    uint16
+	Timestamp uint32
 
 	// 控制
 	client  *sipgo.Client

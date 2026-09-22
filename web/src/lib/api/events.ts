@@ -85,3 +85,62 @@ export function eventsStreamUrl(params: { camera_id?: string; source?: string } 
   const qs = query.toString();
   return qs ? `/api/events/stream?${qs}` : '/api/events/stream';
 }
+
+export interface SubscribeNvrEventsOptions {
+  debounceMs?: number;
+}
+
+// Live NVR event stream. Returns an unsubscribe function.
+// Reconnects when the EventSource reaches CLOSED (native retry handles CONNECTING).
+export function subscribeNvrEvents(
+  params: { camera_id?: string; source?: string } = {},
+  onEvent: (ev: NvrEvent) => void,
+  options: SubscribeNvrEventsOptions = {},
+): () => void {
+  let es: EventSource | null = null;
+  let stopped = false;
+  let retry = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  const debounceMs = options.debounceMs ?? 0;
+
+  const deliver = (ev: NvrEvent) => {
+    if (debounceMs <= 0) {
+      onEvent(ev);
+      return;
+    }
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => onEvent(ev), debounceMs);
+  };
+
+  const connect = () => {
+    if (stopped) return;
+    es = new EventSource(eventsStreamUrl(params));
+    es.addEventListener('nvr', (e: Event) => {
+      retry = 0;
+      try {
+        deliver(JSON.parse((e as MessageEvent).data) as NvrEvent);
+      } catch {
+        // ignore malformed payloads
+      }
+    });
+    es.onerror = () => {
+      if (stopped || !es) return;
+      if (es.readyState !== EventSource.CLOSED) return;
+      es.close();
+      es = null;
+      const delay = Math.min(1000 * 2 ** retry, 15000);
+      retry += 1;
+      reconnectTimer = setTimeout(connect, delay);
+    };
+  };
+
+  connect();
+  return () => {
+    stopped = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (debounceTimer) clearTimeout(debounceTimer);
+    es?.close();
+    es = null;
+  };
+}

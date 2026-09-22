@@ -25,8 +25,8 @@ type RTSPProbeConfig struct {
 
 // ProbeResult holds the result of RTSP encoding probe.
 type ProbeResult struct {
-	HasH264 bool
-	HasH265 bool
+	HasH264  bool
+	HasH265  bool
 	HasMJPEG bool
 	HasAudio bool
 	// Detected encoding priority: H265 > H264 > MJPEG

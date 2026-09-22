@@ -349,10 +349,10 @@ func TestRecorderConfigDefaults(t *testing.T) {
 func TestRecorderConfigCustom(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID:   "cam",
-		DID:        "dev",
-		SegmentDur: 5 * time.Minute,
-		MaxBackoff: 30 * time.Second,
+		CameraID:    "cam",
+		DID:         "dev",
+		SegmentDur:  5 * time.Minute,
+		MaxBackoff:  30 * time.Second,
 		InitBackoff: 500 * time.Millisecond,
 	}, &noopSegmentStore{})
 	require.Equal(t, 5*time.Minute, r.cfg.SegmentDur)

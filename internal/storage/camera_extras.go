@@ -20,6 +20,7 @@ type cameraExtras struct {
 	DID                  string                        `json:"did,omitempty"`
 	Vendor               string                        `json:"vendor,omitempty"`
 	SourceType           string                        `json:"source_type,omitempty"`
+	StreamID             string                        `json:"stream_id,omitempty"`
 	SubProfileToken      string                        `json:"sub_profile_token,omitempty"`
 	SubnetHints          []string                      `json:"subnet_hints,omitempty"`
 	Adaptive             *config.CameraAdaptiveConfig  `json:"adaptive,omitempty"`
@@ -40,6 +41,7 @@ func extrasFromCameraConfig(cam config.CameraConfig) cameraExtras {
 		DID:                  cam.DID,
 		Vendor:               cam.Vendor,
 		SourceType:           cam.SourceType,
+		StreamID:             cam.StreamID,
 		SubProfileToken:      cam.SubProfileToken,
 		SubnetHints:          cam.SubnetHints,
 		Adaptive:             cam.Adaptive,
@@ -68,6 +70,7 @@ func applyExtrasToCamera(cam *config.CameraConfig, extras cameraExtras) {
 	cam.DID = extras.DID
 	cam.Vendor = extras.Vendor
 	cam.SourceType = extras.SourceType
+	cam.StreamID = extras.StreamID
 	cam.SubProfileToken = extras.SubProfileToken
 	cam.SubnetHints = extras.SubnetHints
 	cam.Adaptive = extras.Adaptive

@@ -24,7 +24,7 @@
 
   onMount(() => {
     void refresh();
-    timer = setInterval(() => { void refresh(); }, 2000);
+    timer = setInterval(() => { void refresh(); }, 10000);
   });
 
   onDestroy(() => {
@@ -64,8 +64,7 @@
       </div>
       <div class="pl-6 border-l th-border">
         <span class="th-text-muted">{t('flow.recording')}</span>
-        {flow.recording.status}
-        {#if flow.recording.paused} · {t('flow.paused')}{/if}
+        {flow.recording.status === 'writing' ? t('flow.writing') : t('flow.notRecording')}
         {#if flow.recording.merge_pending > 0}
           · {t('flow.mergePending', { n: flow.recording.merge_pending })}
         {/if}

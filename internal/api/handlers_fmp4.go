@@ -2,8 +2,6 @@ package api
 
 import (
 	"net/http"
-
-	"github.com/go-chi/chi/v5"
 )
 
 // handleFMP4Stream handles GET /api/cameras/{id}/stream.m4s
@@ -11,11 +9,15 @@ import (
 // The response is a continuous fMP4 byte stream: init segment (ftyp+moov)
 // followed by fragmented moof+mdat parts.
 func (h *Handler) handleFMP4Stream(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := playResourceID(r)
 	streamID, quality := h.resolvePlayStreamID(r, id)
 	w.Header().Set("X-Stream-Quality", quality)
 	if h.mediaEngine == nil {
 		writeError(w, http.StatusServiceUnavailable, "fMP4 streaming not available: media engine disabled")
+		return
+	}
+	if streamID == "" {
+		writePlayStreamNotFound(w, r)
 		return
 	}
 

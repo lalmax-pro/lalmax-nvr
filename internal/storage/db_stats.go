@@ -31,23 +31,23 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int) ([]model.DailySta
 		days = 30
 	}
 	cutoff := time.Now().AddDate(0, 0, -days).UTC()
-	
+
 	query := `SELECT DATE(r.started_at) as date, COUNT(*) as recordings, SUM(r.file_size) as total_size, r.camera_id, COALESCE(c.name, r.camera_id) as camera_name
 		FROM recordings r LEFT JOIN cameras c ON r.camera_id = c.id
 		WHERE r.started_at >= ?
 		GROUP BY DATE(r.started_at), r.camera_id
 		ORDER BY date`
-	
+
 	rows, err := d.db.QueryContext(ctx, query, formatTime(cutoff))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	// Aggregate per-camera rows into per-date stats
 	dateIndex := make(map[string]int) // date -> index into result slice
 	var result []model.DailyStats
-	
+
 	for rows.Next() {
 		var date string
 		var count int

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
@@ -43,12 +44,14 @@ func hasUnavailableProtocol(t *testing.T, protocols []ProtocolDetail, name strin
 }
 
 type stubMediaEngine struct {
-	stream      *media.StreamInfo
-	streams     []media.StreamInfo
-	streamsByID map[string]*media.StreamInfo
-	getErr      error
-	listErr     error
-	playURLs    map[string]string
+	stream       *media.StreamInfo
+	streams      []media.StreamInfo
+	streamsByID  map[string]*media.StreamInfo
+	getErr       error
+	listErr      error
+	playURLs     map[string]string
+	pulls        []media.StartPullRequest
+	startPullErr error
 }
 
 type stubWSManager struct{}
@@ -56,8 +59,12 @@ type stubWSManager struct{}
 func (s *stubMediaEngine) Start(context.Context) error    { return nil }
 func (s *stubMediaEngine) Shutdown(context.Context) error { return nil }
 func (s *stubMediaEngine) Ready(context.Context) error    { return nil }
-func (s *stubMediaEngine) StartPull(context.Context, media.StartPullRequest) (*media.StreamSession, error) {
-	return nil, errors.New("not implemented")
+func (s *stubMediaEngine) StartPull(_ context.Context, req media.StartPullRequest) (*media.StreamSession, error) {
+	if s.startPullErr != nil {
+		return nil, s.startPullErr
+	}
+	s.pulls = append(s.pulls, req)
+	return &media.StreamSession{StreamID: req.StreamID, AppName: req.AppName, Protocol: "relay_pull"}, nil
 }
 func (s *stubMediaEngine) StopPull(context.Context, string) error {
 	return nil
@@ -103,6 +110,9 @@ func (s *stubMediaEngine) SubscribeSRTEvents(context.Context) (<-chan media.SRTE
 }
 func (s *stubMediaEngine) SubscribeWHIPEvents(context.Context) (<-chan media.WHIPEvent, error) {
 	return nil, errors.New("not implemented")
+}
+func (s *stubMediaEngine) SubscribeFrames(context.Context, media.SubscribeFramesRequest) (media.FrameSubscription, error) {
+	return nil, media.ErrFramesNotSupported
 }
 func (s *stubMediaEngine) AddCustomizePubSession(_ context.Context, _ string) (media.CustomizePubSession, error) {
 	return nil, errors.New("not implemented")
@@ -785,7 +795,8 @@ func TestWHEP_UsesMediaEngineProxy_ForExternalStream(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test110/stream/webrtc", strings.NewReader("v=0"))
+	// External (unbound) streams are played through the stream route.
+	req := httptest.NewRequest(http.MethodPost, "/api/streams/test110/stream/webrtc", strings.NewReader("v=0"))
 	req.Header.Set("Content-Type", "application/sdp")
 	req.SetBasicAuth("admin", "pass")
 	rr := httptest.NewRecorder()
@@ -795,6 +806,7 @@ func TestWHEP_UsesMediaEngineProxy_ForExternalStream(t *testing.T) {
 	require.Equal(t, "answer-sdp", rr.Body.String())
 	location := rr.Header().Get("Location")
 	require.NotEmpty(t, location)
+	require.True(t, strings.HasPrefix(location, "/api/streams/test110/stream/webrtc/"), location)
 
 	delReq := httptest.NewRequest(http.MethodDelete, location, nil)
 	delReq.SetBasicAuth("admin", "pass")
@@ -941,6 +953,52 @@ func TestListStreams_ReturnsManagedAndExternalStreams(t *testing.T) {
 	require.Len(t, resp.Streams[1].Subscribers, 1)
 }
 
+func TestListStreams_UnboundCameraIDIsNotAStream(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	// Camera exists but has no stream binding: the matching stream name must not
+	// be treated as managed (camera ID and stream ID are separate identities).
+	require.NoError(t, db.UpsertCamera(context.Background(), "cam1", "Unbound", "rtsp", "h264", "rtsp://example.com/s", "", "", true, "", "", ""))
+
+	engine := &stubMediaEngine{
+		streams: []media.StreamInfo{
+			{StreamID: "cam1", AppName: "live", Active: true, VideoCodec: "h264"},
+		},
+	}
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
+	h.SetMediaEngine(engine)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/streams", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp streamListResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Streams, 1)
+	require.Equal(t, "cam1", resp.Streams[0].StreamID)
+	require.False(t, resp.Streams[0].Managed)
+	require.Empty(t, resp.Streams[0].CameraID)
+}
+
+func TestPlayRoute_UnboundCameraReturns404(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	db, store := setupTestDB(t)
+	defer db.Close()
+	require.NoError(t, db.UpsertCamera(context.Background(), "cam-unbound", "Unbound", "rtsp", "h264", "rtsp://example.com/s", "", "", true, "", "", ""))
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
+	h.SetMediaEngine(&stubMediaEngine{})
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-unbound/stream.flv", nil, "admin", "pass")
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
 func TestListStreams_SearchAndPagination(t *testing.T) {
 	t.Helper()
 	t.Parallel()
@@ -949,7 +1007,7 @@ func TestListStreams_SearchAndPagination(t *testing.T) {
 	defer db.Close()
 
 	seedCameraWithEncoding(t, db, "cam1", "h264")
-	require.NoError(t, db.UpsertCamera(context.Background(), "cam2", "Lobby Camera", "rtsp", "h264", "rtsp://example.com/lobby", "", "", true, "", "", ""))
+	seedBoundCamera(t, db, "cam2", "Lobby Camera", "rtsp", "h264")
 
 	engine := &stubMediaEngine{
 		streams: []media.StreamInfo{
@@ -1007,7 +1065,7 @@ func TestListStreams_ActiveStreamsFirst(t *testing.T) {
 	defer db.Close()
 
 	seedCameraWithEncoding(t, db, "cam-idle", "h264")
-	require.NoError(t, db.UpsertCamera(context.Background(), "cam-active", "Active Cam", "rtsp", "h264", "rtsp://example.com/active", "", "", true, "", "", ""))
+	seedBoundCamera(t, db, "cam-active", "Active Cam", "rtsp", "h264")
 
 	engine := &stubMediaEngine{
 		streams: []media.StreamInfo{
@@ -1105,11 +1163,21 @@ func TestListStreams_RequiresMediaEngine(t *testing.T) {
 
 // --- Test helpers ---
 
-// seedCameraWithEncoding inserts a camera with the given encoding into the DB.
+// bindTestStream registers the stream binding that AddCamera would create in production.
+func bindTestStream(t *testing.T, db *storage.DB, streamID, cameraID string) {
+	t.Helper()
+	require.NoError(t, db.BindStreamToCamera(context.Background(), streamID, cameraID))
+}
+
+// seedCameraWithEncoding inserts a camera plus its stream binding into the DB.
 func seedCameraWithEncoding(t *testing.T, db *storage.DB, id, encoding string) {
 	t.Helper()
 	err := db.UpsertCamera(context.Background(), id, "Test Camera", "rtsp", encoding, "rtsp://example.com/stream", "", "", true, "", "", "")
 	require.NoError(t, err, "failed to seed camera %s", id)
+	require.NoError(t, db.SaveCameraExtras(context.Background(), config.CameraConfig{
+		ID: id, StreamID: id, Protocol: "rtsp", Encoding: encoding,
+	}))
+	bindTestStream(t, db, id, id)
 }
 
 // seedCameraWithEncodings inserts a camera with separate encoding and stream_encoding.
@@ -1117,6 +1185,17 @@ func seedCameraWithEncodings(t *testing.T, db *storage.DB, id, encoding, streamE
 	t.Helper()
 	err := db.UpsertCamera(context.Background(), id, "Test Camera", "rtsp", encoding, "rtsp://example.com/stream", "", "", true, "", "", streamEncoding)
 	require.NoError(t, err, "failed to seed camera %s", id)
+	require.NoError(t, db.SaveCameraExtras(context.Background(), config.CameraConfig{
+		ID: id, StreamID: id, Protocol: "rtsp", Encoding: encoding,
+	}))
+	bindTestStream(t, db, id, id)
+}
+
+// seedBoundCamera inserts a named camera and binds it to its own stream.
+func seedBoundCamera(t *testing.T, db *storage.DB, id, name, protocol, encoding string) {
+	t.Helper()
+	require.NoError(t, db.UpsertCamera(context.Background(), id, name, protocol, encoding, "rtsp://example.com/"+id, "", "", true, "", "", ""))
+	bindTestStream(t, db, id, id)
 }
 
 // parseJSONBody parses JSON from a httptest.ResponseRecorder into v.
@@ -1606,21 +1685,34 @@ func TestPromoteStream_Success(t *testing.T) {
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
 	require.Equal(t, "obs-stream-1", resp["stream_id"])
-	require.Equal(t, "obs-stream-1", resp["camera_id"])
+	require.NotEqual(t, "obs-stream-1", resp["camera_id"])
+	require.True(t, strings.HasPrefix(resp["camera_id"], "cam-"))
 	require.Equal(t, "rtmp_push", resp["source_type"])
 	require.Equal(t, "promoted", resp["status"])
 
 	binding, err := db.GetStreamBinding(context.Background(), "obs-stream-1")
 	require.NoError(t, err)
 	require.NotNil(t, binding)
-	require.Equal(t, "obs-stream-1", binding.CameraID)
+	require.Equal(t, resp["camera_id"], binding.CameraID)
 
 	rr = doRequest(t, h.Routes(), "GET", "/api/cameras", nil, "admin", "pass")
 	require.Equal(t, http.StatusOK, rr.Code)
 	var cameras []storage.CameraRow
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &cameras))
 	require.Len(t, cameras, 1)
+	require.Equal(t, resp["camera_id"], cameras[0].ID)
 	require.Equal(t, "rtmp_push", cameras[0].SourceType)
+}
+
+func TestStreamPlayRoute_FLVNoMediaEngine(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
+	rr := doRequest(t, h.Routes(), "GET", "/api/streams/obs-stream-1/stream.flv", nil, "admin", "pass")
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
 func TestPromoteStream_StreamNotFound(t *testing.T) {
@@ -1672,7 +1764,7 @@ func TestPromoteStream_AlreadyMapped(t *testing.T) {
 	body := `{"name": "Camera 1"}`
 	rr := doRequest(t, h.Routes(), "POST", "/api/streams/cam1/promote",
 		strings.NewReader(body), "admin", "pass")
-	require.Equal(t, http.StatusConflict, rr.Code)
+	require.Equal(t, http.StatusConflict, rr.Code, "seed helper already bound cam1")
 }
 
 func TestPromoteStream_MissingName(t *testing.T) {
@@ -1785,6 +1877,7 @@ func TestPromoteStream_WHIPCustomizeSession(t *testing.T) {
 	var cameras []storage.CameraRow
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &cameras))
 	require.Len(t, cameras, 1)
+	require.NotEqual(t, "whip-stream-1", cameras[0].ID)
 	require.Equal(t, "whip_push", cameras[0].SourceType)
 }
 

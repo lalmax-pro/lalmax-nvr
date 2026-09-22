@@ -349,11 +349,11 @@ func (g *GB28181API) sendSIPInfo(stream *Streams, body string, contentType strin
 	req := sip.NewRequest(sip.INFO, recipient)
 	req.SetBody([]byte(body))
 	req.AppendHeader(sip.NewHeader("Content-Type", contentType+"/"+contentSubType))
-	
+
 	// Set Call-ID from the INVITE dialog
 	callID := sip.CallIDHeader(stream.CallID)
 	req.AppendHeader(&callID)
-	
+
 	// Set From/To with tags from the INVITE dialog
 	req.AppendHeader(&sip.FromHeader{
 		Address: sip.Uri{Scheme: "sip", User: g.cfg.ID, Host: g.cfg.Host},
@@ -362,7 +362,7 @@ func (g *GB28181API) sendSIPInfo(stream *Streams, body string, contentType strin
 	if stream.FromTag != "" {
 		req.From().Params.Add("tag", stream.FromTag)
 	}
-	
+
 	req.AppendHeader(&sip.ToHeader{
 		Address: sip.Uri{Scheme: "sip", User: stream.ChannelID, Host: getHost(dev.Address)},
 		Params:  sip.HeaderParams(sip.NewParams()),
@@ -370,7 +370,7 @@ func (g *GB28181API) sendSIPInfo(stream *Streams, body string, contentType strin
 	if stream.ToTag != "" {
 		req.To().Params.Add("tag", stream.ToTag)
 	}
-	
+
 	// Set CSeq
 	cseq := sip.CSeqHeader{SeqNo: uint32(time.Now().Unix() % 100000000), MethodName: sip.INFO}
 	req.AppendHeader(&cseq)
@@ -378,13 +378,13 @@ func (g *GB28181API) sendSIPInfo(stream *Streams, body string, contentType strin
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	slog.Info("[SIP] INFO sending", 
+	slog.Info("[SIP] INFO sending",
 		"recipient", recipient.String(),
 		"call_id", stream.CallID,
 		"from_tag", stream.FromTag,
 		"to_tag", stream.ToTag,
 		"body", body)
-	
+
 	resp, err := g.client.Do(ctx, req)
 	if err != nil {
 		slog.Error("[SIP] INFO send failed", "error", err)
@@ -515,7 +515,7 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (*InviteResult, err
 			}
 			if res.IsSuccess() {
 				slog.Info("[SIP] INVITE success - preparing ACK")
-				
+
 				// Get Contact from 200 OK for ACK destination
 				ackRecipient := req.Recipient
 				remoteURI := req.Recipient.String()
@@ -529,7 +529,7 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (*InviteResult, err
 						slog.Warn("[SIP] Failed to parse Contact URI", "error", err)
 					}
 				}
-				
+
 				ack := sip.NewRequest(sip.ACK, ackRecipient)
 				ack.AppendHeader(sip.HeaderClone(req.From()))
 				ack.AppendHeader(sip.HeaderClone(res.To()))
@@ -537,7 +537,7 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (*InviteResult, err
 				cseq := *req.CSeq()
 				cseq.MethodName = sip.ACK
 				ack.AppendHeader(&cseq)
-				
+
 				slog.Info("[SIP] ACK sending", "to", ackRecipient.String())
 				if err := g.client.WriteRequest(ack); err != nil {
 					slog.Error("[SIP] ACK send failed", "error", err)
@@ -553,7 +553,7 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (*InviteResult, err
 						ssrc = strings.SplitN(parts[1], ",", 2)[0]
 					}
 				}
-				
+
 				// Extract dialog info for later use (speed/seek)
 				callID := ""
 				if h := req.CallID(); h != nil {
@@ -571,12 +571,12 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (*InviteResult, err
 						toTag = h.Value()[idx+5:]
 					}
 				}
-				
+
 				// Parse SDP from response to get media info
 				if len(res.Body()) > 0 {
 					slog.Info("[SIP] INVITE response SDP", "body", string(res.Body()))
 				}
-				
+
 				slog.Info("[SIP] INVITE completed", "ssrc", ssrc)
 				return &InviteResult{
 					SSRC:      ssrc,

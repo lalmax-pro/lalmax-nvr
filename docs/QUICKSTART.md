@@ -1,6 +1,6 @@
 # lalmax-nvr Quick Start
 
-Web UI is **http://localhost:9090** (not 8080). Full guides: [English](en/getting-started.md) · [中文](zh/getting-started.md) · [Architecture](en/architecture.md) / [架构](zh/architecture.md).
+Web UI is **http://localhost:9090** (not 8080). Full guides: [English](en/getting-started.md) · [中文](zh/getting-started.md) · [Architecture](en/architecture.md) / [架构](zh/architecture.md) · [Recording plans](en/recording-plans.md) / [录像计划](zh/recording-plans.md).
 
 ## 1. Configure
 

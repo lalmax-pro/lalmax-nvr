@@ -39,7 +39,7 @@ type Records struct {
 
 // RecordDay represents recordings on a single day.
 type RecordDay struct {
-	Date  string       `json:"date"`  // "2006-01-02"
+	Date  string       `json:"date"` // "2006-01-02"
 	Items []RecordTime `json:"items"`
 }
 

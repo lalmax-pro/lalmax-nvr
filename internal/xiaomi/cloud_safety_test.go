@@ -215,7 +215,7 @@ func TestCaptchaSessionErrorMessage(t *testing.T) {
 	t.Helper()
 	inner := &LoginError{Captcha: []byte("data")}
 	e := &CaptchaSessionError{
-		LoginError:        inner,
+		LoginError:       inner,
 		CaptchaSessionID: "sess-123",
 	}
 	require.Contains(t, e.Error(), "captcha required")
@@ -363,7 +363,7 @@ func TestCaptchaSessionErrorAsLoginError(t *testing.T) {
 	t.Helper()
 	inner := &LoginError{VerifyPhone: "+1234"}
 	e := &CaptchaSessionError{
-		LoginError:        inner,
+		LoginError:       inner,
 		CaptchaSessionID: "session-id",
 	}
 

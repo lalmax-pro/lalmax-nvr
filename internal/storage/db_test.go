@@ -159,7 +159,7 @@ func TestCleanupIncomplete(t *testing.T) {
 
 	// Insert directly with NULL ended_at to test cleanup (InsertRecording serializes zero time as 0001-01-01, not NULL)
 	_, err := db.db.ExecContext(ctx,
-	`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,NULL,?,?,?,?);`,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,NULL,?,?,?,?);`,
 		"inc-1", "camC", "/c.mp4", model.FormatH264, time.Now(), 0, 0, 0, false,
 	)
 	err = db.CleanupIncomplete(ctx)
@@ -192,7 +192,6 @@ func TestCloseAndReopen(t *testing.T) {
 	require.NoError(t, db2.Close())
 }
 
-
 func TestUpsertCamera(t *testing.T) {
 
 	dir := t.TempDir()
@@ -205,15 +204,11 @@ func TestUpsertCamera(t *testing.T) {
 
 	_ = db.Init(ctx)
 
-
-
 	// Test insert new camera
 
 	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp_h264", "", "rtsp://localhost:554/stream", "user", "pass", true, "", "", "")
 
 	require.NoError(t, err)
-
-
 
 	// Verify camera was inserted
 
@@ -235,15 +230,11 @@ func TestUpsertCamera(t *testing.T) {
 	require.Equal(t, "user", cameras[0].Username)
 	require.True(t, cameras[0].HasPassword)
 
-
-
 	// Test update existing camera
 
 	err = db.UpsertCamera(ctx, "cam1", "Updated Camera 1", "rtsp_mjpeg", "", "rtsp://localhost:555/stream", "newuser", "newpass", false, "", "", "")
 
 	require.NoError(t, err)
-
-
 
 	// Verify camera was updated
 
@@ -264,8 +255,6 @@ func TestUpsertCamera(t *testing.T) {
 	require.False(t, cameras2[0].Enabled)
 	require.Equal(t, "newuser", cameras2[0].Username)
 	require.True(t, cameras2[0].HasPassword)
-
-
 
 	require.NoError(t, db.Close())
 
@@ -1237,4 +1226,37 @@ func TestListCameraConfigs_DefaultsAudioEnabledForLegacyH264(t *testing.T) {
 	configs, err = db.ListCameraConfigs(ctx)
 	require.NoError(t, err)
 	require.False(t, configs[0].AudioEnabled)
+}
+
+func TestListCameraMergeWindows_WindowSize(t *testing.T) {
+	dir := t.TempDir()
+	db, err := New(filepath.Join(dir, "merge-win.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+
+	hour := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Hour)
+	insert := func(id string, start time.Time) {
+		t.Helper()
+		require.NoError(t, db.InsertRecording(ctx, &model.Recording{
+			ID: id, CameraID: "camW", FilePath: "/" + id + ".mp4", Format: model.FormatH264,
+			StartedAt: start, EndedAt: start.Add(30 * time.Second), Duration: 30, FileSize: 100,
+		}))
+	}
+	insert("a1", hour.Add(1*time.Minute))
+	insert("a2", hour.Add(10*time.Minute))
+	insert("b1", hour.Add(40*time.Minute))
+	insert("b2", hour.Add(45*time.Minute))
+
+	hourly, err := db.ListCameraMergeWindows(ctx, "camW", 0, time.Hour)
+	require.NoError(t, err)
+	require.Len(t, hourly, 1)
+	require.Equal(t, 4, hourly[0].SegmentCount)
+
+	half, err := db.ListCameraMergeWindows(ctx, "camW", 0, 30*time.Minute)
+	require.NoError(t, err)
+	require.Len(t, half, 2)
+	require.Equal(t, 2, half[0].SegmentCount)
+	require.Equal(t, 2, half[1].SegmentCount)
 }

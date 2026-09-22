@@ -9,11 +9,11 @@ import (
 type PlatformEventType string
 
 const (
-	PlatformEventRegister   PlatformEventType = "register"
-	PlatformEventUnregister PlatformEventType = "unregister"
-	PlatformEventKeepAlive  PlatformEventType = "keepalive"
-	PlatformEventOnline     PlatformEventType = "online"
-	PlatformEventOffline    PlatformEventType = "offline"
+	PlatformEventRegister    PlatformEventType = "register"
+	PlatformEventUnregister  PlatformEventType = "unregister"
+	PlatformEventKeepAlive   PlatformEventType = "keepalive"
+	PlatformEventOnline      PlatformEventType = "online"
+	PlatformEventOffline     PlatformEventType = "offline"
 	PlatformEventStreamStart PlatformEventType = "stream_start"
 	PlatformEventStreamStop  PlatformEventType = "stream_stop"
 )

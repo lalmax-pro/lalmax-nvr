@@ -11,10 +11,10 @@ import (
 func TestParseLegacyProtocol(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		input       string
-		wantProto   string
-		wantEnc     string
-		wantErr     bool
+		input     string
+		wantProto string
+		wantEnc   string
+		wantErr   bool
 	}{
 		{"rtsp_h264", "rtsp", "h264", false},
 		{"rtsp_h265", "rtsp", "h265", false},

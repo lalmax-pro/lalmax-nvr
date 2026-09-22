@@ -22,11 +22,11 @@ var timelapseLogger = slog.Default().With("component", "timelapse-recorder")
 // TimelapseRecorderConfig holds configuration for the timelapse recorder.
 type TimelapseRecorderConfig struct {
 	CameraID   string
-	Interval   time.Duration  // frame capture interval (e.g., 5s)
-	OutputFPS  int            // output video FPS (e.g., 30)
-	VideoCodec string         // "h264" or "h265"
-	SegmentDur time.Duration  // segment duration before merging
-	DataDir    string         // base data directory
+	Interval   time.Duration // frame capture interval (e.g., 5s)
+	OutputFPS  int           // output video FPS (e.g., 30)
+	VideoCodec string        // "h264" or "h265"
+	SegmentDur time.Duration // segment duration before merging
+	DataDir    string        // base data directory
 	DB         RecordingDB
 	Metrics    *metrics.Metrics
 }

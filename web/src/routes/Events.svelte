@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { listEvents, acknowledgeEvent, listCameras, listAlarmRules, createAlarmRule, deleteAlarmRule } from '$lib/api';
+  import { listEvents, acknowledgeEvent, listCameras, listAlarmRules, createAlarmRule, deleteAlarmRule, subscribeNvrEvents } from '$lib/api';
   import type { Camera, EventsResponse, NvrEvent, AlarmRule } from '$lib/api';
   import { formatDate } from '$lib/format';
   import { t } from '$lib/i18n';
@@ -149,15 +149,19 @@
     }
   });
 
-  let refreshTimer: ReturnType<typeof setInterval> | null = null;
   $effect(() => {
     const _ = [cameraFilter, sourceFilter, statusFilter, page];
     loadEvents();
-    if (refreshTimer) clearInterval(refreshTimer);
-    refreshTimer = setInterval(loadEvents, 30000);
-    return () => {
-      if (refreshTimer) clearInterval(refreshTimer);
-    };
+  });
+
+  $effect(() => {
+    const cam = cameraFilter;
+    const src = sourceFilter;
+    return subscribeNvrEvents(
+      { camera_id: cam || undefined, source: src || undefined },
+      () => { void loadEvents(); },
+      { debounceMs: 400 },
+    );
   });
 
   async function loadRules() {

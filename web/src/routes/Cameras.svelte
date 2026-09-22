@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, permanentlyDeleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, restoreArchiveGroup, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getCameraRecordingStats, pauseRecording, resumeRecording } from '$lib/api';
+  import { listCameras, deleteCamera, permanentlyDeleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, restoreArchiveGroup, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getCameraRecordingStats, pauseRecording, resumeRecording, subscribeNvrEvents } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -285,18 +285,20 @@
     }
   }
 
-  async function loadCameras() {
-    loading = true;
+  async function loadCameras(opts?: { silent?: boolean }) {
+    if (!opts?.silent) loading = true;
     error = '';
     try {
       const all = await listCameras();
       cameras = all;
       pausedCameras = new Set(cameras.filter(c => c.recording_paused).map(c => c.id));
-      const tutkCameras = cameras.filter(c => c.error_type === 'tutk_incompatible');
-      if (tutkCameras.length === 1) {
-        showToast(tutkCameras[0].name + ': ' + t('cameras.tutkIncompatible'), 'warning');
-      } else if (tutkCameras.length > 1) {
-        showToast(tutkCameras.length + ' ' + t('cameras.tutkToastTitle'), 'warning');
+      if (!opts?.silent) {
+        const tutkCameras = cameras.filter(c => c.error_type === 'tutk_incompatible');
+        if (tutkCameras.length === 1) {
+          showToast(tutkCameras[0].name + ': ' + t('cameras.tutkIncompatible'), 'warning');
+        } else if (tutkCameras.length > 1) {
+          showToast(tutkCameras.length + ' ' + t('cameras.tutkToastTitle'), 'warning');
+        }
       }
     } catch (e) {
       error = friendlyError(e, t('cameras.failedLoad'));
@@ -306,8 +308,10 @@
         showOnboarding = true;
       }
     }
-    loadArchives();
-    loadHealth();
+    if (!opts?.silent) {
+      loadArchives();
+      loadHealth();
+    }
   }
 
   async function loadHealth() {
@@ -443,8 +447,14 @@
       }
     } catch (e) { console.warn('Xiaomi not authenticated:', e); }
 
-    const healthInterval = window.setInterval(() => loadHealth(), 30000);
-    return () => clearInterval(healthInterval);
+    const stopHealth = subscribeNvrEvents({ source: 'health' }, () => { void loadHealth(); }, { debounceMs: 300 });
+    const stopRecorder = subscribeNvrEvents({ source: 'recorder' }, () => { void loadCameras({ silent: true }); }, { debounceMs: 500 });
+    const healthFallback = window.setInterval(() => loadHealth(), 120000);
+    return () => {
+      stopHealth();
+      stopRecorder();
+      clearInterval(healthFallback);
+    };
   });
 </script>
 
@@ -585,8 +595,6 @@
                 onrestart={handleRestartCamera}
                 ontoggle={handleToggleCamera}
                 onsaveName={handleSaveName}
-                onpause={handlePauseRecording}
-                onresume={handleResumeRecording}
                 recordingPaused={camera.recording_paused || pausedCameras.has(camera.id)}
               />
             {/each}

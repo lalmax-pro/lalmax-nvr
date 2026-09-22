@@ -31,6 +31,7 @@ type DB struct {
 	db           *sql.DB
 	notifyEvent  func(model.Event)
 	notifyEventM sync.Mutex
+	recCache     recordingsQueryCache
 }
 
 // DB returns the underlying *sql.DB for advanced queries.
@@ -76,7 +77,7 @@ func New(dbPath string) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	return &DB{path: dbPath, db: db}, nil
+	return &DB{path: dbPath, db: db, recCache: newRecordingsQueryCache()}, nil
 }
 
 func (d *DB) Init(ctx context.Context) error {
@@ -421,10 +422,8 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='22' WHERE key='schema_version'")
 
-	// Migration v22 → v23: per-camera recording_mode + schedules, migrate recording plans.
-	if err := d.migrateRecordingMode(ctx); err != nil {
-		return err
-	}
+	// Migration v22 → v23: recording-mode column (superseded by recording_plans;
+	// the column is dropped below).
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='23' WHERE key='schema_version'")
 
 	// Migration v23 → v24: relay_tasks table for relay push tasks
@@ -517,6 +516,51 @@ func (d *DB) Init(ctx context.Context) error {
 	if err := d.migrateMergeRolling(ctx); err != nil {
 		return err
 	}
+	// Migration v27 -> v28: stream-keyed recording plans.
+	if err := d.migrateRecordingPlans(ctx); err != nil {
+		return err
+	}
+	// Recording mode is owned by recording_plans; drop the legacy per-camera column.
+	var recModeColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='recording_mode'`).Scan(&recModeColExists)
+	if recModeColExists > 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE cameras DROP COLUMN recording_mode`)
+	}
+
+	// Migration: recordings carry the lalmax stream they came from.
+	var streamIDColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='stream_id'`).Scan(&streamIDColExists)
+	if streamIDColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN stream_id TEXT NOT NULL DEFAULT ''`)
+		// Camera-backed recordings fall back to the camera ID.
+		_, _ = d.db.ExecContext(ctx, `UPDATE recordings SET stream_id = camera_id WHERE stream_id = ''`)
+		_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recordings_stream_time ON recordings(stream_id, started_at)`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='28' WHERE key='schema_version'")
+
+	// Migration v28 -> v29: external push slots created from the stream page.
+	createdStreamsSQL := `CREATE TABLE IF NOT EXISTS created_streams (
+		stream_id TEXT PRIMARY KEY,
+		name TEXT NOT NULL DEFAULT '',
+		app_name TEXT NOT NULL DEFAULT 'live',
+		input_mode TEXT NOT NULL DEFAULT 'push',
+		source_url TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL
+	);`
+	if _, err := d.db.ExecContext(ctx, createdStreamsSQL); err != nil {
+		return err
+	}
+	var inputModeCol int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('created_streams') WHERE name='input_mode'`).Scan(&inputModeCol)
+	if inputModeCol == 0 {
+		if _, err := d.db.ExecContext(ctx, `ALTER TABLE created_streams ADD COLUMN input_mode TEXT NOT NULL DEFAULT 'push'`); err != nil {
+			return err
+		}
+		if _, err := d.db.ExecContext(ctx, `ALTER TABLE created_streams ADD COLUMN source_url TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='30' WHERE key='schema_version'")
 
 	return nil
 

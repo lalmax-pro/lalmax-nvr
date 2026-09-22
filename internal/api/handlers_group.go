@@ -43,8 +43,8 @@ func (h *Handler) handleGetGroup(w http.ResponseWriter, r *http.Request) {
 	total, online, _ := h.db.GetGroupChannelStats(r.Context(), id)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"group":         group,
-		"channel_total": total,
+		"group":          group,
+		"channel_total":  total,
 		"channel_online": online,
 	})
 }
@@ -271,13 +271,13 @@ func (h *Handler) handleRemoveGroupChannel(w http.ResponseWriter, r *http.Reques
 
 // GroupTreeNode represents a group with its children for tree structure.
 type GroupTreeNode struct {
-	ID        int64            `json:"id"`
-	Name      string           `json:"name"`
-	ParentID  int64            `json:"parent_id"`
-	Level     int              `json:"level"`
-	SortOrder int              `json:"sort_order"`
-	Children  []GroupTreeNode  `json:"children,omitempty"`
-	Stats     *GroupStats      `json:"stats,omitempty"`
+	ID        int64           `json:"id"`
+	Name      string          `json:"name"`
+	ParentID  int64           `json:"parent_id"`
+	Level     int             `json:"level"`
+	SortOrder int             `json:"sort_order"`
+	Children  []GroupTreeNode `json:"children,omitempty"`
+	Stats     *GroupStats     `json:"stats,omitempty"`
 }
 
 // GroupStats represents channel statistics for a group.

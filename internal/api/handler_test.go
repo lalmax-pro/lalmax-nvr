@@ -2659,3 +2659,86 @@ func TestHandleCreateCamera_ValidURLs(t *testing.T) {
 		})
 	}
 }
+
+func TestCopyHeaderFiltered_StripsHopByHop(t *testing.T) {
+	t.Parallel()
+	src := make(http.Header)
+	src.Set("Content-Type", "video/mp2t")
+	src.Set("Cache-Control", "no-cache")
+	src.Set("Connection", "keep-alive")
+	src.Set("Keep-Alive", "timeout=5")
+	src.Set("Transfer-Encoding", "chunked")
+	src.Set("Content-Length", "42")
+	src.Set("Upgrade", "websocket")
+	src.Set("TE", "trailers")
+	src.Set("Trailer", "X-Checksum")
+	src.Set("Proxy-Authenticate", "Basic")
+	src.Set("Proxy-Authorization", "Basic xxx")
+
+	dst := make(http.Header)
+	dst.Set("X-Stale", "drop-me")
+	copyHeaderFiltered(dst, src)
+
+	require.Equal(t, "video/mp2t", dst.Get("Content-Type"))
+	require.Equal(t, "no-cache", dst.Get("Cache-Control"))
+	require.Empty(t, dst.Get("X-Stale"))
+	for _, hop := range []string{
+		"Connection", "Keep-Alive", "Transfer-Encoding", "Content-Length",
+		"Upgrade", "TE", "Proxy-Authenticate", "Proxy-Authorization",
+	} {
+		require.Empty(t, dst.Get(hop), hop)
+	}
+}
+
+type flushCountWriter struct {
+	http.ResponseWriter
+	flushes int
+}
+
+func (w *flushCountWriter) Flush() {
+	w.flushes++
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func TestCopyBodyFlush_FlushesChunks(t *testing.T) {
+	t.Parallel()
+	rr := httptest.NewRecorder()
+	w := &flushCountWriter{ResponseWriter: rr}
+	payload := strings.Repeat("live-chunk-", 8)
+	err := copyBodyFlush(w, strings.NewReader(payload))
+	require.NoError(t, err)
+	require.Equal(t, payload, rr.Body.String())
+	require.Greater(t, w.flushes, 0)
+}
+
+type playHandlerEngine struct {
+	stubMediaEngine
+	h http.Handler
+}
+
+func (p *playHandlerEngine) PlayHTTPHandler() http.Handler { return p.h }
+
+func TestSetMediaEngine_WiresInProcessPlayProxy(t *testing.T) {
+	t.Parallel()
+	h, _, _ := newTestCamHandler(t)
+	h.SetMediaEngine(&playHandlerEngine{
+		h: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = io.WriteString(w, "#EXTM3U\n")
+		}),
+	})
+	require.NotNil(t, h.mediaProxy)
+	require.NotEqual(t, mediaProxyClient, h.mediaProxy)
+
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:12090/live/hls/cam/index.m3u8", nil)
+	require.NoError(t, err)
+	resp, err := h.playProxyClient().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "#EXTM3U")
+	require.Equal(t, "application/vnd.apple.mpegurl", resp.Header.Get("Content-Type"))
+}
