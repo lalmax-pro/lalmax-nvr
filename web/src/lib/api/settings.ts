@@ -2,6 +2,7 @@
  * Settings API — cleanup, webdav, merge, feature flags
  */
 import { apiRequest } from './client';
+import type { DLNAConfig } from './dlna';
 
 // --- Types ---
 
@@ -74,6 +75,7 @@ export interface StreamingConfig {
 export interface SettingsConfig {
   cleanup: CleanupConfig;
   webdav: WebDAVConfig;
+  dlna?: DLNAConfig;
   streaming?: StreamingConfig;
 }
 

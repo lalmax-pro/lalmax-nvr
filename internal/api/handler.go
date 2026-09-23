@@ -187,6 +187,7 @@ type Handler struct {
 	linkage           *linkage.Engine
 	logRing           *middleware.LogRing
 	serviceLogPath    string
+	dlnaApply         func(context.Context) error
 }
 
 // GB28181StreamStatus reports active GB28181 play sessions for stream status overlay.
@@ -214,6 +215,9 @@ func (h *Handler) SetServiceLogPath(path string) {
 	}
 	h.serviceLogPath = strings.TrimSpace(path)
 }
+
+// SetDLNAApply registers the callback used when the web UI toggles DLNA.
+func (h *Handler) SetDLNAApply(fn func(context.Context) error) { h.dlnaApply = fn }
 
 // SetRestartFunc registers the process restart callback used by first-time
 // setup after it has moved the canonical configuration into the data folder.

@@ -278,6 +278,11 @@ func (e *LalmaxHTTP) BuildPlayURL(ctx context.Context, req PlayURLRequest) (*Pla
 		}
 		u.Path = "/" + pathEscape(app) + "/" + pathEscape(req.StreamID) + ".flv"
 		proto = "ws-flv"
+	case "httpts", "http-ts", "ts":
+		// Native lal HTTP-TS is the most interoperable live DLNA resource.
+		u.Host = fmt.Sprintf("%s:%d", u.Hostname(), e.httpPort)
+		u.Path = "/live/" + pathEscape(req.StreamID) + ".ts"
+		proto = "httpts"
 	case "hls", "hls-ts":
 		// HLS (TS) uses lal's HTTP port with lal's URL pattern
 		u.Host = fmt.Sprintf("%s:%d", u.Hostname(), e.httpPort)

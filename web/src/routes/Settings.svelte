@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAutoDiscoverSettings, updateAutoDiscoverSettings, getAiSettings, saveAiSettings, detectAiBackend, getAiBackendConfig, updateAiBackendConfig, getGB28181Settings, updateGB28181Settings, reloadConfig, checkConfigChange, regenerateLalmaxConfig, getHLSSettings, updateHLSSettings, getLocalNetworkInterfaces } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAutoDiscoverSettings, updateAutoDiscoverSettings, getAiSettings, saveAiSettings, detectAiBackend, getAiBackendConfig, updateAiBackendConfig, getGB28181Settings, updateGB28181Settings, reloadConfig, checkConfigChange, regenerateLalmaxConfig, getHLSSettings, updateHLSSettings, getLocalNetworkInterfaces, updateDLNASettings } from '$lib/api';
   import type { AiBackendConfig } from '$lib/api';
   import type { SettingsConfig, FeatureFlags, StorageStats, Camera, StreamingConfig, GB28181Config, HLSConfig, NetworkInterface } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '../lib/preferences';
@@ -23,6 +23,15 @@ let itemsPerPage = $state(getItemsPerPage());
 let webdavEnabled = $state(false);
 let webdavPathPrefix = $state('/dav');
 let webdavReadWrite = $state(false);
+let dlnaEnabled = $state(false);
+let dlnaFriendlyName = $state('Lalmax NVR');
+let dlnaAdvertiseURL = $state('');
+let dlnaInterface = $state('');
+let dlnaIncludeLive = $state(true);
+let dlnaIncludeRecordings = $state(true);
+let dlnaMaxViewers = $state(4);
+let dlnaMaxBrowseCount = $state(200);
+let dlnaAllowedCIDRs = $state('');
 
 // Merge settings state
 let mergeEnabled = $state(true);
@@ -154,6 +163,8 @@ let isDirty = $derived(() => {
     const current = JSON.stringify({
       retentionDays, diskThresholdPercent, checkInterval,
       webdavEnabled, webdavPathPrefix, webdavReadWrite,
+      dlnaEnabled, dlnaFriendlyName, dlnaAdvertiseURL, dlnaInterface,
+      dlnaIncludeLive, dlnaIncludeRecordings, dlnaMaxViewers, dlnaMaxBrowseCount, dlnaAllowedCIDRs,
       mergeEnabled, mergeCheckInterval, mergeWindowSize,
       mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit, mergeRollingEnabled,
       streamingDefaultProtocol, streamingWebrtcEnabled, streamingWebrtcMaxViewers,
@@ -253,6 +264,8 @@ function getAffectedCameraCount(protocol: string): number {
     originalSnapshot = JSON.stringify({
       retentionDays, diskThresholdPercent, checkInterval,
       webdavEnabled, webdavPathPrefix, webdavReadWrite,
+      dlnaEnabled, dlnaFriendlyName, dlnaAdvertiseURL, dlnaInterface,
+      dlnaIncludeLive, dlnaIncludeRecordings, dlnaMaxViewers, dlnaMaxBrowseCount, dlnaAllowedCIDRs,
       mergeEnabled, mergeCheckInterval, mergeWindowSize,
       mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit, mergeRollingEnabled,
       streamingDefaultProtocol, streamingWebrtcEnabled, streamingWebrtcMaxViewers,
@@ -317,6 +330,16 @@ function getAffectedCameraCount(protocol: string): number {
       webdavEnabled = settings.webdav?.enabled ?? false;
       webdavPathPrefix = settings.webdav?.path_prefix ?? '/dav';
       webdavReadWrite = settings.webdav?.read_write ?? false;
+      const dlna = settings.dlna;
+      dlnaEnabled = dlna?.enabled ?? false;
+      dlnaFriendlyName = dlna?.friendly_name || 'Lalmax NVR';
+      dlnaAdvertiseURL = dlna?.advertise_url || '';
+      dlnaInterface = dlna?.interface || '';
+      dlnaIncludeLive = dlna?.include_live ?? true;
+      dlnaIncludeRecordings = dlna?.include_recordings ?? true;
+      dlnaMaxViewers = dlna?.max_media_viewers ?? 4;
+      dlnaMaxBrowseCount = dlna?.max_browse_count ?? 200;
+      dlnaAllowedCIDRs = (dlna?.allowed_cidrs ?? []).join('\n');
 
       // Load merge settings
       const mergeSettings = await getMergeSettings();
@@ -403,6 +426,18 @@ function getAffectedCameraCount(protocol: string): number {
       };
 
       await updateSettings(payload);
+      const dlnaResult = await updateDLNASettings({
+        enabled: dlnaEnabled,
+        friendly_name: dlnaFriendlyName,
+        advertise_url: dlnaAdvertiseURL,
+        interface: dlnaInterface,
+        include_live: dlnaIncludeLive,
+        include_recordings: dlnaIncludeRecordings,
+        max_media_viewers: dlnaMaxViewers,
+        max_browse_count: dlnaMaxBrowseCount,
+        allowed_cidrs: dlnaAllowedCIDRs.split('\n').map(v => v.trim()).filter(Boolean),
+      });
+      if ((dlnaResult as any).dlna_error) throw new Error((dlnaResult as any).dlna_error);
 
       // Save merge settings
       await updateMergeSettings({
@@ -1230,6 +1265,22 @@ function getAffectedCameraCount(protocol: string): number {
               </div>
               <p class="text-xs th-text-muted mt-1">{t('merge.rollingHint')}</p>
             </div>
+          </div>
+        </div>
+
+        <!-- DLNA Settings -->
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">DLNA</h3>
+          <p class="text-sm th-text-secondary mt-1 mb-5">将实时流和录像发布到局域网 DLNA 播放器。</p>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div><label class="input-label" for="dlna-toggle">启用 DLNA</label><div class="flex items-center gap-3 mt-2"><button id="dlna-toggle" type="button" role="switch" aria-label="启用 DLNA" aria-checked={dlnaEnabled} class="relative inline-flex h-6 w-11 items-center rounded-full {dlnaEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}" onclick={() => { dlnaEnabled = !dlnaEnabled; }}><span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {dlnaEnabled ? 'translate-x-6' : 'translate-x-1'}"></span></button><span class="text-sm th-text-secondary">{dlnaEnabled ? '已开启' : '已关闭'}</span></div></div>
+            <div><label class="input-label" for="dlna-name">设备名称</label><input id="dlna-name" class="input" bind:value={dlnaFriendlyName} /></div>
+            <div><label class="input-label" for="dlna-url">局域网访问地址</label><input id="dlna-url" class="input" bind:value={dlnaAdvertiseURL} placeholder="http://192.168.1.10:9090" /><p class="text-xs th-text-tertiary mt-1">必须是电视能访问的地址，不能填写 127.0.0.1。</p></div>
+            <div><label class="input-label" for="dlna-interface">网卡名称（可选）</label><input id="dlna-interface" class="input" bind:value={dlnaInterface} placeholder="eth0" /></div>
+            <div><label class="input-label" for="dlna-viewers">最大实时播放数</label><input id="dlna-viewers" type="number" class="input" bind:value={dlnaMaxViewers} min="1" max="50" /></div>
+            <div><label class="input-label" for="dlna-browse-count">目录最大条数</label><input id="dlna-browse-count" type="number" class="input" bind:value={dlnaMaxBrowseCount} min="1" max="1000" /></div>
+            <div><label class="input-label" for="dlna-cidrs">允许的局域网 CIDR（每行一个）</label><textarea id="dlna-cidrs" class="input min-h-20" bind:value={dlnaAllowedCIDRs} placeholder="192.168.1.0/24"></textarea></div>
+            <div class="flex items-center gap-6 pt-6"><label class="flex items-center gap-2 text-sm th-text-secondary"><input type="checkbox" bind:checked={dlnaIncludeLive} /> 实时流</label><label class="flex items-center gap-2 text-sm th-text-secondary"><input type="checkbox" bind:checked={dlnaIncludeRecordings} /> 录像</label></div>
           </div>
         </div>
 
