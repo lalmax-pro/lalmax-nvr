@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -46,6 +47,7 @@ type Config struct {
 	Health        HealthConfig        `yaml:"health"`
 	RemoteLog     RemoteLogConfig     `yaml:"remote_log"`
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
+	DLNA          DLNAConfig          `yaml:"dlna"`
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
 	Snapshot      SnapshotConfig      `yaml:"snapshot"`
@@ -332,6 +334,21 @@ type HLSConfig struct {
 }
 
 // StreamingConfig configures streaming protocol options (WebRTC, FLV, etc.)
+// DLNAConfig controls the optional LAN UPnP MediaServer.
+type DLNAConfig struct {
+	Enabled           *bool    `yaml:"enabled"`
+	FriendlyName      string   `yaml:"friendly_name"`
+	UUID              string   `yaml:"uuid"`
+	AdvertiseURL      string   `yaml:"advertise_url"`
+	Interface         string   `yaml:"interface"`
+	AllowedCIDRs      []string `yaml:"allowed_cidrs,omitempty"`
+	IncludeLive       *bool    `yaml:"include_live"`
+	IncludeRecordings *bool    `yaml:"include_recordings"`
+	MaxBrowseCount    int      `yaml:"max_browse_count"`
+	MaxMediaViewers   int      `yaml:"max_media_viewers"`
+}
+
+// StreamingConfig controls streaming protocol options (WebRTC, FLV, etc.)
 type StreamingConfig struct {
 	DefaultProtocol string       `yaml:"default_protocol"` // webrtc | flv | ws-flv | hls | ll-hls (default "webrtc")
 	WebRTC          WebRTCConfig `yaml:"webrtc"`
@@ -829,6 +846,28 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("hls.idle_timeout must be > 0, got %s", cfg.HLS.IdleTimeout)
 	}
 
+	// Validate DLNA configuration
+	if cfg.DLNA.MaxBrowseCount < 1 || cfg.DLNA.MaxBrowseCount > 1000 {
+		return fmt.Errorf("dlna.max_browse_count must be between 1 and 1000, got %d", cfg.DLNA.MaxBrowseCount)
+	}
+	if cfg.DLNA.MaxMediaViewers < 1 || cfg.DLNA.MaxMediaViewers > 100 {
+		return fmt.Errorf("dlna.max_media_viewers must be between 1 and 100, got %d", cfg.DLNA.MaxMediaViewers)
+	}
+	if strings.TrimSpace(cfg.DLNA.AdvertiseURL) != "" {
+		u, err := url.Parse(cfg.DLNA.AdvertiseURL)
+		if err != nil || u.Scheme != "http" || u.Host == "" {
+			return fmt.Errorf("dlna.advertise_url must be an http URL")
+		}
+		if strings.HasPrefix(strings.ToLower(u.Hostname()), "127.") || u.Hostname() == "localhost" {
+			return fmt.Errorf("dlna.advertise_url must be reachable from the LAN, not loopback")
+		}
+	}
+	for _, cidr := range cfg.DLNA.AllowedCIDRs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("dlna.allowed_cidrs contains invalid CIDR %q", cidr)
+		}
+	}
+
 	// Validate streaming configuration
 	if cfg.Streaming.DefaultProtocol != "webrtc" && cfg.Streaming.DefaultProtocol != "flv" && cfg.Streaming.DefaultProtocol != "ws-flv" && cfg.Streaming.DefaultProtocol != "hls" && cfg.Streaming.DefaultProtocol != "ll-hls" {
 		return fmt.Errorf("streaming.default_protocol invalid: %s (must be webrtc/flv/ws-flv/hls/ll-hls)", cfg.Streaming.DefaultProtocol)
@@ -961,6 +1000,28 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Cleanup.DiskThresholdPercent == 0 {
 		cfg.Cleanup.DiskThresholdPercent = 95
+	}
+	// DLNA defaults to disabled; when enabled it advertises both live streams and recordings.
+	if cfg.DLNA.Enabled == nil {
+		cfg.DLNA.Enabled = new(bool)
+		*cfg.DLNA.Enabled = false
+	}
+	if strings.TrimSpace(cfg.DLNA.FriendlyName) == "" {
+		cfg.DLNA.FriendlyName = "Lalmax NVR"
+	}
+	if cfg.DLNA.IncludeLive == nil {
+		cfg.DLNA.IncludeLive = new(bool)
+		*cfg.DLNA.IncludeLive = true
+	}
+	if cfg.DLNA.IncludeRecordings == nil {
+		cfg.DLNA.IncludeRecordings = new(bool)
+		*cfg.DLNA.IncludeRecordings = true
+	}
+	if cfg.DLNA.MaxBrowseCount <= 0 {
+		cfg.DLNA.MaxBrowseCount = 200
+	}
+	if cfg.DLNA.MaxMediaViewers <= 0 {
+		cfg.DLNA.MaxMediaViewers = 4
 	}
 	// Auth - no defaults
 	// FTP

@@ -49,6 +49,9 @@ export type {
   APIObservabilityResponse,
 } from './client';
 
+export { getDLNASettings, updateDLNASettings } from './dlna';
+export type { DLNAConfig } from './dlna';
+
 // Cameras — CRUD, ONVIF, PTZ, protocols
 export {
   listCameras,

@@ -37,6 +37,18 @@ media:
   #   lal (port 1935):    RTMP
   #   lal (port 15544):   RTSP  (rtsp://{lalmax_public_url host}:15544/live/{camera_id})
 
+# DLNA MediaServer — publishes live streams and recordings to trusted LAN players.
+# The web UI can enable this feature. advertise_url must be reachable by the TV.
+# dlna:
+#   enabled: false
+#   friendly_name: "Lalmax NVR"
+#   advertise_url: "http://192.168.1.10:9090"
+#   interface: "eth0"
+#   include_live: true
+#   include_recordings: true
+#   max_browse_count: 200
+#   max_media_viewers: 4
+
 # Authentication
 # Option 1: Set password_hash (generate with: lalmax-nvr hash-password <pw>)
 # Option 2: Set password in plaintext (auto-converted to hash on first run)

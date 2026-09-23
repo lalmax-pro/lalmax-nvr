@@ -89,11 +89,12 @@ func TestSetupLoggerUnknownLevelDefaultsToInfo(t *testing.T) {
 
 func TestComponentLoggerAddsField(t *testing.T) {
 	t.Helper()
-	t.Parallel()
 	var buf bytes.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
 	testLogger := slog.New(handler)
+	previous := slog.Default()
 	slog.SetDefault(testLogger)
+	defer slog.SetDefault(previous)
 
 	logger := ComponentLogger("test")
 	require.NotNil(t, logger)
@@ -106,11 +107,12 @@ func TestComponentLoggerAddsField(t *testing.T) {
 
 func TestComponentLoggerDifferentComponents(t *testing.T) {
 	t.Helper()
-	t.Parallel()
 	var buf bytes.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
 	testLogger := slog.New(handler)
+	previous := slog.Default()
 	slog.SetDefault(testLogger)
+	defer slog.SetDefault(previous)
 
 	logger1 := ComponentLogger("camera-manager")
 	logger2 := ComponentLogger("api")

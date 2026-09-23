@@ -28,6 +28,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/cleanup"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/lalmax-pro/lalmax-nvr/internal/dlna"
 	"github.com/lalmax-pro/lalmax-nvr/internal/docsportal"
 	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ftp"
@@ -410,6 +411,7 @@ type App struct {
 
 	// HTTP server
 	httpServer *http.Server
+	dlna       *dlna.Service
 
 	// Remote log handler (nil when disabled)
 	remoteLogHandler *remotelog.Handler
@@ -710,6 +712,9 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.recPlanner = recorder.NewRecordingPlanner(a.db)
 	a.wireRecordTasks()
 
+	// Optional DLNA MediaServer shares the NVR HTTP listener but has its own SSDP lifecycle.
+	a.dlna = dlna.NewService(cfg, a.db, a.store, a.mediaEngine)
+
 	// Step 12: Build HTTP router
 	a.httpServer = &http.Server{
 		Addr:    cfg.Server.Listen,
@@ -775,6 +780,9 @@ func (a *App) buildRouter() http.Handler {
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.configPath, a.mergeMgr, cloudProxy)
 	handler.SetServiceLogPath(authmw.ResolveServiceLogPath())
+	if a.dlna != nil {
+		handler.SetDLNAApply(a.dlna.Apply)
+	}
 	a.apiHandler = handler
 	handler.SetMultiUserAuthMW(a.multiUserMW)
 	handler.SetRestartFunc(func() {
@@ -924,6 +932,9 @@ func (a *App) buildRouter() http.Handler {
 	})
 	r.Handle("/docs/", http.StripPrefix("/docs/", http.FileServer(http.FS(docsportal.FS))))
 
+	if a.dlna != nil {
+		a.dlna.RegisterRoutes(r)
+	}
 	r.Mount("/", handler.Routes())
 
 	// WebDAV
@@ -1297,6 +1308,12 @@ func (a *App) Start() error {
 		go a.camMgr.MonitorStreamEvents(ctx)
 	}
 
+	if a.dlna != nil && a.dlna.Enabled() {
+		if err := a.dlna.Start(ctx); err != nil {
+			slog.Warn("DLNA service failed to start", "error", err)
+		}
+	}
+
 	// Start HTTP server
 	go func() {
 		slog.Info("lalmax-nvr listening", "version", appVersion, "addr", a.cfg.Server.Listen)
@@ -1345,6 +1362,12 @@ func (a *App) Stop() error {
 		if a.remoteLogHandler != nil {
 			log.Info("flushing remote log handler")
 			a.remoteLogHandler.Close()
+		}
+
+		// Stop SSDP before the shared HTTP server.
+		if a.dlna != nil {
+			log.Info("stopping DLNA service")
+			_ = a.dlna.Stop(shutdownCtx)
 		}
 
 		// 1. HTTP server — stop accepting new requests
@@ -1575,6 +1598,7 @@ func newMediaEngine(cfg *config.Config, opts ...interface{}) (media.Engine, erro
 		SRTPort:               cfg.SRT.Port,
 		SRTEnabled:            cfg.SRT.Enabled != nil && *cfg.SRT.Enabled,
 		HLSEnabled:            cfg.IsHLSEnabled(),
+		DLNAEnabled:           cfg.DLNA.Enabled != nil && *cfg.DLNA.Enabled,
 		HLSOnDemand:           cfg.IsHLSOnDemand(),
 		HLSIdleTimeoutMs:      int(cfg.HLSIdleTimeout() / time.Millisecond),
 		LalFragmentDurationMs: cfg.HLS.LalFragmentDurationMs,

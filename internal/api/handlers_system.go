@@ -548,6 +548,18 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"path_prefix": h.config.WebDAV.PathPrefix,
 			"read_write":  h.config.WebDAV.ReadWrite,
 		},
+		"dlna": map[string]any{
+			"enabled":            h.config.DLNA.Enabled != nil && *h.config.DLNA.Enabled,
+			"friendly_name":      h.config.DLNA.FriendlyName,
+			"uuid":               h.config.DLNA.UUID,
+			"advertise_url":      h.config.DLNA.AdvertiseURL,
+			"interface":          h.config.DLNA.Interface,
+			"allowed_cidrs":      h.config.DLNA.AllowedCIDRs,
+			"include_live":       h.config.DLNA.IncludeLive != nil && *h.config.DLNA.IncludeLive,
+			"include_recordings": h.config.DLNA.IncludeRecordings != nil && *h.config.DLNA.IncludeRecordings,
+			"max_browse_count":   h.config.DLNA.MaxBrowseCount,
+			"max_media_viewers":  h.config.DLNA.MaxMediaViewers,
+		},
 		"auth": map[string]any{
 			"username":        h.config.Auth.Username,
 			"auth_configured": h.config.Auth.PasswordHash != "" || h.config.Auth.Password != "",
@@ -572,6 +584,18 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			PathPrefix *string `json:"path_prefix"`
 			ReadWrite  *bool   `json:"read_write"`
 		} `json:"webdav"`
+		DLNA *struct {
+			Enabled           *bool     `json:"enabled"`
+			FriendlyName      *string   `json:"friendly_name"`
+			UUID              *string   `json:"uuid"`
+			AdvertiseURL      *string   `json:"advertise_url"`
+			Interface         *string   `json:"interface"`
+			AllowedCIDRs      *[]string `json:"allowed_cidrs"`
+			IncludeLive       *bool     `json:"include_live"`
+			IncludeRecordings *bool     `json:"include_recordings"`
+			MaxBrowseCount    *int      `json:"max_browse_count"`
+			MaxMediaViewers   *int      `json:"max_media_viewers"`
+		} `json:"dlna"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -605,6 +629,48 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update webdav settings
+	if body.DLNA != nil {
+		if body.DLNA.Enabled != nil {
+			if h.config.DLNA.Enabled == nil {
+				h.config.DLNA.Enabled = new(bool)
+			}
+			*h.config.DLNA.Enabled = *body.DLNA.Enabled
+		}
+		if body.DLNA.FriendlyName != nil {
+			h.config.DLNA.FriendlyName = strings.TrimSpace(*body.DLNA.FriendlyName)
+		}
+		if body.DLNA.UUID != nil {
+			h.config.DLNA.UUID = strings.TrimSpace(*body.DLNA.UUID)
+		}
+		if body.DLNA.AdvertiseURL != nil {
+			h.config.DLNA.AdvertiseURL = strings.TrimRight(strings.TrimSpace(*body.DLNA.AdvertiseURL), "/")
+		}
+		if body.DLNA.Interface != nil {
+			h.config.DLNA.Interface = strings.TrimSpace(*body.DLNA.Interface)
+		}
+		if body.DLNA.AllowedCIDRs != nil {
+			h.config.DLNA.AllowedCIDRs = *body.DLNA.AllowedCIDRs
+		}
+		if body.DLNA.IncludeLive != nil {
+			if h.config.DLNA.IncludeLive == nil {
+				h.config.DLNA.IncludeLive = new(bool)
+			}
+			*h.config.DLNA.IncludeLive = *body.DLNA.IncludeLive
+		}
+		if body.DLNA.IncludeRecordings != nil {
+			if h.config.DLNA.IncludeRecordings == nil {
+				h.config.DLNA.IncludeRecordings = new(bool)
+			}
+			*h.config.DLNA.IncludeRecordings = *body.DLNA.IncludeRecordings
+		}
+		if body.DLNA.MaxBrowseCount != nil && *body.DLNA.MaxBrowseCount > 0 {
+			h.config.DLNA.MaxBrowseCount = *body.DLNA.MaxBrowseCount
+		}
+		if body.DLNA.MaxMediaViewers != nil && *body.DLNA.MaxMediaViewers > 0 {
+			h.config.DLNA.MaxMediaViewers = *body.DLNA.MaxMediaViewers
+		}
+	}
+
 	if body.WebDAV != nil {
 		if body.WebDAV.Enabled != nil {
 			if h.config.WebDAV.Enabled == nil {
@@ -623,6 +689,13 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// Persist config to disk (with conflict detection)
 	if !h.saveConfig(w) {
 		return
+	}
+	if h.dlnaApply != nil {
+		if err := h.dlnaApply(r.Context()); err != nil {
+			logger.Warn("failed to apply DLNA settings", "error", err)
+			writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "dlna_error": err.Error()})
+			return
+		}
 	}
 	h.logOperation(r, "config.update", "config", "", "success", "settings updated", nil)
 

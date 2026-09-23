@@ -42,6 +42,7 @@ type EmbeddedLalmaxConfig struct {
 	LalmaxSegmentDuration int
 	LalmaxPartDuration    int
 	HLSOnDemand           bool
+	DLNAEnabled           bool
 	HLSIdleTimeoutMs      int
 	// RTSP server auth
 	RTSPAuthEnable bool
@@ -889,7 +890,9 @@ func embeddedConfigJSON(cfg EmbeddedLalmaxConfig) ([]byte, error) {
 			"httpflv":      map[string]any{"enable": true, "url_pattern": "/"},
 			"default_http": map[string]any{"http_listen_addr": fmt.Sprintf(":%d", config.DefaultLalHTTPPort)},
 			"http_api":     map[string]any{"enable": false},
-			"httpts":       map[string]any{"enable": false},
+			// Keep the native TS fan-out available to the NVR DLNA proxy. The lal
+			// listener is not advertised to DLNA clients directly.
+			"httpts": map[string]any{"enable": true, "url_pattern": "/live/"},
 			"hls": map[string]any{
 				"enable":                    cfg.HLSEnabled,
 				"url_pattern":               "/hls/",
