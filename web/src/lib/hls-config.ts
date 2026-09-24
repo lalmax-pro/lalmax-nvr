@@ -7,8 +7,36 @@
 import { getCredentials } from '$lib/api';
 import type Hls from 'hls.js';
 
+export interface HlsRequestOptions {
+  headers?: Record<string, string>;
+  appAuth?: boolean;
+  headerOrigin?: string;
+}
+
+const forbiddenBrowserHeaders = new Set([
+  'accept-charset', 'accept-encoding', 'access-control-request-headers',
+  'access-control-request-method', 'connection', 'content-length', 'cookie',
+  'date', 'dnt', 'expect', 'host', 'keep-alive', 'origin', 'referer',
+  'te', 'trailer', 'transfer-encoding', 'upgrade', 'via', 'user-agent',
+]);
+
+function addRequestHeaders(headers: Headers, requestHeaders: Record<string, string>, url: string, headerOrigin?: string) {
+  if (headerOrigin) {
+    try {
+      if (new URL(url, window.location.href).origin !== headerOrigin) return;
+    } catch {
+      return;
+    }
+  }
+  for (const [name, value] of Object.entries(requestHeaders)) {
+    const lower = name.toLowerCase();
+    if (forbiddenBrowserHeaders.has(lower) || lower.startsWith('proxy-') || lower.startsWith('sec-')) continue;
+    headers.set(name, value);
+  }
+}
+
 /** RPi-optimized hls.js configuration. When protocol is 'll-hls', returns LL-HLS tuned config. */
-export function createHlsConfig(protocol: string = 'hls'): Partial<Hls.Config> {
+export function createHlsConfig(protocol: string = 'hls', requestOptions: HlsRequestOptions = {}): Partial<Hls.Config> {
   const baseConfig = {
     enableWorker: false,
     liveDurationInfinity: true,
@@ -50,23 +78,26 @@ export function createHlsConfig(protocol: string = 'hls'): Partial<Hls.Config> {
       },
     },
     xhrSetup: (xhr: XMLHttpRequest, url: string) => {
-      const creds = getCredentials();
+      const creds = requestOptions.appAuth === false ? null : getCredentials();
       if (creds) {
         if (!xhr.readyState) {
           xhr.open('GET', url, true);
         }
         xhr.setRequestHeader('Authorization', 'Basic ' + btoa(`${creds.username}:${creds.password}`));
       }
+      const headers = new Headers();
+      addRequestHeaders(headers, requestOptions.headers ?? {}, url, requestOptions.headerOrigin);
+      headers.forEach((value, name) => xhr.setRequestHeader(name, value));
     },
     // HLS.js 1.6+ uses fetch by default; xhrSetup alone doesn't add auth to fetch requests.
     fetchSetup: (context, initParams) => {
-      const creds = getCredentials();
+      const creds = requestOptions.appAuth === false ? null : getCredentials();
+      const headers = new Headers(initParams.headers);
       if (creds) {
-        initParams.headers = {
-          ...initParams.headers,
-          'Authorization': 'Basic ' + btoa(`${creds.username}:${creds.password}`),
-        };
+        headers.set('Authorization', 'Basic ' + btoa(`${creds.username}:${creds.password}`));
       }
+      addRequestHeaders(headers, requestOptions.headers ?? {}, context.url, requestOptions.headerOrigin);
+      initParams.headers = headers;
       return new Request(context.url, initParams);
     },
   };

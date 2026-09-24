@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
@@ -13,6 +15,11 @@ import (
 type triggerMessage struct {
 	Action string `json:"action"`
 }
+
+const (
+	connectTimeout = 5 * time.Second
+	retryInterval  = 5 * time.Second
+)
 
 // Client subscribes to MQTT topics for camera trigger events.
 type Client struct {
@@ -52,6 +59,7 @@ func (c *Client) Start(ctx context.Context) error {
 	opts := mqtt.NewClientOptions().
 		AddBroker(c.brokerURL).
 		SetClientID(c.clientID).
+		SetConnectTimeout(connectTimeout).
 		SetAutoReconnect(true).
 		SetOnConnectHandler(func(client mqtt.Client) {
 			topic := c.topicPrefix + "/trigger/+"
@@ -66,10 +74,28 @@ func (c *Client) Start(ctx context.Context) error {
 		}
 	}
 	c.mqttClient = mqtt.NewClient(opts)
-	token := c.mqttClient.Connect()
-	token.Wait()
-	if err := token.Error(); err != nil {
-		return err
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+
+		token := c.mqttClient.Connect()
+		token.Wait()
+		if err := token.Error(); err == nil {
+			break
+		} else if ctx.Err() != nil {
+			return nil
+		} else {
+			slog.Warn("MQTT initial connection failed; retrying", "error", err)
+		}
+
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
+		}
 	}
 
 	<-ctx.Done()
@@ -97,8 +123,12 @@ func (c *Client) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 		return
 	}
 
-	if c.onAction != nil && tm.Action != "" {
-		c.onAction(cameraID, tm.Action)
+	action := strings.ToLower(strings.TrimSpace(tm.Action))
+	switch action {
+	case "record", "start", "trigger", "stop", "end", "off":
+		if c.onAction != nil && cameraID != "" {
+			c.onAction(cameraID, action)
+		}
 	}
 }
 

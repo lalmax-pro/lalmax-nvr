@@ -4,6 +4,7 @@ export interface DLNAConfig {
   enabled: boolean;
   friendly_name: string;
   uuid?: string;
+  port: number;
   advertise_url?: string;
   interface?: string;
   allowed_cidrs?: string[];
@@ -11,6 +12,7 @@ export interface DLNAConfig {
   include_recordings: boolean;
   max_browse_count: number;
   max_media_viewers: number;
+  gop_cache: number;
 }
 
 export function getDLNASettings(signal?: AbortSignal) {

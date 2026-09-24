@@ -89,3 +89,33 @@ func TestCase2(t *testing.T) {
 		remuxer.FeedAvPacket(p)
 	}
 }
+
+func TestAvPacket2RtmpPreservesCompositionTime(t *testing.T) {
+	var videoMessages []base.RtmpMsg
+	remuxer := remux.NewAvPacket2RtmpRemuxer().WithOnRtmpMsg(func(msg base.RtmpMsg) {
+		if msg.Header.MsgTypeId == base.RtmpTypeIdVideo && len(msg.Payload) > 5 && msg.Payload[1] == base.RtmpAvcPacketTypeNalu {
+			videoMessages = append(videoMessages, msg)
+		}
+	})
+	remuxer.WithOption(func(option *base.AvPacketStreamOption) {
+		option.VideoFormat = base.AvPacketStreamVideoFormatAnnexb
+	})
+
+	sps, _ := hex.DecodeString("67640032ad84010c20086100430802184010c200843b5014005ad370101014000003000400000300ca100002")
+	pps, _ := hex.DecodeString("68ee3cb0")
+	remuxer.FeedAvPacket(base.AvPacket{PayloadType: base.AvPacketPtAvc, Timestamp: 100, Pts: 100, Payload: append([]byte{0, 0, 0, 1}, sps...)})
+	remuxer.FeedAvPacket(base.AvPacket{PayloadType: base.AvPacketPtAvc, Timestamp: 100, Pts: 100, Payload: append([]byte{0, 0, 0, 1}, pps...)})
+	remuxer.FeedAvPacket(base.AvPacket{
+		PayloadType: base.AvPacketPtAvc,
+		Timestamp:   100,
+		Pts:         140,
+		Payload:     []byte{0, 0, 0, 1, 0x65, 0x88},
+	})
+
+	if len(videoMessages) != 1 {
+		t.Fatalf("expected one video packet, got %d", len(videoMessages))
+	}
+	if got := videoMessages[0].Payload[2:5]; got[0] != 0 || got[1] != 0 || got[2] != 40 {
+		t.Fatalf("expected 40ms composition offset, got %x", got)
+	}
+}

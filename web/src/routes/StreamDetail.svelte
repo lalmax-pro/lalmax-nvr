@@ -306,6 +306,7 @@
   function sourceTypeLabel(type: string): string {
     switch (type) {
       case 'camera': return t('streams.sourceCamera');
+      case 'iptv': return t('streams.sourceIPTV');
       case 'gb28181': return t('streams.sourceGB28181');
       case 'rtmp_push': return t('streams.sourceRTMPPush');
       case 'srt_push': return t('streams.sourceSRTPush');

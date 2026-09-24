@@ -70,7 +70,106 @@ tags:
     description: |
       进程服务日志环形缓冲（快照 + SSE）。
       In-memory process service logs (snapshot + SSE).
+  - name: IPTV
+    description: |
+      独立 IPTV 模块：导入并检测 M3U，浏览器 HLS.js 直播放；频道可发布到 lal，发布与录像计划共享同一个 HLS 拉流。
+      Independent IPTV module: import and probe M3U, play in browser HLS.js, or publish into lal with one HLS pull shared by publication and recording plans.
 paths:
+  /api/iptv/imports:
+    post:
+      tags: [IPTV]
+      summary: 导入 M3U · Import M3U
+      description: |
+        解析播放列表并创建检测草稿，不会立即拉流。
+        Parse a playlist into a validation draft. Does not start pulls.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                playlist_url: { type: string }
+                playlist_text: { type: string }
+      responses:
+        "202":
+          description: Import job created
+  /api/iptv/channels:
+    get:
+      tags: [IPTV]
+      summary: 已纳管 IPTV 频道 · Enrolled IPTV channels
+      responses:
+        "200":
+          description: Channel list
+  /api/iptv/channels/{id}/playback:
+    get:
+      tags: [IPTV]
+      summary: 获取频道代理播放地址 · Get same-origin proxied channel playback details
+      description: |
+        返回同源 HLS 代理 URL。代理转发播放列表、分片和密钥请求；响应不缓存。
+        Returns the same-origin HLS proxy URL. The proxy fetches playlists, segments, and keys; the response is not cacheable.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Playback details
+        "404":
+          description: Channel not found
+  /api/iptv/channels/{id}/hls:
+    get:
+      tags: [IPTV]
+      summary: 代理 IPTV HLS 清单和媒体资源 · Proxy IPTV HLS manifests and media resources
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: url
+          in: query
+          required: false
+          description: Upstream resource URI; omitted for the channel's main playlist.
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Rewritten HLS manifest or media segment
+        "206":
+          description: Partial media resource
+        "502":
+          description: Upstream resource could not be fetched or rewritten
+  /api/iptv/channels/{id}:
+    put:
+      tags: [IPTV]
+      summary: 更新 IPTV 频道 · Update IPTV channel
+      description: |
+        更新名称、启用、收藏和发布状态。`publish_enabled` 会把频道的 HLS 源拉入 lal；发布和录像计划共享拉流。发布仅支持 `media.mode: embedded`。
+        Updates name, enabled, favorite, and publication state. `publish_enabled` pulls the channel into lal; publication and recording plans share the pull. Publication requires `media.mode: embedded`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                enabled: { type: boolean }
+                favorite: { type: boolean }
+                publish_enabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated channel
+        "400":
+          description: Invalid channel state or unsupported codec
+        "503":
+          description: IPTV publishing requires embedded media mode
   /api/health:
     get:
       tags: [Health]

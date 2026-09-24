@@ -15,6 +15,7 @@
   - [ONVIF 摄像头控制](#onvif-摄像头控制)
   - [摄像头合并配置](#摄像头合并配置)
 - [录像计划 API](#录像计划-api)
+- [IPTV API](#iptv-api)
 - [录像 API](#录像-api)
 - [连续 VOD](#连续-vod)
 - [流诊断](#流诊断)
@@ -1183,6 +1184,23 @@ curl -u username:password \
 **端点：** `GET /api/flow/streams`
 
 所有相机的同一结构列表：`{ "cameras": [ ... ] }`。
+
+## IPTV API
+
+独立 IPTV 模块：导入并验证 M3U，浏览器 HLS.js 经同源代理播放；可启用频道发布，将 HLS 拉流接入 lal，供其他协议播放和录像计划共享。频道不是摄像头。完整说明：[IPTV](iptv.md)。
+
+```
+POST   /api/iptv/imports
+GET    /api/iptv/imports/{id}
+GET    /api/iptv/imports/{id}/items
+POST   /api/iptv/imports/{id}/commit
+GET    /api/iptv/channels
+GET    /api/iptv/channels/{id}/playback
+GET    /api/iptv/channels/{id}/hls[?url=<upstream-url>]
+PUT    /api/iptv/channels/{id}  # publish_enabled 控制发布
+```
+
+浏览器播放通过同源代理请求 HLS 清单和分片，不要求源站支持 CORS。发布和录像拉流要求 `media.mode: embedded`（默认值），并共享 `iptv.max_concurrent_pulls` 并发限制。发布开启后，从 `GET /api/streams/{stream_id}` 的 `play_urls` 获取协议地址。
 
 ## 录像计划 API
 

@@ -259,11 +259,6 @@ func (d *DB) DesiredRecordingStreams(ctx context.Context) (map[string]bool, erro
 	}
 
 	now := time.Now()
-	activeWindows, err := d.plansActiveNow(ctx, int(now.Weekday()), now.Format("15:04"))
-	if err != nil {
-		return nil, err
-	}
-
 	desired := make(map[string]bool, len(plans))
 	for _, p := range plans {
 		if !p.Enabled {
@@ -274,7 +269,7 @@ func (d *DB) DesiredRecordingStreams(ctx context.Context) (map[string]bool, erro
 		case RecordingModeOff, RecordingModeEvent:
 			desired[p.StreamID] = false
 		case RecordingModeScheduled:
-			desired[p.StreamID] = activeWindows[p.ID]
+			desired[p.StreamID] = ScheduleWindowsActive(p.Windows, now)
 		default:
 			desired[p.StreamID] = true
 		}
@@ -282,24 +277,29 @@ func (d *DB) DesiredRecordingStreams(ctx context.Context) (map[string]bool, erro
 	return desired, nil
 }
 
-// plansActiveNow returns plan IDs whose schedule covers the given moment.
-func (d *DB) plansActiveNow(ctx context.Context, dayOfWeek int, hhmm string) (map[string]bool, error) {
-	rows, err := d.db.QueryContext(ctx, `
-		SELECT DISTINCT plan_id FROM recording_plan_windows
-		WHERE day_of_week = ? AND start_time <= ? AND end_time > ?;`,
-		dayOfWeek, hhmm, hhmm)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	active := make(map[string]bool)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+// ScheduleWindowsActive reports whether now falls inside any weekly window.
+// A window with start_time > end_time is overnight: it runs from start on
+// DayOfWeek through midnight, then until end_time the next day.
+func ScheduleWindowsActive(windows []ScheduleWindow, now time.Time) bool {
+	day := int(now.Weekday())
+	hhmm := now.Format("15:04")
+	prev := (day + 6) % 7
+	for _, w := range windows {
+		if w.StartTime == w.EndTime {
+			continue
 		}
-		active[id] = true
+		if w.StartTime < w.EndTime {
+			if w.DayOfWeek == day && w.StartTime <= hhmm && hhmm < w.EndTime {
+				return true
+			}
+			continue
+		}
+		if w.DayOfWeek == day && hhmm >= w.StartTime {
+			return true
+		}
+		if w.DayOfWeek == prev && hhmm < w.EndTime {
+			return true
+		}
 	}
-	return active, rows.Err()
+	return false
 }

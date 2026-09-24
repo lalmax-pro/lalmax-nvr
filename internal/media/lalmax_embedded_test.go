@@ -113,7 +113,7 @@ func TestPatchLalmaxConfig_CreatesMissingProtocolSections(t *testing.T) {
 	path := filepath.Join(dir, "lalmax.conf.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{"lal":{},"lalmax":{}}`), 0o644))
 
-	require.NoError(t, patchLalmaxConfig(path, true, true, ":1935", ":9000"))
+	require.NoError(t, patchLalmaxConfig(path, true, true, ":1935", ":9000", 4))
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -130,6 +130,19 @@ func TestPatchLalmaxConfig_CreatesMissingProtocolSections(t *testing.T) {
 	srt := lalmax["srt_config"].(map[string]any)
 	require.True(t, srt["enable"].(bool))
 	require.Equal(t, ":9000", srt["addr"])
+
+	httpts := lal["httpts"].(map[string]any)
+	require.True(t, httpts["enable"].(bool))
+	require.Equal(t, "/live/", httpts["url_pattern"])
+	require.Equal(t, float64(4), httpts["gop_num"])
+}
+
+func TestHTTPTSGopNum(t *testing.T) {
+	require.Equal(t, 1, httptsGopNum(0))
+	require.Equal(t, 1, httptsGopNum(-3))
+	require.Equal(t, 1, httptsGopNum(1))
+	require.Equal(t, 8, httptsGopNum(8))
+	require.Equal(t, 16, httptsGopNum(99))
 }
 
 func TestEnsureLalLogConfig_AddsLogWhenMissing(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -50,15 +51,24 @@ func TestRecordingPlan_CRUD(t *testing.T) {
 	rr = doRequest(t, h.Routes(), "POST", "/api/recording-plans", strings.NewReader(body), "admin", "pass")
 	require.Equal(t, http.StatusConflict, rr.Code)
 
-	// Update mode + windows.
-	upd := `{"mode":"continuous","enabled":false}`
+	// A partial pause/resume update must preserve the recording mode and windows.
+	upd := `{"enabled":false}`
 	rr = doRequest(t, h.Routes(), "PUT", "/api/recording-plans/"+created.ID, strings.NewReader(upd), "admin", "pass")
 	require.Equal(t, http.StatusOK, rr.Code)
 	var updated storage.RecordingPlan
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &updated))
-	require.Equal(t, storage.RecordingModeContinuous, updated.Mode)
+	require.Equal(t, storage.RecordingModeScheduled, updated.Mode)
 	require.False(t, updated.Enabled)
 	require.Equal(t, "obs-1", updated.StreamID, "stream_id is kept when omitted")
+	require.Len(t, updated.Windows, 1, "windows are kept when omitted")
+
+	// An explicit mode change still takes effect.
+	upd = `{"mode":"continuous","enabled":true}`
+	rr = doRequest(t, h.Routes(), "PUT", "/api/recording-plans/"+created.ID, strings.NewReader(upd), "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &updated))
+	require.Equal(t, storage.RecordingModeContinuous, updated.Mode)
+	require.True(t, updated.Enabled)
 	require.Len(t, updated.Windows, 1, "windows are kept when omitted")
 
 	rr = doRequest(t, h.Routes(), "DELETE", "/api/recording-plans/"+created.ID, nil, "admin", "pass")
@@ -94,6 +104,37 @@ func TestRecordingPlan_Validation(t *testing.T) {
 
 // Promoting a stream to a device must not start recording: recording is driven
 // by recording plans only.
+func TestPauseResume_DoesNotInventRecordingPlan(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertCamera(ctx, "cam-1", "Cam", "rtsp", "h264", "rtsp://x", "", "", true, "", "", ""))
+	require.NoError(t, db.SetCameraStream(ctx, "cam-1", "obs-1"))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/cam-1/pause-recording", nil)
+	require.NoError(t, h.setStreamRecordingEnabled(req, "cam-1", false))
+	plan, err := db.GetRecordingPlanByStream(ctx, "obs-1")
+	require.NoError(t, err)
+	require.Nil(t, plan, "pause must not create a recording plan")
+
+	require.NoError(t, h.setStreamRecordingEnabled(req, "cam-1", true))
+	plan, err = db.GetRecordingPlanByStream(ctx, "obs-1")
+	require.NoError(t, err)
+	require.Nil(t, plan, "resume must not create a recording plan")
+
+	require.NoError(t, db.UpsertRecordingPlan(ctx, &storage.RecordingPlan{
+		StreamID: "obs-1", Mode: storage.RecordingModeScheduled, Enabled: true,
+	}))
+	require.NoError(t, h.setStreamRecordingEnabled(req, "cam-1", false))
+	plan, err = db.GetRecordingPlanByStream(ctx, "obs-1")
+	require.NoError(t, err)
+	require.NotNil(t, plan)
+	require.False(t, plan.Enabled)
+	require.Equal(t, storage.RecordingModeScheduled, plan.Mode)
+}
+
 func TestPromoteStream_DoesNotCreateRecordingPlan(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { createStream, listStreams, subscribeNvrEvents, updateStream } from '$lib/api';
+  import { createStream, deleteStream, listStreams, subscribeNvrEvents, updateStream } from '$lib/api';
   import type { StreamInfo } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -42,6 +42,7 @@
   let creating = $state(false);
   let createError = $state('');
   let createdResult = $state<StreamInfo | null>(null);
+  let deletingID = $state('');
 
   let managedTotalPages = $derived(Math.max(1, Math.ceil(managedTotal / PAGE_SIZE)));
   let externalTotalPages = $derived(Math.max(1, Math.ceil(externalTotal / PAGE_SIZE)));
@@ -181,6 +182,20 @@
     }
   }
 
+  async function handleDelete(stream: StreamInfo) {
+    if (!confirm(t('streams.confirmDelete'))) return;
+    deletingID = stream.stream_id;
+    try {
+      await deleteStream(stream.stream_id);
+      showToast(t('streams.deleteSuccess'), 'success');
+      await loadStreams({ silent: true });
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('streams.deleteFailed'), 'error');
+    } finally {
+      deletingID = '';
+    }
+  }
+
   async function handleSaveName(stream: StreamInfo, name: string) {
     try {
       await updateStream(stream.stream_id, { name });
@@ -233,7 +248,13 @@
     </div>
   {:else}
     {#each items as stream (stream.stream_id)}
-      <StreamCard {stream} {managed} onsaveName={handleSaveName} />
+      <StreamCard
+        {stream}
+        {managed}
+        onsaveName={handleSaveName}
+        ondelete={managed ? undefined : handleDelete}
+        deleting={deletingID === stream.stream_id}
+      />
     {/each}
   {/if}
 {/snippet}

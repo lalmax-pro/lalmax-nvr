@@ -72,7 +72,7 @@
 
   function validate(): boolean {
     for (const r of ranges) {
-      if (r.start_time >= r.end_time) {
+      if (r.start_time === r.end_time) {
         showToast(t('cameras.recordingSchedule.invalidRange'), 'error');
         return false;
       }

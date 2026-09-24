@@ -563,6 +563,24 @@ func (d *DB) RepairZeroDurationRecordings(ctx context.Context) ([]model.Recordin
 	return res, nil
 }
 
+// ListDistinctRecordingOwners returns camera_id values that have at least one recording.
+func (d *DB) ListDistinctRecordingOwners(ctx context.Context) ([]string, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT DISTINCT camera_id FROM recordings WHERE camera_id != '' ORDER BY camera_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // UpdateRecordingDuration updates the duration and ended_at for a recording.
 func (d *DB) UpdateRecordingDuration(ctx context.Context, id string, duration float64, endedAt time.Time) error {
 	_, err := d.db.ExecContext(ctx, `UPDATE recordings SET duration=?, ended_at=? WHERE id=?;`, duration, timeToDB(endedAt), id)

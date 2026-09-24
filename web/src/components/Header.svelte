@@ -29,6 +29,7 @@
     Brain,
     Send,
     MapPin,
+    Tv,
   } from 'lucide-svelte';
 
   // Props
@@ -89,6 +90,7 @@
     { href: '#/map', labelKey: 'nav.map', route: '/map', icon: MapPin },
     { href: '#/device-groups', labelKey: 'nav.device_groups', route: '/device-groups', icon: FolderTree },
     { href: '#/gb-channels', labelKey: 'nav.gb_channels', route: '/gb-channels', icon: Network },
+    { href: '#/iptv', labelKey: 'nav.iptv', route: '/iptv', icon: Tv },
     { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings', icon: Film },
     { href: '#/recording-plans', labelKey: 'nav.recording_plans', route: '/recording-plans', icon: CalendarClock },
     { href: '#/events', labelKey: 'nav.events', route: '/events', icon: Bell },

@@ -23,6 +23,7 @@ The release [QUICKSTART](../QUICKSTART.md) is a short cheat sheet; this tree is 
 | [Camera Guide](camera-guide.md) | RTSP / HTTP / codecs |
 | [ONVIF Guide](onvif-guide.md) | Discovery, GetStreamUri then RTSP pull, PTZ |
 | [GB28181 Guide](gb28181-guide.md) | SIP platform, device PS/RTP push, playback, talk |
+| [IPTV](iptv.md) | Import and validate M3U, browser playback, recording-plan-driven HLS pull |
 | [Xiaomi](xiaomi-setup.md) | CS2 P2P fetch and inject |
 
 ## Integrations

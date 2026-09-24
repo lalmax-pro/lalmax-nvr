@@ -90,6 +90,26 @@ func TestGroupToStreamInfo_InactiveStream(t *testing.T) {
 	require.Nil(t, info.Publisher)
 }
 
+func TestGroupToStreamInfo_CustomizePublishWithRecentFramesActive(t *testing.T) {
+	t.Parallel()
+
+	info := groupToStreamInfo(groupPayload{
+		StreamName: "iptv-channel",
+		VideoCodec: "H264",
+		FPS: []struct {
+			UnixSec int64   `json:"unix_sec"`
+			V       float64 `json:"v"`
+			Value   float64 `json:"value"`
+			Num     float64 `json:"num"`
+			FPS     float64 `json:"fps"`
+		}{{UnixSec: time.Now().Unix(), FPS: 25}},
+	})
+
+	require.True(t, info.Active)
+	require.Equal(t, "customize", info.Publisher.Protocol)
+	require.InDelta(t, 25.0, info.InFPS, 0.01)
+}
+
 func TestGroupToStreamInfo_OmitsInternalRecorder(t *testing.T) {
 	t.Parallel()
 

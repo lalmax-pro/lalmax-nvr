@@ -1,15 +1,17 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
   import type { StreamInfo } from '$lib/api';
-  import { Eye, Pencil, Users } from 'lucide-svelte';
+  import { Eye, Pencil, Trash2, Users } from 'lucide-svelte';
 
   interface Props {
     stream: StreamInfo;
     managed?: boolean;
     onsaveName?: (stream: StreamInfo, name: string) => void;
+    ondelete?: (stream: StreamInfo) => void;
+    deleting?: boolean;
   }
 
-  let { stream, managed = false, onsaveName }: Props = $props();
+  let { stream, managed = false, onsaveName, ondelete, deleting = false }: Props = $props();
 
   let editingName = $state(false);
   let nameInput = $state('');
@@ -51,10 +53,19 @@
     }
   }
 
+  function handleDelete(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (deleting) return;
+    ondelete?.(stream);
+  }
+
   let sourceLabel = $derived.by(() => {
     switch (stream.source_type) {
       case 'camera':
         return t('streams.sourceCamera');
+      case 'iptv':
+        return t('streams.sourceIPTV');
       case 'rtmp_push':
         return t('streams.sourceRTMPPush');
       case 'srt_push':
@@ -157,9 +168,23 @@
       <Users size={14} class="th-text-tertiary" />
       {viewerCount}
     </span>
-    <span class="btn btn-ghost px-2 py-1 text-sm pointer-events-none">
-      <Eye size={14} />
-      <span class="hidden sm:inline">{t('streams.viewDetails')}</span>
+    <span class="inline-flex items-center gap-1">
+      {#if ondelete}
+        <button
+          type="button"
+          class="btn btn-ghost px-2 py-1 text-sm th-color-danger"
+          title={t('streams.deleteStream')}
+          aria-label={t('streams.deleteStream')}
+          disabled={deleting}
+          onclick={handleDelete}
+        >
+          <Trash2 size={14} />
+        </button>
+      {/if}
+      <span class="btn btn-ghost px-2 py-1 text-sm pointer-events-none">
+        <Eye size={14} />
+        <span class="hidden sm:inline">{t('streams.viewDetails')}</span>
+      </span>
     </span>
   </div>
 </a>

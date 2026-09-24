@@ -1,14 +1,14 @@
 # MQTT Integration
 
-lalmax-nvr supports MQTT-based recording triggers for smart home automation and event-driven recording. When an MQTT message is received, the system can start recording on a specific camera for a configurable duration. The camera’s bound stream needs an `mode=event` [recording plan](recording-plans.md).
+lalmax-nvr supports MQTT-based activity triggers for smart home automation and event-driven recording. A `record` message triggers the camera's event/adaptive recording plan; a `stop` message ends an active event recording. Event duration follows the configured post-roll settings, not a duration in the MQTT payload. The camera's bound stream needs an `mode=event` [recording plan](recording-plans.md).
 
 ## Overview
 
 - **Protocol**: MQTT (Message Queuing Telemetry Transport)
 - **Topic Pattern**: `{prefix}/trigger/{camera_id}`
 - **Payload**: JSON with `action` field
-- **Actions**: `record`, `stop`, `snapshot`
-- **Auto-reconnect**: Built-in with exponential backoff
+- **Actions**: `record` / `start` to trigger activity; `stop` / `end` / `off` to end an event recording
+- **Reconnect**: Retries an initial broker connection every 5 seconds; reconnects automatically after an established connection drops
 
 ## Configuration
 
@@ -18,7 +18,7 @@ lalmax-nvr supports MQTT-based recording triggers for smart home automation and 
 mqtt:
   broker: "tcp://192.168.1.100:1883"
   client_id: "lalmax-nvr"
-  topic: "lalmax-nvr"
+  topic: "lalmax-nvr" # Prefix; subscribes to lalmax-nvr/trigger/+
   username: "mqtt_user"
   password: "mqtt_password"
 ```
@@ -37,7 +37,7 @@ mqtt:
 
 ```yaml
 mqtt:
-  broker_url: "tcp://mqtt.example.com:1883"
+  broker: "tcp://mqtt.example.com:1883"
   client_id: "lalmax-nvr-home"
   topic: "home/security"
   username: "smart_home_user"
@@ -50,7 +50,7 @@ mqtt:
 
 #### Trigger Recording
 
-Start recording on a specific camera for a set duration:
+Trigger event or adaptive recording for the camera:
 
 ```json
 {
@@ -76,19 +76,6 @@ Stop recording on a specific camera:
 
 **Topic**: `home/security/trigger/front-door`  
 **Message**: `{"action": "stop"}`
-
-#### Trigger Snapshot
-
-Take a snapshot from a specific camera:
-
-```json
-{
-  "action": "snapshot"
-}
-```
-
-**Topic**: `home/security/trigger/front-door`  
-**Message**: `{"action": "snapshot"}`
 
 ### Integration Examples
 
@@ -251,16 +238,14 @@ security/trigger/camera3
 
 ```yaml
 mqtt:
-  broker_url: "ssl://mqtt.example.com:8883"
+  broker: "ssl://mqtt.example.com:8883"
   client_id: "lalmax-nvr"
   topic: "home/security"
   username: "secure_user"
   password: "complex_password"
-  # For SSL, certificates must be properly configured
-  ca_cert: "/path/to/ca.crt"
-  client_cert: "/path/to/client.crt"
-  client_key: "/path/to/client.key"
 ```
+
+TLS uses the system CA trust store. Custom CA certificates and mutual TLS client certificates are not configurable.
 
 ### Integration with Other Systems
 
@@ -289,7 +274,7 @@ mqtt:
     - service: mqtt.publish
       data:
         topic: "zigbee2mqtt/trigger/doorbell"
-        payload: '{"action": "record", "duration": 60}'
+        payload: '{"action": "record"}'
         retain: false
 ```
 

@@ -20,7 +20,7 @@ Typical use:
 - **Manage a camera**: add a device or register the stream; create a plan on its `stream_id` to record.
 - **Register as device**: give the stream an operations identity (name, map, dashboard). The API is still `POST /api/streams/{stream_id}/promote`.
 
-Current gap: the recordings page still filters by the **camera list**. Plan-only rows store `recordings.stream_id` (`camera_id` equals the stream ID when there is no device) but are invisible until a camera is selected.
+The recordings page lists **recording sources**: cameras, plan-only streams, and leftover stream IDs that still have files. `GET /api/recordings/sources?include_archived=true` is the sidebar. Timeline, VOD, and file lists still query by the source `id` (`camera_id` in `recordings`).
 
 ## Modes
 

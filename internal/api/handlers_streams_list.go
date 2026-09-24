@@ -361,7 +361,7 @@ func (h *Handler) buildMergedStreamList(
 				Engine:        "lalmax",
 				StreamID:      snap.StreamID,
 				AppName:       appName,
-				SourceType:    inferStreamSourceTypeFromProtocol(snap.Protocol),
+				SourceType:    inferStreamSourceTypeForID(snap.StreamID, snap.Protocol),
 				Active:        false,
 				LastFrameTime: timePointer(lastSeen),
 			}
@@ -455,6 +455,12 @@ func inferCustomizePushSource(info *media.StreamInfo, remoteAddr string) string 
 }
 
 func inferStreamSourceType(info media.StreamInfo, managed bool) string {
+	// IPTV channels are pulled by the NVR's HLS client and published into the
+	// embedded media engine. Their customize publisher session is an internal
+	// implementation detail, not an external WHIP ingest.
+	if isIPTVStreamID(info.StreamID) {
+		return "iptv"
+	}
 	if info.Publisher != nil {
 		if src := inferStreamSourceTypeFromProtocol(info.Publisher.Protocol); src == "gb28181" {
 			return src
@@ -476,6 +482,17 @@ func inferStreamSourceType(info media.StreamInfo, managed bool) string {
 		return inferCustomizePushSource(&info, "")
 	}
 	return "stream"
+}
+
+func isIPTVStreamID(streamID string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(streamID)), "iptv_")
+}
+
+func inferStreamSourceTypeForID(streamID, protocol string) string {
+	if isIPTVStreamID(streamID) {
+		return "iptv"
+	}
+	return inferStreamSourceTypeFromProtocol(protocol)
 }
 
 func inferStreamSourceTypeFromProtocol(protocol string) string {
@@ -978,7 +995,7 @@ func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (
 		Engine:        "lalmax",
 		StreamID:      latest.StreamID,
 		AppName:       appName,
-		SourceType:    inferStreamSourceTypeFromProtocol(latest.Protocol),
+		SourceType:    inferStreamSourceTypeForID(latest.StreamID, latest.Protocol),
 		Active:        false,
 		LastFrameTime: timePointer(lastSeen),
 	}
@@ -1265,53 +1282,114 @@ func (h *Handler) handleDeleteStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if created, err := h.db.GetCreatedStream(ctx, streamID); err != nil {
-		logger.Error("get created stream for delete failed", "stream_id", streamID, "err", err)
-	} else if created != nil && created.InputMode == storage.CreatedStreamPull {
+	// Capture device ownership before archive/unbind so we do not delete a
+	// camera-backed recording plan after deleteOfflineStream clears the binding.
+	keepPlan := h.streamHasDevice(ctx, streamID)
+
+	created, err := h.db.GetCreatedStream(ctx, streamID)
+	if err != nil {
+		logger.Warn("get created stream for delete failed", "stream_id", streamID, "err", err)
+	}
+	if created != nil && created.InputMode == storage.CreatedStreamPull {
 		if err := h.mediaEngine.StopPull(ctx, streamID); err != nil {
 			logger.Debug("stop created pull failed", "stream_id", streamID, "err", err)
 		}
 	}
+
 	info, err := h.mediaEngine.GetStream(ctx, streamID)
 	if err != nil {
-		logger.Error("get stream for delete failed", "stream_id", streamID, "err", err)
-		writeError(w, http.StatusInternalServerError, "failed to get stream")
-		return
+		// Idle created slots and direct-push leftovers should still be removable
+		// even if lalmax returns a transient group lookup error.
+		logger.Warn("get stream for delete failed", "stream_id", streamID, "err", err)
+		info = nil
 	}
+	h.disconnectStreamSessions(ctx, streamID, info)
 
-	if info != nil {
-		if info.Publisher != nil {
-			if err := h.mediaEngine.KickSession(ctx, info.Publisher.SessionID); err != nil {
-				logger.Error("kick publisher failed", "stream_id", streamID, "session_id", info.Publisher.SessionID, "err", err)
-				writeError(w, http.StatusInternalServerError, "failed to kick publisher")
-				return
-			}
-		}
-
-		if err := h.mediaEngine.StopPull(ctx, streamID); err != nil {
-			logger.Debug("stop pull failed (may not be a pull stream)", "stream_id", streamID, "err", err)
-		}
-	} else if ok, err := h.deleteOfflineStream(ctx, streamID); err != nil {
-		logger.Error("delete offline stream failed", "stream_id", streamID, "err", err)
-		writeError(w, http.StatusInternalServerError, "failed to delete stream")
-		return
-	} else if !ok {
-		writeError(w, http.StatusNotFound, "stream not found")
-		return
-	}
-
-	if _, err := h.db.DeleteCreatedStream(ctx, streamID); err != nil {
+	removedCreated, err := h.db.DeleteCreatedStream(ctx, streamID)
+	if err != nil {
 		logger.Warn("failed to delete created stream", "stream_id", streamID, "error", err)
 	}
-
+	if info == nil && !removedCreated {
+		ok, err := h.deleteOfflineStream(ctx, streamID)
+		if err != nil {
+			logger.Error("delete offline stream failed", "stream_id", streamID, "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to delete stream")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "stream not found")
+			return
+		}
+	}
 	if err := h.db.DeleteStreamHistory(ctx, streamID); err != nil {
 		logger.Warn("failed to clear stream history", "stream_id", streamID, "error", err)
+	}
+	if !keepPlan {
+		h.dropUnmanagedRecordingPlan(ctx, streamID)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"stream_id": streamID,
 		"status":    "deleted",
 	})
+}
+
+func (h *Handler) streamHasDevice(ctx context.Context, streamID string) bool {
+	if h.db == nil {
+		return false
+	}
+	if cam, err := h.db.GetCamera(ctx, streamID); err == nil && cam != nil {
+		return true
+	}
+	if binding, err := h.db.GetStreamBinding(ctx, streamID); err == nil && binding != nil {
+		return true
+	}
+	return false
+}
+
+func (h *Handler) dropUnmanagedRecordingPlan(ctx context.Context, streamID string) {
+	if h.db == nil {
+		return
+	}
+	if err := h.db.DeleteRecordingPlanByStream(ctx, streamID); err != nil {
+		logger.Warn("failed to delete recording plan for stream", "stream_id", streamID, "error", err)
+		return
+	}
+	if h.recPlanner != nil {
+		if err := h.recPlanner.Refresh(ctx); err != nil {
+			logger.Warn("failed to refresh recording plans after stream delete", "error", err)
+		}
+	}
+	if h.reconcileRecording != nil {
+		h.reconcileRecording(ctx)
+	}
+}
+
+func (h *Handler) disconnectStreamSessions(ctx context.Context, streamID string, info *media.StreamInfo) {
+	if h.mediaEngine == nil {
+		return
+	}
+	if info != nil {
+		if info.Publisher != nil && info.Publisher.SessionID != "" {
+			if err := h.mediaEngine.KickSession(ctx, info.Publisher.SessionID); err != nil {
+				logger.Warn("kick publisher failed", "stream_id", streamID, "session_id", info.Publisher.SessionID, "err", err)
+			}
+		}
+		for _, sub := range info.Subscribers {
+			if media.IsInternalRecorderSession(sub.Protocol, sub.SessionID) {
+				continue
+			}
+			if sub.SessionID == "" {
+				continue
+			}
+			if err := h.mediaEngine.KickSession(ctx, sub.SessionID); err != nil {
+				logger.Warn("kick subscriber failed", "stream_id", streamID, "session_id", sub.SessionID, "err", err)
+			}
+		}
+	}
+	if err := h.mediaEngine.StopPull(ctx, streamID); err != nil {
+		logger.Debug("stop pull failed (may not be a pull stream)", "stream_id", streamID, "err", err)
+	}
 }
 
 // deleteOfflineStream removes stream records that are visible in the list but no longer active in lalmax.

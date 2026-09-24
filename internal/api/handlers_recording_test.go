@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -317,4 +318,50 @@ func TestLockRecording_BlocksDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.True(t, got.Locked)
+}
+
+func TestListRecordingSources_IncludesPlanAndOrphanStreams(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+	ctx := context.Background()
+
+	require.NoError(t, db.UpsertCamera(ctx, "cam-front", "Front Door", "rtsp", "h264", "rtsp://127.0.0.1/front", "", "", true, "", "", ""))
+	require.NoError(t, db.BindStreamToCamera(ctx, "front-stream", "cam-front"))
+	require.NoError(t, db.UpsertRecordingPlan(ctx, &storage.RecordingPlan{
+		ID:       "plan-obs",
+		StreamID: "obs-1",
+		Name:     "OBS",
+		Mode:     storage.RecordingModeContinuous,
+		Enabled:  true,
+	}))
+	now := time.Now().UTC().Truncate(time.Second)
+	orphan := makeRecording("rec-orphan", "ghost-stream", "h264", now, false)
+	orphan.StreamID = "ghost-stream"
+	seedRecording(t, db, orphan)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/recordings/sources?include_archived=true", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp struct {
+		Sources []recordingSource `json:"sources"`
+	}
+	parseJSON(t, rr, &resp)
+
+	byID := map[string]recordingSource{}
+	for _, src := range resp.Sources {
+		byID[src.ID] = src
+	}
+	require.Contains(t, byID, "cam-front")
+	require.Equal(t, "camera", byID["cam-front"].Kind)
+	require.Equal(t, "front-stream", byID["cam-front"].StreamID)
+	require.Equal(t, "Front Door", byID["cam-front"].Name)
+
+	require.Contains(t, byID, "obs-1")
+	require.Equal(t, "plan", byID["obs-1"].Kind)
+	require.Equal(t, "OBS", byID["obs-1"].Name)
+
+	require.Contains(t, byID, "ghost-stream")
+	require.Equal(t, "stream", byID["ghost-stream"].Kind)
 }

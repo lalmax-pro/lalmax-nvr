@@ -23,6 +23,7 @@ Release 包里的 [QUICKSTART](../QUICKSTART.md) 是精简版，细节以本文�
 | [摄像头指南](camera-guide.md) | RTSP / HTTP / 编码 |
 | [ONVIF 指南](onvif-guide.md) | 发现、GetStreamUri 后 RTSP 拉流、云台 |
 | [GB28181 指南](gb28181-guide.md) | SIP 上级、设备推 PS/RTP、回放、对讲 |
+| [IPTV](iptv.md) | 导入检测 M3U、浏览器直播放、录像计划驱动 HLS 拉流 |
 | [小米摄像头](xiaomi-setup.md) | CS2 P2P 取帧注入 |
 
 ## 集成

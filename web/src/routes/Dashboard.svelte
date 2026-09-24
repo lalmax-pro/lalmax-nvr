@@ -311,6 +311,8 @@
     switch (source.stream?.source_type) {
       case 'camera':
         return t('streams.sourceCamera');
+      case 'iptv':
+        return t('streams.sourceIPTV');
       case 'rtmp_push':
         return t('streams.sourceRTMPPush');
       case 'srt_push':

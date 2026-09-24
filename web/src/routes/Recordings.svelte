@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { listRecordings, listCameras, deleteRecording, downloadRecording, getRecordingsTimeline, listEvents, batchDeleteRecordings, setRecordingLocked, getDeviceGroupTree, listGroupChannels, getVodExportUrl, startDevicePlayback, getONVIFReplayURI } from '$lib/api';
-  import type { Recording, Camera, TimelineEntry, NvrEvent, DeviceGroupTreeNode, UnifiedSource, UnifiedTimelineClip } from '$lib/api';
+  import { listRecordings, listCameras, listRecordingSources, deleteRecording, downloadRecording, getRecordingsTimeline, listEvents, batchDeleteRecordings, setRecordingLocked, getDeviceGroupTree, listGroupChannels, getVodExportUrl, startDevicePlayback, getONVIFReplayURI } from '$lib/api';
+  import type { Recording, RecordingSource, Camera, TimelineEntry, NvrEvent, DeviceGroupTreeNode, UnifiedSource, UnifiedTimelineClip } from '$lib/api';
   import { loadUnifiedTimeline } from '$lib/unified-timeline';
   import { formatDuration, formatFileSize } from '$lib/format';
   import { showToast } from '$lib/toast';
@@ -16,6 +16,7 @@
   let { initialCameraId = '' }: { initialCameraId?: string } = $props();
 
   let cameras = $state<Camera[]>([]);
+  let recordingSources = $state<RecordingSource[]>([]);
   let selectedCameraId = $state(untrack(() => initialCameraId));
   let selectedDate = $state(formatDateForInput(new Date()));
   let selectedHour = $state<number>(-1);
@@ -63,6 +64,15 @@
       return c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q);
     })
   );
+  let visibleStreamSources = $derived(
+    recordingSources.filter(source => {
+      if (source.kind === 'camera') return false;
+      if (!cameraQuery.trim()) return true;
+      const q = cameraQuery.trim().toLowerCase();
+      return source.name.toLowerCase().includes(q) || source.id.toLowerCase().includes(q);
+    })
+  );
+  let visibleSourceCount = $derived(visibleCameras.length + visibleStreamSources.length);
 
   let filteredRecordings = $derived(
     recordings.filter(r => {
@@ -113,25 +123,34 @@
     selectedDate = formatDateForInput(new Date());
   }
 
-  async function loadCameras() {
-    try {
-      cameras = await listCameras(undefined, true);
-      if (cameras.length > 0 && !selectedCameraId) {
-        selectedCameraId = cameras[0].id;
-      }
-    } catch (e) {
-      console.error('Failed to load cameras:', e);
+  async function loadRecordingSources() {
+    const [cameraResult, sourceResult] = await Promise.allSettled([
+      listCameras(undefined, true),
+      listRecordingSources(true),
+    ]);
+
+    if (cameraResult.status === 'fulfilled') cameras = cameraResult.value;
+    else console.error('Failed to load cameras:', cameraResult.reason);
+
+    if (sourceResult.status === 'fulfilled') recordingSources = sourceResult.value;
+    else console.error('Failed to load recording sources:', sourceResult.reason);
+
+    if (!selectedCameraId) {
+      selectedCameraId = cameras[0]?.id ?? recordingSources[0]?.id ?? '';
     }
   }
 
   async function loadRecordings() {
     if (!selectedCameraId) {
       recordings = [];
+      timelineEntries = [];
+      unifiedClips = [];
       return;
     }
 
     loading = true;
     error = '';
+    unifiedClips = [];
 
     try {
       const dayStart = new Date(selectedDate);
@@ -154,6 +173,8 @@
         timelineEntries = await getRecordingsTimeline(selectedCameraId, dayStart.toISOString(), dayEnd.toISOString());
         if (selectedCamera) {
           unifiedClips = await loadUnifiedTimeline(selectedCamera, dayStart.toISOString(), dayEnd.toISOString());
+        } else {
+          unifiedClips = [];
         }
       } catch {
         timelineEntries = recordings.map(r => ({
@@ -191,6 +212,7 @@
     selectedCameraId = id;
     selectedRecording = null;
     continuousPlay = false;
+    sourceFilter = 'all';
   }
 
   function handleTimelineSelect(recording: Recording | TimelineEntry | UnifiedTimelineClip) {
@@ -385,7 +407,7 @@
   }
 
   let visibleTimeline = $derived(
-    sourceFilter === 'all'
+    sourceFilter === 'all' || (sourceFilter === 'nvr' && unifiedClips.length === 0)
       ? (unifiedClips.length ? unifiedClips : timelineEntries)
       : unifiedClips.filter(c => c.source === sourceFilter)
   );
@@ -412,7 +434,7 @@
   });
 
   onMount(() => {
-    loadCameras();
+    loadRecordingSources();
     loadGroups();
   });
 </script>
@@ -492,7 +514,7 @@
     <aside class="device-pane">
       <div class="pane-head">
         <h3>{t('recordings.page.devices')}</h3>
-        <span class="count">{visibleCameras.length}</span>
+        <span class="count">{visibleSourceCount}</span>
       </div>
       <div class="search-wrap">
         <Search size={14} class="search-icon" />
@@ -503,9 +525,10 @@
         />
       </div>
       <div class="device-list">
-        {#if cameras.length === 0}
-          <p class="empty-hint">{t('recordings.page.noCameras')}</p>
-        {:else if groupTree.length > 0}
+        {#if cameras.length === 0 && visibleStreamSources.length === 0}
+          <p class="empty-hint">{t('recordings.page.noSources')}</p>
+        {:else}
+          {#if visibleCameras.length > 0 && groupTree.length > 0}
           {#each groupTree as node (node.id)}
             <button class="device-item" onclick={() => toggleGroup(node.id)}>
               <span class="device-name">{expandedGroups.has(node.id) ? '▾' : '▸'} {node.name}</span>
@@ -529,9 +552,7 @@
               <span class="device-name">{camera.name}</span>
             </button>
           {/each}
-        {:else if visibleCameras.length === 0}
-          <p class="empty-hint">{t('recordings.page.noCameras')}</p>
-        {:else}
+          {:else if visibleCameras.length > 0}
           {#each visibleCameras as camera (camera.id)}
             <button
               class="device-item"
@@ -545,6 +566,17 @@
               {/if}
             </button>
           {/each}
+          {/if}
+          {#each visibleStreamSources as source (source.id)}
+            <button class="device-item" class:active={selectedCameraId === source.id} onclick={() => selectCamera(source.id)}>
+              <span class="status-dot dot-muted"></span>
+              <span class="device-name">{source.name || source.stream_id || source.id}</span>
+              <span class="badge badge-neutral text-xs">{t(`recordings.page.kind${source.kind === 'plan' ? 'Plan' : 'Stream'}`)}</span>
+            </button>
+          {/each}
+          {#if visibleSourceCount === 0}
+            <p class="empty-hint">{t('recordings.page.noCameras')}</p>
+          {/if}
         {/if}
       </div>
     </aside>

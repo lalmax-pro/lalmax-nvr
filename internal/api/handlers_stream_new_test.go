@@ -52,6 +52,7 @@ type stubMediaEngine struct {
 	playURLs     map[string]string
 	pulls        []media.StartPullRequest
 	startPullErr error
+	kickErr      error
 }
 
 type stubWSManager struct{}
@@ -76,7 +77,7 @@ func (s *stubMediaEngine) StopRTPReceive(context.Context, string) error {
 	return errors.New("not implemented")
 }
 func (s *stubMediaEngine) KickSession(context.Context, string) error {
-	return nil
+	return s.kickErr
 }
 func (s *stubMediaEngine) GetStream(_ context.Context, id string) (*media.StreamInfo, error) {
 	if s.getErr != nil {
@@ -1961,6 +1962,29 @@ func TestDeleteStream_OfflineManagedCamera(t *testing.T) {
 	binding, err := db.GetStreamBinding(context.Background(), "codex-test")
 	require.NoError(t, err)
 	require.Nil(t, binding)
+}
+
+func TestDeleteStream_KeepsCameraBackedRecordingPlan(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	seedCameraWithEncoding(t, db, "cam-keep", "h264")
+	require.NoError(t, db.SetCameraStream(ctx, "cam-keep", "obs-keep"))
+	require.NoError(t, db.UpsertRecordingPlan(ctx, &storage.RecordingPlan{
+		StreamID: "obs-keep", Mode: storage.RecordingModeContinuous, Enabled: true,
+	}))
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
+	h.SetMediaEngine(&stubMediaEngine{stream: nil})
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/streams/obs-keep", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	plan, err := db.GetRecordingPlanByStream(ctx, "obs-keep")
+	require.NoError(t, err)
+	require.NotNil(t, plan, "deleting a camera-backed stream must not drop its recording plan")
 }
 
 func TestDeleteStream_OfflineHistoryOnly(t *testing.T) {

@@ -13,6 +13,8 @@ import (
 type CustomizePubSession interface {
 	FeedAvPacket(packet base.AvPacket) error
 	FeedRtmpMsg(msg base.RtmpMsg) error
+	WithOption(func(*base.AvPacketStreamOption))
+	FeedAudioSpecificConfig(asc []byte) error
 }
 
 type Engine interface {
@@ -63,6 +65,24 @@ type PlayHandlerProvider interface {
 // Restarter is implemented by engines that support dynamic protocol reconfiguration.
 type Restarter interface {
 	Restart(ctx context.Context, rtmpPort, srtPort int, rtmpEnabled, srtEnabled bool) error
+}
+
+// HLSPuller starts a native HLS playlist pull into a lal custom publish session.
+// MVP is embedded-mode only; HTTP-mode engines should return a clear error.
+type HLSPuller interface {
+	StartHLSPull(ctx context.Context, req StartHLSPullRequest) (*StreamSession, error)
+	StopHLSPull(ctx context.Context, streamID string) error
+	StopAllHLSPulls()
+	PullingStreamIDs() []string
+}
+
+// StartHLSPullRequest pulls a standard HLS playlist into a lalmax stream.
+type StartHLSPullRequest struct {
+	StreamID     string
+	PlaylistURL  string
+	Headers      map[string]string
+	PullTimeout  time.Duration
+	PullRetryNum int
 }
 
 // RTMPEvent represents an RTMP stream event for the ingest handler.

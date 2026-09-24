@@ -121,7 +121,7 @@ func (h *Handler) handleUpdateRecordingPlan(w http.ResponseWriter, r *http.Reque
 	if plan.StreamID == "" {
 		plan.StreamID = existing.StreamID
 	}
-	if plan.Mode == "" {
+	if strings.TrimSpace(body.Mode) == "" {
 		plan.Mode = existing.Mode
 	}
 	if plan.Name == "" {
