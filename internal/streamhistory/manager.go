@@ -3,7 +3,9 @@ package streamhistory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
@@ -15,13 +17,55 @@ var logger = slog.Default().With("component", "stream-history")
 
 // Manager subscribes to lalmax pub start/stop events and records stream history.
 type Manager struct {
-	db         *storage.DB
-	engine     media.Engine
-	cancelFunc context.CancelFunc
+	db           *storage.DB
+	engine       media.Engine
+	cancelFunc   context.CancelFunc
+	mu           sync.Mutex
+	iptvSessions map[string]string
 }
 
 func NewManager(db *storage.DB, engine media.Engine) *Manager {
-	return &Manager{db: db, engine: engine}
+	return &Manager{db: db, engine: engine, iptvSessions: make(map[string]string)}
+}
+
+// RecordHLSPullState persists IPTV online sessions based on actual video
+// delivery, since native HLS pulls do not emit regular publisher events.
+func (m *Manager) RecordHLSPullState(streamID string, online bool, at time.Time) {
+	if m == nil || m.db == nil || streamID == "" {
+		return
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	m.mu.Lock()
+	if online {
+		if _, exists := m.iptvSessions[streamID]; exists {
+			m.mu.Unlock()
+			return
+		}
+		sessionID := fmt.Sprintf("iptv-hls-%s-%d", streamID, at.UnixNano())
+		m.iptvSessions[streamID] = sessionID
+		m.mu.Unlock()
+		history := &storage.StreamHistory{
+			StreamID:  streamID,
+			AppName:   "live",
+			Protocol:  "HLS_PULL",
+			SessionID: sessionID,
+			StartedAt: at,
+		}
+		if err := m.db.InsertStreamHistory(context.Background(), history); err != nil {
+			logger.Error("failed to insert IPTV pull history", "stream_id", streamID, "error", err)
+		}
+		return
+	}
+	sessionID, exists := m.iptvSessions[streamID]
+	delete(m.iptvSessions, streamID)
+	m.mu.Unlock()
+	if exists {
+		if err := m.db.FinishStreamHistory(context.Background(), sessionID, at, 0, 0); err != nil {
+			logger.Warn("failed to finish IPTV pull history", "stream_id", streamID, "error", err)
+		}
+	}
 }
 
 // Start begins listening for pub events and recording history.

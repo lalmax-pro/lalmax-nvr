@@ -77,7 +77,7 @@ Full diagrams, ports, and module map: **[Architecture](docs/en/architecture.md)*
 - **IPTV**: Import and validate M3U playlists, play channels in the browser through the same-origin HLS proxy, or publish channels to NVR for protocol playback and recording ([guide](docs/en/iptv.md))
 - **DLNA**: Optional UPnP MediaServer — discover the NVR on the LAN and browse live streams and recordings on TVs or other DLNA players; configure `dlna.enabled` and the dedicated HTTP port (default `8200`) in `lalmax-nvr.yaml`
 - **Web UI**: Dark/light theme, responsive, i18n (EN/ZH), Chart.js dashboards
-- **Smart Home**: MQTT trigger-based recording, WebDAV/FTP file access
+- **Smart home and file access**: MQTT recording triggers and WebDAV storage browsing; FTP currently has a [hash-password authentication limitation](docs/en/ftp-integration.md)
 - **Health Monitoring**: Multi-layer camera health detection, auto-remediation, connection quality metrics (uptime, MTBF)
 - **Single Binary**: Zero dependencies, embedded SPA, `CGO_ENABLED=0`
 - **Xiaomi Support**: CS2 P2P protocol, cloud auth (community-driven)

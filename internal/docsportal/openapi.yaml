@@ -72,8 +72,8 @@ tags:
       In-memory process service logs (snapshot + SSE).
   - name: IPTV
     description: |
-      独立 IPTV 模块：导入并检测 M3U，浏览器 HLS.js 直播放；频道可发布到 lal，发布与录像计划共享同一个 HLS 拉流。
-      Independent IPTV module: import and probe M3U, play in browser HLS.js, or publish into lal with one HLS pull shared by publication and recording plans.
+      独立 IPTV 模块：导入并检测 M3U，浏览器通过同源 HLS 代理播放；频道可发布到 NVR，发布与录像计划共享同一个 HLS 拉流。
+      Independent IPTV module: import and probe M3U, play in the browser through the same-origin HLS proxy, or publish to NVR with one HLS pull shared by publication and recording plans.
 paths:
   /api/iptv/imports:
     post:
@@ -145,8 +145,8 @@ paths:
       tags: [IPTV]
       summary: 更新 IPTV 频道 · Update IPTV channel
       description: |
-        更新名称、启用、收藏和发布状态。`publish_enabled` 会把频道的 HLS 源拉入 lal；发布和录像计划共享拉流。发布仅支持 `media.mode: embedded`。
-        Updates name, enabled, favorite, and publication state. `publish_enabled` pulls the channel into lal; publication and recording plans share the pull. Publication requires `media.mode: embedded`.
+        更新名称、启用、收藏和发布状态。`publish_enabled` 会将频道发布为 NVR 流；发布和录像计划共享服务端 HLS 拉流。发布仅支持 `media.mode: embedded`。
+        Updates name, enabled, favorite, and publication state. `publish_enabled` publishes the channel as an NVR stream; publication and recording plans share a server-side HLS pull. Publication requires `media.mode: embedded`.
       parameters:
         - name: id
           in: path

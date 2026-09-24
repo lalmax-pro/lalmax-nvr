@@ -6,12 +6,16 @@ Example file: [`config/config.example.yaml`](../../config/config.example.yaml). 
 
 ## Configuration File Structure
 
+This excerpt shows selected fields; start a new deployment from the [configuration example](../../config/config.example.yaml). Cameras are normally added through the Web UI and stored in the database.
+
 ```yaml
 server:
   listen: ":9090"
 storage:
   root_dir: "/var/lib/lalmax-nvr"
   segment_duration: "30s"
+media:
+  mode: "embedded"
 auth:
   username: "admin"
   password_hash: ""
@@ -66,6 +70,11 @@ webdav:
   enabled: true
   path_prefix: "/dav"
   read_write: false
+dlna:
+  enabled: false
+  port: 8200
+iptv:
+  max_concurrent_pulls: 32
 hls:
   enabled: false                 # Enable HLS/LL-HLS playback (default off)
   on_demand: true                # On-demand slicing: slice only when viewers connect (default on)
@@ -280,13 +289,12 @@ cameras:
 
 ### `cameras[].audio_enabled`
 
-#SS|- **Type**: boolean
-#TT|- **Default**: `false`
-#BY|- **Description**: Enable audio recording for this camera. When enabled, the recorder captures audio from the RTSP/ONVIF/Xiaomi stream and muxes it into the MP4 recording.
-#MV|- **Supported Formats**: AAC (RTSP cameras), G.711 μ-law/A-law (ONVIF/Xiaomi cameras)
-#YR|- **Note**: Not supported for MJPEG or HTTP-JPEG cameras
-#TM|- **Example**: `true`, `false
+- **Type**: boolean
+- **Default behavior**: Loading YAML enables audio for H.264/H.265 RTSP, ONVIF, and Xiaomi cameras. JPEG/MJPEG does not support audio. When creating a device through the API, pass `false` explicitly to disable it.
+- **Description**: Controls whether supported source audio is written to recordings; the source must provide a usable audio track.
+- **Example**: `true`, `false`
 
+### `cameras[].did`
 
 - **Type**: string
 - **Optional**: Yes (required for Xiaomi cameras)
@@ -371,6 +379,8 @@ cameras:
 
 ## FTP Configuration
 
+FTP currently checks a plaintext password, so the hash saved by normal initialization cannot authenticate FTP clients. See the [FTP guide](ftp-integration.md) before using it.
+
 ### `ftp.enabled`
 - **Type**: boolean
 - **Default**: `true`
@@ -381,7 +391,7 @@ cameras:
 - **Default**: 2121
 - **Range**: 1-65535
 - **Description**: FTP control port
-- **Example**: `2121`, `990`
+- **Example**: `2121`, `2021`
 
 ### `ftp.passive_port_range`
 - **Type**: string
@@ -400,7 +410,7 @@ cameras:
 - **Type**: string
 - **Required**: Yes (if enabled)
 - **Description**: MQTT broker URL
-- **Example**: `"tcp://localhost:1883"`, `"mqtt://192.168.1.100:1883"`
+- **Example**: `"tcp://localhost:1883"`, `"tcp://192.168.1.100:1883"`
 
 ### `mqtt.topic`
 - **Type**: string
@@ -410,7 +420,7 @@ cameras:
 
 ### `mqtt.client_id`
 - **Type**: string
-- **Default**: `"lalmax-nvr"`
+- **Default**: none; set it explicitly when enabling MQTT
 - **Description**: MQTT client identifier
 - **Example**: `"lalmax-nvr"`, `"nvr-client-01"`
 
@@ -437,7 +447,7 @@ cameras:
 - **Type**: string
 - **Default**: `"/dav"`
 - **Description**: URL path prefix for WebDAV access
-- **Example**: `"/dav"`, `"/ recordings"`
+- **Example**: `"/dav"`, `"/files"`
 
 ### `webdav.read_write`
 - **Type**: boolean
@@ -557,7 +567,7 @@ HLS playback is independent of recording pulls: disabling `hls.enabled` or using
 
 ### `media.lalmax_http_addr`
 - **Type**: string
-- **Default**: `"http://127.0.0.1:1290"`
+- **Default**: `"http://127.0.0.1:12090"`
 - **Description**: lalmax HTTP API address
 
 ### `media.lalmax_public_url`
@@ -567,7 +577,15 @@ HLS playback is independent of recording pulls: disabling `hls.enabled` or using
 
 ### `media.rtmp_port` / `media.rtsp_port` / `media.http_port`
 - **Type**: integer
-- **Description**: Lal protocol ports (used when mode=http). In embedded mode RTSP defaults to **15544**. Camera protocol APIs return `rtsp://{lalmax_public_url host}:15544/live/{camera_id}`. Set `media.lalmax_public_url` to the public hostname, otherwise the URL will use `127.0.0.1`.
+- **Description**: External lal protocol ports used to build playback URLs in `media.mode: http`. Defaults: RTMP **11935**, RTSP **15544**, HTTP-FLV/HLS-TS **18080**. In embedded mode, set the RTMP ingest port with `rtmp.port`; the embedded engine uses its default RTSP and HTTP listen ports. Set `media.lalmax_public_url` to a hostname clients can reach.
+
+## DLNA configuration
+
+The optional LAN MediaServer is disabled by default. `dlna.port` defaults to **8200**, separate from `server.listen`; `include_live` and `include_recordings` default to true. Use `interface` to select a network interface and `allowed_cidrs` to restrict clients. `max_browse_count` defaults to **200**, and `gop_cache` to **1**. The `max_media_viewers` setting exists but is not currently enforced. See the [DLNA guide](dlna.md).
+
+## IPTV configuration
+
+IPTV import and browser proxy playback do not start media pulls. Publishing a channel or pulling it for a recording plan requires `media.mode: embedded`. `iptv.max_concurrent_pulls` caps HLS pulls shared by publishing and recording (default **32**, range **1–128**). See the [IPTV guide](iptv.md).
 
 ## Streaming Configuration
 
@@ -614,7 +632,8 @@ websocket:
 
 ```yaml
 rtmp:
-  enabled: false         # default false, served by lalmax on port 1935
+  enabled: false         # default false; embedded engine listens on 11935 when enabled
+  port: 11935            # optional RTMP ingest port
   stream_keys:           # camera_id → stream_key mapping
     cam1: "your_secret_key"
 ```
@@ -623,7 +642,8 @@ rtmp:
 
 ```yaml
 srt:
-  enabled: false         # default false, served by lalmax on port 9000
+  enabled: false         # default false; embedded engine listens on 19000 when enabled
+  port: 19000            # optional SRT ingest port
 ```
 
 > **Push format**: SRT pushes should use streamid format: `#!::h=<camera_id>,m=publish`

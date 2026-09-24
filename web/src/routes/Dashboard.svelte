@@ -471,9 +471,15 @@
     return streamById.has(id);
   }
 
-  function streamPageURL(streamId: string, mode: CameraMode): string {
+  function streamPageURL(stream: StreamInfo, mode: CameraMode): string {
+    const streamId = stream.stream_id;
     if (mode === 'flv') return streamMediaURL(streamId, 'flv');
-    if (mode === 'ws-flv' || mode === 'wasm') return streamMediaURL(streamId, 'ws');
+    if (mode === 'ws-flv') {
+      // WS-FLV is served by lal's FLV endpoint. `/stream/ws` is the separate
+      // raw-frame WebCodecs transport and only supports recorder-backed cameras.
+      return stream.play_urls?.find((play) => play.protocol === 'ws-flv')?.url || '';
+    }
+    if (mode === 'wasm') return streamMediaURL(streamId, 'ws');
     if (mode === 'webrtc') return streamMediaURL(streamId, 'webrtc');
     if (mode === 'fmp4') return streamMediaURL(streamId, 'fmp4');
     return defaultProtocol === 'll-hls'
@@ -1103,7 +1109,7 @@
           {:else if stream}
             {@const mode = videoMode()}
             {@const title = stream.name || stream.stream_id}
-            {@const mediaURL = streamPageURL(stream.stream_id, mode)}
+            {@const mediaURL = streamPageURL(stream, mode)}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div

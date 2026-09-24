@@ -117,7 +117,7 @@ cameras:
 | `region` | No | string | "cn" | Region code (cn, sg, de, us, etc.) |
 | `did` | Yes | string | - | Xiaomi device ID |
 | `encoding` | Yes | string | "h264" | Video encoding (h264, h265) |
-| `audio_enabled` | No | boolean | false | Enable audio recording |
+| `audio_enabled` | No | boolean | true for H.264/H.265 | Enable audio recording; API creation can explicitly disable it |
 
 ## Two-way Audio (Talk)
 
@@ -249,4 +249,4 @@ RTSP Pull → MP4 Recording
 
 ## Support
 
-For additional help, see [lalmax-nvr documentation](../getting-started.md) or create an issue on the GitHub repository.
+For additional help, see [Getting started](getting-started.md) or create an issue on the GitHub repository.

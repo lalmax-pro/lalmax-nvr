@@ -6,12 +6,16 @@ lalmax-nvr 使用 YAML 配置文件控制各模块。分层、端口与数据流
 
 ## 配置文件结构
 
+以下只展示部分字段；新部署请以[配置示例](../../config/config.example.yaml)为起点。摄像头通常通过 Web UI 添加并保存在数据库中。
+
 ```yaml
 server:
   listen: ":9090"
 storage:
   root_dir: "/var/lib/lalmax-nvr"
   segment_duration: "30s"
+media:
+  mode: "embedded"
 auth:
   username: "admin"
   password_hash: ""
@@ -66,6 +70,11 @@ webdav:
   enabled: true
   path_prefix: "/dav"
   read_write: false
+dlna:
+  enabled: false
+  port: 8200
+iptv:
+  max_concurrent_pulls: 32
 hls:
   enabled: false                 # 是否启用 HLS/LL-HLS 播放（默认关闭）
   on_demand: true                # 按需切片：仅在有观众访问时切片（默认开启）
@@ -280,13 +289,12 @@ cameras:
 
 ### `cameras[].audio_enabled`
 
-#ZV|- **类型**: boolean
-#MK|- **默认**: `false`
-#VB|- **描述**: 启用此摄像头的音频录制。启用后，录制器会从 RTSP/ONVIF/小米摄像头流中捕获音频并将其混入 MP4 录像
-#QM|- **支持格式**: AAC（RTSP 摄像头）、G.711 μ-law/A-law（ONVIF/小米摄像头）
-#ZX|- **注意**: MJPEG 和 HTTP-JPEG 摄像头不支持
-#RN|- **示例**: `true`, `false
+- **类型**: boolean
+- **默认行为**: 从 YAML 载入时，H.264/H.265 的 RTSP、ONVIF、小米摄像头会自动开启；JPEG/MJPEG 不支持音频。通过 API 添加设备时，可显式传 `false` 关闭。
+- **描述**: 控制是否把源流中的受支持音频写入录像；源流本身必须有可用音频轨。
+- **示例**: `true`、`false`
 
+### `cameras[].did`
 
 - **类型**: string
 - **可选**: 是（小米摄像头必需）
@@ -371,6 +379,8 @@ cameras:
 
 ## FTP 配置
 
+FTP 当前仅支持明文密码认证，常规初始化保存的哈希密码无法用于 FTP 登录；使用前见 [FTP 指南](ftp-integration.md)。
+
 ### `ftp.enabled`
 - **类型**: boolean
 - **默认**: `true`
@@ -381,7 +391,7 @@ cameras:
 - **默认**: 2121
 - **范围**: 1-65535
 - **描述**: FTP 控制端口
-- **示例**: `2121`, `990`
+- **示例**: `2121`, `2021`
 
 ### `ftp.passive_port_range`
 - **类型**: string
@@ -400,7 +410,7 @@ cameras:
 - **类型**: string
 - **必需**: 是（如果启用）
 - **描述**: MQTT 代理地址
-- **示例**: `"tcp://localhost:1883"`, `"mqtt://192.168.1.100:1883"`
+- **示例**: `"tcp://localhost:1883"`, `"tcp://192.168.1.100:1883"`
 
 ### `mqtt.topic`
 - **类型**: string
@@ -410,7 +420,7 @@ cameras:
 
 ### `mqtt.client_id`
 - **类型**: string
-- **默认**: `"lalmax-nvr"`
+- **默认**: 无；启用 MQTT 时请显式设置
 - **描述**: MQTT 客户端标识符
 - **示例**: `"lalmax-nvr"`, `"nvr-client-01"`
 
@@ -557,7 +567,7 @@ HLS 播放与录像拉流相互独立：关闭 `hls.enabled` 或启用按需切�
 
 ### `media.lalmax_http_addr`
 - **类型**: string
-- **默认**: `"http://127.0.0.1:1290"`
+- **默认**: `"http://127.0.0.1:12090"`
 - **描述**: lalmax HTTP API 地址
 
 ### `media.lalmax_public_url`
@@ -567,7 +577,15 @@ HLS 播放与录像拉流相互独立：关闭 `hls.enabled` 或启用按需切�
 
 ### `media.rtmp_port` / `media.rtsp_port` / `media.http_port`
 - **类型**: integer
-- **描述**: lal 协议端口（mode=http 时使用）。embedded 模式默认 RTSP 为 **15544**。相机协议 API 返回 `rtsp://{lalmax_public_url 主机}:15544/live/{camera_id}`。请把 `media.lalmax_public_url` 设成对外 hostname，否则 URL 会是 `127.0.0.1`。
+- **描述**: 外部 lal 的协议端口（`media.mode: http` 时用于生成播放地址）。默认 RTMP **11935**、RTSP **15544**、HTTP-FLV/HLS-TS **18080**。embedded 模式的 RTMP 推流端口由 `rtmp.port` 设置；RTSP 和 HTTP 监听使用内嵌引擎默认端口。请把 `media.lalmax_public_url` 设成客户端可访问的主机名。
+
+## DLNA 配置
+
+可选的局域网 MediaServer，默认关闭。`dlna.port` 默认 **8200**，与 `server.listen` 分开；`include_live` 和 `include_recordings` 默认开启。可用 `interface` 指定网卡、`allowed_cidrs` 限制客户端网段。`max_browse_count` 默认 **200**，`gop_cache` 默认 **1**。`max_media_viewers` 已提供配置项，但当前未用于限制连接数。使用方法见 [DLNA 指南](dlna.md)。
+
+## IPTV 配置
+
+IPTV 导入、浏览器代理播放无需启动媒体拉流；发布频道或按录像计划拉流要求 `media.mode: embedded`。`iptv.max_concurrent_pulls` 限制发布与录像共享的并发 HLS 拉流数，默认 **32**，范围 **1–128**。使用方法见 [IPTV 指南](iptv.md)。
 
 ## 流媒体配置
 
@@ -614,7 +632,8 @@ websocket:
 
 ```yaml
 rtmp:
-  enabled: false         # 默认 false，由 lalmax 在端口 1935 提供
+  enabled: false         # 默认 false；启用后内嵌媒体引擎默认监听 11935
+  port: 11935            # 可选，RTMP 推流端口
   stream_keys:           # camera_id → stream_key 映射
     cam1: "your_secret_key"
 ```
@@ -623,7 +642,8 @@ rtmp:
 
 ```yaml
 srt:
-  enabled: false         # 默认 false，由 lalmax 在端口 9000 提供
+  enabled: false         # 默认 false；启用后内嵌媒体引擎默认监听 19000
+  port: 19000            # 可选，SRT 推流端口
 ```
 
 > **推流格式**：SRT 推流应使用 streamid 格式：`#!::h=<camera_id>,m=publish`

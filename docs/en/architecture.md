@@ -59,7 +59,7 @@ flowchart TB
   Files --> Store
 ```
 
-- **lalmax / lal** is the only media plane. H.264 / H.265 pull, push, and protocol conversion go through it.
+- **lalmax / lal** distributes NVR streams and converts playback protocols. IPTV browser playback uses a separate same-origin HLS proxy; a channel enters the media engine when publication or recording needs it.
 - **NVR layer** owns camera lifecycle, ONVIF discovery, GB28181 SIP platform, recording policy, hour merge, health repair, SQLite/files, and the Svelte UI.
 - **`media.mode: embedded` (recommended)** runs the engine in-process. `http` talks to an external lalmax.
 - **Exception:** MJPEG / HTTP JPEG are still pulled by the NVR (lalmax does not ingest them).
@@ -219,10 +219,11 @@ flowchart TB
 | **4888** | WebRTC ICE mux (WHIP/WHEP) |
 | **15544** | lal RTSP playback |
 | **18080** | lal HTTP (HLS-TS, HTTP-FLV) |
-| **11935** | RTMP ingest |
-| **19000** | SRT ingest |
+| **11935** | RTMP ingest (when enabled) |
+| **19000** | SRT ingest (when enabled) |
 | **2121** | FTP |
 | **5060** | GB28181 SIP |
+| **8200** | DLNA HTTP (when enabled; discovery also needs UDP 1900 multicast; see [DLNA](dlna.md)) |
 
 ```mermaid
 flowchart TB

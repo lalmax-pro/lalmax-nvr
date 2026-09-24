@@ -25,16 +25,17 @@ media:
   lalmax_public_url: "http://127.0.0.1:12090"  # Use a public hostname; otherwise RTSP URLs become 127.0.0.1
   # lalmax_config_path is auto-generated at {root_dir}/config/lalmax.conf.json
   # Uncomment to override: lalmax_config_path: "/custom/path/lalmax.conf.json"
-  # Lal protocol ports (used for RTMP, RTSP, HTTP-FLV, HLS-TS playback URLs)
-  # These are only used when mode=http; embedded mode uses default ports
-  # rtmp_port: 1935                       # RTMP port (default: 1935)
-  # rtsp_port: 15544                      # RTSP port (embedded default: 15544)
-  # http_port: 8080                       # HTTP-FLV and HLS-TS port (default: 8080)
+  # Lal protocol ports used for playback URLs in mode=http.
+  # In embedded mode, set RTMP ingest port under rtmp.port; RTSP and HTTP
+  # listener ports use the embedded media engine defaults.
+  # rtmp_port: 11935                      # External lal RTMP port (default: 11935)
+  # rtsp_port: 15544                      # External lal RTSP port (default: 15544)
+  # http_port: 18080                      # External lal HTTP-FLV/HLS-TS port (default: 18080)
   #
   # Protocol -> Port mapping:
   #   lalmax (port 12090): HLS (fMP4), LL-HLS, WebRTC, fMP4, WS-FLV
-  #   lal (port 8080):    HLS (TS), HTTP-FLV
-  #   lal (port 1935):    RTMP
+  #   lal (port 18080):   HLS (TS), HTTP-FLV
+  #   lal (port 11935):   RTMP, when rtmp.enabled is true
   #   lal (port 15544):   RTSP  (rtsp://{lalmax_public_url host}:15544/live/{camera_id})
 
 # DLNA MediaServer — publishes live streams and recordings to trusted LAN players.
@@ -49,7 +50,7 @@ media:
 #   include_recordings: true
 #   gop_cache: 1                       # HTTP-TS GOP cache count, 1-16; 1 starts at the latest keyframe
 #   max_browse_count: 200
-#   max_media_viewers: 4
+#   max_media_viewers: 4              # reserved; currently not enforced
 
 # Authentication
 # Option 1: Set password_hash (generate with: lalmax-nvr hash-password <pw>)
@@ -74,14 +75,14 @@ cameras: []
 #     encoding: "h264"         # Encoding: h264, h265, mjpeg, jpeg
 #     url: "rtsp://192.168.1.100:554/stream"
 #     enabled: true
-#     audio_enabled: false          # Enable audio recording (default: false)
+#     audio_enabled: true           # Supported H.264/H.265 cameras default to audio on
 #   - id: "backyard"
 #     name: "Back Yard"
 #     protocol: "http"
 #     encoding: "jpeg"
 #     url: "http://192.168.1.101/capture"
 #     enabled: true
-#     audio_enabled: false          # Enable audio recording (default: false). Not supported for MJPEG/HTTP-JPEG.
+#     audio_enabled: false          # Audio is not supported for HTTP-JPEG.
 #   - id: "xiaomi-cam"
 #     name: "Xiaomi Camera"
 #     protocol: "xiaomi"
@@ -89,7 +90,7 @@ cameras: []
 #     did: "xiaomi_device_id"      # Xiaomi Device ID
 #     vendor: "cs2"                # Transport vendor: "cs2" (default)
 #     enabled: true
-#     audio_enabled: false          # Enable audio recording (default: false)
+#     audio_enabled: true           # Supported H.264/H.265 cameras default to audio on
 
 # Xiaomi cloud account settings (required for xiaomi cameras)
 # xiaomi:
@@ -116,7 +117,9 @@ merge:
   rolling_enabled: true            # Merge into the current hour bucket shortly after each segment closes
   rolling_debounce: "5s"           # Wait this long after the last closed segment before merging
 
-# FTP server — provides file access over FTP protocol
+# FTP server — plain FTP access to the storage root. Current authentication
+# checks auth.password, while first-run setup clears it after hashing; see
+# docs/en/ftp-integration.md before relying on FTP login.
 # Configurable port and passive port range
 ftp:
   enabled: true                    # Enable FTP server (default: true)
@@ -158,7 +161,8 @@ mqtt:
 #   preview_auto_stop_sec: 60
 #
 # IPTV is an independent module (Web UI: #/iptv). Import and validate M3U,
-# play in the browser, or publish into lal for protocol playback and recording.
+# play in the browser, or publish through NVR for protocol playback.
+# Publication and recording plans share one server-side HLS pull.
 # iptv:
 #   max_concurrent_pulls: 32          # shared publication/recording pulls, range 1-128
 
@@ -170,12 +174,13 @@ webdav:
   read_write: false                # Allow write operations (PUT, MKCOL, DELETE, etc.)
 
 # RTMP ingest — receive pushed streams from cameras or encoders
-# RTMP is served by lalmax on port 1935 (managed by the media engine).
+# RTMP is served by the embedded media engine on port 11935 by default when enabled.
 # stream_keys maps camera_id -> stream_key for push URL resolution.
-# Push URL format: rtmp://<host>:1935/live/<stream_key>
-# You can also push directly with camera ID as stream key: rtmp://<host>:1935/live/<camera_id>
+# Push URL format: rtmp://<host>:11935/live/<stream_key>
+# You can also push directly with camera ID as stream key: rtmp://<host>:11935/live/<camera_id>
 # rtmp:
 #   enabled: true
+#   port: 11935
 #   stream_keys:
 #     front-door: "my-stream-key"
 

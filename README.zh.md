@@ -77,7 +77,7 @@ flowchart LR
 - **IPTV**：导入并检测 M3U，通过同源 HLS 代理在浏览器直播放；也可将频道发布到 NVR，通过其他协议播放或录像（[说明](docs/zh/iptv.md)）
 - **DLNA**：可选的 UPnP MediaServer — 在局域网中发现 NVR，并在电视或其他 DLNA 播放器上浏览实时流和录像；在 `lalmax-nvr.yaml` 中配置 `dlna.enabled` 和独立 HTTP 端口（默认 `8200`）
 - **Web 界面**：深色/浅色主题、响应式、中英文切换、Chart.js 图表
-- **智能家居**：MQTT 触发录像、WebDAV/FTP 文件访问
+- **智能家居与文件访问**：MQTT 触发录像、WebDAV 浏览存储文件；FTP 当前存在[哈希密码认证限制](docs/zh/ftp-integration.md)
 - **健康监控**：多层摄像头健康检测、自动修复、质量评分
 - **单文件部署**：零依赖、内嵌前端、`CGO_ENABLED=0`
 - **小米摄像头**：CS2 P2P 协议、云端认证（社区驱动）
