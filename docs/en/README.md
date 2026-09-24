@@ -1,49 +1,38 @@
-# Documentation (English)
+# Documentation
 
-[中文](../zh/README.md) · [Repository README](../../README.md)
+[中文](../zh/README.md) · [Project README](../../README.md)
 
-## Start here
+Find guides by task. For configuration examples, see [`config/config.example.yaml`](../../config/config.example.yaml). A running NVR serves its OpenAPI documentation at `/docs/`.
 
-| Document | Description |
-|----------|-------------|
-| [Getting Started](getting-started.md) | Install, first camera, Web UI |
-| [Recording plans](recording-plans.md) | Plans hang off streams; registering as a device does not record |
-| [Recording flow](recording-flow.md) | When a record task starts, writes, and stops |
-| [Architecture](architecture.md) | Layers, live/recording paths, pull vs push, ports |
-| [Configuration](configuration.md) | Full YAML reference |
-| [Deployment](deployment.md) | Docker, reverse proxy, cross-compile |
-| [Troubleshooting](troubleshooting.md) | Common issues |
+## Getting started and operations
 
-The release [QUICKSTART](../QUICKSTART.md) is a short cheat sheet; this tree is the source of truth.
+| Guide | Covers |
+|-------|--------|
+| [Getting started](getting-started.md) | Install, start, and add a first camera |
+| [Deployment](deployment.md) | Docker, binary deployment, and reverse proxies |
+| [Configuration](configuration.md) | Main settings and examples; compare with the configuration example above |
+| [Troubleshooting](troubleshooting.md) | Common runtime issues |
+| [Architecture](architecture.md) | The NVR, media engine, and common ingest paths |
 
-## Devices and protocols
+## Media sources and playback
 
-| Document | Description |
-|----------|-------------|
-| [Camera Guide](camera-guide.md) | RTSP / HTTP / codecs |
-| [ONVIF Guide](onvif-guide.md) | Discovery, GetStreamUri then RTSP pull, PTZ |
-| [GB28181 Guide](gb28181-guide.md) | SIP platform, device PS/RTP push, playback, talk |
-| [IPTV](iptv.md) | Import and validate M3U, browser playback, recording-plan-driven HLS pull |
-| [Xiaomi](xiaomi-setup.md) | CS2 P2P fetch and inject |
+| Guide | Covers |
+|-------|--------|
+| [Cameras](camera-guide.md) | RTSP and HTTP cameras, codecs |
+| [ONVIF](onvif-guide.md) | Discovery, stream access, and PTZ |
+| [GB28181](gb28181-guide.md) | GB28181 device ingest and operations |
+| [IPTV](iptv.md) | Import and probe M3U, play in the browser, publish to NVR for other protocols, or create recording plans |
+| [Xiaomi cameras](xiaomi-setup.md) | Xiaomi camera ingest |
+| [MediaMTX](mediamtx-guide.md) | Optional camera ingest through MediaMTX |
+| [DLNA](dlna.md) | Discover and play live streams and recordings on LAN players |
 
-## Integrations
+## Recording and integrations
 
-| Document | Description |
-|----------|-------------|
-| [API Reference](api-reference.md) | REST API (markdown) |
-| [API docs site](../../internal/docsportal/) | OpenAPI; live at `/docs/` on the NVR |
+| Guide | Covers |
+|-------|--------|
+| [Recording plans](recording-plans.md) | Continuous, scheduled, and event recording for streams |
+| [Recording flow](recording-flow.md) | How recording tasks start, write, and stop |
+| [API reference](api-reference.md) | REST API usage; the OpenAPI spec is [`openapi.yaml`](../../internal/docsportal/openapi.yaml) |
 | [MQTT](mqtt-integration.md) | Event-triggered recording |
-| [FTP](ftp-integration.md) | FTP access to recordings |
-| [WebDAV](webdav-integration.md) | WebDAV access to recordings |
-| [AI detection](ai-setup-guide.md) | Inference and overlay |
-| [MediaMTX](mediamtx-guide.md) | CSI and similar via MediaMTX |
-
-## Design notes
-
-| Document | Description |
-|----------|-------------|
-| [Stream management](stream-management-design.md) | Push ingest vs camera binding |
-| [WebCodecs player](wasm-player-design.md) | Low-latency live |
-| [GB catalog](gb-catalog-design.md) | GB28181 catalog tree |
-| [Hikvision SDK](hikvision-sdk-integration.md) | Optional SDK path |
-| [Map analysis](map-feature-analysis.md) | Map-related notes |
+| [WebDAV](webdav-integration.md) / [FTP](ftp-integration.md) | Browse stored files; the FTP guide covers the current auth limitation |
+| [AI detection](ai-setup-guide.md) | Deploy and configure detection services |

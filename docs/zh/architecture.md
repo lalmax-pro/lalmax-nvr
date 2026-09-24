@@ -59,7 +59,7 @@ flowchart TB
   Files --> Store
 ```
 
-- **lalmax / lal**：唯一媒体面。H.264 / H.265 的拉流、推流、转协议都走这里。
+- **lalmax / lal**：负责已接入 NVR 流的分发和转协议。IPTV 频道在浏览器中播放时走独立的同源 HLS 代理；启用发布或录像后才进入媒体引擎。
 - **NVR 层**：相机生命周期、ONVIF 发现、GB28181 SIP 上级、录像策略、小时合并、健康修复、SQLite 与文件、Svelte UI。
 - **`media.mode: embedded`（推荐）**：引擎跑在同一进程里。`http` 模式则连外部 lalmax。
 - **例外**：MJPEG / HTTP JPEG 仍由 NVR 直拉（lalmax 不吃这类源）。
@@ -219,10 +219,11 @@ flowchart TB
 | **4888** | WebRTC ICE mux（WHIP/WHEP） |
 | **15544** | lal RTSP 播放 |
 | **18080** | lal HTTP（HLS-TS、HTTP-FLV） |
-| **11935** | RTMP 推流接入 |
-| **19000** | SRT 推流接入 |
+| **11935** | RTMP 推流接入（启用时） |
+| **19000** | SRT 推流接入（启用时） |
 | **2121** | FTP |
 | **5060** | GB28181 SIP |
+| **8200** | DLNA HTTP（启用时，另需 UDP 1900 组播发现；见 [DLNA](dlna.md)） |
 
 ```mermaid
 flowchart TB

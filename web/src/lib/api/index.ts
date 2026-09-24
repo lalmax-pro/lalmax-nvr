@@ -293,6 +293,7 @@ export {
   cameraStreamID,
   deleteStream,
   kickPublisher,
+  listStreamHistory,
   getStreamMetricsHistory,
 } from './streams';
 
@@ -322,6 +323,8 @@ export type {
   UpdateStreamRequest,
   PromoteStreamRequest,
   StreamOperationResponse,
+  StreamHistorySession,
+  StreamHistoryResponse,
   StreamMetricSample,
   StreamMetricsPeriod,
 } from './streams';

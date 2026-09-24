@@ -35,6 +35,7 @@ type HLSPullManager struct {
 	engine     Engine
 	httpClient *http.Client
 	maxTasks   int
+	online     func(streamID string, online bool, at time.Time)
 
 	mu    sync.Mutex
 	tasks map[string]*hlsPullTask
@@ -76,6 +77,26 @@ func (m *HLSPullManager) SetMaxTasks(n int) {
 	m.mu.Lock()
 	m.maxTasks = n
 	m.mu.Unlock()
+}
+
+// SetOnlineCallback reports when a pull starts delivering video frames and when
+// that frame session ends. A nil callback disables lifecycle notifications.
+func (m *HLSPullManager) SetOnlineCallback(callback func(streamID string, online bool, at time.Time)) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.online = callback
+	m.mu.Unlock()
+}
+
+func (m *HLSPullManager) notifyOnline(streamID string, online bool) {
+	m.mu.Lock()
+	callback := m.online
+	m.mu.Unlock()
+	if callback != nil {
+		callback(streamID, online, time.Now())
+	}
 }
 
 func (m *HLSPullManager) PullingStreamIDs() []string {
@@ -231,8 +252,27 @@ func (m *HLSPullManager) pullOnce(ctx context.Context, task *hlsPullTask) error 
 		OnDownloadPart:            func(string) {},
 		OnDecodeError:             func(error) {},
 	}
+	var onlineOnce sync.Once
+	var onlineMu sync.Mutex
+	wasOnline := false
+	markOnline := func() {
+		onlineOnce.Do(func() {
+			onlineMu.Lock()
+			wasOnline = true
+			onlineMu.Unlock()
+			m.notifyOnline(task.streamID, true)
+		})
+	}
+	defer func() {
+		onlineMu.Lock()
+		wasOnline := wasOnline
+		onlineMu.Unlock()
+		if wasOnline {
+			m.notifyOnline(task.streamID, false)
+		}
+	}()
 	client.OnTracks = func(tracks []*gohlslib.Track) error {
-		return attachHLSTracks(client, session, tracks)
+		return attachHLSTracks(client, session, tracks, markOnline)
 	}
 	if err := client.Start(); err != nil {
 		return err
@@ -247,7 +287,7 @@ func (m *HLSPullManager) pullOnce(ctx context.Context, task *hlsPullTask) error 
 	}
 }
 
-func attachHLSTracks(client *gohlslib.Client, session CustomizePubSession, tracks []*gohlslib.Track) error {
+func attachHLSTracks(client *gohlslib.Client, session CustomizePubSession, tracks []*gohlslib.Track, onVideoFrame ...func()) error {
 	info, err := ClassifyHLSTracks(tracks)
 	if err != nil {
 		return err
@@ -273,6 +313,9 @@ func attachHLSTracks(client *gohlslib.Client, session CustomizePubSession, track
 				payload := AnnexBFromAU(au)
 				if len(payload) == 0 {
 					return
+				}
+				if len(onVideoFrame) > 0 && onVideoFrame[0] != nil {
+					onVideoFrame[0]()
 				}
 				_ = session.FeedAvPacket(base.AvPacket{
 					Payload:     payload,

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
-  import { getStream, unbindCamera, promoteStream, deleteStream, kickPublisher, deleteCamera, getStreamMetricsHistory, getStreamingSettings, subscribeNvrEvents, streamMediaURL, updateStream } from '$lib/api';
-  import type { StreamInfo, StreamMetricSample, StreamMetricsPeriod } from '$lib/api';
+  import { getStream, unbindCamera, promoteStream, deleteStream, kickPublisher, deleteCamera, listStreamHistory, getStreamMetricsHistory, getStreamingSettings, subscribeNvrEvents, streamMediaURL, updateStream } from '$lib/api';
+  import type { StreamHistorySession, StreamInfo, StreamMetricSample, StreamMetricsPeriod } from '$lib/api';
   import { loadChart, createStreamMetricChart, updateStreamMetricChart } from '$lib/charts';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -41,6 +41,8 @@
   let error = $state('');
   let refreshTimer: number | undefined;
   let stopEvents: (() => void) | undefined;
+  let streamHistory = $state<StreamHistorySession[]>([]);
+  let historyLoading = $state(true);
 
   // Tabs
   type DetailTab = 'detail' | 'metrics' | 'urls' | 'actions';
@@ -158,10 +160,23 @@
     try {
       const next = await getStream(streamId);
       updateStreamState(next);
+      void loadRecentHistory();
     } catch (e) {
       error = e instanceof Error ? e.message : t('streams.loadFailed');
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadRecentHistory() {
+    historyLoading = streamHistory.length === 0;
+    try {
+      const response = await listStreamHistory(streamId, 10);
+      streamHistory = response.history;
+    } catch (e) {
+      console.warn('[StreamDetail] load recent stream history failed', e);
+    } finally {
+      historyLoading = false;
     }
   }
 
@@ -347,6 +362,16 @@
     const minutes = Math.floor((diff % 3600) / 60);
     const seconds = diff % 60;
     if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+    if (minutes > 0) return `${minutes}m ${seconds}s`;
+    return `${seconds}s`;
+  }
+
+  function formatElapsed(durationSec: number): string {
+    const totalSeconds = Math.max(0, Math.floor(durationSec || 0));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) return `${hours}h ${minutes}m`;
     if (minutes > 0) return `${minutes}m ${seconds}s`;
     return `${seconds}s`;
   }
@@ -909,6 +934,42 @@
               </div>
             </div>
           {/if}
+
+          <div class="history-section">
+            <h3>
+              <Clock size={16} />
+              {t('streams.recentOnlineHistory')}
+              <span class="history-count">{t('streams.recentOnlineCount', { count: '10' })}</span>
+            </h3>
+            {#if historyLoading}
+              <p class="history-empty">{t('common.loading')}</p>
+            {:else if streamHistory.length === 0}
+              <p class="history-empty">{t('streams.recentOnlineEmpty')}</p>
+            {:else}
+              <div class="history-table-wrap">
+                <table class="history-table">
+                  <thead>
+                    <tr>
+                      <th>{t('streams.onlineStartedAt')}</th>
+                      <th>{t('streams.onlineEndedAt')}</th>
+                      <th>{t('streams.protocol')}</th>
+                      <th>{t('streams.duration')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each streamHistory as session (session.id)}
+                      <tr>
+                        <td>{formatTime(session.started_at)}</td>
+                        <td>{session.ended_at ? formatTime(session.ended_at) : t('streams.onlineNow')}</td>
+                        <td>{session.protocol || '—'}</td>
+                        <td>{session.ended_at ? formatElapsed(session.duration_sec) : formatDuration(session.started_at)}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
+          </div>
         </section>
         {:else if activeTab === 'metrics'}
         <!-- Live metrics section -->
@@ -1515,19 +1576,62 @@
   }
 
   .publisher-section,
-  .subscribers-section {
+  .subscribers-section,
+  .history-section {
     padding: 1.25rem;
     border-top: 1px solid var(--border);
   }
 
   .publisher-section h3,
-  .subscribers-section h3 {
+  .subscribers-section h3,
+  .history-section h3 {
     margin: 0 0 0.75rem;
     font-size: 0.9rem;
     font-weight: 600;
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+
+  .history-count {
+    margin-left: auto;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 400;
+  }
+
+  .history-empty {
+    padding: 1.25rem;
+    color: var(--text-secondary);
+    text-align: center;
+    font-size: 0.85rem;
+  }
+
+  .history-table-wrap {
+    overflow-x: auto;
+  }
+
+  .history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+
+  .history-table th,
+  .history-table td {
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+  }
+
+  .history-table th {
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  .history-table tr:last-child td {
+    border-bottom: 0;
   }
 
   .publisher-info {

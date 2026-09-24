@@ -101,7 +101,7 @@ cameras:
 | `region` | 否 | 区域代码，默认 "cn"，支持 "sg"、"de"、"us" 等 |
 | `did` | 是 | 设备 ID（从设备发现中获取） |
 | `encoding` | 是 | 视频编码，"h264" 或 "h265" |
-| `audio_enabled` | 否 | 启用音频录制，默认 false |
+| `audio_enabled` | 否 | H.264/H.265 设备默认开启音频录制；通过 API 添加时可显式关闭 |
 
 ## 对讲功能
 
@@ -214,4 +214,4 @@ RTSP Pull → MP4 录制
 
 ## 有关其他支持
 
-请查看 [lalmax-nvr 文档](../getting-started.md) 或在 GitHub 仓库中创建问题。
+请查看 [快速入门](getting-started.md) 或在 GitHub 仓库中创建问题。

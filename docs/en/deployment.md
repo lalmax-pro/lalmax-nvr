@@ -283,7 +283,7 @@ docker compose logs lalmax-nvr
 
 **FTP won't connect**
 
-Ensure passive port range (2122-2140) is mapped and not blocked by firewall.
+Check that control port `2121` and passive ports `2122-2140` are mapped and allowed. FTP currently checks the plaintext `auth.password`, while first-run setup saves a hash and clears that field, so login may fail even when the ports are reachable. See the [FTP guide](ftp-integration.md).
 
 **Wrong timezone**
 

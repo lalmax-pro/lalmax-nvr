@@ -790,6 +790,7 @@ func (a *App) buildRouter() http.Handler {
 		var puller media.HLSPuller
 		if a.mediaEngine != nil {
 			a.hlsPuller = media.NewHLSPullManager(a.mediaEngine)
+			a.hlsPuller.SetOnlineCallback(a.historyMgr.RecordHLSPullState)
 			a.hlsPuller.SetMaxTasks(a.cfg.IPTV.MaxConcurrentPulls)
 			puller = a.hlsPuller
 		}

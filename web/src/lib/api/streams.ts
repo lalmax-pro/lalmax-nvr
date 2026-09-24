@@ -201,6 +201,39 @@ export interface StreamMetricSample {
 
 export type StreamMetricsPeriod = '5m' | '15m' | '30m';
 
+export interface StreamHistorySession {
+  id: number;
+  stream_id: string;
+  app_name: string;
+  protocol: string;
+  remote_addr: string;
+  session_id: string;
+  started_at: string;
+  ended_at?: string;
+  duration_sec: number;
+}
+
+export interface StreamHistoryResponse {
+  history: StreamHistorySession[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export async function listStreamHistory(
+  streamId: string,
+  limit = 10,
+  signal?: AbortSignal,
+): Promise<StreamHistoryResponse> {
+  const query = new URLSearchParams({
+    stream_id: streamId,
+    limit: String(limit),
+    offset: '0',
+  });
+  const data = await apiRequest<StreamHistoryResponse>(`/streams/history?${query}`, { signal });
+  return { ...data, history: data.history ?? [] };
+}
+
 export async function getStreamMetricsHistory(
   streamId: string,
   period: StreamMetricsPeriod = '15m',

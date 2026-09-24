@@ -78,10 +78,11 @@ Live RTSP playback (lal, not the camera): `rtsp://HOST:15544/live/{camera_id}`. 
 | 4888 | WebRTC ICE mux (WHIP/WHEP) |
 | 15544 | RTSP play |
 | 18080 | HLS-TS / HTTP-FLV |
-| 11935 | RTMP ingest |
-| 19000 | SRT ingest |
-| 2121 | FTP |
+| 11935 | RTMP ingest (when enabled) |
+| 19000 | SRT ingest (when enabled) |
+| 2121 | FTP (current hash-auth limitation; see [guide](en/ftp-integration.md)) |
 | 5060 | GB28181 SIP |
+| 8200 | DLNA HTTP (when enabled; discovery uses UDP 1900 multicast) |
 
 ## More
 
