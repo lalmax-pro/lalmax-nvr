@@ -3,6 +3,7 @@
   import { t } from '$lib/i18n';
   import { Maximize, Minimize, AlertCircle, RefreshCw, Volume2, VolumeX } from 'lucide-svelte';
   import { createHlsConfig } from '$lib/hls-config';
+  import type { HlsRequestOptions } from '$lib/hls-config';
   import {
     setupHlsErrorHandling,
     setupZombieDetector,
@@ -22,6 +23,8 @@
     expanded = false,
     protocol = 'hls',
     tabVisible = true,
+    externalHls = false,
+    requestHeaders = {},
   }: {
     cameraId: string;
     cameraName: string;
@@ -30,6 +33,8 @@
     expanded?: boolean;
     protocol?: string;
     tabVisible?: boolean;
+    externalHls?: boolean;
+    requestHeaders?: Record<string, string>;
   } = $props();
 
   // Reconnection coordinator from Dashboard context
@@ -148,6 +153,7 @@
       config,
       recreateAttempts,
       protocol,
+      hlsRequestOptions(),
     );
     if (newHls) {
       hlsInstance = newHls;
@@ -195,6 +201,18 @@
     };
   }
 
+  function hlsRequestOptions(): HlsRequestOptions {
+    let headerOrigin: string | undefined;
+    if (externalHls) {
+      try {
+        headerOrigin = new URL(streamUrl, window.location.href).origin;
+      } catch {
+        headerOrigin = undefined;
+      }
+    }
+    return { headers: requestHeaders, appAuth: !externalHls, headerOrigin };
+  }
+
   function destroyCurrentHls() {
     if (zombieCleanup) {
       zombieCleanup();
@@ -215,7 +233,7 @@
     if (destroyed) return;
 
     // Check if stream endpoint is available
-    const available = await checkStreamAvailable(streamUrl);
+    const available = externalHls || await checkStreamAvailable(streamUrl);
     if (destroyed) return;
     if (!available) {
       streamState = 'error';
@@ -233,7 +251,7 @@
       }
 
       HlsConstructor = Hls;
-      const hls = new Hls(createHlsConfig(protocol));
+      const hls = new Hls(createHlsConfig(protocol, hlsRequestOptions()));
       hlsInstance = hls;
       streamState = 'buffering';
       recreateAttempts.value = 0;
@@ -259,6 +277,8 @@ streamState = 'error';
   $effect(() => {
     const _url = streamUrl;
     const _protocol = protocol;
+    const _external = externalHls;
+    const _headers = requestHeaders;
     if (!_url) return;
 
     destroyCurrentHls();

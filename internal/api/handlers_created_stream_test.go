@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
+	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -116,6 +118,76 @@ func TestCreateStream_RequiresAnEnabledIngest(t *testing.T) {
 	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/streams",
 		strings.NewReader(`{"stream_id":"room-1"}`), "admin", "pass")
 	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+}
+
+func TestDeleteStream_RemovesIdleCreatedSlot(t *testing.T) {
+	h, engine := newCreatedStreamHarness(t, ingestTestConfig(true, false, true))
+	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/streams",
+		strings.NewReader(`{"stream_id":"room-idle","name":"空闲"}`), "admin", "pass")
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+	engine.stream = nil
+
+	rr = doRequest(t, h.Routes(), http.MethodDelete, "/api/streams/room-idle", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	row, err := h.db.GetCreatedStream(context.Background(), "room-idle")
+	require.NoError(t, err)
+	require.Nil(t, row)
+}
+
+func TestDeleteStream_RemovesCreatedSlotWhenKickFails(t *testing.T) {
+	h, engine := newCreatedStreamHarness(t, ingestTestConfig(true, false, true))
+	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/streams",
+		strings.NewReader(`{"stream_id":"room-kick","name":"直推"}`), "admin", "pass")
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+
+	engine.stream = &media.StreamInfo{
+		StreamID:  "room-kick",
+		Active:    true,
+		Publisher: &media.SessionInfo{SessionID: "pub-1", Protocol: "rtmp"},
+	}
+	engine.kickErr = errors.New("session not found")
+
+	rr = doRequest(t, h.Routes(), http.MethodDelete, "/api/streams/room-kick", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	row, err := h.db.GetCreatedStream(context.Background(), "room-kick")
+	require.NoError(t, err)
+	require.Nil(t, row)
+}
+
+func TestDeleteStream_RemovesCreatedSlotWhenGetStreamErrors(t *testing.T) {
+	h, engine := newCreatedStreamHarness(t, ingestTestConfig(true, false, true))
+	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/streams",
+		strings.NewReader(`{"stream_id":"room-err","name":"异常"}`), "admin", "pass")
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+	engine.getErr = errors.New("lalmax error 500: group lookup failed")
+
+	rr = doRequest(t, h.Routes(), http.MethodDelete, "/api/streams/room-err", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	row, err := h.db.GetCreatedStream(context.Background(), "room-err")
+	require.NoError(t, err)
+	require.Nil(t, row)
+}
+
+func TestDeleteStream_RemovesRecordingPlan(t *testing.T) {
+	h, engine := newCreatedStreamHarness(t, ingestTestConfig(true, false, true))
+	ctx := context.Background()
+	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/streams",
+		strings.NewReader(`{"stream_id":"room-plan","name":"计划流"}`), "admin", "pass")
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+	require.NoError(t, h.db.UpsertRecordingPlan(ctx, &storage.RecordingPlan{
+		StreamID: "room-plan", Mode: storage.RecordingModeContinuous, Enabled: true,
+	}))
+	engine.stream = nil
+
+	rr = doRequest(t, h.Routes(), http.MethodDelete, "/api/streams/room-plan", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	plan, err := h.db.GetRecordingPlanByStream(ctx, "room-plan")
+	require.NoError(t, err)
+	require.Nil(t, plan)
 }
 
 func TestDeleteStream_RemovesCreatedSlotWhileLive(t *testing.T) {

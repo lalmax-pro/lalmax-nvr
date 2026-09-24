@@ -86,6 +86,121 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// recordingSource is a camera, recording plan, or orphan stream that the
+// recordings page can select. ID is the camera_id used to list files.
+type recordingSource struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"` // camera | plan | stream
+	StreamID string `json:"stream_id,omitempty"`
+	Archived bool   `json:"archived,omitempty"`
+	Enabled  bool   `json:"enabled"`
+	Status   string `json:"status,omitempty"`
+	Protocol string `json:"protocol,omitempty"`
+}
+
+func (h *Handler) handleListRecordingSources(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"sources": []recordingSource{}})
+		return
+	}
+	ctx := r.Context()
+	seen := map[string]bool{}
+	var sources []recordingSource
+
+	add := func(src recordingSource) {
+		id := strings.TrimSpace(src.ID)
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		if src.StreamID != "" {
+			seen[src.StreamID] = true
+		}
+		sources = append(sources, src)
+	}
+
+	includeArchived := r.URL.Query().Get("include_archived") == "true"
+	cameras, err := h.db.ListCameras(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list cameras")
+		return
+	}
+	if includeArchived {
+		archived, err := h.db.ListArchivedCameras(ctx)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list archived cameras")
+			return
+		}
+		cameras = append(cameras, archived...)
+	}
+	streamByCamera := map[string]string{}
+	if bindings, err := h.db.ListStreamBindings(ctx); err != nil {
+		logger.Warn("failed to list stream bindings for recording sources", "error", err)
+	} else {
+		for _, b := range bindings {
+			streamByCamera[b.CameraID] = b.StreamID
+		}
+	}
+	for _, cam := range cameras {
+		streamID := cam.StreamID
+		if streamID == "" {
+			streamID = streamByCamera[cam.ID]
+		}
+		add(recordingSource{
+			ID:       cam.ID,
+			Name:     cam.Name,
+			Kind:     "camera",
+			StreamID: streamID,
+			Archived: cam.Archived,
+			Enabled:  cam.Enabled,
+			Status:   string(cam.Status),
+			Protocol: cam.Protocol,
+		})
+	}
+
+	plans, err := h.db.ListRecordingPlans(ctx)
+	if err != nil {
+		logger.Warn("failed to list recording plans for sources", "error", err)
+	} else {
+		for _, plan := range plans {
+			name := strings.TrimSpace(plan.Name)
+			if name == "" {
+				name = plan.StreamID
+			}
+			add(recordingSource{
+				ID:       plan.StreamID,
+				Name:     name,
+				Kind:     "plan",
+				StreamID: plan.StreamID,
+				Enabled:  plan.Enabled,
+				Protocol: "hls",
+			})
+		}
+	}
+
+	owners, err := h.db.ListDistinctRecordingOwners(ctx)
+	if err != nil {
+		logger.Warn("failed to list recording owners", "error", err)
+	} else {
+		for _, id := range owners {
+			add(recordingSource{
+				ID:       id,
+				Name:     id,
+				Kind:     "stream",
+				StreamID: id,
+				Enabled:  true,
+				Protocol: "hls",
+			})
+		}
+	}
+
+	if sources == nil {
+		sources = []recordingSource{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sources": sources})
+}
+
 func (h *Handler) handleGetRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)

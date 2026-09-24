@@ -58,7 +58,7 @@ ftp:
 mqtt:
   enabled: false
   broker: "tcp://localhost:1883"
-  topic: "lalmax-nvr/trigger"
+  topic: "lalmax-nvr"
   client_id: "lalmax-nvr"
   username: ""
   password: ""
@@ -405,8 +405,8 @@ cameras:
 ### `mqtt.topic`
 - **Type**: string
 - **Required**: Yes (if enabled)
-- **Description**: MQTT topic to subscribe to for recording triggers
-- **Example**: `"lalmax-nvr/trigger"`, `"cameras/front-door/record"`
+- **Description**: Topic prefix; the NVR subscribes to `{topic}/trigger/+`
+- **Example**: `"lalmax-nvr"`, `"home/security"`
 
 ### `mqtt.client_id`
 - **Type**: string
@@ -893,7 +893,7 @@ ftp:
 mqtt:
   enabled: true
   broker: "tcp://192.168.1.100:1883"
-  topic: "lalmax-nvr/trigger"
+  topic: "lalmax-nvr"
 webdav:
   enabled: true
   read_write: false

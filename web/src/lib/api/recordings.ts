@@ -38,6 +38,23 @@ export interface RecordingListResponse {
   total?: number;
 }
 
+export type RecordingSourceKind = 'camera' | 'plan' | 'stream';
+
+export interface RecordingSource {
+  id: string;
+  name: string;
+  kind: RecordingSourceKind;
+  stream_id?: string;
+  archived?: boolean;
+  enabled: boolean;
+  status?: string;
+  protocol?: string;
+}
+
+export interface RecordingSourcesResponse {
+  sources: RecordingSource[];
+}
+
 export interface StorageStats {
   total_bytes: number;
   used_bytes: number;
@@ -100,6 +117,15 @@ export async function listRecordings(params: {
 
   const { signal } = params;
   return apiRequest<RecordingListResponse>(endpoint, { signal });
+}
+
+export async function listRecordingSources(
+  includeArchived = true,
+  signal?: AbortSignal
+): Promise<RecordingSource[]> {
+  const query = includeArchived ? '?include_archived=true' : '';
+  const res = await apiRequest<RecordingSourcesResponse>(`/recordings/sources${query}`, { signal });
+  return res.sources || [];
 }
 
 export async function getRecording(id: string, signal?: AbortSignal): Promise<Recording> {

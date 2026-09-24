@@ -83,6 +83,47 @@ func TestParseActionStop(t *testing.T) {
 	assert.Equal(t, "stop", cb.action)
 }
 
+func TestParseActionRecord(t *testing.T) {
+	t.Helper()
+	cb := &mockCallback{}
+	c := NewClient("tcp://localhost:1883", "test", "lalmax-nvr", "", "", cb.callback)
+
+	c.handleMessage(nil, &mockMessage{
+		topic:   "lalmax-nvr/trigger/camera1",
+		payload: []byte(`{"action":"record"}`),
+	})
+
+	assert.True(t, cb.called)
+	assert.Equal(t, "camera1", cb.cameraID)
+	assert.Equal(t, "record", cb.action)
+}
+
+func TestParseActionIgnoresUnsupportedAction(t *testing.T) {
+	t.Helper()
+	cb := &mockCallback{}
+	c := NewClient("tcp://localhost:1883", "test", "lalmax-nvr", "", "", cb.callback)
+
+	c.handleMessage(nil, &mockMessage{
+		topic:   "lalmax-nvr/trigger/camera1",
+		payload: []byte(`{"action":"snapshot"}`),
+	})
+
+	assert.False(t, cb.called)
+}
+
+func TestStartRetriesInitialConnectionUntilContextCanceled(t *testing.T) {
+	t.Helper()
+	c := NewClient("tcp://127.0.0.1:1", "test-retry", "lalmax-nvr", "", "", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	err := c.Start(ctx)
+
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, time.Since(started), 80*time.Millisecond)
+}
+
 func TestIsConfigured(t *testing.T) {
 	t.Helper()
 	c := NewClient("tcp://localhost:1883", "test", "lalmax-nvr", "", "", nil)

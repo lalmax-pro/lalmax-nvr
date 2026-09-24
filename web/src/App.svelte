@@ -15,6 +15,7 @@
   import Setup from './routes/Setup.svelte';
   import Streams from './routes/Streams.svelte';
   import StreamDetail from './routes/StreamDetail.svelte';
+  import IPTV from './routes/IPTV.svelte';
 
   import Devices from './routes/Devices.svelte';
   import DeviceGroups from './routes/DeviceGroups.svelte';
@@ -160,6 +161,10 @@
       return { route: 'gb-channels', params: {} };
     }
 
+    if (segments[0] === 'iptv') {
+      return { route: 'iptv', params: {} };
+    }
+
 
     if (segments[0] === 'users') {
       return { route: 'users', params: {} };
@@ -287,6 +292,8 @@
         <DeviceGroups />
       {:else if currentRoute === 'gb-channels'}
         <GB28181Channels />
+      {:else if currentRoute === 'iptv'}
+        <IPTV />
       {:else if currentRoute === 'users'}
         <Users />
       {:else if currentRoute === 'logs'}

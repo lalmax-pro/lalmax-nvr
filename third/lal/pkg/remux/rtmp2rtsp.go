@@ -278,7 +278,9 @@ func (r *Rtmp2RtspRemuxer) remux(msg base.RtmpMsg) {
 			}
 
 			rtppkts = r.getVideoPacker().Pack(base.AvPacket{
-				Timestamp:   int64(msg.Header.TimestampAbs),
+				// RTP timestamps represent presentation time. RTMP stores DTS in
+				// the message header and the PTS-DTS offset in the video payload.
+				Timestamp:   int64(msg.Header.TimestampAbs) + int64(msg.Cts()),
 				PayloadType: r.videoPt,
 				Payload:     payload,
 			})

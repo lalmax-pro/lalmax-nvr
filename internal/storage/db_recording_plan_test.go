@@ -24,10 +24,15 @@ func newPlanTestDB(t *testing.T) *DB {
 func windowCoveringNow(t *testing.T) ScheduleWindow {
 	t.Helper()
 	now := time.Now()
+	start := now.Add(-time.Hour)
+	end := now.Add(time.Hour)
+	if start.Weekday() != now.Weekday() || end.Weekday() != now.Weekday() {
+		return ScheduleWindow{DayOfWeek: int(now.Weekday()), StartTime: "00:00", EndTime: "23:59"}
+	}
 	return ScheduleWindow{
 		DayOfWeek: int(now.Weekday()),
-		StartTime: now.Add(-time.Hour).Format("15:04"),
-		EndTime:   now.Add(time.Hour).Format("15:04"),
+		StartTime: start.Format("15:04"),
+		EndTime:   end.Format("15:04"),
 	}
 }
 
@@ -158,4 +163,19 @@ func TestDesiredRecordingStreams(t *testing.T) {
 	require.True(t, desired["in-window"])
 	require.False(t, desired["out-window"])
 	require.False(t, desired["event"])
+}
+
+func TestScheduleWindowsActive_Overnight(t *testing.T) {
+	// Monday 22:00 → Tuesday 06:00.
+	win := []ScheduleWindow{{DayOfWeek: int(time.Monday), StartTime: "22:00", EndTime: "06:00"}}
+	monday := time.Date(2026, 4, 6, 0, 0, 0, 0, time.Local) // a Monday
+	require.Equal(t, time.Monday, monday.Weekday())
+
+	require.False(t, ScheduleWindowsActive(win, monday.Add(21*time.Hour+59*time.Minute)))
+	require.True(t, ScheduleWindowsActive(win, monday.Add(22*time.Hour)))
+	require.True(t, ScheduleWindowsActive(win, monday.Add(23*time.Hour+30*time.Minute)))
+	require.True(t, ScheduleWindowsActive(win, monday.Add(24*time.Hour)))  // Tuesday 00:00
+	require.True(t, ScheduleWindowsActive(win, monday.Add(29*time.Hour)))  // Tuesday 05:00
+	require.False(t, ScheduleWindowsActive(win, monday.Add(30*time.Hour))) // Tuesday 06:00
+	require.False(t, ScheduleWindowsActive(win, monday.Add(12*time.Hour))) // Monday noon
 }

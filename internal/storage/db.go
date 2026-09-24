@@ -562,6 +562,10 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='30' WHERE key='schema_version'")
 
+	if err := d.migrateIPTV(ctx); err != nil {
+		return err
+	}
+
 	return nil
 
 }

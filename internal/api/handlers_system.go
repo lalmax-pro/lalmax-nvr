@@ -20,6 +20,7 @@ import (
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/lalmax-pro/lalmax-nvr/internal/dlna"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -552,13 +553,15 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"enabled":            h.config.DLNA.Enabled != nil && *h.config.DLNA.Enabled,
 			"friendly_name":      h.config.DLNA.FriendlyName,
 			"uuid":               h.config.DLNA.UUID,
-			"advertise_url":      h.config.DLNA.AdvertiseURL,
+			"port":               h.config.DLNA.Port,
+			"advertise_url":      dlna.ResolvedBaseURL(h.config),
 			"interface":          h.config.DLNA.Interface,
 			"allowed_cidrs":      h.config.DLNA.AllowedCIDRs,
 			"include_live":       h.config.DLNA.IncludeLive != nil && *h.config.DLNA.IncludeLive,
 			"include_recordings": h.config.DLNA.IncludeRecordings != nil && *h.config.DLNA.IncludeRecordings,
 			"max_browse_count":   h.config.DLNA.MaxBrowseCount,
 			"max_media_viewers":  h.config.DLNA.MaxMediaViewers,
+			"gop_cache":          h.config.DLNA.GopCache,
 		},
 		"auth": map[string]any{
 			"username":        h.config.Auth.Username,
@@ -588,13 +591,14 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			Enabled           *bool     `json:"enabled"`
 			FriendlyName      *string   `json:"friendly_name"`
 			UUID              *string   `json:"uuid"`
-			AdvertiseURL      *string   `json:"advertise_url"`
+			Port              *int      `json:"port"`
 			Interface         *string   `json:"interface"`
 			AllowedCIDRs      *[]string `json:"allowed_cidrs"`
 			IncludeLive       *bool     `json:"include_live"`
 			IncludeRecordings *bool     `json:"include_recordings"`
 			MaxBrowseCount    *int      `json:"max_browse_count"`
 			MaxMediaViewers   *int      `json:"max_media_viewers"`
+			GopCache          *int      `json:"gop_cache"`
 		} `json:"dlna"`
 	}
 
@@ -642,8 +646,17 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if body.DLNA.UUID != nil {
 			h.config.DLNA.UUID = strings.TrimSpace(*body.DLNA.UUID)
 		}
-		if body.DLNA.AdvertiseURL != nil {
-			h.config.DLNA.AdvertiseURL = strings.TrimRight(strings.TrimSpace(*body.DLNA.AdvertiseURL), "/")
+		if body.DLNA.Port != nil {
+			port := *body.DLNA.Port
+			if port < 1 || port > 65535 {
+				writeError(w, http.StatusBadRequest, "dlna port must be between 1 and 65535")
+				return
+			}
+			if port == config.ParseListenPort(h.config.Server.Listen) {
+				writeError(w, http.StatusBadRequest, "dlna port must be different from the HTTP listen port")
+				return
+			}
+			h.config.DLNA.Port = port
 		}
 		if body.DLNA.Interface != nil {
 			h.config.DLNA.Interface = strings.TrimSpace(*body.DLNA.Interface)
@@ -668,6 +681,14 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.DLNA.MaxMediaViewers != nil && *body.DLNA.MaxMediaViewers > 0 {
 			h.config.DLNA.MaxMediaViewers = *body.DLNA.MaxMediaViewers
+		}
+		if body.DLNA.GopCache != nil {
+			n := *body.DLNA.GopCache
+			if n < 1 || n > 16 {
+				writeError(w, http.StatusBadRequest, "dlna gop_cache must be between 1 and 16")
+				return
+			}
+			h.config.DLNA.GopCache = n
 		}
 	}
 

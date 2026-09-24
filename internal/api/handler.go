@@ -21,6 +21,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
+	"github.com/lalmax-pro/lalmax-nvr/internal/iptv"
 	"github.com/lalmax-pro/lalmax-nvr/internal/linkage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/merge"
@@ -188,6 +189,7 @@ type Handler struct {
 	logRing           *middleware.LogRing
 	serviceLogPath    string
 	dlnaApply         func(context.Context) error
+	iptvSvc           *iptv.Service
 }
 
 // GB28181StreamStatus reports active GB28181 play sessions for stream status overlay.
@@ -218,6 +220,9 @@ func (h *Handler) SetServiceLogPath(path string) {
 
 // SetDLNAApply registers the callback used when the web UI toggles DLNA.
 func (h *Handler) SetDLNAApply(fn func(context.Context) error) { h.dlnaApply = fn }
+
+// SetIPTVService attaches the independent IPTV module.
+func (h *Handler) SetIPTVService(svc *iptv.Service) { h.iptvSvc = svc }
 
 // SetRestartFunc registers the process restart callback used by first-time
 // setup after it has moved the canonical configuration into the data folder.
@@ -343,6 +348,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Route("/api/recordings", func(r chi.Router) {
 			r.Get("/", h.handleListRecordings)
 			r.Get("/timeline", h.handleRecordingsTimeline)
+			r.Get("/sources", h.handleListRecordingSources)
 			r.With(middleware.RequireOperatePermission()).Post("/batch-delete", h.handleBatchDeleteRecordings)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
@@ -475,6 +481,22 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/streams/bans", h.handleListBans)
 		r.Get("/api/streams/history", h.handleListStreamHistory)
 		r.Delete("/api/streams/history/{stream_id}", h.handleDeleteStreamHistory)
+		r.Route("/api/iptv", func(r chi.Router) {
+			r.With(middleware.RequireOperatePermission()).Post("/imports", h.handleIPTVCreateImport)
+			r.Get("/imports/{id}", h.handleIPTVGetImport)
+			r.Get("/imports/{id}/items", h.handleIPTVListImportItems)
+			r.With(middleware.RequireOperatePermission()).Post("/imports/{id}/items/{item_id}/probe", h.handleIPTVProbeImportItem)
+			r.With(middleware.RequireOperatePermission()).Post("/imports/{id}/commit", h.handleIPTVCommitImport)
+			r.Get("/sources", h.handleIPTVListSources)
+			r.With(middleware.RequireOperatePermission()).Delete("/sources/{id}", h.handleIPTVDeleteSource)
+			r.Get("/groups", h.handleIPTVListGroups)
+			r.Get("/channels", h.handleIPTVListChannels)
+			r.Get("/channels/{id}/hls", h.handleIPTVHLSProxy)
+			r.Get("/channels/{id}", h.handleIPTVGetChannel)
+			r.Get("/channels/{id}/playback", h.handleIPTVGetPlayback)
+			r.With(middleware.RequireOperatePermission()).Put("/channels/{id}", h.handleIPTVUpdateChannel)
+			r.With(middleware.RequireOperatePermission()).Delete("/channels/{id}", h.handleIPTVDeleteChannel)
+		})
 		r.Get("/api/settings", h.handleGetSettings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings", h.handleUpdateSettings)
 		r.Get("/api/settings/merge", h.handleGetMergeSettings)

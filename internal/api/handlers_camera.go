@@ -763,6 +763,11 @@ func (h *Handler) permanentlyDeleteCamera(ctx context.Context, cameraID string) 
 		if err := h.db.RemoveGroupChannelsByDeviceID(ctx, cameraID); err != nil {
 			logger.Warn("failed to remove camera from groups", "camera_id", cameraID, "error", err)
 		}
+		if streamID := h.cameraIngestStreamID(ctx, cameraID); streamID != "" {
+			if err := h.db.DeleteRecordingPlanByStream(ctx, streamID); err != nil {
+				logger.Warn("failed to delete recording plan", "camera_id", cameraID, "stream_id", streamID, "error", err)
+			}
+		}
 		if _, err := h.db.DeleteRecordingsByCamera(ctx, cameraID); err != nil {
 			return err
 		}
@@ -926,7 +931,7 @@ func (h *Handler) handleResumeRecording(w http.ResponseWriter, r *http.Request) 
 }
 
 // setStreamRecordingEnabled flips the recording plan for a camera's stream.
-// A plan is created on demand so pause/resume works for unplanned streams.
+// If no plan exists, pause/resume are no-ops for plan state (no inventing a 24/7 plan).
 func (h *Handler) setStreamRecordingEnabled(r *http.Request, cameraID string, enabled bool) error {
 	if h.db == nil {
 		return nil
@@ -940,11 +945,8 @@ func (h *Handler) setStreamRecordingEnabled(r *http.Request, cameraID string, en
 		return err
 	}
 	if plan == nil {
-		plan = &storage.RecordingPlan{
-			StreamID: streamID,
-			Name:     streamID,
-			Mode:     storage.RecordingModeContinuous,
-		}
+		// Pause/resume must not invent a 24/7 plan. No plan means no recording.
+		return nil
 	}
 	plan.Enabled = enabled
 	if err := h.db.UpsertRecordingPlan(r.Context(), plan); err != nil {

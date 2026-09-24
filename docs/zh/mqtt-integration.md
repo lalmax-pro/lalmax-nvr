@@ -1,14 +1,14 @@
 # MQTT 集成
 
-lalmax-nvr 支持 MQTT 基于的录制触发，用于智能家居自动化和事件驱动录制。当接收到 MQTT 消息时，系统可以开始录制特定摄像头的视频。该摄像头绑定流需要一份 `mode=event` 的 [录像计划](recording-plans.md)。
+lalmax-nvr 支持 MQTT 活动触发，用于智能家居自动化和事件录像。`record` 消息会触发摄像头的事件/自适应录像计划；`stop` 消息结束正在进行的事件录像。事件时长由配置的后录时间决定，MQTT 消息中的 duration 不生效。摄像头绑定的流需要配置 `mode=event` [录像计划](recording-plans.md)。
 
 ## 概述
 
 - **协议**: MQTT (Message Queuing Telemetry Transport)
 - **主题模式**: `{prefix}/trigger/{camera_id}`
 - **负载**: 包含 `action` 字段的 JSON
-- **操作**: `record`, `stop`, `snapshot`
-- **自动重连**: 内置指数退避重连
+- **操作**: `record` / `start` 触发活动；`stop` / `end` / `off` 结束事件录像
+- **重连**: 初次连接失败后每 5 秒重试；连接建立后断开则自动重连
 
 ## 配置
 
@@ -18,7 +18,7 @@ lalmax-nvr 支持 MQTT 基于的录制触发，用于智能家居自动化和事
 mqtt:
   broker: "tcp://192.168.1.100:1883"
   client_id: "lalmax-nvr"
-  topic: "lalmax-nvr"
+  topic: "lalmax-nvr" # 前缀；实际订阅 lalmax-nvr/trigger/+
   username: "mqtt_user"
   password: "mqtt_password"
 ```
@@ -37,7 +37,7 @@ mqtt:
 
 ```yaml
 mqtt:
-  broker_url: "tcp://mqtt.example.com:1883"
+  broker: "tcp://mqtt.example.com:1883"
   client_id: "lalmax-nvr-home"
   topic: "home/security"
   username: "smart_home_user"
@@ -76,19 +76,6 @@ mqtt:
 
 **主题**: `home/security/trigger/front-door`  
 **消息**: `{"action": "stop"}`
-
-#### 触发快照
-
-从特定摄像头拍摄快照：
-
-```json
-{
-  "action": "snapshot"
-}
-```
-
-**主题**: `home/security/trigger/front-door`  
-**消息**: `{"action": "snapshot"}`
 
 ### 集成示例
 
@@ -251,16 +238,14 @@ security/trigger/camera3
 
 ```yaml
 mqtt:
-  broker_url: "ssl://mqtt.example.com:8883"
+  broker: "ssl://mqtt.example.com:8883"
   client_id: "lalmax-nvr"
   topic: "home/security"
   username: "secure_user"
   password: "complex_password"
-  # SSL 需要 正确配置证书
-  ca_cert: "/path/to/ca.crt"
-  client_cert: "/path/to/client.crt"
-  client_key: "/path/to/client.key"
 ```
+
+TLS 使用系统 CA 信任库；目前不能配置自定义 CA 证书或双向 TLS 客户端证书。
 
 ### 与其他系统集成
 
@@ -289,7 +274,7 @@ mqtt:
     - service: mqtt.publish
       data:
         topic: "zigbee2mqtt/trigger/doorbell"
-        payload: '{"action": "record", "duration": 60}'
+        payload: '{"action": "record"}'
         retain: false
 ```
 

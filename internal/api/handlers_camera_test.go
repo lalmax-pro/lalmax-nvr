@@ -117,6 +117,19 @@ func TestInferStreamSourceType_WHIPWithoutPublisher(t *testing.T) {
 	require.Equal(t, "whip_push", src)
 }
 
+func TestInferStreamSourceType_IPTVIsNotWHIP(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	info := media.StreamInfo{
+		StreamID:   "iptv_dbbd82b49b8c62e4551e1e4d",
+		VideoCodec: "h264",
+		Publisher:  &media.SessionInfo{Protocol: "customize"},
+	}
+	require.Equal(t, "iptv", inferStreamSourceType(info, false))
+	require.Equal(t, "iptv", inferStreamSourceTypeForID(info.StreamID, "customize"))
+}
+
 func TestResolveCameraSourceType_PrefersStoredValue(t *testing.T) {
 	t.Helper()
 	t.Parallel()

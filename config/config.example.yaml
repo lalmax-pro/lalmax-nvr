@@ -38,14 +38,16 @@ media:
   #   lal (port 15544):   RTSP  (rtsp://{lalmax_public_url host}:15544/live/{camera_id})
 
 # DLNA MediaServer — publishes live streams and recordings to trusted LAN players.
-# The web UI can enable this feature. advertise_url must be reachable by the TV.
+# The LAN address is detected automatically. port is a dedicated listener,
+# separate from server.listen.
 # dlna:
 #   enabled: false
 #   friendly_name: "Lalmax NVR"
-#   advertise_url: "http://192.168.1.10:9090"
-#   interface: "eth0"
+#   port: 8200
+#   interface: ""                      # optional NIC name; empty uses the detected LAN address
 #   include_live: true
 #   include_recordings: true
+#   gop_cache: 1                       # HTTP-TS GOP cache count, 1-16; 1 starts at the latest keyframe
 #   max_browse_count: 200
 #   max_media_viewers: 4
 
@@ -126,7 +128,7 @@ ftp:
 mqtt:
   enabled: false                   # Enable MQTT client
   broker: "tcp://localhost:1883"   # MQTT broker URL
-  topic: "lalmax-nvr/trigger"         # MQTT topic to subscribe to
+  topic: "lalmax-nvr"               # Prefix; NVR subscribes to {topic}/trigger/+
   client_id: "lalmax-nvr"           # MQTT client ID
   username: ""                     # MQTT broker authentication (optional)
   password: ""                     # MQTT broker password (optional, auto-encrypted if encryption key is set)
@@ -154,6 +156,11 @@ mqtt:
 # Sub-stream preview idle stop (seconds, default 60)
 # streaming:
 #   preview_auto_stop_sec: 60
+#
+# IPTV is an independent module (Web UI: #/iptv). Import and validate M3U,
+# play in the browser, or publish into lal for protocol playback and recording.
+# iptv:
+#   max_concurrent_pulls: 32          # shared publication/recording pulls, range 1-128
 
 # WebDAV server — file access over WebDAV protocol
 # Shares recordings directory over HTTP

@@ -58,7 +58,7 @@ ftp:
 mqtt:
   enabled: false
   broker: "tcp://localhost:1883"
-  topic: "lalmax-nvr/trigger"
+  topic: "lalmax-nvr"
   client_id: "lalmax-nvr"
   username: ""
   password: ""
@@ -405,8 +405,8 @@ cameras:
 ### `mqtt.topic`
 - **类型**: string
 - **必需**: 是（如果启用）
-- **描述**: 订阅的 MQTT 主题（用于录制触发器）
-- **示例**: `"lalmax-nvr/trigger"`, `"cameras/front-door/record"`
+- **描述**: MQTT 主题前缀；NVR 实际订阅 `{topic}/trigger/+`
+- **示例**: `"lalmax-nvr"`, `"home/security"`
 
 ### `mqtt.client_id`
 - **类型**: string
@@ -893,7 +893,7 @@ ftp:
 mqtt:
   enabled: true
   broker: "tcp://192.168.1.100:1883"
-  topic: "lalmax-nvr/trigger"
+  topic: "lalmax-nvr"
 webdav:
   enabled: true
   read_write: false

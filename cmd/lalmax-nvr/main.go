@@ -34,6 +34,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/ftp"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
 	"github.com/lalmax-pro/lalmax-nvr/internal/health"
+	"github.com/lalmax-pro/lalmax-nvr/internal/iptv"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/merge"
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
@@ -412,6 +413,8 @@ type App struct {
 	// HTTP server
 	httpServer *http.Server
 	dlna       *dlna.Service
+	iptvSvc    *iptv.Service
+	hlsPuller  *media.HLSPullManager
 
 	// Remote log handler (nil when disabled)
 	remoteLogHandler *remotelog.Handler
@@ -783,6 +786,18 @@ func (a *App) buildRouter() http.Handler {
 	if a.dlna != nil {
 		handler.SetDLNAApply(a.dlna.Apply)
 	}
+	if a.iptvSvc == nil {
+		var puller media.HLSPuller
+		if a.mediaEngine != nil {
+			a.hlsPuller = media.NewHLSPullManager(a.mediaEngine)
+			a.hlsPuller.SetMaxTasks(a.cfg.IPTV.MaxConcurrentPulls)
+			puller = a.hlsPuller
+		}
+		a.iptvSvc = iptv.NewService(a.db, puller)
+	}
+	if a.iptvSvc != nil {
+		handler.SetIPTVService(a.iptvSvc)
+	}
 	a.apiHandler = handler
 	handler.SetMultiUserAuthMW(a.multiUserMW)
 	handler.SetRestartFunc(func() {
@@ -932,9 +947,6 @@ func (a *App) buildRouter() http.Handler {
 	})
 	r.Handle("/docs/", http.StripPrefix("/docs/", http.FileServer(http.FS(docsportal.FS))))
 
-	if a.dlna != nil {
-		a.dlna.RegisterRoutes(r)
-	}
 	r.Mount("/", handler.Routes())
 
 	// WebDAV
@@ -1161,6 +1173,9 @@ func (a *App) Start() error {
 	a.recSched.SetTasks(a.recTasks)
 	a.recSched.SetEventActive(a.eventActive)
 	a.recSched.SetAliveStreams(a.aliveRecordingStreams)
+	if a.iptvSvc != nil {
+		a.recSched.SetSourceReconciler(a.iptvSvc.ReconcileSources)
+	}
 	a.recSched.Start(ctx)
 	if a.apiHandler != nil {
 		a.apiHandler.SetRecordingReconciler(func(context.Context) { a.recSched.ReconcileNow() })
@@ -1237,6 +1252,9 @@ func (a *App) Start() error {
 			}
 			if a.apiHandler != nil {
 				a.apiHandler.RestoreCreatedPulls(ctx)
+			}
+			if a.recSched != nil {
+				a.recSched.ReconcileNow()
 			}
 		}()
 
@@ -1368,6 +1386,10 @@ func (a *App) Stop() error {
 		if a.dlna != nil {
 			log.Info("stopping DLNA service")
 			_ = a.dlna.Stop(shutdownCtx)
+		}
+		if a.iptvSvc != nil {
+			log.Info("stopping IPTV module")
+			a.iptvSvc.Stop()
 		}
 
 		// 1. HTTP server — stop accepting new requests
@@ -1613,6 +1635,7 @@ func newMediaEngine(cfg *config.Config, opts ...interface{}) (media.Engine, erro
 		RTSPUsername:          cfg.Media.RTSPUsername,
 		RTSPPassword:          cfg.Media.RTSPPassword,
 		LalLogLevel:           cfg.Observability.LogLevel,
+		HTTPTSGOPNum:          cfg.DLNA.GopCache,
 	}, toLalMaxOpts(svrOpts)...)
 	if err != nil {
 		return nil, err

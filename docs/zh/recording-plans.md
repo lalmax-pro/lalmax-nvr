@@ -20,7 +20,7 @@ Web UI：侧栏 **录像计划**（`#/recording-plans`）。REST：`/api/recordi
 - **要管一台摄像头**：添加设备或登记流；要录像再给它的 `stream_id` 建计划。
 - **登记为设备**：给流一个运维身份（名字、地图、大屏）。API 仍是 `POST /api/streams/{stream_id}/promote`。
 
-当前缺口：录像回放页仍按 **摄像头列表** 筛选。纯流录像会写入 `recordings.stream_id`（无设备时 `camera_id` 也是流 ID），但 UI 里选不到设备就看不见。
+录像回放页侧栏列出 **录像来源**：摄像头、纯计划流、以及还有文件的孤立流 ID。接口是 `GET /api/recordings/sources?include_archived=true`。时间轴、VOD、文件列表仍按来源 `id` 查询（即 `recordings.camera_id`）。
 
 ## 模式
 

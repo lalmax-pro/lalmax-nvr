@@ -19,12 +19,13 @@ type RecordingScheduler struct {
 	planner *RecordingPlanner
 	tasks   *TaskManager
 
-	mu          sync.Mutex
-	stopCh      chan struct{}
-	done        chan struct{}
-	kick        chan struct{}
-	alive       func(ctx context.Context) ([]string, error)
-	eventActive func(streamID string) bool
+	mu               sync.Mutex
+	stopCh           chan struct{}
+	done             chan struct{}
+	kick             chan struct{}
+	alive            func(ctx context.Context) ([]string, error)
+	eventActive      func(streamID string) bool
+	sourceReconciler func(ctx context.Context, desired map[string]bool, eventActive func(string) bool) bool
 }
 
 func NewRecordingScheduler(db *storage.DB) *RecordingScheduler {
@@ -61,6 +62,15 @@ func (s *RecordingScheduler) SetAliveStreams(fn func(ctx context.Context) ([]str
 func (s *RecordingScheduler) SetEventActive(fn func(streamID string) bool) {
 	s.mu.Lock()
 	s.eventActive = fn
+	s.mu.Unlock()
+}
+
+// SetSourceReconciler wires external HLS sources whose streams must be started
+// before the recorder can observe them. It returns true when a source was
+// started and the scheduler should check stream liveness again shortly.
+func (s *RecordingScheduler) SetSourceReconciler(fn func(context.Context, map[string]bool, func(string) bool) bool) {
+	s.mu.Lock()
+	s.sourceReconciler = fn
 	s.mu.Unlock()
 }
 
@@ -116,6 +126,7 @@ func (s *RecordingScheduler) check(ctx context.Context) {
 	tasks := s.tasks
 	aliveFn := s.alive
 	eventActive := s.eventActive
+	sourceReconciler := s.sourceReconciler
 	s.mu.Unlock()
 
 	if tasks == nil {
@@ -128,6 +139,9 @@ func (s *RecordingScheduler) check(ctx context.Context) {
 		}
 	}
 	desired := s.desiredState(ctx, planner)
+	if sourceReconciler != nil && sourceReconciler(ctx, desired, eventActive) {
+		time.AfterFunc(time.Second, s.ReconcileNow)
+	}
 
 	aliveKnown := false
 	aliveSet := map[string]bool{}

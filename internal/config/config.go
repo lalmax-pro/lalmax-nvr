@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,6 +49,7 @@ type Config struct {
 	RemoteLog     RemoteLogConfig     `yaml:"remote_log"`
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
 	DLNA          DLNAConfig          `yaml:"dlna"`
+	IPTV          IPTVConfig          `yaml:"iptv"`
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
 	Snapshot      SnapshotConfig      `yaml:"snapshot"`
@@ -334,18 +336,55 @@ type HLSConfig struct {
 }
 
 // StreamingConfig configures streaming protocol options (WebRTC, FLV, etc.)
+// DefaultDLNAPort is the MediaServer HTTP port, separate from server.listen.
+const DefaultDLNAPort = 8200
+
 // DLNAConfig controls the optional LAN UPnP MediaServer.
 type DLNAConfig struct {
 	Enabled           *bool    `yaml:"enabled"`
 	FriendlyName      string   `yaml:"friendly_name"`
 	UUID              string   `yaml:"uuid"`
-	AdvertiseURL      string   `yaml:"advertise_url"`
+	Port              int      `yaml:"port"`
+	AdvertiseURL      string   `yaml:"advertise_url,omitempty"`
 	Interface         string   `yaml:"interface"`
 	AllowedCIDRs      []string `yaml:"allowed_cidrs,omitempty"`
 	IncludeLive       *bool    `yaml:"include_live"`
 	IncludeRecordings *bool    `yaml:"include_recordings"`
-	MaxBrowseCount    int      `yaml:"max_browse_count"`
-	MaxMediaViewers   int      `yaml:"max_media_viewers"`
+	// GopCache is how many GOPs HTTP-TS keeps for a new player. 1 starts at the
+	// latest keyframe. A larger value fills a player buffer sooner and plays
+	// further behind live. Default 1, range 1-16.
+	GopCache        int `yaml:"gop_cache"`
+	MaxBrowseCount  int `yaml:"max_browse_count"`
+	MaxMediaViewers int `yaml:"max_media_viewers"`
+}
+
+// ParseListenPort returns the TCP port from an address such as ":9090" or "0.0.0.0:9090".
+func ParseListenPort(listen string) int {
+	listen = strings.TrimSpace(listen)
+	if listen == "" {
+		return 9090
+	}
+	if !strings.Contains(listen, ":") {
+		if p, err := strconv.Atoi(listen); err == nil && p > 0 {
+			return p
+		}
+		return 9090
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return 9090
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p <= 0 {
+		return 9090
+	}
+	return p
+}
+
+// IPTVConfig controls the independent IPTV module.
+type IPTVConfig struct {
+	// MaxConcurrentPulls caps HLS pulls shared by IPTV publication and recording plans (default 32, range 1-128).
+	MaxConcurrentPulls int `yaml:"max_concurrent_pulls"`
 }
 
 // StreamingConfig controls streaming protocol options (WebRTC, FLV, etc.)
@@ -853,6 +892,16 @@ func Validate(cfg *Config) error {
 	if cfg.DLNA.MaxMediaViewers < 1 || cfg.DLNA.MaxMediaViewers > 100 {
 		return fmt.Errorf("dlna.max_media_viewers must be between 1 and 100, got %d", cfg.DLNA.MaxMediaViewers)
 	}
+	dlnaPort := cfg.DLNA.Port
+	if dlnaPort == 0 {
+		dlnaPort = DefaultDLNAPort
+	}
+	if cfg.DLNA.Port != 0 && (dlnaPort < 1 || dlnaPort > 65535) {
+		return fmt.Errorf("dlna.port must be between 1 and 65535, got %d", cfg.DLNA.Port)
+	}
+	if cfg.DLNA.Enabled != nil && *cfg.DLNA.Enabled && dlnaPort == ParseListenPort(cfg.Server.Listen) {
+		return fmt.Errorf("dlna.port %d must be different from the HTTP listen port", dlnaPort)
+	}
 	if strings.TrimSpace(cfg.DLNA.AdvertiseURL) != "" {
 		u, err := url.Parse(cfg.DLNA.AdvertiseURL)
 		if err != nil || u.Scheme != "http" || u.Host == "" {
@@ -866,6 +915,9 @@ func Validate(cfg *Config) error {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("dlna.allowed_cidrs contains invalid CIDR %q", cidr)
 		}
+	}
+	if cfg.DLNA.GopCache != 0 && (cfg.DLNA.GopCache < 1 || cfg.DLNA.GopCache > 16) {
+		return fmt.Errorf("dlna.gop_cache must be between 1 and 16, got %d", cfg.DLNA.GopCache)
 	}
 
 	// Validate streaming configuration
@@ -1009,6 +1061,9 @@ func (cfg *Config) ApplyDefaults() {
 	if strings.TrimSpace(cfg.DLNA.FriendlyName) == "" {
 		cfg.DLNA.FriendlyName = "Lalmax NVR"
 	}
+	if cfg.DLNA.Port <= 0 {
+		cfg.DLNA.Port = DefaultDLNAPort
+	}
 	if cfg.DLNA.IncludeLive == nil {
 		cfg.DLNA.IncludeLive = new(bool)
 		*cfg.DLNA.IncludeLive = true
@@ -1022,6 +1077,15 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.DLNA.MaxMediaViewers <= 0 {
 		cfg.DLNA.MaxMediaViewers = 4
+	}
+	if cfg.DLNA.GopCache <= 0 {
+		cfg.DLNA.GopCache = 1
+	}
+	if cfg.IPTV.MaxConcurrentPulls <= 0 {
+		cfg.IPTV.MaxConcurrentPulls = 32
+	}
+	if cfg.IPTV.MaxConcurrentPulls > 128 {
+		cfg.IPTV.MaxConcurrentPulls = 128
 	}
 	// Auth - no defaults
 	// FTP

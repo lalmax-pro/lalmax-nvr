@@ -51,6 +51,8 @@ type EmbeddedLalmaxConfig struct {
 	RTSPPassword   string
 	// LalLogLevel mirrors observability.log_level (debug/info/warn/error).
 	LalLogLevel string
+	// HTTPTSGOPNum is lal httpts.gop_num. 1 caches the latest GOP.
+	HTTPTSGOPNum int
 }
 
 type EmbeddedLalmax struct {
@@ -197,6 +199,14 @@ func (w *customizePubSessionWrapper) FeedRtmpMsg(msg base.RtmpMsg) error {
 	return w.ctx.FeedRtmpMsg(msg)
 }
 
+func (w *customizePubSessionWrapper) WithOption(modOption func(*base.AvPacketStreamOption)) {
+	w.ctx.WithOption(modOption)
+}
+
+func (w *customizePubSessionWrapper) FeedAudioSpecificConfig(asc []byte) error {
+	return w.ctx.FeedAudioSpecificConfig(asc)
+}
+
 func (e *EmbeddedLalmax) Start(ctx context.Context) error {
 	e.mu.Lock()
 	server := e.server
@@ -263,7 +273,7 @@ func (e *EmbeddedLalmax) Restart(ctx context.Context, rtmpPort, srtPort int, rtm
 	if cfgPath != "" {
 		if _, err := os.Stat(cfgPath); err == nil {
 			// File exists 闁?patch only rtmp/srt fields
-			if err := patchLalmaxConfig(cfgPath, rtmpEnabled, srtEnabled, rtmpAddr, srtAddr); err != nil {
+			if err := patchLalmaxConfig(cfgPath, rtmpEnabled, srtEnabled, rtmpAddr, srtAddr, e.cfg.HTTPTSGOPNum); err != nil {
 				return fmt.Errorf("patch lalmax config: %w", err)
 			}
 		} else {
@@ -423,6 +433,7 @@ func loadEmbeddedLalmaxConfig(cfg EmbeddedLalmaxConfig) (*lalmaxconfig.Config, e
 				cfg.SRTEnabled,
 				fmt.Sprintf(":%d", rtmpPort),
 				fmt.Sprintf(":%d", srtPort),
+				cfg.HTTPTSGOPNum,
 			); err != nil {
 				return nil, fmt.Errorf("sync lalmax protocol config: %w", err)
 			}
@@ -475,10 +486,22 @@ func loadEmbeddedLalmaxConfig(cfg EmbeddedLalmaxConfig) (*lalmaxconfig.Config, e
 	return lalmaxconfig.GetConfig(), nil
 }
 
+// httptsGopNum clamps the HTTP-TS GOP cache. 0 and negatives mean the default
+// of one GOP, which lets a new player start on the latest keyframe.
+func httptsGopNum(n int) int {
+	if n < 1 {
+		return 1
+	}
+	if n > 16 {
+		return 16
+	}
+	return n
+}
+
 // patchLalmaxConfig reads the existing lalmax config JSON file, patches only
 // the RTMP/SRT enable and addr fields in the lal/lalmax sections, and writes
 // it back. This preserves all user customizations.
-func patchLalmaxConfig(path string, rtmpEnabled, srtEnabled bool, rtmpAddr, srtAddr string) error {
+func patchLalmaxConfig(path string, rtmpEnabled, srtEnabled bool, rtmpAddr, srtAddr string, gopNum int) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read lalmax config: %w", err)
@@ -535,6 +558,26 @@ func patchLalmaxConfig(path string, rtmpEnabled, srtEnabled bool, rtmpAddr, srtA
 		return fmt.Errorf("marshal default_http config: %w", err)
 	}
 	lal["default_http"] = patchedHTTP
+
+	// HTTP-TS shares the HTTP-FLV listener, so a .ts URL still returns headers
+	// when httpts is disabled. MPEG-TS packets are only produced when the
+	// remuxer is started, which requires httpts.enable.
+	httpts := map[string]any{}
+	if tsRaw, ok := lal["httpts"]; ok {
+		if err := json.Unmarshal(tsRaw, &httpts); err != nil {
+			return fmt.Errorf("parse httpts config: %w", err)
+		}
+	}
+	httpts["enable"] = true
+	if strings.TrimSpace(fmt.Sprint(httpts["url_pattern"])) == "" || httpts["url_pattern"] == nil {
+		httpts["url_pattern"] = "/live/"
+	}
+	httpts["gop_num"] = httptsGopNum(gopNum)
+	patchedTS, err := json.Marshal(httpts)
+	if err != nil {
+		return fmt.Errorf("marshal httpts config: %w", err)
+	}
+	lal["httpts"] = patchedTS
 
 	patchedLal, err := json.Marshal(lal)
 	if err != nil {
@@ -892,7 +935,7 @@ func embeddedConfigJSON(cfg EmbeddedLalmaxConfig) ([]byte, error) {
 			"http_api":     map[string]any{"enable": false},
 			// Keep the native TS fan-out available to the NVR DLNA proxy. The lal
 			// listener is not advertised to DLNA clients directly.
-			"httpts": map[string]any{"enable": true, "url_pattern": "/live/"},
+			"httpts": map[string]any{"enable": true, "url_pattern": "/live/", "gop_num": httptsGopNum(cfg.HTTPTSGOPNum)},
 			"hls": map[string]any{
 				"enable":                    cfg.HLSEnabled,
 				"url_pattern":               "/hls/",

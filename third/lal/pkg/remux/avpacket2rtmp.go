@@ -216,6 +216,7 @@ func (r *AvPacket2RtmpRemuxer) FeedAvPacket(pkt base.AvPacket) {
 						payload[0] = base.RtmpAvcInterFrame
 					}
 					payload[1] = base.RtmpAvcPacketTypeNalu
+					writeCompositionTime(payload, pkt.Pts-pkt.Timestamp)
 					bele.BePutUint32(payload[pos:], uint32(len(nal)))
 					pos += 4
 					copy(payload[pos:], nal)
@@ -265,6 +266,7 @@ func (r *AvPacket2RtmpRemuxer) FeedAvPacket(pkt base.AvPacket) {
 						payload[0] = base.RtmpHevcInterFrame
 					}
 					payload[1] = base.RtmpHevcPacketTypeNalu
+					writeCompositionTime(payload, pkt.Pts-pkt.Timestamp)
 					bele.BePutUint32(payload[pos:], uint32(len(nal)))
 					pos += 4
 					copy(payload[pos:], nal)
@@ -337,6 +339,18 @@ func (r *AvPacket2RtmpRemuxer) FeedAvPacket(pkt base.AvPacket) {
 	default:
 		Log.Warnf("unsupported packet. type=%d", pkt.PayloadType)
 	}
+}
+
+// RTMP AVC/HEVC video packets carry a 24-bit composition offset from the
+// message timestamp (DTS). Preserve non-negative offsets when converting
+// AvPacket values, since HLS sources with reordered frames need them for
+// correct decoding. lal's RTMP parser currently interprets this field as
+// unsigned, so negative offsets cannot safely be emitted here.
+func writeCompositionTime(payload []byte, compositionTime int64) {
+	if len(payload) < 5 || compositionTime < 0 || compositionTime > 0xffffff {
+		return
+	}
+	bele.BePutUint24(payload[2:5], uint32(compositionTime)&0xffffff)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

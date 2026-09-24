@@ -538,6 +538,13 @@ func groupToStreamInfo(group groupPayload) StreamInfo {
 		if latestUnixSec > 0 {
 			info.LastFrameTime = time.Unix(latestUnixSec, 0)
 		}
+		// Customize publish sessions (including native HLS pulls) are not
+		// always represented in lal's pub/pull session fields. Recent incoming
+		// video frames are authoritative evidence that such a stream is active.
+		if !info.Active && info.InFPS > 0 && !info.LastFrameTime.IsZero() && time.Since(info.LastFrameTime) <= 10*time.Second {
+			info.Active = true
+			info.Publisher = &SessionInfo{Protocol: "customize"}
+		}
 	}
 	return info
 }

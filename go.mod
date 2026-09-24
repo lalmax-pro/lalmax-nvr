@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/abema/go-mp4 v1.5.0
+	github.com/bluenviron/gohlslib v1.3.0
 	github.com/bluenviron/gortsplib/v5 v5.5.2
 	github.com/bluenviron/mediacommon/v2 v2.8.3
 	github.com/eclipse/paho.mqtt.golang v1.5.1
@@ -38,7 +39,6 @@ require (
 	github.com/asticode/go-astits v1.15.0 // indirect
 	github.com/benburkert/openpgp v0.0.0-20160410205803-c2471f86866c // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/bluenviron/gohlslib v1.3.0 // indirect
 	github.com/bluenviron/gortsplib/v4 v4.16.2 // indirect
 	github.com/bluenviron/mediacommon v1.9.2 // indirect
 	github.com/bytedance/sonic v1.9.1 // indirect

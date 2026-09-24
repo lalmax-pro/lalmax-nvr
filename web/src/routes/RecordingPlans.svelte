@@ -101,7 +101,7 @@
     }
     if (formMode === 'scheduled') {
       for (const w of formWindows) {
-        if (w.start_time >= w.end_time) {
+        if (w.start_time === w.end_time) {
           showToast(t('cameras.recordingSchedule.invalidRange'), 'error');
           return false;
         }

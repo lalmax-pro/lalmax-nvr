@@ -17,6 +17,7 @@ Layers and ports: [Architecture](architecture.md). The Web UI usually proxies li
   - [Camera Merge Configuration](#camera-merge-configuration)
   - [ONVIF API](#onvif-api)
 - [Recording plans API](#recording-plans-api)
+- [IPTV API](#iptv-api)
 - [Recordings API](#recordings-api)
 - [Events & alarm linkage](#events--alarm-linkage)
 - [Continuous VOD](#continuous-vod)
@@ -1193,6 +1194,23 @@ Source, lalmax group, recording, sub-stream, viewers by protocol. Used by the ca
 **Endpoint:** `GET /api/flow/streams`
 
 Same payload for every camera: `{ "cameras": [ ... ] }`.
+
+## IPTV API
+
+Independent IPTV module: import and validate M3U, enroll channels, and play through a same-origin HLS proxy. Channels can be published into lal for other playback protocols, and publication shares its HLS pull with recording plans. Channels are not cameras. Full guide: [IPTV](iptv.md).
+
+```
+POST   /api/iptv/imports
+GET    /api/iptv/imports/{id}
+GET    /api/iptv/imports/{id}/items
+POST   /api/iptv/imports/{id}/commit
+GET    /api/iptv/channels
+GET    /api/iptv/channels/{id}/playback
+GET    /api/iptv/channels/{id}/hls[?url=<upstream-url>]
+PUT    /api/iptv/channels/{id}  # control publish_enabled
+```
+
+Browser playback uses the same-origin proxy for HLS playlists and segments, so the upstream source does not need CORS support. Publication and recording pulls require `media.mode: embedded` (the default) and share the `iptv.max_concurrent_pulls` limit. When publication is enabled, get protocol URLs from `play_urls` in `GET /api/streams/{stream_id}`.
 
 ## Recording plans API
 
@@ -2405,4 +2423,3 @@ curl -u admin:password \
 curl -u admin:password \
   "http://localhost:9090/api/xiaomi/devices"
 ```
-

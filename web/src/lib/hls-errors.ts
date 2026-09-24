@@ -11,6 +11,7 @@
  */
 
 import { createHlsConfig } from './hls-config';
+import type { HlsRequestOptions } from './hls-config';
 
 // Error recovery thresholds (exported for testability)
 export const RECOVERY_DEBOUNCE_MS = 500;
@@ -284,6 +285,7 @@ export function destroyAndRecreate(
   config: HlsErrorConfig,
   attempts: { value: number } = { value: 0 },
   protocol: string = 'hls',
+  requestOptions: HlsRequestOptions = {},
 ): any | null {
   if (attempts.value >= MAX_RECREATE_ATTEMPTS) {
     config.onStateChange(config.cameraId, 'error');
@@ -299,7 +301,7 @@ export function destroyAndRecreate(
     // Already destroyed
   }
 
-  const newHls = new Hls(createHlsConfig(protocol));
+  const newHls = new Hls(createHlsConfig(protocol, requestOptions));
 
   setupHlsErrorHandling(newHls, Hls, config);
 

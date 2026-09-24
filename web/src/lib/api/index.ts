@@ -180,6 +180,7 @@ export type { RecordingPlan, RecordingPlanRequest } from './recording-plans';
 // Recordings — list, download, frames, stats, archives
 export {
   listRecordings,
+  listRecordingSources,
   getRecording,
   deleteRecording,
   batchDeleteRecordings,
@@ -208,6 +209,9 @@ export { getONVIFRecordings, searchONVIFRecordings, getONVIFReplayURI } from './
 
 export type {
   Recording,
+  RecordingSource,
+  RecordingSourceKind,
+  RecordingSourcesResponse,
   TimelineEntry,
   UnifiedTimelineClip,
   UnifiedSource,
@@ -291,6 +295,22 @@ export {
   kickPublisher,
   getStreamMetricsHistory,
 } from './streams';
+
+export {
+  createIPTVImport,
+  getIPTVImport,
+  listIPTVImportItems,
+  probeIPTVImportItem,
+  commitIPTVImport,
+  listIPTVSources,
+  deleteIPTVSource,
+  listIPTVGroups,
+  listIPTVChannels,
+  getIPTVChannelPlayback,
+  updateIPTVChannel,
+  deleteIPTVChannel,
+} from './iptv';
+export type { IPTVImportJob, IPTVImportItem, IPTVSource, IPTVChannel, IPTVPlaybackDetails } from './iptv';
 
 export type {
   StreamInfo,
