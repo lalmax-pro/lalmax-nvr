@@ -17,7 +17,7 @@ flowchart TB
   subgraph nvr [lalmax-nvr process]
     API[HTTP API :9090]
     CamMgr[Camera Manager]
-    Rec[Recorder]
+    Rec[Group writer]
     Merge[Merge / Rolling]
     Health[Health]
     Bus[Event Bus]
@@ -44,7 +44,7 @@ flowchart TB
   Push --> Group
   MediaAdp --> Group
   Group --> Out
-  Group --> Rec
+  Group -->|AddSubscriber| Rec
   Rec --> Store
   Rec --> Bus
   Bus --> Merge
@@ -110,13 +110,13 @@ flowchart LR
   RTSP[RTSP / ONVIF] -->|single pull| G["lalmax group"]
   GB[GB28181 device] -->|PS/RTP push after INVITE| G
   Push[RTMP / SRT / WHIP] -->|publish| G
-  G --> Rec[Recorder]
+  G -->|AddSubscriber| Rec[Group writer]
   G --> HLS[HLS / LL-HLS]
   G --> FLV[HTTP-FLV / WS-FLV]
   G --> RTC[WebRTC WHEP]
   G --> FMP4[fMP4]
   G --> RTSPOut["RTSP :15544"]
-  WS[WebCodecs WS] -.->|optional| Rec
+  WS[WebCodecs WS] -.->|StreamHub| Dev[device recorder]
 ```
 
 The browser uses API proxies or lalmax play URLs. You can also copy RTSP for VLC: `rtsp://{public-host}:15544/live/{camera_id}`. Set `media.lalmax_public_url` to a hostname clients can reach, otherwise the URL will be `127.0.0.1`.
@@ -148,22 +148,23 @@ The browser usually talks only to **`:9090`** (the API proxies HLS/FLV/WebRTC/fM
 ```mermaid
 sequenceDiagram
   participant Cam as Camera
-  participant Lal as lalmax
-  participant Rec as Recorder
+  participant Group as lalmax group
+  participant Rec as Group writer
   participant Disk as Disk / SQLite
   participant Roll as Rolling merge
   participant VOD as VOD HLS
 
-  Cam->>Lal: ingest (pull or push)
-  Lal->>Rec: frames
-  Rec->>Disk: short MP4 segments
+  Cam->>Group: ingest (pull or push)
+  Group->>Rec: AddSubscriber, then OnMsg(RtmpMsg)
+  Note over Rec: the plan only flips disk writing
+  Rec->>Disk: short MP4 while writing is on
   Rec->>Roll: segment.completed
   Note over Roll: debounce, then remux into the UTC hour file
   Roll->>Disk: replace with hour bucket
   VOD->>Disk: slice fMP4 on demand (~6s)
 ```
 
-- Recording is driven by **plans** on streams (`stream_id`), not cameras. Modes: `continuous` / `scheduled` / `event` / `adaptive` / `off`. No plan means no recording; registering a stream as a device does not start recording. See [Recording plans](recording-plans.md).
+- On the embedded engine, H.264/H.265 recording subscribes to the lalmax group. A plan on `stream_id` (`continuous` / `scheduled` / `event` / `off`) only turns disk writing on or off. `adaptive` and `media.mode: http` still use a record task. No plan means no recording; registering a stream as a device does not start recording. See [Recording plans](recording-plans.md) and [Recording flow](recording-flow.md).
 - **Rolling merge** appends a closed segment into the hour bucket after a short debounce (default 5s). Periodic merge still backfills history.
 - **Continuous VOD** loads a day playlist (`playlist.m3u8`); gaps use `#EXT-X-DISCONTINUITY`. MJPEG stays on the single-file player.
 
@@ -200,9 +201,9 @@ flowchart TB
 
 | Package | Role |
 |---------|------|
-| `camera` | Start/stop ingest, recording, sub-stream, IP self-heal |
-| `media` | lalmax pull / RTP receive / GetStream / BuildPlayURL |
-| `recorder` | Write frames to MP4 / MJPEG directories |
+| `camera` | Start/stop ingest, sub-stream, IP self-heal. Group-covered cameras do not open a second recorder |
+| `media` | lalmax pull / RTP receive / GetStream / BuildPlayURL / stream events |
+| `recorder` | Group writer subscribes to the lalmax group; plans flip `SetWriting`. Record tasks cover `adaptive` and HTTP mode. MJPEG / HTTP JPEG / timelapse stay on their collectors |
 | `merge` | Periodic merge + rolling hour buckets |
 | `vod` | On-demand init + fMP4, HLS VOD playlists |
 | `health` | Multi-layer probes and auto-remediation |

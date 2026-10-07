@@ -17,7 +17,7 @@ flowchart TB
   subgraph nvr [lalmax-nvr 进程]
     API[HTTP API :9090]
     CamMgr[Camera Manager]
-    Rec[Recorder]
+    Rec[组写入器]
     Merge[Merge / Rolling]
     Health[Health]
     Bus[Event Bus]
@@ -44,7 +44,7 @@ flowchart TB
   Push --> Group
   MediaAdp --> Group
   Group --> Out
-  Group --> Rec
+  Group -->|AddSubscriber| Rec
   Rec --> Store
   Rec --> Bus
   Bus --> Merge
@@ -110,13 +110,13 @@ flowchart LR
   RTSP[RTSP / ONVIF] -->|拉流一次| G["lalmax group"]
   GB[GB28181 设备] -->|INVITE 后 PS/RTP 推流| G
   Push[RTMP / SRT / WHIP] -->|推流| G
-  G --> Rec[录像]
+  G -->|AddSubscriber| Rec[组写入器]
   G --> HLS[HLS / LL-HLS]
   G --> FLV[HTTP-FLV / WS-FLV]
   G --> RTC[WebRTC WHEP]
   G --> FMP4[fMP4]
   G --> RTSPOut["RTSP :15544"]
-  WS[WebCodecs WS] -.->|可选直出| Rec
+  WS[WebCodecs WS] -.->|StreamHub| Dev[设备录像器]
 ```
 
 浏览器默认走 API 反代或 lalmax 播放 URL。也可以把 RTSP 地址拷出来给 VLC：`rtsp://{对外主机}:15544/live/{camera_id}`。请把 `media.lalmax_public_url` 设成客户端能访问的 hostname，否则 URL 会是 `127.0.0.1`。
@@ -148,22 +148,23 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   participant Cam as 相机
-  participant Lal as lalmax
-  participant Rec as Recorder
+  participant Group as lalmax group
+  participant Rec as 组写入器
   participant Disk as 磁盘 / SQLite
   participant Roll as Rolling merge
   participant VOD as VOD HLS
 
-  Cam->>Lal: 收流（拉或推）
-  Lal->>Rec: 帧
-  Rec->>Disk: 短 MP4 片段
+  Cam->>Group: 收流（拉或推）
+  Group->>Rec: AddSubscriber，随后 OnMsg(RtmpMsg)
+  Note over Rec: 计划只拨写盘开关
+  Rec->>Disk: 写盘打开时落短 MP4
   Rec->>Roll: segment.completed
   Note over Roll: debounce 后合进当前 UTC 小时文件
   Roll->>Disk: 替换为小时桶
   VOD->>Disk: 按 sample 切 fMP4（约 6s）
 ```
 
-- 录像由 **计划** 驱动，计划挂在流（`stream_id`）上，不是摄像头上。模式：`continuous` / `scheduled` / `event` / `adaptive` / `off`。没有计划就不录；把流登记为设备也不会自动开录。详见 [录像计划](recording-plans.md)。
+- 嵌入式引擎上，H.264/H.265 录像订阅 lalmax group。挂在 `stream_id` 上的计划（`continuous` / `scheduled` / `event` / `off`）只拨写盘开关。`adaptive` 和 `media.mode: http` 仍走 record task。没有计划就不录；把流登记为设备也不会自动开录。详见 [录像计划](recording-plans.md) 和 [录制流程](recording-flow.md)。
 - **滚动合并**：片段一关就 debounce（默认 5s）合进小时桶；周期合并仍做历史补齐。
 - **连续 VOD**：录像页按天拉 `playlist.m3u8`，段间缺口用 `#EXT-X-DISCONTINUITY`。MJPEG 仍走单文件播放。
 
@@ -200,9 +201,9 @@ flowchart TB
 
 | 模块 | 职责 |
 |------|------|
-| `camera` | 启停接入、录像、子码流、IP 自愈 |
-| `media` | 对 lalmax 的 pull / RTP 收口 / GetStream / BuildPlayURL |
-| `recorder` | 把帧写成 MP4 / MJPEG 目录 |
+| `camera` | 启停接入、子码流、IP 自愈。组写入器覆盖的相机不再另开一路录像器 |
+| `media` | 对 lalmax 的 pull / RTP 收口 / GetStream / BuildPlayURL / 流事件 |
+| `recorder` | 组写入器订阅 lalmax group，计划调用 `SetWriting`。record task 覆盖 `adaptive` 和 HTTP 模式。MJPEG / HTTP JPEG / 延时摄影仍走各自采集器 |
 | `merge` | 周期合并 + 滚动小时桶 |
 | `vod` | 按需切 init + fMP4，生成 HLS VOD |
 | `health` | 多层探活与自动修复 |

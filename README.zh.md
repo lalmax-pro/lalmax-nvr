@@ -35,19 +35,20 @@ lalmax-nvr 是叠在内嵌 [lalmax](https://github.com/q191201771/lal) 引擎上
 
 ```mermaid
 flowchart LR
-  Cam[摄像头 RTSP / ONVIF] -->|拉流| Lalmax[lalmax / lal]
-  GB[GB28181] -->|INVITE 后 RTP 推流| Lalmax
-  Push[RTMP / SRT / WHIP 推流] --> Lalmax
-  Lalmax --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
-  Lalmax --> Rec[录像]
+  Cam[摄像头 RTSP / ONVIF] -->|拉流| Group[lalmax group]
+  GB[GB28181] -->|INVITE 后 RTP 推流| Group
+  Push[RTMP / SRT / WHIP / RTSP 推流] --> Group
+  Group --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
+  Group -->|AddSubscriber| Rec[组写入器]
+  Plan[录像计划] -->|写盘开关| Rec
   Rec --> Disk[(MP4 + SQLite)]
   Disk --> VOD[连续 VOD]
 ```
 
 - **lalmax** — 收流、转协议、直播分发（含 `rtsp://host:15544/live/{id}`）
-- **NVR** — 相机、ONVIF/GB28181、**挂在流上的录像计划**、滚动小时合并、健康、Web UI
-- **`media.mode: embedded`** — 引擎同进程；`http` 则连外部 lalmax
-- MJPEG / HTTP JPEG 仍直拉（lalmax 限制）
+- **NVR** — 相机、ONVIF/GB28181、订阅 lalmax group 的**组写入器**（写盘跟着流上的计划）、滚动小时合并、健康、Web UI
+- **`media.mode: embedded`** — 引擎同进程，录像可以对 lalmax group `AddSubscriber`。`http` 连外部 lalmax，仍走 record task
+- MJPEG / HTTP JPEG / 延时摄影仍由各自的采集器写盘（lalmax 限制）
 
 完整图、端口与模块表见 **[架构](docs/zh/architecture.md)**。文档目录：**[docs/zh](docs/zh/README.md)**。
 
@@ -67,7 +68,7 @@ flowchart LR
 - **媒体引擎**：基于 lalmax 的统一中继——摄录分离，无重复拉流
 - **摄像头协议**：RTSP（H.264/H.265/MJPEG）、HTTP JPEG、ONVIF 设备发现与管理
 - **国标 GB28181**：作为 SIP **上级平台**；设备 REGISTER，INVITE 后 **推送 PS/RTP**；级联、录像查询与回放（带时间轴）、多协议流媒体（ws-flv、flv、hls、webrtc 等）、播放控制（暂停/恢复/倍速/拖动）、批量下载、平台事件历史、语音对讲（SIP INVITE，UDP/TCP）
-- **视频录像**：MP4 切片由 **流上的录像计划** 驱动（连续 / 定时 / 事件 / 自适应 / 关闭）。把流登记为设备不会自动开录。按相机保留天数、AAC + G.711 音频
+- **视频录像**：嵌入式 H.264/H.265 订阅 lalmax group。计划（连续 / 定时 / 事件 / 关闭）只拨写盘开关，拉流或推流保持。`adaptive` 和 `media.mode: http` 仍走 record task。把流登记为设备不会自动开录。按相机保留天数、AAC + G.711 音频。详见 [录制流程](docs/zh/recording-flow.md)
 - **录像回放**：24 小时时间轴、小时缩放、单文件播放，或 **连续 VOD**（按天 HLS fMP4，缺口可 seek）
 - **实时直播**：WebCodecs、fMP4、WebRTC、HTTP-FLV、HLS、LL-HLS，可复制 **RTSP**（`:15544`）
 - **RTMP / SRT / WHIP 接入**：接收摄像头或编码器推送的流（WHIP：`http://host:12090/webrtc/whip?streamid={id}`）
@@ -131,7 +132,7 @@ media:
 - H.264/H.265 的 RTSP/ONVIF 摄像头经 lalmax 拉流
 - GB28181 设备在 SIP INVITE 之后 **推送** PS/RTP（NVR 是 SIP 上级平台，不是 RTSP 拉流端）
 - HLS/FLV/WebRTC/fMP4 播放由 lalmax 提供
-- 录像消费 lalmax 统一流
+- 嵌入式录像订阅同一条 lalmax group。计划只拨写盘开关。`http` 模式回退到 record task
 - 把 `media.lalmax_public_url` 设成客户端能访问的 hostname，否则 RTSP URL 会是 `127.0.0.1`
 - MJPEG 和 HTTP/JPEG 摄像头仍直连（lalmax 限制）
 
@@ -144,6 +145,7 @@ media:
 | 文档 | 说明 |
 |------|------|
 | [架构](docs/zh/architecture.md) | 分层、接入（拉流 vs 国标推流）、VOD、端口、模块 |
+| [录像计划](docs/zh/recording-plans.md) · [录制流程](docs/zh/recording-flow.md) | 一条流何时写盘，以及组写入器如何订阅 |
 | [快速入门](docs/zh/getting-started.md) | 安装、第一个摄像头 |
 | [配置说明](docs/zh/configuration.md) | YAML 参考 |
 | [API 文档](docs/zh/api-reference.md) | REST API |
@@ -180,7 +182,7 @@ internal/              # 核心模块
   mqtt/                # MQTT 客户端
   muxer/               # MP4 封装器
   onvif/               # ONVIF 客户端适配器（NVR 侧）
-  recorder/            # H264/H265/MJPEG/HTTP-JPEG 录像引擎
+  recorder/            # lalmax 组写入器、record task、MJPEG/HTTP-JPEG 采集器
   storage/             # SQLite 数据库 + 文件管理
   streamhistory/       # 流历史记录
   ui/                  # 内嵌 SPA 静态文件
