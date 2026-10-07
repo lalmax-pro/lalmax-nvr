@@ -31,7 +31,7 @@
 | 文档 | 内容 |
 |------|------|
 | [录像计划](recording-plans.md) | 为流设置连续、定时或事件录像 |
-| [录制流程](recording-flow.md) | 录像任务的启动、写盘和停止 |
+| [录制流程](recording-flow.md) | 组写入器如何订阅 lalmax group，计划如何拨写盘开关 |
 | [API 参考](api-reference.md) | REST API 使用说明；OpenAPI 规范见 [`openapi.yaml`](../../internal/docsportal/openapi.yaml) |
 | [MQTT](mqtt-integration.md) | 事件触发录像 |
 | [WebDAV](webdav-integration.md) / [FTP](ftp-integration.md) | 浏览存储文件；FTP 指南说明当前认证限制 |
