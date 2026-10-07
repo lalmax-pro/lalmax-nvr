@@ -392,6 +392,7 @@ type App struct {
 	recSched     *recorder.RecordingScheduler
 	recPlanner   *recorder.RecordingPlanner
 	recTasks     *recorder.TaskManager
+	groupWriter  *recorder.GroupWriter
 	eventMgr     *recorder.EventManager
 	autoDiscover *autodiscover.Service
 	startCtx     context.Context
@@ -1036,6 +1037,10 @@ func (a *App) wireRecordTasks() {
 	if err != nil || segDur <= 0 {
 		segDur = recorder.DefaultSegmentDur
 	}
+	if _, ok := a.mediaEngine.(*media.EmbeddedLalmax); ok {
+		a.groupWriter = recorder.NewGroupWriter(a.store, a.db, a.eventBus, a.mediaEngine, segDur)
+		a.camMgr.SetGroupWriter(a.groupWriter)
+	}
 	tasks := recorder.NewTaskManager(a.mediaEngine, a.store, a.db, a.metrics, a.eventBus, segDur)
 	tasks.SetOwnerFunc(func(streamID string) recorder.StreamOwner {
 		cam := a.camMgr.CameraByStream(streamID)
@@ -1083,9 +1088,11 @@ func (a *App) wireRecordTasks() {
 		switch strings.ToLower(strings.TrimSpace(cam.Encoding)) {
 		case string(model.FormatMJPEG), string(model.EncJPEG):
 			return true
-		default:
-			return false
 		}
+		if a.groupWriter != nil && a.groupWriter.Covers(*cam) {
+			return true
+		}
+		return false
 	})
 	tasks.SetShouldRecord(func(streamID string) bool {
 		if a.recPlanner != nil {
@@ -1174,6 +1181,18 @@ func (a *App) Start() error {
 	a.recSched.SetTasks(a.recTasks)
 	a.recSched.SetEventActive(a.eventActive)
 	a.recSched.SetAliveStreams(a.aliveRecordingStreams)
+	if a.groupWriter != nil {
+		a.recSched.SetWriteSwitch(func(streamID string, want bool) bool {
+			cam := a.camMgr.CameraByStream(streamID)
+			if cam == nil || !a.groupWriter.Covers(*cam) {
+				return false
+			}
+			a.groupWriter.SetWriting(cam.ID, want)
+			a.groupWriter.AttachCamera(*cam)
+			return true
+		})
+		go a.groupWriter.Run(ctx)
+	}
 	if a.iptvSvc != nil {
 		a.recSched.SetSourceReconciler(a.iptvSvc.ReconcileSources)
 	}
@@ -1425,6 +1444,10 @@ func (a *App) Stop() error {
 		if a.recTasks != nil {
 			log.Info("stopping record tasks")
 			a.recTasks.StopAll()
+		}
+		if a.groupWriter != nil {
+			log.Info("stopping group recorder")
+			a.groupWriter.Close()
 		}
 		if a.rtmpIngest != nil {
 			log.Info("stopping RTMP ingest handler")

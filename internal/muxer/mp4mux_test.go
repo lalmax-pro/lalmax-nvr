@@ -2,6 +2,7 @@ package muxer
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -446,6 +447,58 @@ func TestStreamingMuxerParseSegment(t *testing.T) {
 	require.False(t, info.Samples[1].IsKeyFrame)
 	require.Greater(t, info.Samples[0].Size, uint32(0))
 	require.Greater(t, info.AudioSamples[0].Size, uint32(0))
+}
+
+func TestVideoTrackWritesSTSS(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stss.mp4")
+	m := NewMP4Muxer(path)
+	videoID, err := m.AddH264Track(testSPS, testPPS)
+	require.NoError(t, err)
+
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+	p := []byte{0x41, 0x9a, 0x24}
+	require.NoError(t, m.WriteSample(videoID, idr, 0, 40*time.Millisecond))
+	require.NoError(t, m.WriteSample(videoID, p, 40*time.Millisecond, 40*time.Millisecond))
+	require.NoError(t, m.WriteTimedSample(videoID, idr, 80*time.Millisecond, 90*time.Millisecond, 40*time.Millisecond))
+	require.NoError(t, m.Close())
+
+	require.Equal(t, []uint32{1, 3}, stssSampleNumbers(t, path))
+}
+
+func TestAllKeyframesOmitSTSS(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allkey.mp4")
+	m := NewMP4Muxer(path)
+	videoID, err := m.AddH264Track(testSPS, testPPS)
+	require.NoError(t, err)
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+	require.NoError(t, m.WriteSample(videoID, idr, 0, 40*time.Millisecond))
+	require.NoError(t, m.Close())
+	require.Nil(t, stssSampleNumbers(t, path))
+}
+
+func stssSampleNumbers(t *testing.T, path string) []uint32 {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	i := bytes.Index(data, []byte("stss"))
+	if i < 4 {
+		return nil
+	}
+	body := data[i+4:]
+	if len(body) < 8 {
+		t.Fatalf("truncated stss")
+	}
+	count := binary.BigEndian.Uint32(body[4:8])
+	nums := make([]uint32, count)
+	for n := uint32(0); n < count; n++ {
+		off := 8 + int(n)*4
+		nums[n] = binary.BigEndian.Uint32(body[off : off+4])
+	}
+	return nums
 }
 
 func TestStripAnnexBPrefix(t *testing.T) {

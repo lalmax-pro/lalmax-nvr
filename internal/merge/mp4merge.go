@@ -553,6 +553,10 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack) error {
 	}
 	_ = bi6
 
+	if err := writeMergeSTSS(w, tr, samples); err != nil {
+		return err
+	}
+
 	// stsc — one entry per chunk. SampleDescriptionIndex MUST be 1.
 	bi7, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stsc")})
 	if err != nil {
@@ -616,6 +620,32 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack) error {
 
 	_, err = w.EndBox()
 	_ = bi
+	return err
+}
+
+// writeMergeSTSS copies keyframe indexes into the merged file.
+// Without it, players treat every sample as a sync sample and seek onto P-frames.
+func writeMergeSTSS(w *mp4.Writer, tr *mergeTrack, samples []mergedSample) error {
+	if tr == nil || tr.isAudio || len(samples) == 0 {
+		return nil
+	}
+	nums := make([]uint32, 0, len(samples))
+	for i, s := range samples {
+		if s.isKeyFrame {
+			nums = append(nums, uint32(i+1))
+		}
+	}
+	if len(nums) == 0 || len(nums) == len(samples) {
+		return nil
+	}
+	box := &mp4.Stss{EntryCount: uint32(len(nums)), SampleNumber: nums}
+	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.BoxTypeStss()}); err != nil {
+		return err
+	}
+	if _, err := mp4.Marshal(w, box, mp4.Context{}); err != nil {
+		return err
+	}
+	_, err := w.EndBox()
 	return err
 }
 
