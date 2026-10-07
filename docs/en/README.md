@@ -31,7 +31,7 @@ Find guides by task. For configuration examples, see [`config/config.example.yam
 | Guide | Covers |
 |-------|--------|
 | [Recording plans](recording-plans.md) | Continuous, scheduled, and event recording for streams |
-| [Recording flow](recording-flow.md) | How recording tasks start, write, and stop |
+| [Recording flow](recording-flow.md) | How the group writer subscribes to the lalmax group, and how plans flip disk writing |
 | [API reference](api-reference.md) | REST API usage; the OpenAPI spec is [`openapi.yaml`](../../internal/docsportal/openapi.yaml) |
 | [MQTT](mqtt-integration.md) | Event-triggered recording |
 | [WebDAV](webdav-integration.md) / [FTP](ftp-integration.md) | Browse stored files; the FTP guide covers the current auth limitation |

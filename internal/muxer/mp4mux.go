@@ -34,11 +34,14 @@ type track struct {
 }
 
 // sample holds sample-table metadata only. Payload is written to mdat immediately.
+// cts is PTS-DTS. Zero means the file can omit the ctts box.
 type sample struct {
 	offset   int64
 	size     uint32
 	pts      time.Duration
 	duration time.Duration
+	cts      time.Duration
+	sync     bool // IDR/IRAP. Listed in stss so players seek to a decodable frame.
 }
 
 // MP4Muxer writes H.264 video data into an MP4 file using abema/go-mp4.
@@ -210,7 +213,7 @@ func (m *MP4Muxer) ensureFileLocked() error {
 	return nil
 }
 
-func (m *MP4Muxer) appendSampleLocked(t *track, data []byte, pts, duration time.Duration, audio bool) error {
+func (m *MP4Muxer) appendSampleLocked(t *track, data []byte, pts, duration, cts time.Duration, audio bool) error {
 	if err := m.ensureFileLocked(); err != nil {
 		return err
 	}
@@ -219,6 +222,7 @@ func (m *MP4Muxer) appendSampleLocked(t *track, data []byte, pts, duration time.
 		return err
 	}
 	var size uint32
+	var sync bool
 	if audio {
 		n, err := m.file.Write(data)
 		if err != nil {
@@ -239,12 +243,15 @@ func (m *MP4Muxer) appendSampleLocked(t *track, data []byte, pts, duration time.
 			return fmt.Errorf("write nal: %w", err)
 		}
 		size = uint32(4 + len(nal))
+		sync = isSyncNAL(nal, t.isH265)
 	}
 	t.samples = append(t.samples, sample{
 		offset:   offset,
 		size:     size,
 		pts:      pts,
 		duration: duration,
+		cts:      cts,
+		sync:     sync,
 	})
 	m.totalDuration += duration
 	return nil
@@ -263,7 +270,26 @@ func (m *MP4Muxer) WriteSample(trackID int, data []byte, pts time.Duration, dura
 	if t == nil {
 		return fmt.Errorf("track %d not found", trackID)
 	}
-	return m.appendSampleLocked(t, data, pts, duration, false)
+	return m.appendSampleLocked(t, data, pts, duration, 0, false)
+}
+
+// WriteTimedSample writes one sample in decode order.
+// duration is the DTS delta used for stts. A non-zero PTS-DTS offset is written as ctts.
+func (m *MP4Muxer) WriteTimedSample(trackID int, data []byte, dts, pts, duration time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return errors.New("muxer is closed")
+	}
+	t := m.findTrackLocked(trackID)
+	if t == nil {
+		return fmt.Errorf("track %d not found", trackID)
+	}
+	if duration < time.Millisecond {
+		duration = time.Millisecond
+	}
+	return m.appendSampleLocked(t, data, dts, duration, pts-dts, t.isAudio)
 }
 
 // WriteAudioSample writes a raw AAC/G.711 frame as a sample to the specified audio track.
@@ -281,7 +307,7 @@ func (m *MP4Muxer) WriteAudioSample(trackID int, data []byte, pts time.Duration,
 	if !t.isAudio {
 		return fmt.Errorf("track %d is not an audio track", trackID)
 	}
-	return m.appendSampleLocked(t, data, pts, duration, true)
+	return m.appendSampleLocked(t, data, pts, duration, 0, true)
 }
 
 // Duration returns the total duration of all written samples.
@@ -666,6 +692,13 @@ func writeStbl(w *mp4.Writer, tr *track) error {
 	}
 	_ = bi6
 
+	if err := writeCTTS(w, tr); err != nil {
+		return err
+	}
+	if err := writeSTSS(w, tr); err != nil {
+		return err
+	}
+
 	// stsc — one sample per chunk so audio/video can be interleaved in mdat.
 	bi7, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stsc")})
 	if err != nil {
@@ -751,6 +784,85 @@ func writeStbl(w *mp4.Writer, tr *track) error {
 	_, err = w.EndBox()
 	_ = bi
 	return err
+}
+
+// writeCTTS writes composition offsets when any sample has PTS != DTS.
+// Tracks with a zero offset omit the box, matching files written before ctts existed.
+func writeCTTS(w *mp4.Writer, tr *track) error {
+	if tr == nil || tr.isAudio || len(tr.samples) == 0 {
+		return nil
+	}
+	needed := false
+	negative := false
+	entries := make([]mp4.CttsEntry, len(tr.samples))
+	for i, s := range tr.samples {
+		ms := s.cts.Milliseconds()
+		if ms != 0 {
+			needed = true
+		}
+		if ms < 0 {
+			negative = true
+		}
+		entries[i] = mp4.CttsEntry{
+			SampleCount:    1,
+			SampleOffsetV0: uint32(ms),
+			SampleOffsetV1: int32(ms),
+		}
+	}
+	if !needed {
+		return nil
+	}
+	box := &mp4.Ctts{EntryCount: uint32(len(entries)), Entries: entries}
+	if negative {
+		box.SetVersion(1)
+	}
+	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("ctts")}); err != nil {
+		return err
+	}
+	if _, err := mp4.Marshal(w, box, mp4.Context{}); err != nil {
+		return err
+	}
+	_, err := w.EndBox()
+	return err
+}
+
+// writeSTSS lists IDR/IRAP sample numbers (1-based).
+// A missing stss means every sample is a sync sample, so players seek onto P-frames.
+// The box is omitted when every sample is a sync sample, which is the same meaning.
+func writeSTSS(w *mp4.Writer, tr *track) error {
+	if tr == nil || tr.isAudio || len(tr.samples) == 0 {
+		return nil
+	}
+	nums := make([]uint32, 0, len(tr.samples))
+	for i, s := range tr.samples {
+		if s.sync {
+			nums = append(nums, uint32(i+1))
+		}
+	}
+	if len(nums) == 0 || len(nums) == len(tr.samples) {
+		return nil
+	}
+	box := &mp4.Stss{EntryCount: uint32(len(nums)), SampleNumber: nums}
+	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.BoxTypeStss()}); err != nil {
+		return err
+	}
+	if _, err := mp4.Marshal(w, box, mp4.Context{}); err != nil {
+		return err
+	}
+	_, err := w.EndBox()
+	return err
+}
+
+// isSyncNAL reports an H.264 IDR or an H.265 IRAP (BLA/IDR/CRA).
+func isSyncNAL(nal []byte, isH265 bool) bool {
+	if len(nal) == 0 {
+		return false
+	}
+	if isH265 {
+		nalType := (nal[0] >> 1) & 0x3F
+		return nalType >= 16 && nalType <= 21
+	}
+	return nal[0]&0x1F == 5
 }
 
 // writeH264SampleEntry writes avc1 + avcC boxes for H.264 tracks.

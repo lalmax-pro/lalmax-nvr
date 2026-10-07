@@ -26,6 +26,9 @@ type RecordingScheduler struct {
 	alive            func(ctx context.Context) ([]string, error)
 	eventActive      func(streamID string) bool
 	sourceReconciler func(ctx context.Context, desired map[string]bool, eventActive func(string) bool) bool
+	// writeSwitch owns disk writing for a stream that is already in lalmax.
+	// Returning true means the task manager must not start or stop that stream.
+	writeSwitch func(streamID string, want bool) bool
 }
 
 func NewRecordingScheduler(db *storage.DB) *RecordingScheduler {
@@ -62,6 +65,14 @@ func (s *RecordingScheduler) SetAliveStreams(fn func(ctx context.Context) ([]str
 func (s *RecordingScheduler) SetEventActive(fn func(streamID string) bool) {
 	s.mu.Lock()
 	s.eventActive = fn
+	s.mu.Unlock()
+}
+
+// SetWriteSwitch flips disk writing for streams the group recorder already subscribes to.
+// A true return tells the scheduler not to start a second record task for that stream.
+func (s *RecordingScheduler) SetWriteSwitch(fn func(streamID string, want bool) bool) {
+	s.mu.Lock()
+	s.writeSwitch = fn
 	s.mu.Unlock()
 }
 
@@ -127,6 +138,7 @@ func (s *RecordingScheduler) check(ctx context.Context) {
 	aliveFn := s.alive
 	eventActive := s.eventActive
 	sourceReconciler := s.sourceReconciler
+	writeSwitch := s.writeSwitch
 	s.mu.Unlock()
 
 	if tasks == nil {
@@ -161,7 +173,11 @@ func (s *RecordingScheduler) check(ctx context.Context) {
 
 	if aliveKnown {
 		for id := range aliveSet {
-			if desired[id] || eventOn(eventActive, id) {
+			want := desired[id] || eventOn(eventActive, id)
+			if writeSwitch != nil && writeSwitch(id, want) {
+				continue
+			}
+			if want {
 				if err := tasks.Ensure(ctx, id); err != nil {
 					schedLogger.Debug("record task ensure failed", "stream_id", id, "error", err)
 				}

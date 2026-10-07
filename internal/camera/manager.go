@@ -91,7 +91,10 @@ type CameraManager struct {
 	eventMgr        *recorder.EventManager
 	// recordTasks owns H264/H265 recording for lalmax streams. When set, this
 	// manager only starts ingest for those protocols.
-	recordTasks    *recorder.TaskManager
+	recordTasks *recorder.TaskManager
+	// groupWriter subscribes to the lalmax group and flips a write switch.
+	// Adaptive plans stay on recordTasks.
+	groupWriter    *recorder.GroupWriter
 	lifecycleMu    sync.Mutex
 	lifecycleLocks map[string]*sync.Mutex // per-camera Start/Stop/Restart serialization
 }
@@ -162,6 +165,38 @@ func (cm *CameraManager) SetHealthManager(m *health.Manager) {
 			return result
 		})
 	}
+}
+
+// SetGroupWriter records embedded H.264/H.265 streams from the lalmax group.
+// The subscriber stays up while the stream exists. Plans only flip SetWriting.
+// Adaptive mode stays on the record task. Nil keeps the task path.
+func (cm *CameraManager) SetGroupWriter(w *recorder.GroupWriter) {
+	cm.mu.Lock()
+	cm.groupWriter = w
+	cm.mu.Unlock()
+	if w == nil {
+		return
+	}
+	w.SetLookup(func(id string) (config.CameraConfig, bool) {
+		cam := cm.GetCameraConfig(id)
+		if cam == nil {
+			return config.CameraConfig{}, false
+		}
+		return *cam, true
+	})
+	w.SetShouldWrite(func(id string) bool {
+		return cm.shouldRecordCamera(id)
+	})
+	w.SetAccept(func(cam config.CameraConfig) bool {
+		if !recorder.CameraUsesGroupRecording(cam) {
+			return false
+		}
+		return cm.recordingModeOf(cam.ID) != storage.RecordingModeAdaptive
+	})
+}
+
+func (cm *CameraManager) groupCovers(cam config.CameraConfig) bool {
+	return cm.groupWriter != nil && cm.groupWriter.Covers(cam)
 }
 
 // SetRecordTasks delegates H264/H265 recording of lalmax streams to tasks.
@@ -969,6 +1004,9 @@ func (cm *CameraManager) startRecorderHeld(ctx context.Context, cam config.Camer
 	if err := cm.startMediaPullLocked(ctx, cam); err != nil {
 		return fmt.Errorf("camera %q: failed to start media pull: %w", cam.ID, err)
 	}
+	if cm.groupCovers(cam) {
+		return cm.startGroupRecording(cam)
+	}
 	if cm.RecordsViaTask(cam) {
 		logger.Info("camera ingest ready; recording follows the stream plan", "camera_id", cam.ID, "stream_id", cm.ingestStreamID(cam))
 		if cm.shouldRecordCamera(cam.ID) {
@@ -1011,6 +1049,34 @@ func (cm *CameraManager) startRecorderHeld(ctx context.Context, cam config.Camer
 	}
 	cm.healthMgr.OnCameraAdded(cam.ID, rec, overrides)
 	logger.Info("started recorder for camera", "camera_id", cam.ID)
+	return nil
+}
+
+// startGroupRecording keeps the ingest session and lets the group writer own the file.
+// Xiaomi still needs its device session so frames reach the engine.
+func (cm *CameraManager) startGroupRecording(cam config.CameraConfig) error {
+	if cam.Protocol == string(model.ProtoXiaomi) {
+		segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
+		if err != nil {
+			segDur = recorder.DefaultSegmentDur
+		}
+		rec := cm.createRecorder(cam, segDur)
+		if rec == nil {
+			return fmt.Errorf("camera %q: protocol %q does not support recording", cam.ID, cam.Protocol)
+		}
+		if err := rec.Start(context.Background()); err != nil {
+			return fmt.Errorf("camera %q: failed to start xiaomi session: %w", cam.ID, err)
+		}
+		cm.mu.Lock()
+		cm.recorders[cam.ID] = rec
+		cm.mu.Unlock()
+	}
+	writing := cm.shouldRecordCamera(cam.ID)
+	if cm.groupWriter != nil {
+		cm.groupWriter.SetWriting(cam.ID, writing)
+		cm.groupWriter.AttachCamera(cam)
+	}
+	logger.Info("camera ingest ready, recording follows the group", "camera_id", cam.ID, "writing", writing)
 	return nil
 }
 
@@ -1322,6 +1388,7 @@ func (cm *CameraManager) Status() map[string]model.RecorderStatus {
 		paused[id] = p
 	}
 	tasks := cm.recordTasks
+	writer := cm.groupWriter
 	cams := append([]config.CameraConfig(nil), cm.cfg.Cameras...)
 	cm.mu.RUnlock()
 	result := make(map[string]model.RecorderStatus, len(recs))
@@ -1333,25 +1400,44 @@ func (cm *CameraManager) Status() map[string]model.RecorderStatus {
 		result[id] = st
 	}
 	if tasks == nil {
-		return result
-	}
-	taskStatus := tasks.Status()
-	for _, cam := range cams {
-		if _, ok := result[cam.ID]; ok {
-			continue
+		if writer == nil {
+			return result
 		}
-		sid := config.IngestStreamID(cam)
-		st, ok := taskStatus[sid]
-		if !ok {
-			if !cm.RecordsViaTask(cam) {
+	} else {
+		taskStatus := tasks.Status()
+		for _, cam := range cams {
+			if _, ok := result[cam.ID]; ok {
 				continue
 			}
-			st = model.StatusStopped
+			sid := config.IngestStreamID(cam)
+			st, ok := taskStatus[sid]
+			if !ok {
+				if !cm.RecordsViaTask(cam) {
+					continue
+				}
+				st = model.StatusStopped
+			}
+			if paused[cam.ID] {
+				st = model.StatusPaused
+			}
+			result[cam.ID] = st
 		}
-		if paused[cam.ID] {
-			st = model.StatusPaused
+	}
+	if writer != nil {
+		for _, cam := range cams {
+			if !writer.Covers(cam) {
+				continue
+			}
+			attached, writing := writer.State(cam.ID)
+			if !attached {
+				continue
+			}
+			if paused[cam.ID] || !writing {
+				result[cam.ID] = model.StatusPaused
+				continue
+			}
+			result[cam.ID] = model.StatusRecording
 		}
-		result[cam.ID] = st
 	}
 	return result
 }
@@ -2070,6 +2156,9 @@ func (cm *CameraManager) StopCamera(ctx context.Context, cameraID string) error 
 	}
 	cm.mu.Unlock()
 	stopDetachedRecorder(cameraID, rec)
+	if haveCam && cm.groupCovers(camCopy) && cm.groupWriter != nil {
+		cm.groupWriter.Detach(cameraID)
+	}
 	if haveCam {
 		cm.stopRecordTask(ctx, camCopy, recorder.ReasonDeviceStopped)
 	}
@@ -2095,6 +2184,20 @@ func (cm *CameraManager) PauseRecording(ctx context.Context, cameraID string) er
 	rec, ok := cm.recorders[cameraID]
 	already := cm.pausedRecorders[cameraID]
 	cm.mu.Unlock()
+
+	if haveCam && cm.groupCovers(camCopy) {
+		if already {
+			return nil
+		}
+		if cm.groupWriter != nil {
+			cm.groupWriter.SetWriting(cameraID, false)
+		}
+		cm.mu.Lock()
+		cm.pausedRecorders[cameraID] = true
+		cm.mu.Unlock()
+		logger.Info("paused recording for camera", "camera_id", cameraID)
+		return nil
+	}
 
 	if haveCam && cm.RecordsViaTask(camCopy) {
 		if already {
@@ -2149,6 +2252,21 @@ func (cm *CameraManager) ResumeRecording(ctx context.Context, cameraID string) e
 	}
 	rec, ok := cm.recorders[cameraID]
 	cm.mu.Unlock()
+
+	if haveCam && cm.groupCovers(camCopy) {
+		if !paused {
+			return fmt.Errorf("camera %q recording is not paused", cameraID)
+		}
+		cm.mu.Lock()
+		delete(cm.pausedRecorders, cameraID)
+		cm.mu.Unlock()
+		if cm.groupWriter != nil {
+			cm.groupWriter.SetWriting(cameraID, true)
+			cm.groupWriter.AttachCamera(camCopy)
+		}
+		logger.Info("resumed recording for camera", "camera_id", cameraID)
+		return nil
+	}
 
 	if haveCam && cm.RecordsViaTask(camCopy) {
 		if !paused {

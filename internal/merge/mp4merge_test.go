@@ -194,6 +194,9 @@ func TestMergeMP4Segments_ThreeSegments(t *testing.T) {
 	require.False(t, merged.Samples[2].IsKeyFrame)
 	require.True(t, merged.Samples[3].IsKeyFrame)
 	require.False(t, merged.Samples[4].IsKeyFrame)
+	raw, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "stss")
 }
 
 func TestMergeMP4Segments_H265(t *testing.T) {
