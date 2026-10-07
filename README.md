@@ -35,19 +35,20 @@ lalmax-nvr is a business NVR on top of an embedded [lalmax](https://github.com/q
 
 ```mermaid
 flowchart LR
-  Cam[Camera RTSP / ONVIF] -->|pull| Lalmax[lalmax / lal]
-  GB[GB28181] -->|RTP push after INVITE| Lalmax
-  Push[RTMP / SRT / WHIP publish] --> Lalmax
-  Lalmax --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
-  Lalmax --> Rec[Recorder]
+  Cam[Camera RTSP / ONVIF] -->|pull| Group[lalmax group]
+  GB[GB28181] -->|RTP push after INVITE| Group
+  Push[RTMP / SRT / WHIP / RTSP publish] --> Group
+  Group --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
+  Group -->|AddSubscriber| Rec[Group writer]
+  Plan[Recording plan] -->|write switch| Rec
   Rec --> Disk[(MP4 + SQLite)]
   Disk --> VOD[Continuous VOD]
 ```
 
 - **lalmax** — ingest, protocol conversion, live fan-out (including `rtsp://host:15544/live/{id}`)
-- **NVR** — cameras, ONVIF/GB28181, **stream-keyed recording plans**, rolling hour merge, health, Web UI
-- **`media.mode: embedded`** — engine in-process; `http` talks to an external lalmax
-- MJPEG / HTTP JPEG still pull directly (lalmax limitation)
+- **NVR** — cameras, ONVIF/GB28181, a **group subscriber** whose disk writing follows the stream plan, rolling hour merge, health, Web UI
+- **`media.mode: embedded`** — engine in-process, so recording can `AddSubscriber` on the lalmax group. `http` talks to an external lalmax and keeps a record task
+- MJPEG / HTTP JPEG / timelapse still write through their own collectors (lalmax limitation)
 
 Full diagrams, ports, and module map: **[Architecture](docs/en/architecture.md)**. Documentation index: **[docs/en](docs/en/README.md)**.
 
@@ -67,7 +68,7 @@ Full diagrams, ports, and module map: **[Architecture](docs/en/architecture.md)*
 - **Media Engine**: lalmax-powered relay — unified ingest, no duplicate camera pulls
 - **Camera Protocols**: RTSP (H.264/H.265/MJPEG), HTTP JPEG, ONVIF discovery & management
 - **GB28181**: SIP platform (上级); devices REGISTER then **push PS/RTP** after INVITE; cascade, recording query & playback with timeline, multi-protocol streaming (ws-flv, flv, hls, webrtc, etc.), playback control (pause/resume/speed/seek), batch download, platform event history, voice broadcast/intercom (SIP INVITE, UDP/TCP)
-- **Recording**: MP4 segments driven by **plans on streams** (continuous / scheduled / event / adaptive / off). Promoting a stream to a device does not start recording. Retention, AAC + G.711 audio
+- **Recording**: embedded H.264/H.265 subscribes to the lalmax group. A plan (`continuous` / `scheduled` / `event` / `off`) only turns disk writing on or off; the pull or push stays up. `adaptive` and `media.mode: http` still use a record task. Promoting a stream to a device does not start recording. Retention, AAC + G.711 audio. Details: [Recording flow](docs/en/recording-flow.md)
 - **Recording Playback**: 24h timeline, hour zoom, single-file player, or **continuous VOD** (HLS fMP4 across a day, seek across gaps)
 - **Live View**: WebCodecs, fMP4, WebRTC, HTTP-FLV, HLS, LL-HLS, copyable **RTSP** (`:15544`)
 - **RTMP / SRT / WHIP Ingest**: Accept pushed streams from cameras or encoders (WHIP: `http://host:12090/webrtc/whip?streamid={id}`)
@@ -131,7 +132,7 @@ With `media.mode: embedded` (or `http`):
 - H.264/H.265 RTSP/ONVIF cameras are pulled through lalmax
 - GB28181 devices **push** PS/RTP after SIP INVITE (the NVR is the SIP platform, not an RTSP client)
 - HLS/FLV/WebRTC/fMP4 playback is served by lalmax
-- Recording consumes the unified lalmax stream
+- Embedded recording subscribes to that same lalmax group. The plan flips the write switch. `http` mode falls back to a record task
 - Set `media.lalmax_public_url` to a hostname clients can reach (RTSP URLs otherwise show `127.0.0.1`)
 - MJPEG and HTTP/JPEG cameras still pull directly (lalmax limitation)
 
@@ -144,6 +145,7 @@ Full catalog: **[docs/en/README.md](docs/en/README.md)**.
 | Document | Description |
 |----------|-------------|
 | [Architecture](docs/en/architecture.md) | Layers, ingest (pull vs GB push), VOD, ports, modules |
+| [Recording plans](docs/en/recording-plans.md) · [Recording flow](docs/en/recording-flow.md) | When a stream is written, and how the group writer subscribes |
 | [Getting Started](docs/en/getting-started.md) | Install, first camera |
 | [Configuration](docs/en/configuration.md) | YAML reference |
 | [API Reference](docs/en/api-reference.md) | REST API |
@@ -180,7 +182,7 @@ internal/              # Core packages
   mqtt/                # MQTT client
   muxer/               # MP4 muxer
   onvif/               # ONVIF client adapter (NVR-side)
-  recorder/            # H264/H265/MJPEG/HTTP-JPEG recording engines
+  recorder/            # lalmax group writer; record tasks; MJPEG/HTTP-JPEG collectors
   storage/             # SQLite DB + file manager
   streamhistory/       # Stream history tracking
   ui/                  # Embedded SPA static files
