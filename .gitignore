@@ -74,5 +74,7 @@ docs/private/
 # Build output
 build/
 .build-tmp/
+.tmp-gocache/
+.tmp-gocache-build/
 internal/transcoding/-decoders
 internal/transcoding/-encoders

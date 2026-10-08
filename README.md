@@ -37,6 +37,7 @@ lalmax-nvr is a business NVR on top of an embedded [lalmax](https://github.com/q
 flowchart LR
   Cam[Camera RTSP / ONVIF] -->|pull| Group[lalmax group]
   GB[GB28181] -->|RTP push after INVITE| Group
+  JT[JT1078] -->|TCP/UDP :1078| Group
   Push[RTMP / SRT / WHIP / RTSP publish] --> Group
   Group --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
   Group -->|AddSubscriber| Rec[Group writer]
@@ -77,6 +78,10 @@ G.711 covers both A-law (PCMA) and µ-law (PCMU). Audio codecs not listed for a 
 - **Recording Playback**: 24h timeline, hour zoom, single-file player, or **continuous VOD** (HLS fMP4 across a day, seek across gaps)
 - **Live View**: WebCodecs, fMP4, WebRTC, HTTP-FLV, WS-FLV, HLS, LL-HLS, copyable **RTSP** (`:15544`) and **RTMP** (`:11935`)
 - **RTMP / SRT / WHIP Ingest**: Accept pushed streams from cameras or encoders (WHIP: `http://host:12090/webrtc/whip?streamid={id}`)
+- **JT1078 ingest (experimental)**: embedded lalmax accepts JT/T 1078 on TCP/UDP `:1078` as `{sim}_{channel}` (H.264/H.265, AAC/G.711). Optional JT808 signaling covers registration, live play, playback, resource query, FTP upload, PTZ, and talk downlink; once enabled, only granted channels may publish. See [configuration](docs/en/configuration.md)
+
+  > **Experimental feature**: JT1078/JT808 has only been validated with simulated terminals and automated tests. It has not been tested with real vehicle devices; device compatibility and operational stability still require validation.
+
 - **Segment Merge**: Periodic backfill plus **rolling merge** into the current UTC hour file
 - **ONVIF**: WS-Discovery / Hello, PTZ, imaging, stream URI, encoding detect, IP self-heal, optional sub-stream
 - **Stream Management**: Runtime stream inventory, camera binding, optional **register as device** (does not start recording)
@@ -149,12 +154,13 @@ Full catalog: **[docs/en/README.md](docs/en/README.md)**.
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](docs/en/architecture.md) | Layers, ingest (pull vs GB push), VOD, ports, modules |
+| [Architecture](docs/en/architecture.md) | Layers, ingest (pull, GB push, JT1078), VOD, ports, modules |
 | [Recording plans](docs/en/recording-plans.md) · [Recording flow](docs/en/recording-flow.md) | When a stream is written, and how the group writer subscribes |
 | [Getting Started](docs/en/getting-started.md) | Install, first camera |
 | [Configuration](docs/en/configuration.md) | YAML reference |
 | [API Reference](docs/en/api-reference.md) | REST API |
 | [GB28181](docs/en/gb28181-guide.md) | National-standard devices, playback, talk |
+| [JT1078 / JT808](docs/en/configuration.md#jt1078-ingest-configuration) | `:1078` media ingest and optional `:808` signaling |
 | [ONVIF](docs/en/onvif-guide.md) | Discovery, PTZ |
 | [Camera Guide](docs/en/camera-guide.md) | RTSP / HTTP setup |
 | [Deployment](docs/en/deployment.md) | Reverse proxy, cross-compile |
@@ -181,6 +187,7 @@ internal/              # Core packages
   gb28181/             # GB28181 SIP server (device mgmt, cascade, playback, intercom)
   health/              # Camera health monitoring
   iptv/                # M3U import, HLS proxy, and channel publish
+  jt808/               # JT/T 808 signaling (register, live, playback, query, upload, PTZ)
   linkage/             # Alarm-rule actions (record, PTZ preset, webhook)
   media/               # lalmax engine adapter
   relay/               # Stream relay
@@ -206,6 +213,9 @@ onvif/                 # Standalone ONVIF library (SOAP, discovery, PTZ, imaging
 third/
   lal/                 # Vendored lal media library
   lalmax/              # Vendored lalmax (lal + extensions)
+    jt1078/            # JT/T 1078 TCP/UDP ingest
+tools/
+  jtsim/               # JT808 terminal simulator that also publishes JT1078
 web/                   # Svelte 5 frontend
 site/                  # Product website
 config/                # config.example.yaml (copy to lalmax-nvr.yaml)
@@ -217,7 +227,8 @@ docs/                  # Documentation (EN/ZH)
 
 > Playback (HLS, LL-HLS, HTTP-FLV, WS-FLV, WebRTC, fMP4, RTSP, RTMP) and
 > RTMP/SRT/WHIP ingest are served by the embedded lalmax engine, not by
-> separate `internal/` packages. WebCodecs lives in `internal/wsstream`.
+> separate `internal/` packages. JT1078 media is `third/lalmax/jt1078`; JT808
+> signaling is `internal/jt808`. WebCodecs lives in `internal/wsstream`.
 
 ## Contributing
 

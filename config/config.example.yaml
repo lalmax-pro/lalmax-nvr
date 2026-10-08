@@ -212,6 +212,22 @@ webdav:
 #   host: ""                            # SIP listen host (optional, auto-detect from media_ip)
 #   standard_version: "2016"             # GB28181 standard version: 2016 or 2022
 
+# Experimental JT1078/JT808 support: simulated terminals only; no real-device validation.
+# JT/T 808 signaling (disabled by default). Requires the embedded JT1078
+# TCP/UDP receiver in lalmax and a media_ip reachable by the vehicle terminal.
+# jt808:
+#   enabled: true
+#   port: 808
+#   media_ip: "192.168.1.100"
+#   auth_code: "set-a-private-jt808-secret"  # issued on registration, required for auth
+#   media_tcp_port: 1078
+#   media_udp_port: 1078
+#   transport: tcp                  # tcp | udp
+#   timeout: "3s"                   # command acknowledgement timeout
+#   ftp_port: 2121                  # optional 0x9206 override; default is ftp.port
+#   ftp_user: ""                    # optional; default is auth.username
+#   ftp_password: ""                # optional plaintext; required if auth.password is empty
+
 # HLS streaming — on-demand live view via Web Web UI
 # RPi constraint: max 4 concurrent streams
 hls:

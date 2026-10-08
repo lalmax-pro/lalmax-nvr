@@ -17,7 +17,8 @@
     "fmp4_config": {},
     "logic_config": {},
     "http_notify": {},
-    "gb28181_config": {}
+    "gb28181_config": {},
+    "jt1078_config": {}
   },
   "lal": {}
 }
@@ -288,6 +289,40 @@ GB28181 服务配置。
   }
 }
 ```
+
+## jt1078_config
+
+> **实验性功能**：JT1078/JT808 当前仅通过软件模拟终端和自动化测试验证，尚未使用真实车载终端验证。设备兼容性及实际运行稳定性仍需验证。
+
+JT/T 1078 单端口 TCP/UDP 收流。终端连入后按包头 `SIM + 逻辑通道号` 分流，流名为 `{sim}_{channel}`，再通过 `AddCustomizePubSession` + `FeedAvPacket` 注入 lal。
+
+- `enable`：是否启用 JT1078
+- `addr`：TCP 监听地址，默认 `:1078`
+- `udp_enable`：是否启用 UDP；省略时跟随 `enable`
+- `udp_addr`：UDP 监听地址，空则与 TCP 相同
+- `udp_idle_timeout_ms`：UDP 流空闲回收时间，默认 15000 毫秒
+- `phone_len`：终端手机号 BCD 宽度。0 自动识别 2016（6 字节）和 2019（10 字节），6 或 10 固定一种
+
+示例：
+
+```json
+{
+  "enable": true,
+  "addr": ":1078",
+  "udp_enable": true,
+  "udp_addr": ":1078",
+  "udp_idle_timeout_ms": 15000,
+  "phone_len": 0
+}
+```
+
+说明：
+
+- 这里只覆盖 **1078 TCP/UDP 媒体口**。JT/T 808 信令（注册、鉴权、直播 `0x9101`、回放 `0x9201`、检索、上传、云台）由 NVR 的可选 `jt808` 服务负责
+- 视频按 Annex-B 喂给 lal，支持 H.264 / H.265。音频支持 G.711A / G.711U / AAC。MP3（载荷类型 25）和 G.726（载荷类型 8）解出来就丢弃
+- 未设置 `StreamAuthorizer` 时任意终端都可推流。NVR 启用 JT808 后会装上放行名单，只有已下发直播或回放的 `{sim}_{channel}` 能发布
+- 对讲下行走终端已经连上的 TCP 媒体连接，UDP 没有回写路径
+- 播放地址与其它 customize 推流相同，例如 `http://127.0.0.1:8080/live/{sim}_{channel}.flv`
 
 ## 兼容说明
 

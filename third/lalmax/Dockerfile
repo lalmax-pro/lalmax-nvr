@@ -6,6 +6,6 @@ WORKDIR /code
 COPY . .
 RUN /bin/bash ./build.sh
 
-EXPOSE 1935 8080 4433 5544 8083 8084 1290 30000-30100/udp 6001/udp 4888/udp
+EXPOSE 1935 8080 4433 5544 8083 8084 1290 30000-30100/udp 6001/udp 4888/udp 1078 1078/udp
 
 CMD export LD_LIBRARY_PATH=/usr/local/lib/ && ./run.sh

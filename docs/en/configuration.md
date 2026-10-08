@@ -648,6 +648,67 @@ srt:
 
 > **Push format**: SRT pushes should use streamid format: `#!::h=<camera_id>,m=publish`
 
+## JT1078 Ingest Configuration
+
+> **Experimental feature**: JT1078/JT808 has only been validated with simulated terminals and automated tests. It has not been tested with real vehicle devices; device compatibility and operational stability still require validation.
+
+JT/T 1078 is ingested by embedded lalmax on **TCP and UDP `:1078`**. Packets are demuxed by `SIM + logic channel`, published as `{sim}_{channel}`, then fed into the group with `FeedAvPacket`. Video is H.264 / H.265. Audio is AAC / G.711A / G.711U. MP3 and G.726 frames are dropped and are not fed into lal. Embedded mode enables this by default when the field is missing. Idle UDP streams are reclaimed after 15 seconds. `phone_len` 0 auto-detects 2016 (6-byte) and 2019 (10-byte) terminal phones; set 6 or 10 to force one width.
+
+Configure it in `lalmax.conf.json`:
+
+```json
+{
+  "lalmax": {
+    "jt1078_config": {
+      "enable": true,
+      "addr": ":1078",
+      "udp_enable": true,
+      "udp_addr": ":1078",
+      "udp_idle_timeout_ms": 15000,
+      "phone_len": 0
+    }
+  }
+}
+```
+
+Enable the JT808 signaling service separately in `lalmax-nvr.yaml` (disabled by default):
+
+```yaml
+jt808:
+  enabled: true
+  port: 808
+  media_ip: "192.168.1.100" # must be reachable by terminals
+  auth_code: "set-a-private-jt808-secret" # issued on register, verified on 0x0102
+  media_tcp_port: 1078
+  media_udp_port: 1078
+  transport: tcp            # tcp or udp; selects the 0x9101 / 0x9201 port field
+  timeout: "3s"
+  # ftp_port: 2121          # optional 0x9206 override; default is ftp.port
+  # ftp_user: ""            # optional; default is auth.username
+  # ftp_password: ""        # optional plaintext; required on upload if only password_hash is set
+```
+
+After registration and authentication, the following routes require an authenticated caller; all POST routes additionally require the super_admin role. Playback URLs stay on the existing HLS / FLV / WebRTC paths, for example `http://host:18080/live/1003_1.flv`. Once JT808 is enabled, a `{SIM}_{channel}` may publish on `:1078` only after a live or playback command has granted it.
+
+- `GET /api/jt808/terminals` lists terminals.
+- `POST /api/jt808/play` sends 0x9101. `data_type`: 0 audio+video, 1 video, 2 intercom, 3 listen, 4 broadcast. `stream`: 0 main, 1 sub.
+- `POST /api/jt808/stop` closes audio and video. `POST /api/jt808/control` sends the full 0x9102: `control` 0 close, 1 switch stream, 2 pause, 3 resume, 4 close talk; `close_av` 0 both, 1 audio, 2 video.
+- `POST /api/jt808/loss` sends 0x9105 with `rate` 0–100.
+- `GET /api/jt808/av?key=1003` queries 0x9003.
+- `POST /api/jt808/playback` and `POST /api/jt808/playback/control` send 0x9201 / 0x9202. Times are RFC3339 or `2006-01-02 15:04:05`. Drag uses `control` 5 plus `drag_to`.
+- `POST /api/jt808/resources` queries 0x9205.
+- `POST /api/jt808/upload` and `POST /api/jt808/upload/control` send 0x9206 / 0x9207. Empty FTP host, port, and account fall back to the local FTP server; `jt808.ftp_port`, `ftp_user`, and `ftp_password` override that. If only a password hash is configured, the request must include the password.
+- `POST /api/jt808/ptz` accepts `action` `rotate`, `focus`, `iris`, `wiper`, `infrared`, or `zoom`.
+- `POST /api/jt808/downlink` writes intercom audio on the terminal's existing TCP media connection. `payload` is base64. `pt` accepts 6 (G.711A), 7 (G.711U), and 19 (AAC).
+
+There is no automatic camera enrollment and no JT808 page. Location, alarms, geofences, and encrypted frames are outside these routes.
+
+### Simulation validation and known limitations
+
+Run `go test ./internal/jt808 ./tools/jtsim` from the repository root and `go test ./jt1078 ./config` from `third/lalmax`. The simulator covers TCP/UDP ingest, 2013/2019 headers, and rejection of unrequested media and media sent after stop. Regression tests cover standard 0x1003 responses, authorization cleanup, shutdown, and downlink sequence numbers.
+
+Media restart functional tests pass. The extended restart race test still reports existing races in the underlying lal logger initialization and HTTP startup/shutdown. This limitation remains unresolved. No real-device validation has been performed.
+
 ## WHIP Ingest Configuration
 
 ```yaml

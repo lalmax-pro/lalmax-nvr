@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"time"
 )
 
 var defaultConfig Config
@@ -15,6 +16,7 @@ type Config struct {
 	HttpConfig       HttpConfig       `json:"http_config"`     // http/https配置
 	Fmp4Config       Fmp4Config       `json:"fmp4_config"`     // fmp4配置
 	GB28181Config    GB28181Config    `json:"gb28181_config"`  // gb28181配置
+	JT1078Config     JT1078Config     `json:"jt1078_config"`   // jt1078 单端口收流配置
 	ServerId         string           `json:"server_id"`       // http 通知唯一标识
 	HttpNotifyConfig HttpNotifyConfig `json:"http_notify"`     // http 通知配置
 	LalSvrConfigPath string           `json:"lal_config_path"` // lal配置文件路径，兼容旧版配置
@@ -26,6 +28,47 @@ type Config struct {
 type SrtConfig struct {
 	Enable bool   `json:"enable"` // srt服务使能配置
 	Addr   string `json:"addr"`   // srt服务监听地址
+}
+
+type JT1078Config struct {
+	Enable           bool   `json:"enable"`               // jt1078 收流使能
+	Addr             string `json:"addr"`                 // TCP 监听地址，默认 :1078
+	UDPEnable        *bool  `json:"udp_enable,omitempty"` // UDP 收流；缺省时跟随 enable
+	UDPAddr          string `json:"udp_addr,omitempty"`   // UDP 监听地址，空则与 addr 相同
+	UDPIdleTimeoutMs int    `json:"udp_idle_timeout_ms"`  // UDP 流空闲超时，默认 15000
+	PhoneLen         int    `json:"phone_len,omitempty"`  // 0 自动，6=2016，10=2019
+}
+
+// FixedPhoneLen returns 6 or 10 when the operator pinned a terminal-phone width.
+func (c JT1078Config) FixedPhoneLen() int {
+	if c.PhoneLen == 6 || c.PhoneLen == 10 {
+		return c.PhoneLen
+	}
+	return 0
+}
+
+func (c JT1078Config) UDPEnabled() bool {
+	if c.UDPEnable != nil {
+		return *c.UDPEnable
+	}
+	return c.Enable
+}
+
+func (c JT1078Config) UDPListenAddr() string {
+	if c.UDPAddr != "" {
+		return c.UDPAddr
+	}
+	if c.Addr != "" {
+		return c.Addr
+	}
+	return ":1078"
+}
+
+func (c JT1078Config) UDPIdleTimeout() time.Duration {
+	if c.UDPIdleTimeoutMs <= 0 {
+		return 15 * time.Second
+	}
+	return time.Duration(c.UDPIdleTimeoutMs) * time.Millisecond
 }
 
 type RtcConfig struct {
@@ -61,13 +104,13 @@ type Fmp4HttpConfig struct {
 }
 
 type Fmp4HlsConfig struct {
-	Enable                bool `json:"enable"`                      // hls使能标志
-	SegmentCount          int  `json:"segment_count"`                 // 分片个数,llhls默认7个
-	SegmentDuration       int  `json:"segment_duration"`              // hls分片时长,默认1s
-	PartDuration          int  `json:"part_duration"`                 // llhls part时长,默认200ms
-	LowLatency            bool `json:"low_latency"`                   // 是否开启llhls
-	OnDemand              bool `json:"on_demand"`                     // 按需切片，默认true
-	OnDemandIdleTimeoutMs int  `json:"on_demand_idle_timeout_ms"`     // 无访问时停止切片的超时(ms)
+	Enable                bool `json:"enable"`                    // hls使能标志
+	SegmentCount          int  `json:"segment_count"`             // 分片个数,llhls默认7个
+	SegmentDuration       int  `json:"segment_duration"`          // hls分片时长,默认1s
+	PartDuration          int  `json:"part_duration"`             // llhls part时长,默认200ms
+	LowLatency            bool `json:"low_latency"`               // 是否开启llhls
+	OnDemand              bool `json:"on_demand"`                 // 按需切片，默认true
+	OnDemandIdleTimeoutMs int  `json:"on_demand_idle_timeout_ms"` // 无访问时停止切片的超时(ms)
 }
 
 type GB28181Config struct {

@@ -35,6 +35,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
 	"github.com/lalmax-pro/lalmax-nvr/internal/health"
 	"github.com/lalmax-pro/lalmax-nvr/internal/iptv"
+	"github.com/lalmax-pro/lalmax-nvr/internal/jt808"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/merge"
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
@@ -405,6 +406,7 @@ type App struct {
 	srtIngest  *media.IngestHandler
 	whipIngest *media.IngestHandler
 	gb28181Svr *gb28181.Server
+	jt808Svr   *jt808.Server
 
 	// Stream management
 	banMgr     *ban.Manager
@@ -616,6 +618,42 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		}
 	}
 
+	// JT808 signaling is optional; the lalmax JT1078 media receiver is independent.
+	if cfg.JT808.Enabled {
+		jtCfg := jt808.Config{
+			Enabled:      true,
+			Port:         cfg.JT808.Port,
+			MediaIP:      cfg.JT808.MediaIP,
+			AuthCode:     cfg.JT808.AuthCode,
+			MediaTCPPort: cfg.JT808.MediaTCPPort,
+			MediaUDPPort: cfg.JT808.MediaUDPPort,
+			Transport:    cfg.JT808.Transport,
+			Timeout:      cfg.JT808.Timeout,
+			FTPPort:      cfg.JT808.FTPPort,
+			FTPUser:      cfg.JT808.FTPUser,
+			FTPPassword:  cfg.JT808.FTPPassword,
+		}
+		if cfg.FTP.Enabled != nil && *cfg.FTP.Enabled {
+			if jtCfg.FTPPort == 0 {
+				jtCfg.FTPPort = cfg.FTP.Port
+			}
+			if jtCfg.FTPUser == "" {
+				jtCfg.FTPUser = cfg.Auth.Username
+			}
+			if jtCfg.FTPPassword == "" {
+				jtCfg.FTPPassword = cfg.Auth.Password
+			}
+		}
+		var err error
+		a.jt808Svr, err = jt808.NewServer(jtCfg)
+		if err != nil {
+			return nil, fmt.Errorf("jt808 config: %w", err)
+		}
+		if emb, ok := a.mediaEngine.(*media.EmbeddedLalmax); ok && emb.Server() != nil {
+			emb.SetJT1078Authorizer(a.jt808Svr)
+		}
+	}
+
 	// Step 7.5: GB28181 SIP server (optional)
 	if cfg.GB28181.Enabled != nil && *cfg.GB28181.Enabled {
 		// Skip GB28181 if ID is not configured
@@ -812,6 +850,9 @@ func (a *App) buildRouter() http.Handler {
 	if a.gb28181Svr != nil {
 		handler.SetGB28181Server(a.gb28181Svr)
 		handler.SetGB28181ServerInstance(a.gb28181Svr)
+	}
+	if a.jt808Svr != nil {
+		handler.SetJT808Server(a.jt808Svr)
 	}
 	handler.SetGB28181Restarter(a)
 	handler.SetWSManager(a.media.WS())
@@ -1159,6 +1200,12 @@ func (a *App) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
 	a.startCtx = ctx
+	if a.jt808Svr != nil {
+		if err := a.jt808Svr.Start(); err != nil {
+			cancel()
+			return fmt.Errorf("start JT808 signaling: %w", err)
+		}
+	}
 
 	// Recording plans are the only thing that starts recording. Load them before
 	// the camera manager starts so its first decision already sees them.
@@ -1464,6 +1511,10 @@ func (a *App) Stop() error {
 		if a.gb28181Svr != nil {
 			log.Info("stopping GB28181 SIP server")
 			a.gb28181Svr.Stop()
+		}
+		if a.jt808Svr != nil {
+			log.Info("stopping JT808 signaling server")
+			a.jt808Svr.Stop()
 		}
 		if a.mediaEngine != nil {
 			log.Info("stopping media engine")

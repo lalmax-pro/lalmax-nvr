@@ -4,6 +4,11 @@
       "enable": true,
       "addr": ":6001"
     },
+    "jt1078_config": {
+      "enable": false,
+      "addr": ":1078",
+      "udp_enable": true
+    },
     "rtc_config": {
       "enable": true,
       "ice_host_nat_to_ips": [],
