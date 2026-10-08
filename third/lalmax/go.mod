@@ -1,6 +1,6 @@
 module github.com/q191201771/lalmax
 
-go 1.24.0
+go 1.26.0
 
 require (
 	github.com/abema/go-mp4 v1.2.0
@@ -8,7 +8,7 @@ require (
 	github.com/bluenviron/gohlslib v1.3.0
 	github.com/bluenviron/gortsplib/v4 v4.8.0
 	github.com/bluenviron/mediacommon v1.9.2
-	github.com/datarhei/gosrt v0.5.4
+	github.com/datarhei/gosrt v0.12.0
 	github.com/ghettovoice/gosip v0.0.0-20230802091127-d58873a3fe44
 	github.com/gin-gonic/gin v1.9.1
 	github.com/gofrs/uuid v4.4.0+incompatible
@@ -21,9 +21,9 @@ require (
 	github.com/q191201771/naza v0.30.48
 	github.com/satori/go.uuid v1.2.1-0.20181028125025-b2ce2384e17b
 	github.com/smallnest/chanx v1.2.0
-	github.com/yapingcat/gomedia v0.0.0-20240316172424-76660eca7389
-	golang.org/x/net v0.50.0
-	golang.org/x/text v0.34.0
+	github.com/stretchr/testify v1.12.1
+	golang.org/x/net v0.59.0
+	golang.org/x/text v0.42.0
 )
 
 require (
@@ -74,10 +74,11 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x-cray/logrus-prefixed-formatter v0.5.2 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/arch v0.3.0 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/term v0.40.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/term v0.46.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/protobuf v1.36.1 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect

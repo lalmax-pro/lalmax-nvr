@@ -3,23 +3,20 @@ package srt
 import (
 	"bufio"
 	"context"
+
+	"github.com/asticode/go-astits"
 	srt "github.com/datarhei/gosrt"
-	"github.com/q191201771/lal/pkg/aac"
-	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
+	"github.com/q191201771/lalmax/mpegts"
 	"github.com/q191201771/naza/pkg/nazalog"
-	codec "github.com/yapingcat/gomedia/go-codec"
-	ts "github.com/yapingcat/gomedia/go-mpeg2"
 )
 
 type Publisher struct {
-	ctx         context.Context
-	srv         *SrtServer
-	ss          logic.ICustomizePubSessionContext
-	streamName  string
-	demuxer     *ts.TSDemuxer
-	conn        srt.Conn
-	subscribers []*Subscriber
+	ctx        context.Context
+	srv        *SrtServer
+	ss         logic.ICustomizePubSessionContext
+	streamName string
+	conn       srt.Conn
 }
 
 func NewPublisher(ctx context.Context, conn srt.Conn, streamName string, srv *SrtServer) *Publisher {
@@ -28,9 +25,7 @@ func NewPublisher(ctx context.Context, conn srt.Conn, streamName string, srv *Sr
 		srv:        srv,
 		streamName: streamName,
 		conn:       conn,
-		demuxer:    ts.NewTSDemuxer(),
 	}
-
 	nazalog.Infof("create srt publisher, streamName:%s", streamName)
 	return pub
 }
@@ -44,66 +39,40 @@ func (p *Publisher) Run() {
 		p.conn.Close()
 		p.srv.Remove(p.streamName, p.ss)
 	}()
-	audioSampleRate := uint32(0)
-	var foundAudio bool
-	p.demuxer.OnFrame = func(cid ts.TS_STREAM_TYPE, frame []byte, pts uint64, dts uint64) {
-		var pkt base.AvPacket
-		if cid == ts.TS_STREAM_AAC {
-			if !foundAudio {
-				if asc, err := codec.ConvertADTSToASC(frame); err != nil {
-					return
-				} else {
-					p.ss.FeedAudioSpecificConfig(asc.Encode())
-					audioSampleRate = uint32(codec.AACSampleIdxToSample(int(asc.Sample_freq_index)))
-				}
+	if p.ss == nil {
+		nazalog.Errorf("srt publisher has no session, streamName:%s", p.streamName)
+		return
+	}
 
-				foundAudio = true
-			}
-
-			var preAudioDts uint64
-			ctx := aac.AdtsHeaderContext{}
-			for len(frame) > aac.AdtsHeaderLength {
-				ctx.Unpack(frame[:])
-				if preAudioDts == 0 {
-					preAudioDts = dts
-				} else {
-					preAudioDts += uint64(1024 * 1000 / audioSampleRate)
-				}
-
-				aacPacket := base.AvPacket{
-					Timestamp:   int64(preAudioDts),
-					PayloadType: base.AvPacketPtAac,
-					Pts:         int64(preAudioDts),
-				}
-				if len(frame) >= int(ctx.AdtsLength) {
-					Payload := frame[aac.AdtsHeaderLength:ctx.AdtsLength]
-					if len(frame) > int(ctx.AdtsLength) {
-						frame = frame[ctx.AdtsLength:]
-					} else {
-						frame = frame[0:0]
-					}
-					aacPacket.Payload = Payload
-					p.ss.FeedAvPacket(aacPacket)
-				}
-
-			}
-		} else if cid == ts.TS_STREAM_H264 {
-			pkt.Payload = frame
-			pkt.PayloadType = base.AvPacketPtAvc
-			pkt.Pts = int64(pts)
-			pkt.Timestamp = int64(dts)
-			p.ss.FeedAvPacket(pkt)
-		} else if cid == ts.TS_STREAM_H265 {
-			pkt.Payload = frame
-			pkt.PayloadType = base.AvPacketPtHevc
-			pkt.Pts = int64(pts)
-			pkt.Timestamp = int64(dts)
-			p.ss.FeedAvPacket(pkt)
+	dmx := astits.NewDemuxer(p.ctx, bufio.NewReader(p.conn))
+	esType := map[uint16]astits.StreamType{}
+	var audio mpegts.Audio
+	for {
+		d, err := dmx.NextData()
+		if err != nil {
+			nazalog.Infof("stream [%s] disconnected", p.streamName)
+			return
 		}
+		if d == nil {
+			continue
+		}
+		if d.PMT != nil {
+			for _, stream := range d.PMT.ElementaryStreams {
+				if stream == nil {
+					continue
+				}
+				esType[stream.ElementaryPID] = stream.StreamType
+			}
+			continue
+		}
+		if d.PES == nil || len(d.PES.Data) == 0 {
+			continue
+		}
+		st, ok := esType[d.PID]
+		if !ok {
+			continue
+		}
+		pts, dts := mpegts.TimeMs(d.PES)
+		mpegts.Feed(p.ss, &audio, st, append([]byte(nil), d.PES.Data...), pts, dts)
 	}
-	err := p.demuxer.Input(bufio.NewReader(p.conn))
-	if err != nil {
-		nazalog.Infof("stream [%s] disconnected", p.streamName)
-	}
-	return
 }

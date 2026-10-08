@@ -2,6 +2,7 @@ package udpts
 
 import (
 	"github.com/asticode/go-astits"
+	"github.com/q191201771/lalmax/mpegts"
 	"github.com/q191201771/naza/pkg/nazalog"
 )
 
@@ -201,17 +202,5 @@ func pmtHasH26x(pmt *astits.PMTData) bool {
 }
 
 func pesTimeMs(pes *astits.PESData) (pts, dts uint64) {
-	if pes == nil || pes.Header == nil || pes.Header.OptionalHeader == nil {
-		return 0, 0
-	}
-	oh := pes.Header.OptionalHeader
-	if oh.PTS != nil {
-		pts = uint64(oh.PTS.Base / 90)
-	}
-	if oh.DTS != nil {
-		dts = uint64(oh.DTS.Base / 90)
-	} else {
-		dts = pts
-	}
-	return pts, dts
+	return mpegts.TimeMs(pes)
 }

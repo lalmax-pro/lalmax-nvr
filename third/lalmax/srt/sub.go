@@ -2,32 +2,39 @@ package srt
 
 import (
 	"context"
+	"sync"
 
 	maxlogic "github.com/q191201771/lalmax/logic"
 
+	"github.com/asticode/go-astits"
 	srt "github.com/datarhei/gosrt"
 	"github.com/gofrs/uuid"
+	"github.com/q191201771/lal/pkg/aac"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/naza/pkg/nazalog"
-	codec "github.com/yapingcat/gomedia/go-codec"
-	flv "github.com/yapingcat/gomedia/go-flv"
-	ts "github.com/yapingcat/gomedia/go-mpeg2"
+)
+
+const (
+	srtVideoPID = 0x100
+	srtAudioPID = 0x101
 )
 
 type Subscriber struct {
 	ctx               context.Context
 	conn              srt.Conn
 	streamName        string
-	muxer             *ts.TSMuxer
-	hasInit           bool
-	videoPid          uint16
-	audioPid          uint16
-	flvVideoDemuxer   flv.VideoTagDemuxer
-	flvAudioDemuxer   flv.AudioTagDemuxer
-	videodts          uint32
-	audiodts          uint32
 	subscriberId      string
 	maxSendPacketSize int
+	group             *maxlogic.Group
+	mux               *astits.Muxer
+	out               *tsBatch
+	closeOnce         sync.Once
+
+	videoPID   uint16
+	audioPID   uint16
+	videoCodec uint8
+	paramSets  []byte
+	asc        *aac.AscContext
 }
 
 func NewSubscriber(ctx context.Context, conn srt.Conn, streamName string, maxSendPacketSize int) *Subscriber {
@@ -36,125 +43,74 @@ func NewSubscriber(ctx context.Context, conn srt.Conn, streamName string, maxSen
 		ctx:               ctx,
 		conn:              conn,
 		streamName:        streamName,
-		muxer:             ts.NewTSMuxer(),
 		subscriberId:      u.String(),
 		maxSendPacketSize: maxSendPacketSize,
 	}
-
 	nazalog.Infof("create srt subscriber, streamName:%s, subscriberId:%s", streamName, sub.subscriberId)
-
 	return sub
 }
 
 func (s *Subscriber) Run() {
 	ok, group := maxlogic.GetGroupManagerInstance().GetGroupByStreamName(s.streamName)
-	if ok {
-		var err error
-		sendBuf := make([]byte, 0, s.maxSendPacketSize*ts.TS_PAKCET_SIZE)
-		s.muxer.OnPacket = func(tsPacket []byte) {
-			defer func() {
-				if err != nil {
-					nazalog.Info("close srt socket")
-					s.conn.Close()
-				}
-
-			}()
-
-			select {
-			case <-s.ctx.Done():
-				return
-			default:
-			}
-			if len(sendBuf) > (s.maxSendPacketSize-1)*ts.TS_PAKCET_SIZE {
-				if _, err = s.conn.Write(sendBuf); err != nil {
-					group.RemoveSubscriber(s.subscriberId)
-					return
-				}
-				sendBuf = sendBuf[0:0]
-			}
-			sendBuf = append(sendBuf, tsPacket...)
-
-		}
-		group.AddSubscriber(maxlogic.SubscriberInfo{
-			SubscriberID: s.subscriberId,
-			Protocol:     maxlogic.SubscriberProtocolSRT,
-		}, s)
-	} else {
+	if !ok {
 		nazalog.Warnf("not found stream group, streamName:%s", s.streamName)
-		s.conn.Close()
+		s.closeConn()
+		return
 	}
+	s.group = group
+	s.out = newTSBatch(s.ctx, s.conn, s.maxSendPacketSize, func() {
+		s.closeConn()
+		group.RemoveSubscriber(s.subscriberId)
+	})
+	s.mux = astits.NewMuxer(s.ctx, s.out)
+	group.AddSubscriber(maxlogic.SubscriberInfo{
+		SubscriberID: s.subscriberId,
+		Protocol:     maxlogic.SubscriberProtocolSRT,
+	}, s)
 }
 
 func (s *Subscriber) OnMsg(msg base.RtmpMsg) {
-	var err error
-	if !s.hasInit {
-		ok, group := maxlogic.GetGroupManagerInstance().GetGroupByStreamName(s.streamName)
-		if ok {
-			videoheader := group.GetVideoSeqHeaderMsg()
-			if videoheader != nil {
-				if videoheader.IsAvcKeySeqHeader() {
-					s.videoPid = s.muxer.AddStream(ts.TS_STREAM_H264)
-					s.flvVideoDemuxer = flv.CreateFlvVideoTagHandle(flv.FLV_AVC)
-				} else {
-					s.videoPid = s.muxer.AddStream(ts.TS_STREAM_H265)
-					s.flvVideoDemuxer = flv.CreateFlvVideoTagHandle(flv.FLV_HEVC)
-				}
-
-				s.flvVideoDemuxer.OnFrame(func(codecid codec.CodecID, b []byte, cts int) {
-					s.muxer.Write(s.videoPid, b, uint64(s.videodts)+uint64(cts), uint64(s.videodts))
-				})
-
-				if err = s.flvVideoDemuxer.Decode(videoheader.Payload); err != nil {
-					nazalog.Error(err)
-					return
-				}
-			}
-
-			audioheader := group.GetAudioSeqHeaderMsg()
-			if audioheader != nil {
-				if audioheader.IsAacSeqHeader() {
-					s.audioPid = s.muxer.AddStream(ts.TS_STREAM_AAC)
-				} else {
-					return
-				}
-
-				s.flvAudioDemuxer = flv.CreateAudioTagDemuxer(flv.FLV_AAC)
-				s.flvAudioDemuxer.OnFrame(func(codecid codec.CodecID, b []byte) {
-					s.muxer.Write(s.audioPid, b, uint64(s.audiodts), uint64(s.audiodts))
-				})
-
-				if err = s.flvAudioDemuxer.Decode(audioheader.Payload); err != nil {
-					nazalog.Error(err)
-					return
-				}
-			}
-		}
-
-		s.hasInit = true
+	if s.mux == nil {
+		return
 	}
+	switch msg.Header.MsgTypeId {
+	case base.RtmpTypeIdVideo:
+		if len(msg.Payload) >= 5 && msg.IsVideoKeySeqHeader() {
+			s.cacheParamSets(msg)
+		}
+	case base.RtmpTypeIdAudio:
+		if len(msg.Payload) >= 2 && msg.IsAacSeqHeader() {
+			s.cacheASC(msg)
+		}
+	default:
+		return
+	}
+	s.ensureStreams()
 
-	if msg.Header.MsgTypeId == base.RtmpTypeIdVideo {
-		s.videodts = msg.Dts()
-		if s.flvVideoDemuxer != nil {
-			if err = s.flvVideoDemuxer.Decode(msg.Payload); err != nil {
-				nazalog.Error(err)
-				return
-			}
+	switch msg.Header.MsgTypeId {
+	case base.RtmpTypeIdVideo:
+		if msg.IsVideoKeySeqHeader() || s.videoPID == 0 {
+			return
 		}
-	} else {
-		s.audiodts = msg.Dts()
-		if s.flvAudioDemuxer != nil {
-			if err = s.flvAudioDemuxer.Decode(msg.Payload); err != nil {
-				nazalog.Error(err)
-				return
-			}
+		au := s.videoAnnexB(msg)
+		if len(au) == 0 {
+			return
 		}
+		dts := uint64(msg.Dts())
+		s.writePES(s.videoPID, au, dts+uint64(msg.Cts()), dts, msg.IsVideoKeyNalu())
+	case base.RtmpTypeIdAudio:
+		adts := s.audioADTS(msg)
+		if len(adts) == 0 || s.audioPID == 0 {
+			return
+		}
+		dts := uint64(msg.Dts())
+		s.writePES(s.audioPID, adts, dts, dts, false)
 	}
 }
 
 func (s *Subscriber) OnStop() {
 	nazalog.Info("srt subscriber onStop")
-	s.conn.Close()
+	s.closeConn()
 }
 
 func (s *Subscriber) GetSubscriberStat() maxlogic.SubscriberStat {
@@ -173,4 +129,157 @@ func (s *Subscriber) GetSubscriberStat() maxlogic.SubscriberStat {
 		stat.RemoteAddr = remoteAddr.String()
 	}
 	return stat
+}
+
+func (s *Subscriber) closeConn() {
+	s.closeOnce.Do(func() {
+		if s.conn != nil {
+			s.conn.Close()
+		}
+	})
+}
+
+func (s *Subscriber) ensureStreams() {
+	if s.mux == nil {
+		return
+	}
+	if s.videoCodec == 0 && s.group != nil {
+		if h := s.group.GetVideoSeqHeaderMsg(); h != nil {
+			s.cacheParamSets(*h)
+		}
+	}
+	if s.asc == nil && s.group != nil {
+		if h := s.group.GetAudioSeqHeaderMsg(); h != nil {
+			s.cacheASC(*h)
+		}
+	}
+	if s.videoPID == 0 && s.videoCodec != 0 {
+		st := astits.StreamTypeH264Video
+		if s.videoCodec == base.RtmpCodecIdHevc {
+			st = astits.StreamTypeH265Video
+		}
+		if err := s.mux.AddElementaryStream(astits.PMTElementaryStream{
+			ElementaryPID: srtVideoPID,
+			StreamType:    st,
+		}); err != nil {
+			nazalog.Errorf("srt add video stream failed, streamName:%s, err:%v", s.streamName, err)
+			return
+		}
+		s.mux.SetPCRPID(srtVideoPID)
+		s.videoPID = srtVideoPID
+	}
+	if s.audioPID == 0 && s.asc != nil {
+		if err := s.mux.AddElementaryStream(astits.PMTElementaryStream{
+			ElementaryPID: srtAudioPID,
+			StreamType:    astits.StreamTypeAACAudio,
+		}); err != nil {
+			nazalog.Errorf("srt add audio stream failed, streamName:%s, err:%v", s.streamName, err)
+			return
+		}
+		if s.videoPID == 0 {
+			s.mux.SetPCRPID(srtAudioPID)
+		}
+		s.audioPID = srtAudioPID
+	}
+}
+
+func (s *Subscriber) writePES(pid uint16, data []byte, ptsMs, dtsMs uint64, randomAccess bool) {
+	if s.mux == nil || pid == 0 || len(data) == 0 {
+		return
+	}
+	pts := astits.ClockReference{Base: int64(ptsMs) * 90}
+	dts := astits.ClockReference{Base: int64(dtsMs) * 90}
+	af := &astits.PacketAdaptationField{RandomAccessIndicator: randomAccess}
+	if pid == s.pcrPID() {
+		af.HasPCR = true
+		pcr := astits.ClockReference{Base: dts.Base}
+		af.PCR = &pcr
+	}
+	_, err := s.mux.WriteData(&astits.MuxerData{
+		PID:             pid,
+		AdaptationField: af,
+		PES: &astits.PESData{
+			Data: data,
+			Header: &astits.PESHeader{
+				OptionalHeader: &astits.PESOptionalHeader{
+					PTS:                    &pts,
+					DTS:                    &dts,
+					PTSDTSIndicator:        astits.PTSDTSIndicatorBothPresent,
+					DataAlignmentIndicator: true,
+				},
+			},
+		},
+	})
+	if err != nil {
+		nazalog.Errorf("srt ts mux write failed, streamName:%s, err:%v", s.streamName, err)
+	}
+}
+
+func (s *Subscriber) pcrPID() uint16 {
+	if s.videoPID != 0 {
+		return s.videoPID
+	}
+	return s.audioPID
+}
+
+type tsBatch struct {
+	ctx    context.Context
+	conn   srt.Conn
+	buf    []byte
+	limit  int
+	onFail func()
+	err    error
+}
+
+func newTSBatch(ctx context.Context, conn srt.Conn, maxSendPacketSize int, onFail func()) *tsBatch {
+	if maxSendPacketSize <= 0 {
+		maxSendPacketSize = 4
+	}
+	return &tsBatch{
+		ctx:    ctx,
+		conn:   conn,
+		limit:  maxSendPacketSize * astits.MpegTsPacketSize,
+		onFail: onFail,
+	}
+}
+
+func (w *tsBatch) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	select {
+	case <-w.ctx.Done():
+		w.fail(w.ctx.Err())
+		return 0, w.err
+	default:
+	}
+	w.buf = append(w.buf, p...)
+	if len(w.buf) >= w.limit {
+		if err := w.flush(); err != nil {
+			w.fail(err)
+			return 0, err
+		}
+	}
+	return len(p), nil
+}
+
+func (w *tsBatch) flush() error {
+	if len(w.buf) == 0 {
+		return nil
+	}
+	if _, err := w.conn.Write(w.buf); err != nil {
+		return err
+	}
+	w.buf = w.buf[:0]
+	return nil
+}
+
+func (w *tsBatch) fail(err error) {
+	if w.err != nil {
+		return
+	}
+	w.err = err
+	if w.onFail != nil {
+		w.onFail()
+	}
 }
