@@ -54,14 +54,19 @@ Full diagrams, ports, and module map: **[Architecture](docs/en/architecture.md)*
 
 ## Streaming Protocols
 
-| Protocol | Latency | Backend | Codec Support |
-|----------|---------|---------|---------------|
-| **WebCodecs** (WebSocket) | <100ms | Builtin WS | H.264, H.265 |
-| **fMP4** (MSE) | ~200ms | lalmax | H.264, H.265 |
-| **WebRTC** (WHEP) | ~300ms | lalmax | H.264 |
-| **HTTP-FLV** | ~500ms | lalmax | H.264, H.265 |
-| **HLS** / **LL-HLS** | 1-3s | lalmax | H.264, H.265 |
-| **RTSP** | ~1 GOP | lal (`:15544`) | H.264, H.265 |
+| Protocol | Backend | Video | Audio |
+|----------|---------|-------|-------|
+| **WebCodecs** (WebSocket) | Builtin WS | H.264, H.265 | AAC, G.711 |
+| **fMP4** (MSE) | lalmax | H.264, H.265 | AAC |
+| **WebRTC** (WHEP) | lalmax | H.264, H.265 | G.711, Opus |
+| **HTTP-FLV** | lal (`:18080`) | H.264, H.265 | AAC, G.711, Opus |
+| **WS-FLV** | lal (`:18080`) | H.264, H.265 | AAC, G.711, Opus |
+| **HLS** (MPEG-TS) | lal (`:18080`) | H.264, H.265 | AAC, Opus |
+| **LL-HLS** (fMP4) | lalmax | H.264, H.265 | AAC, Opus |
+| **RTSP** | lal (`:15544`) | H.264, H.265 | AAC, G.711, Opus |
+| **RTMP** | lal (`:11935`) | H.264, H.265 | AAC, G.711, Opus |
+
+G.711 covers both A-law (PCMA) and µ-law (PCMU). Audio codecs not listed for a protocol are not muxed into that output.
 
 ## Core Features
 
@@ -70,7 +75,7 @@ Full diagrams, ports, and module map: **[Architecture](docs/en/architecture.md)*
 - **GB28181**: SIP platform (上级); devices REGISTER then **push PS/RTP** after INVITE; cascade, recording query & playback with timeline, multi-protocol streaming (ws-flv, flv, hls, webrtc, etc.), playback control (pause/resume/speed/seek), batch download, platform event history, voice broadcast/intercom (SIP INVITE, UDP/TCP)
 - **Recording**: embedded H.264/H.265 subscribes to the lalmax group. A plan (`continuous` / `scheduled` / `event` / `off`) only turns disk writing on or off; the pull or push stays up. `adaptive` and `media.mode: http` still use a record task. Promoting a stream to a device does not start recording. Retention, AAC + G.711 audio. Details: [Recording flow](docs/en/recording-flow.md)
 - **Recording Playback**: 24h timeline, hour zoom, single-file player, or **continuous VOD** (HLS fMP4 across a day, seek across gaps)
-- **Live View**: WebCodecs, fMP4, WebRTC, HTTP-FLV, HLS, LL-HLS, copyable **RTSP** (`:15544`)
+- **Live View**: WebCodecs, fMP4, WebRTC, HTTP-FLV, WS-FLV, HLS, LL-HLS, copyable **RTSP** (`:15544`) and **RTMP** (`:11935`)
 - **RTMP / SRT / WHIP Ingest**: Accept pushed streams from cameras or encoders (WHIP: `http://host:12090/webrtc/whip?streamid={id}`)
 - **Segment Merge**: Periodic backfill plus **rolling merge** into the current UTC hour file
 - **ONVIF**: WS-Discovery / Hello, PTZ, imaging, stream URI, encoding detect, IP self-heal, optional sub-stream
@@ -169,10 +174,14 @@ internal/              # Core packages
   cleanup/             # Data cleanup tasks
   civilcode/           # GB28181 administrative-division / industry codes
   config/              # YAML config
+  dlna/                # UPnP MediaServer (LAN discovery, live streams, recordings)
+  docsportal/          # Embedded API docs (`/docs/`)
   event/               # Event bus
   ftp/                 # FTP server
   gb28181/             # GB28181 SIP server (device mgmt, cascade, playback, intercom)
   health/              # Camera health monitoring
+  iptv/                # M3U import, HLS proxy, and channel publish
+  linkage/             # Alarm-rule actions (record, PTZ preset, webhook)
   media/               # lalmax engine adapter
   relay/               # Stream relay
   merge/               # Periodic + rolling segment merge
@@ -181,8 +190,10 @@ internal/              # Core packages
   model/               # Data models
   mqtt/                # MQTT client
   muxer/               # MP4 muxer
+  observability/       # OpenTelemetry traces and metrics
   onvif/               # ONVIF client adapter (NVR-side)
   recorder/            # lalmax group writer; record tasks; MJPEG/HTTP-JPEG collectors
+  rediscovery/         # Rediscover ONVIF device IPs by serial
   storage/             # SQLite DB + file manager
   streamhistory/       # Stream history tracking
   ui/                  # Embedded SPA static files
@@ -196,6 +207,7 @@ third/
   lal/                 # Vendored lal media library
   lalmax/              # Vendored lalmax (lal + extensions)
 web/                   # Svelte 5 frontend
+site/                  # Product website
 config/                # config.example.yaml (copy to lalmax-nvr.yaml)
 scripts/               # Build and management scripts
 docker/                # Docker build assets
@@ -203,8 +215,9 @@ tests/                 # Integration tests
 docs/                  # Documentation (EN/ZH)
 ```
 
-> Playback protocols (HLS, HTTP-FLV, WebRTC, fMP4) and RTMP/SRT ingest are served
-> by the embedded lalmax engine, not by separate `internal/` packages.
+> Playback (HLS, LL-HLS, HTTP-FLV, WS-FLV, WebRTC, fMP4, RTSP, RTMP) and
+> RTMP/SRT/WHIP ingest are served by the embedded lalmax engine, not by
+> separate `internal/` packages. WebCodecs lives in `internal/wsstream`.
 
 ## Contributing
 

@@ -54,14 +54,19 @@ flowchart LR
 
 ## 流媒体协议
 
-| 协议 | 延迟 | 后端 | 编码支持 |
-|------|------|------|----------|
-| **WebCodecs**（WebSocket） | <100ms | 内置 WS | H.264, H.265 |
-| **fMP4**（MSE） | ~200ms | lalmax | H.264, H.265 |
-| **WebRTC**（WHEP） | ~300ms | lalmax | H.264 |
-| **HTTP-FLV** | ~500ms | lalmax | H.264, H.265 |
-| **HLS** / **LL-HLS** | 1-3s | lalmax | H.264, H.265 |
-| **RTSP** | ~1 GOP | lal（`:15544`） | H.264, H.265 |
+| 协议 | 后端 | 视频 | 音频 |
+|------|------|------|------|
+| **WebCodecs**（WebSocket） | 内置 WS | H.264, H.265 | AAC, G.711 |
+| **fMP4**（MSE） | lalmax | H.264, H.265 | AAC |
+| **WebRTC**（WHEP） | lalmax | H.264, H.265 | G.711, Opus |
+| **HTTP-FLV** | lal（`:18080`） | H.264, H.265 | AAC, G.711, Opus |
+| **WS-FLV** | lal（`:18080`） | H.264, H.265 | AAC, G.711, Opus |
+| **HLS**（MPEG-TS） | lal（`:18080`） | H.264, H.265 | AAC, Opus |
+| **LL-HLS**（fMP4） | lalmax | H.264, H.265 | AAC, Opus |
+| **RTSP** | lal（`:15544`） | H.264, H.265 | AAC, G.711, Opus |
+| **RTMP** | lal（`:11935`） | H.264, H.265 | AAC, G.711, Opus |
+
+G.711 包括 A-law（PCMA）和 µ-law（PCMU）。表中未列出的音频不会进入该协议。
 
 ## 核心功能
 
@@ -70,7 +75,7 @@ flowchart LR
 - **国标 GB28181**：作为 SIP **上级平台**；设备 REGISTER，INVITE 后 **推送 PS/RTP**；级联、录像查询与回放（带时间轴）、多协议流媒体（ws-flv、flv、hls、webrtc 等）、播放控制（暂停/恢复/倍速/拖动）、批量下载、平台事件历史、语音对讲（SIP INVITE，UDP/TCP）
 - **视频录像**：嵌入式 H.264/H.265 订阅 lalmax group。计划（连续 / 定时 / 事件 / 关闭）只拨写盘开关，拉流或推流保持。`adaptive` 和 `media.mode: http` 仍走 record task。把流登记为设备不会自动开录。按相机保留天数、AAC + G.711 音频。详见 [录制流程](docs/zh/recording-flow.md)
 - **录像回放**：24 小时时间轴、小时缩放、单文件播放，或 **连续 VOD**（按天 HLS fMP4，缺口可 seek）
-- **实时直播**：WebCodecs、fMP4、WebRTC、HTTP-FLV、HLS、LL-HLS，可复制 **RTSP**（`:15544`）
+- **实时直播**：WebCodecs、fMP4、WebRTC、HTTP-FLV、WS-FLV、HLS、LL-HLS，可复制 **RTSP**（`:15544`）和 **RTMP**（`:11935`）
 - **RTMP / SRT / WHIP 接入**：接收摄像头或编码器推送的流（WHIP：`http://host:12090/webrtc/whip?streamid={id}`）
 - **片段合并**：周期补齐，加上 **滚动合并** 写入当前 UTC 小时文件
 - **ONVIF**：WS-Discovery / Hello、云台、成像、流地址、编码检测、IP 自愈、可选子码流
@@ -169,10 +174,14 @@ internal/              # 核心模块
   cleanup/             # 数据清理任务
   civilcode/           # GB28181 行政区划/行业代码
   config/              # YAML 配置
+  dlna/                # UPnP MediaServer（局域网发现、直播与录像浏览）
+  docsportal/          # 内嵌 API 文档（`/docs/`）
   event/               # 事件总线
   ftp/                 # FTP 服务
   gb28181/             # GB28181 SIP 服务（设备管理、级联、回放、对讲）
   health/              # 摄像头健康监控
+  iptv/                # M3U 导入、HLS 代理与频道发布
+  linkage/             # 告警规则联动（录像、云台、Webhook）
   media/               # lalmax 引擎适配器
   relay/               # 流中继
   merge/               # 周期合并 + 滚动小时桶
@@ -181,8 +190,10 @@ internal/              # 核心模块
   model/               # 数据模型
   mqtt/                # MQTT 客户端
   muxer/               # MP4 封装器
+  observability/       # OpenTelemetry 追踪与指标
   onvif/               # ONVIF 客户端适配器（NVR 侧）
   recorder/            # lalmax 组写入器、record task、MJPEG/HTTP-JPEG 采集器
+  rediscovery/         # 按序列号重新发现 ONVIF 设备 IP
   storage/             # SQLite 数据库 + 文件管理
   streamhistory/       # 流历史记录
   ui/                  # 内嵌 SPA 静态文件
@@ -196,6 +207,7 @@ third/
   lal/                 # lal 媒体库（vendored）
   lalmax/              # lalmax 扩展（vendored）
 web/                   # Svelte 5 前端
+site/                  # 产品官网
 config/                # config.example.yaml（复制为 lalmax-nvr.yaml）
 scripts/               # 构建和管理脚本
 docker/                # Docker 构建资源
@@ -203,7 +215,7 @@ tests/                 # 集成测试
 docs/                  # 文档（中文/英文）
 ```
 
-> HLS、HTTP-FLV、WebRTC、fMP4 等播放协议以及 RTMP/SRT 接入均由内嵌的 lalmax 引擎提供，不单独存在于 `internal/` 包中。
+> HLS、LL-HLS、HTTP-FLV、WS-FLV、WebRTC、fMP4、RTSP、RTMP 等播放协议，以及 RTMP/SRT/WHIP 接入，均由内嵌的 lalmax 引擎提供，不单独存在于 `internal/` 包中。WebCodecs 在 `internal/wsstream`。
 
 ## 贡献
 
