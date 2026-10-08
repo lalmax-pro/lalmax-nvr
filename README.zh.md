@@ -37,6 +37,7 @@ lalmax-nvr 是叠在内嵌 [lalmax](https://github.com/q191201771/lal) 引擎上
 flowchart LR
   Cam[摄像头 RTSP / ONVIF] -->|拉流| Group[lalmax group]
   GB[GB28181] -->|INVITE 后 RTP 推流| Group
+  JT[JT1078] -->|TCP/UDP :1078| Group
   Push[RTMP / SRT / WHIP / RTSP 推流] --> Group
   Group --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
   Group -->|AddSubscriber| Rec[组写入器]
@@ -77,6 +78,10 @@ G.711 包括 A-law（PCMA）和 µ-law（PCMU）。表中未列出的音频不�
 - **录像回放**：24 小时时间轴、小时缩放、单文件播放，或 **连续 VOD**（按天 HLS fMP4，缺口可 seek）
 - **实时直播**：WebCodecs、fMP4、WebRTC、HTTP-FLV、WS-FLV、HLS、LL-HLS，可复制 **RTSP**（`:15544`）和 **RTMP**（`:11935`）
 - **RTMP / SRT / WHIP 接入**：接收摄像头或编码器推送的流（WHIP：`http://host:12090/webrtc/whip?streamid={id}`）
+- **JT1078 接入（实验性）**：内嵌 lalmax 在 TCP/UDP `:1078` 收流，流名为 `{sim}_{channel}`，视频 H.264/H.265，音频 AAC/G.711。可选 JT808 信令负责注册鉴权、直播、回放、检索、FTP 上传、云台和对讲下行；启用后只有已下发的通道能推上来。详见 [配置](docs/zh/configuration.md)
+
+  > **实验性功能**：JT1078/JT808 当前仅通过软件模拟终端和自动化测试验证，尚未使用真实车载终端验证。设备兼容性及实际运行稳定性仍需验证。
+
 - **片段合并**：周期补齐，加上 **滚动合并** 写入当前 UTC 小时文件
 - **ONVIF**：WS-Discovery / Hello、云台、成像、流地址、编码检测、IP 自愈、可选子码流
 - **流管理**：运行时流清单、摄像头绑定、可选 **登记为设备**（不会开始录像）
@@ -149,12 +154,13 @@ media:
 
 | 文档 | 说明 |
 |------|------|
-| [架构](docs/zh/architecture.md) | 分层、接入（拉流 vs 国标推流）、VOD、端口、模块 |
+| [架构](docs/zh/architecture.md) | 分层、接入（拉流、国标推流、JT1078）、VOD、端口、模块 |
 | [录像计划](docs/zh/recording-plans.md) · [录制流程](docs/zh/recording-flow.md) | 一条流何时写盘，以及组写入器如何订阅 |
 | [快速入门](docs/zh/getting-started.md) | 安装、第一个摄像头 |
 | [配置说明](docs/zh/configuration.md) | YAML 参考 |
 | [API 文档](docs/zh/api-reference.md) | REST API |
 | [GB28181](docs/zh/gb28181-guide.md) | 国标设备、回放、对讲 |
+| [JT1078 / JT808](docs/zh/configuration.md#jt1078-推流配置) | `:1078` 媒体收流，以及可选的 `:808` 信令 |
 | [ONVIF](docs/zh/onvif-guide.md) | 发现、云台 |
 | [摄像头指南](docs/zh/camera-guide.md) | RTSP / HTTP 接入 |
 | [部署指南](docs/zh/deployment.md) | 反向代理、交叉编译 |
@@ -181,6 +187,7 @@ internal/              # 核心模块
   gb28181/             # GB28181 SIP 服务（设备管理、级联、回放、对讲）
   health/              # 摄像头健康监控
   iptv/                # M3U 导入、HLS 代理与频道发布
+  jt808/               # JT/T 808 信令（注册鉴权、直播、回放、检索、上传、云台）
   linkage/             # 告警规则联动（录像、云台、Webhook）
   media/               # lalmax 引擎适配器
   relay/               # 流中继
@@ -206,6 +213,9 @@ onvif/                 # 独立 ONVIF 库（SOAP、发现、云台、成像、�
 third/
   lal/                 # lal 媒体库（vendored）
   lalmax/              # lalmax 扩展（vendored）
+    jt1078/            # JT/T 1078 TCP/UDP 收流
+tools/
+  jtsim/               # JT808 终端模拟器，同时推 JT1078
 web/                   # Svelte 5 前端
 site/                  # 产品官网
 config/                # config.example.yaml（复制为 lalmax-nvr.yaml）
@@ -215,7 +225,7 @@ tests/                 # 集成测试
 docs/                  # 文档（中文/英文）
 ```
 
-> HLS、LL-HLS、HTTP-FLV、WS-FLV、WebRTC、fMP4、RTSP、RTMP 等播放协议，以及 RTMP/SRT/WHIP 接入，均由内嵌的 lalmax 引擎提供，不单独存在于 `internal/` 包中。WebCodecs 在 `internal/wsstream`。
+> HLS、LL-HLS、HTTP-FLV、WS-FLV、WebRTC、fMP4、RTSP、RTMP 等播放协议，以及 RTMP/SRT/WHIP 接入，均由内嵌的 lalmax 引擎提供，不单独存在于 `internal/` 包中。JT1078 媒体在 `third/lalmax/jt1078`，JT808 信令在 `internal/jt808`。WebCodecs 在 `internal/wsstream`。
 
 ## 贡献
 

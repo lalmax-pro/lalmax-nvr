@@ -45,6 +45,7 @@ type Config struct {
 	SRT           SRTConfig           `yaml:"srt"`
 	WHIP          WHIPConfig          `yaml:"whip"`
 	GB28181       GB28181Config       `yaml:"gb28181"`
+	JT808         JT808Config         `yaml:"jt808"`
 	Health        HealthConfig        `yaml:"health"`
 	RemoteLog     RemoteLogConfig     `yaml:"remote_log"`
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
@@ -453,6 +454,21 @@ func (cfg *Config) IsWHIPEnabled() bool {
 		return true
 	}
 	return cfg.WHIP.Enabled == nil || *cfg.WHIP.Enabled
+}
+
+// JT808Config configures the optional JT/T 808 signaling service.
+type JT808Config struct {
+	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	Port         int    `yaml:"port" json:"port"`
+	MediaIP      string `yaml:"media_ip" json:"media_ip"`
+	AuthCode     string `yaml:"auth_code" json:"auth_code,omitempty"`
+	MediaTCPPort int    `yaml:"media_tcp_port" json:"media_tcp_port"`
+	MediaUDPPort int    `yaml:"media_udp_port" json:"media_udp_port"`
+	Transport    string `yaml:"transport" json:"transport"`
+	Timeout      string `yaml:"timeout" json:"timeout"`
+	FTPPort      int    `yaml:"ftp_port" json:"ftp_port"`
+	FTPUser      string `yaml:"ftp_user" json:"ftp_user,omitempty"`
+	FTPPassword  string `yaml:"ftp_password" json:"ftp_password,omitempty"`
 }
 
 // GB28181Config configures the GB28181 SIP signaling server.

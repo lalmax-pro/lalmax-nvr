@@ -13,6 +13,7 @@ import (
 	"github.com/q191201771/lalmax/rtc"
 
 	"github.com/q191201771/lalmax/gb28181/rtppub"
+	"github.com/q191201771/lalmax/jt1078"
 	"github.com/q191201771/lalmax/udpts"
 
 	maxlogic "github.com/q191201771/lalmax/logic"
@@ -35,6 +36,7 @@ type LalMaxServer struct {
 	stats       *maxlogic.StatAggregator
 	notifyHub   *HttpNotify
 	srtsvr      *srt.SrtServer
+	jt1078svr   *jt1078.Server
 	rtcsvr      *rtc.RtcServer
 	router      *gin.Engine
 	routerTls   *gin.Engine
@@ -78,6 +80,23 @@ func (s *LalMaxServer) AddCustomizePubSession(streamName string) (logic.ICustomi
 // DelCustomizePubSession removes a custom publish session.
 func (s *LalMaxServer) DelCustomizePubSession(ctx logic.ICustomizePubSessionContext) {
 	s.lalsvr.DelCustomizePubSession(ctx)
+}
+
+// SetJT1078Authorizer attaches the NVR allowlist. A nil server or a nil
+// authorizer leaves JT1078 open, which is the standalone lalmax behavior.
+func (s *LalMaxServer) SetJT1078Authorizer(a jt1078.StreamAuthorizer) {
+	if s == nil || s.jt1078svr == nil {
+		return
+	}
+	s.jt1078svr.SetAuthorizer(a)
+}
+
+// PushJT1078 writes one packet on the terminal's inbound TCP media connection.
+func (s *LalMaxServer) PushJT1078(pkt jt1078.Packet) error {
+	if s == nil || s.jt1078svr == nil {
+		return fmt.Errorf("jt1078 server unavailable")
+	}
+	return s.jt1078svr.Push(pkt)
 }
 
 func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxServer, error) {
@@ -124,6 +143,17 @@ func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxSe
 			option.Latency = 300
 			option.PeerLatency = 300
 		})
+	}
+
+	if conf.JT1078Config.Enable {
+		var opts []jt1078.ServerOption
+		if conf.JT1078Config.UDPEnabled() {
+			opts = append(opts, jt1078.WithUDP(conf.JT1078Config.UDPListenAddr(), conf.JT1078Config.UDPIdleTimeout()))
+		}
+		if n := conf.JT1078Config.FixedPhoneLen(); n != 0 {
+			opts = append(opts, jt1078.WithPhoneLen(n))
+		}
+		maxsvr.jt1078svr = jt1078.NewServer(conf.JT1078Config.Addr, lalsvr, opts...)
 	}
 
 	if conf.RtcConfig.Enable {
@@ -218,6 +248,9 @@ func (s *LalMaxServer) Start(ctx context.Context) error {
 	if s.srtsvr != nil {
 		go s.srtsvr.Run(runCtx)
 	}
+	if s.jt1078svr != nil {
+		go s.jt1078svr.Run(runCtx)
+	}
 
 	go s.runPeriodicUpdate(runCtx)
 	go s.runPeriodicKeepalive(runCtx)
@@ -289,6 +322,9 @@ func (s *LalMaxServer) Shutdown(ctx context.Context) error {
 	if s.srtsvr != nil {
 		s.srtsvr.Shutdown()
 	}
+	if s.jt1078svr != nil {
+		s.jt1078svr.Shutdown()
+	}
 	if s.rtcsvr != nil {
 		_ = s.rtcsvr.Close()
 	}
@@ -347,6 +383,9 @@ func (s *LalMaxServer) Close() {
 	}
 	if s.srtsvr != nil {
 		s.srtsvr.Shutdown()
+	}
+	if s.jt1078svr != nil {
+		s.jt1078svr.Shutdown()
 	}
 	if s.rtcsvr != nil {
 		_ = s.rtcsvr.Close()

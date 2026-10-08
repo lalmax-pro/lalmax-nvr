@@ -35,12 +35,14 @@ flowchart TB
     RTSP[RTSP / ONVIF 拉流]
     GB[GB28181 设备]
     Push[RTMP / SRT / WHIP 推流]
+    JT[JT1078 终端]
   end
 
   RTSP --> MediaAdp
   GB -->|REGISTER / Catalog| SIP
   SIP -->|INVITE| GB
   GB -->|PS/RTP 推流| Group
+  JT -->|TCP/UDP :1078| Group
   Push --> Group
   MediaAdp --> Group
   Group --> Out
@@ -74,6 +76,7 @@ flowchart TB
 | ONVIF | SOAP：发现 / `GetStreamUri` | 解析出 RTSP 后再 **拉** | [ONVIF 指南](onvif-guide.md) |
 | GB28181 | SIP：设备 REGISTER，平台 INVITE | 设备向 `media_ip` **推** PS/RTP | [GB28181 指南](gb28181-guide.md) |
 | RTMP / SRT / WHIP | 编码器主动连入 | 编码器 **推** | 配置里的 `rtmp` / `srt` / `whip` |
+| JT1078 | 可选 JT808：注册鉴权后下发 0x9101 直播或 0x9201 回放 | 终端向 `:1078` **推** TCP/UDP 帧。启用信令后，未授权通道会被拒绝 | [配置](configuration.md) |
 | 小米 CS2 | 云端鉴权 + P2P | NVR 连相机取帧再注入 lalmax | [小米摄像头](xiaomi-setup.md) |
 
 ```mermaid
@@ -110,6 +113,7 @@ flowchart LR
   RTSP[RTSP / ONVIF] -->|拉流一次| G["lalmax group"]
   GB[GB28181 设备] -->|INVITE 后 PS/RTP 推流| G
   Push[RTMP / SRT / WHIP] -->|推流| G
+  JT[JT1078 :1078] -->|TCP/UDP 推流| G
   G -->|AddSubscriber| Rec[组写入器]
   G --> HLS[HLS / LL-HLS]
   G --> FLV[HTTP-FLV / WS-FLV]
@@ -209,6 +213,7 @@ flowchart TB
 | `health` | 多层探活与自动修复 |
 | `autodiscover` / `onvif` | WS-Discovery、Hello、PTZ |
 | `gb28181` | SIP 上级、目录、INVITE 后收 RTP 推流、回放、对讲 |
+| `jt808` | JT/T 808 信令：注册鉴权、直播、回放、检索、上传、云台。媒体仍由 lalmax `:1078` 接收 |
 | `storage` | SQLite + 片段文件 |
 
 ## 默认端口
@@ -222,6 +227,8 @@ flowchart TB
 | **18080** | lal HTTP（HLS-TS、HTTP-FLV） |
 | **11935** | RTMP 推流接入（启用时） |
 | **19000** | SRT 推流接入（启用时） |
+| **1078/tcp, 1078/udp** | JT1078 单端口收流（embedded 默认启用） |
+| **808/tcp** | JT808 信令（配置启用时） |
 | **2121** | FTP |
 | **5060** | GB28181 SIP |
 | **8200** | DLNA HTTP（启用时，另需 UDP 1900 组播发现；见 [DLNA](dlna.md)） |
@@ -230,6 +237,7 @@ flowchart TB
 flowchart TB
   subgraph nvrPort [NVR]
     P9090[":9090 Web / API / WebDAV"]
+    P808[":808 JT808 信令"]
     P2121[":2121 FTP"]
     P5060[":5060 GB28181 SIP"]
   end
@@ -240,6 +248,7 @@ flowchart TB
     P15544[":15544 RTSP"]
     P11935[":11935 RTMP"]
     P19000[":19000 SRT"]
+    P1078[":1078 JT1078"]
   end
 ```
 

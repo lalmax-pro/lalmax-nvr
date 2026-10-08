@@ -137,6 +137,58 @@ func TestPatchLalmaxConfig_CreatesMissingProtocolSections(t *testing.T) {
 	require.Equal(t, float64(4), httpts["gop_num"])
 }
 
+func TestEmbeddedConfigJSON_IncludesJT1078(t *testing.T) {
+	raw, err := embeddedConfigJSON(EmbeddedLalmaxConfig{
+		RTMPPort:    1935,
+		RTMPEnabled: true,
+		SRTPort:     9000,
+		SRTEnabled:  false,
+	})
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(raw, &parsed))
+	lalmax := parsed["lalmax"].(map[string]any)
+	jt := lalmax["jt1078_config"].(map[string]any)
+	require.True(t, jt["enable"].(bool))
+	require.Equal(t, ":1078", jt["addr"])
+	require.True(t, jt["udp_enable"].(bool))
+}
+
+func TestEnsureJT1078Config_AddsWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lalmax.conf.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"lal":{},"lalmax":{"srt_config":{"enable":true,"addr":":9000"}}}`), 0o644))
+
+	require.NoError(t, ensureJT1078Config(path))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(data, &parsed))
+	lalmax := parsed["lalmax"].(map[string]any)
+	jt := lalmax["jt1078_config"].(map[string]any)
+	require.True(t, jt["enable"].(bool))
+	require.Equal(t, ":1078", jt["addr"])
+	require.True(t, jt["udp_enable"].(bool))
+	srt := lalmax["srt_config"].(map[string]any)
+	require.True(t, srt["enable"].(bool))
+	require.Equal(t, ":9000", srt["addr"])
+}
+
+func TestEnsureJT1078Config_PreservesExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lalmax.conf.json")
+	initial := `{"lalmax":{"jt1078_config":{"enable":false,"addr":":2078"}}}`
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
+
+	require.NoError(t, ensureJT1078Config(path))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.JSONEq(t, initial, string(data))
+}
+
 func TestHTTPTSGopNum(t *testing.T) {
 	require.Equal(t, 1, httptsGopNum(0))
 	require.Equal(t, 1, httptsGopNum(-3))

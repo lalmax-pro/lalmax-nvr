@@ -16,6 +16,7 @@ import (
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
 	lalmaxconfig "github.com/q191201771/lalmax/config"
+	"github.com/q191201771/lalmax/jt1078"
 	lalmaxserver "github.com/q191201771/lalmax/server"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
@@ -57,11 +58,12 @@ type EmbeddedLalmaxConfig struct {
 
 type EmbeddedLalmax struct {
 	*LalmaxHTTP
-	cfg        EmbeddedLalmaxConfig
-	mu         sync.Mutex
-	server     *lalmaxserver.LalMaxServer
-	httpEngine *LalmaxHTTP
-	svrOpts    []lalmaxserver.LalMaxServerOption
+	cfg              EmbeddedLalmaxConfig
+	mu               sync.Mutex
+	server           *lalmaxserver.LalMaxServer
+	httpEngine       *LalmaxHTTP
+	svrOpts          []lalmaxserver.LalMaxServerOption
+	jt1078Authorizer jt1078.StreamAuthorizer
 }
 
 func applyEmbeddedPortDefaults(cfg *EmbeddedLalmaxConfig) {
@@ -144,6 +146,44 @@ func (e *EmbeddedLalmax) Server() *lalmaxserver.LalMaxServer {
 	return e.server
 }
 
+// SetJT1078Authorizer retains the authorizer across media server restarts.
+func (e *EmbeddedLalmax) SetJT1078Authorizer(a jt1078.StreamAuthorizer) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.jt1078Authorizer = a
+	if e.server != nil {
+		e.server.SetJT1078Authorizer(a)
+	}
+}
+
+// PushJT1078Audio sends one audio frame to a terminal that already has a TCP
+// JT1078 session for sim_channel. MP3 (25) and G.726 (8) are rejected.
+func (e *EmbeddedLalmax) PushJT1078Audio(sim string, channel byte, pt byte, payload []byte) error {
+	switch pt {
+	case 6, 7, 19:
+	default:
+		return fmt.Errorf("unsupported jt1078 audio pt %d", pt)
+	}
+	if len(payload) == 0 {
+		return fmt.Errorf("empty jt1078 audio payload")
+	}
+	e.mu.Lock()
+	server := e.server
+	e.mu.Unlock()
+	if server == nil {
+		return fmt.Errorf("embedded lalmax server is nil")
+	}
+	return server.PushJT1078(jt1078.Packet{
+		Sim:             sim,
+		LogicChannel:    channel,
+		Flag:            jt1078.Flag{PT: jt1078.PTType(pt)},
+		DataType:        jt1078.DataTypeA,
+		SubcontractType: jt1078.SubcontractTypeAtomic,
+		Timestamp:       uint64(time.Now().UnixMilli()),
+		Body:            payload,
+	})
+}
+
 // PlayHTTPHandler returns the in-process lalmax HTTP handler for play proxying.
 func (e *EmbeddedLalmax) PlayHTTPHandler() http.Handler {
 	e.mu.Lock()
@@ -214,10 +254,10 @@ func (e *EmbeddedLalmax) Start(ctx context.Context) error {
 	if server == nil {
 		return fmt.Errorf("embedded lalmax server is nil")
 	}
+	e.applyRuntimeHLSSettings(server, e.cfg)
 	if err := server.Start(ctx); err != nil {
 		return err
 	}
-	e.applyRuntimeHLSSettings(server, e.cfg)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if err := e.LalmaxHTTP.Ready(ctx); err == nil && server.Ready() {
@@ -302,13 +342,14 @@ func (e *EmbeddedLalmax) Restart(ctx context.Context, rtmpPort, srtPort int, rtm
 	}
 
 	e.mu.Lock()
+	svr.SetJT1078Authorizer(e.jt1078Authorizer)
 	e.server = svr
 	e.mu.Unlock()
 
+	e.applyRuntimeHLSSettings(svr, e.cfg)
 	if err := svr.Start(ctx); err != nil {
 		return fmt.Errorf("start server: %w", err)
 	}
-	e.applyRuntimeHLSSettings(svr, e.cfg)
 
 	// Update LalmaxHTTP port reference
 	e.LalmaxHTTP = e.httpEngine
@@ -436,6 +477,9 @@ func loadEmbeddedLalmaxConfig(cfg EmbeddedLalmaxConfig) (*lalmaxconfig.Config, e
 				cfg.HTTPTSGOPNum,
 			); err != nil {
 				return nil, fmt.Errorf("sync lalmax protocol config: %w", err)
+			}
+			if err := ensureJT1078Config(cfg.ConfigPath); err != nil {
+				slog.Warn("ensure jt1078 config", "path", cfg.ConfigPath, "error", err)
 			}
 			if err := ensureLalLogConfig(cfg.ConfigPath, cfg.LalLogLevel); err != nil {
 				slog.Warn("ensure lal log config", "path", cfg.ConfigPath, "error", err)
@@ -631,6 +675,51 @@ func patchLalmaxConfig(path string, rtmpEnabled, srtEnabled bool, rtmpAddr, srtA
 		return fmt.Errorf("marshal lalmax config: %w", err)
 	}
 
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, patched, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// ensureJT1078Config adds a default jt1078_config section when the existing
+// lalmax JSON does not already have one. User-defined values are left intact.
+func ensureJT1078Config(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read lalmax config: %w", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse lalmax config: %w", err)
+	}
+
+	lalmax := map[string]json.RawMessage{}
+	if maxRaw, ok := raw["lalmax"]; ok {
+		if err := json.Unmarshal(maxRaw, &lalmax); err != nil {
+			return fmt.Errorf("parse lalmax config: %w", err)
+		}
+	}
+	if _, ok := lalmax["jt1078_config"]; ok {
+		return nil
+	}
+
+	patchedJT, err := json.Marshal(map[string]any{"enable": true, "addr": ":1078", "udp_enable": true})
+	if err != nil {
+		return fmt.Errorf("marshal jt1078 config: %w", err)
+	}
+	lalmax["jt1078_config"] = patchedJT
+	patchedLalmax, err := json.Marshal(lalmax)
+	if err != nil {
+		return fmt.Errorf("marshal lalmax config: %w", err)
+	}
+	raw["lalmax"] = patchedLalmax
+
+	patched, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal lalmax config: %w", err)
+	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, patched, 0o644); err != nil {
 		return err
@@ -898,7 +987,8 @@ func embeddedConfigJSON(cfg EmbeddedLalmaxConfig) ([]byte, error) {
 				"http_listen_addr": addr,
 				"enable_https":     false,
 			},
-			"srt_config": map[string]any{"enable": cfg.SRTEnabled, "addr": srtAddr},
+			"srt_config":    map[string]any{"enable": cfg.SRTEnabled, "addr": srtAddr},
+			"jt1078_config": map[string]any{"enable": true, "addr": ":1078", "udp_enable": true},
 			"rtc_config": map[string]any{
 				"enable":           true,
 				"ice_udp_mux_port": 4888,

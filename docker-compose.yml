@@ -41,6 +41,9 @@ services:
       - "4888:4888/udp" # WebRTC ICE mux (WHIP / WHEP)
       - "4888:4888/tcp"
       - "15544:15544" # lal RTSP playback (rtsp://host:15544/live/{camera_id})
+      - "1078:1078"     # JT1078 TCP ingest
+      - "1078:1078/udp" # JT1078 UDP ingest
+      - "808:808"       # JT808 TCP signaling (when enabled)
       # ONVIF WS-Discovery still needs host networking (uncomment network_mode: host above).
       - "5060:5060/tcp" # GB28181 SIP
       - "5060:5060/udp" # GB28181 SIP

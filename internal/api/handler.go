@@ -22,6 +22,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
 	"github.com/lalmax-pro/lalmax-nvr/internal/iptv"
+	"github.com/lalmax-pro/lalmax-nvr/internal/jt808"
 	"github.com/lalmax-pro/lalmax-nvr/internal/linkage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/merge"
@@ -173,6 +174,7 @@ type Handler struct {
 	gb28181Svr         GB28181StreamStatus
 	gb28181Restarter   GB28181Restarter
 	gb28181Server      *gb28181.Server
+	jt808Server        jt808Signaling
 	snapshotMgr        *camera.SnapshotManager
 	relayMgr           *relay.Manager
 	// readyzDiskUsage overrides disk probing for /api/readyz (tests only).
@@ -595,6 +597,21 @@ func (h *Handler) Routes() http.Handler {
 			})
 		})
 		// GB28181 API routes
+		r.Route("/api/jt808", func(r chi.Router) {
+			r.Get("/terminals", h.handleJT808ListTerminals)
+			r.Get("/av", h.handleJT808QueryAV)
+			r.With(middleware.RequireOperatePermission()).Post("/play", h.handleJT808Play)
+			r.With(middleware.RequireOperatePermission()).Post("/stop", h.handleJT808StopPlay)
+			r.With(middleware.RequireOperatePermission()).Post("/control", h.handleJT808Control)
+			r.With(middleware.RequireOperatePermission()).Post("/loss", h.handleJT808Loss)
+			r.With(middleware.RequireOperatePermission()).Post("/playback", h.handleJT808Playback)
+			r.With(middleware.RequireOperatePermission()).Post("/playback/control", h.handleJT808PlaybackControl)
+			r.With(middleware.RequireOperatePermission()).Post("/resources", h.handleJT808Resources)
+			r.With(middleware.RequireOperatePermission()).Post("/upload", h.handleJT808Upload)
+			r.With(middleware.RequireOperatePermission()).Post("/upload/control", h.handleJT808UploadControl)
+			r.With(middleware.RequireOperatePermission()).Post("/ptz", h.handleJT808PTZ)
+			r.With(middleware.RequireOperatePermission()).Post("/downlink", h.handleJT808Downlink)
+		})
 		r.Route("/api/gb28181", func(r chi.Router) {
 			r.Get("/devices", h.handleGB28181ListDevices)
 			r.Post("/play", h.handleGB28181Play)
@@ -855,6 +872,26 @@ func (h *Handler) SetGB28181Server(svr GB28181StreamStatus) {
 
 func (h *Handler) SetGB28181ServerInstance(svr *gb28181.Server) {
 	h.gb28181Server = svr
+}
+
+// jt808Signaling separates API dispatch from the terminal TCP implementation.
+type jt808Signaling interface {
+	ListTerminals() []jt808.Terminal
+	Play(jt808.PlayInput) (string, error)
+	StopPlay(jt808.StopPlayInput) error
+	LiveControl(jt808.LiveControlInput) error
+	ReportLoss(jt808.LossInput) error
+	QueryAV(key string) (jt808.AVProperties, error)
+	Playback(jt808.PlaybackInput) (string, error)
+	PlaybackControl(jt808.PlaybackControlInput) error
+	QueryResources(jt808.ResourceQuery) ([]jt808.Resource, error)
+	Upload(jt808.UploadInput) (uint16, error)
+	UploadControl(jt808.UploadControlInput) error
+	PTZ(jt808.PTZInput) error
+}
+
+func (h *Handler) SetJT808Server(svr jt808Signaling) {
+	h.jt808Server = svr
 }
 
 func (h *Handler) SetGB28181Restarter(r GB28181Restarter) {

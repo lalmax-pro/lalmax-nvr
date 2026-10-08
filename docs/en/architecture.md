@@ -35,12 +35,14 @@ flowchart TB
     RTSP[RTSP / ONVIF pull]
     GB[GB28181 device]
     Push[RTMP / SRT / WHIP publish]
+    JT[JT1078 terminal]
   end
 
   RTSP --> MediaAdp
   GB -->|REGISTER / Catalog| SIP
   SIP -->|INVITE| GB
   GB -->|PS/RTP push| Group
+  JT -->|TCP/UDP :1078| Group
   Push --> Group
   MediaAdp --> Group
   Group --> Out
@@ -74,6 +76,7 @@ How a stream enters the group differs by protocol. GB28181 is not RTSP pull.
 | ONVIF | SOAP: discovery / `GetStreamUri` | resolve RTSP, then **pull** | [ONVIF Guide](onvif-guide.md) |
 | GB28181 | SIP: device REGISTER, platform INVITE | device **pushes** PS/RTP to `media_ip` | [GB28181 Guide](gb28181-guide.md) |
 | RTMP / SRT / WHIP | encoder connects in | encoder **publishes** | `rtmp` / `srt` / `whip` in config |
+| JT1078 | optional JT808: after register/auth, 0x9101 live or 0x9201 playback | terminal **publishes** TCP/UDP frames to `:1078`. With signaling enabled, ungranted channels are rejected | [configuration](configuration.md) |
 | Xiaomi CS2 | cloud auth + P2P | NVR fetches frames, injects lalmax | [Xiaomi](xiaomi-setup.md) |
 
 ```mermaid
@@ -110,6 +113,7 @@ flowchart LR
   RTSP[RTSP / ONVIF] -->|single pull| G["lalmax group"]
   GB[GB28181 device] -->|PS/RTP push after INVITE| G
   Push[RTMP / SRT / WHIP] -->|publish| G
+  JT[JT1078 :1078] -->|TCP/UDP publish| G
   G -->|AddSubscriber| Rec[Group writer]
   G --> HLS[HLS / LL-HLS]
   G --> FLV[HTTP-FLV / WS-FLV]
@@ -209,6 +213,7 @@ flowchart TB
 | `health` | Multi-layer probes and auto-remediation |
 | `autodiscover` / `onvif` | WS-Discovery, Hello, PTZ |
 | `gb28181` | SIP platform, catalog, RTP receive after INVITE, playback, talk |
+| `jt808` | JT/T 808 signaling: register, live, playback, query, upload, PTZ. Media stays on lalmax `:1078` |
 | `storage` | SQLite + segment files |
 
 ## Default ports
@@ -222,6 +227,8 @@ flowchart TB
 | **18080** | lal HTTP (HLS-TS, HTTP-FLV) |
 | **11935** | RTMP ingest (when enabled) |
 | **19000** | SRT ingest (when enabled) |
+| **1078/tcp, 1078/udp** | JT1078 single-port ingest (enabled by default in embedded mode) |
+| **808/tcp** | JT808 signaling (when configured) |
 | **2121** | FTP |
 | **5060** | GB28181 SIP |
 | **8200** | DLNA HTTP (when enabled; discovery also needs UDP 1900 multicast; see [DLNA](dlna.md)) |
@@ -230,6 +237,7 @@ flowchart TB
 flowchart TB
   subgraph nvrPort [NVR]
     P9090[":9090 Web / API / WebDAV"]
+    P808[":808 JT808 signaling"]
     P2121[":2121 FTP"]
     P5060[":5060 GB28181 SIP"]
   end
@@ -240,6 +248,7 @@ flowchart TB
     P15544[":15544 RTSP"]
     P11935[":11935 RTMP"]
     P19000[":19000 SRT"]
+    P1078[":1078 JT1078"]
   end
 ```
 

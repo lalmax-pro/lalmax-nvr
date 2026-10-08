@@ -648,6 +648,67 @@ srt:
 
 > **推流格式**：SRT 推流应使用 streamid 格式：`#!::h=<camera_id>,m=publish`
 
+## JT1078 推流配置
+
+> **实验性功能**：JT1078/JT808 当前仅通过软件模拟终端和自动化测试验证，尚未使用真实车载终端验证。设备兼容性及实际运行稳定性仍需验证。
+
+JT/T 1078 由内嵌 lalmax 在 **TCP 与 UDP `:1078`** 收流，按包头 `SIM + 逻辑通道号` 分流，流名为 `{sim}_{channel}`，再 `FeedAvPacket` 进 group。视频支持 H.264 / H.265，音频支持 AAC / G.711A / G.711U。MP3 和 G.726 会丢掉，不送进 lal。embedded 模式首次生成或缺少该字段时默认开启。UDP 流无连接状态，空闲 15 秒后回收。`phone_len` 为 0 时自动识别 2016（6 字节）和 2019（10 字节）手机号，也可固定为 6 或 10。
+
+在 `lalmax.conf.json` 中配置：
+
+```json
+{
+  "lalmax": {
+    "jt1078_config": {
+      "enable": true,
+      "addr": ":1078",
+      "udp_enable": true,
+      "udp_addr": ":1078",
+      "udp_idle_timeout_ms": 15000,
+      "phone_len": 0
+    }
+  }
+}
+```
+
+JT808 信令服务在 `lalmax-nvr.yaml` 中单独启用（默认关闭）：
+
+```yaml
+jt808:
+  enabled: true
+  port: 808
+  media_ip: "192.168.1.100" # 必须是终端可达地址
+  auth_code: "set-a-private-jt808-secret" # 注册时下发，0102 鉴权时校验
+  media_tcp_port: 1078
+  media_udp_port: 1078
+  transport: tcp            # tcp 或 udp，影响 0x9101 / 0x9201 的端口字段
+  timeout: "3s"
+  # ftp_port: 2121          # 可选，0x9206 默认用 ftp.port
+  # ftp_user: ""            # 可选，默认 auth.username
+  # ftp_password: ""        # 可选明文；只配了 password_hash 时上传请求必须自带密码
+```
+
+终端注册/鉴权后，已鉴权接口如下；所有 POST 接口还要求 super_admin 操作权限。播放地址走现有 HLS / FLV / WebRTC，例如 `http://host:18080/live/1003_1.flv`。启用 JT808 后，只有先下发直播或回放的 `{SIM}_{通道}` 才允许从 `:1078` 推上来。
+
+- `GET /api/jt808/terminals` 列出终端。
+- `POST /api/jt808/play` 下发 0x9101。`data_type`：0 音视频、1 视频、2 对讲、3 监听、4 广播。`stream`：0 主码流、1 子码流。
+- `POST /api/jt808/stop` 关闭该通道音视频。`POST /api/jt808/control` 发送完整 0x9102：`control` 0 关闭、1 切码流、2 暂停、3 恢复、4 关对讲；`close_av` 0 全部、1 音频、2 视频。
+- `POST /api/jt808/loss` 发送 0x9105，`rate` 为 0–100。
+- `GET /api/jt808/av?key=1003` 查询 0x9003。
+- `POST /api/jt808/playback` 与 `POST /api/jt808/playback/control` 对应 0x9201 / 0x9202。时间用 RFC3339 或 `2006-01-02 15:04:05`。拖动时 `control` 为 5，并带 `drag_to`。
+- `POST /api/jt808/resources` 查询 0x9205。
+- `POST /api/jt808/upload` 与 `POST /api/jt808/upload/control` 对应 0x9206 / 0x9207。FTP 主机、端口、账号为空时使用本机 FTP 配置；`jt808.ftp_port`、`ftp_user`、`ftp_password` 可单独覆盖。只配置了密码哈希、没有明文密码时，请求里必须自己带密码。
+- `POST /api/jt808/ptz` 的 `action` 为 `rotate`、`focus`、`iris`、`wiper`、`infrared`、`zoom`。
+- `POST /api/jt808/downlink` 在终端 TCP 媒体连接已建立时下发对讲音频。`payload` 为 base64，`pt` 只接受 6（G.711A）、7（G.711U）、19（AAC）。
+
+没有自动摄像头建档，也没有 JT808 页面。定位、报警、电子围栏和加密帧不在这组接口里。
+
+### 模拟验证与已知限制
+
+在仓库根目录执行 `go test ./internal/jt808 ./tools/jtsim`，在 `third/lalmax` 目录执行 `go test ./jt1078 ./config`。模拟器覆盖 TCP/UDP 接入、2013/2019 报文头，以及未请求媒体和停止后媒体的拒绝行为。回归测试覆盖标准 0x1003 响应、授权清理、关闭连接和下行序号。
+
+媒体重启功能测试通过，但扩展的重启 race 测试仍报告底层 lal 日志初始化及 HTTP 启停的既有竞争，尚未修复。当前尚未使用真实设备验证。
+
 ## WHIP 推流配置
 
 ```yaml

@@ -21,6 +21,7 @@
 | [摄像头指南](camera-guide.md) | RTSP、HTTP 摄像头及编码配置 |
 | [ONVIF](onvif-guide.md) | 设备发现、取流和云台控制 |
 | [GB28181](gb28181-guide.md) | 国标设备接入与相关操作 |
+| [JT1078 / JT808](configuration.md#jt1078-推流配置) | `:1078` 媒体收流，以及可选的 `:808` 信令 |
 | [IPTV](iptv.md) | 导入和检测 M3U、浏览器播放；按需发布到 NVR 供其他协议播放，或创建录像计划 |
 | [小米摄像头](xiaomi-setup.md) | 小米摄像头接入 |
 | [MediaMTX](mediamtx-guide.md) | 通过可选的 MediaMTX 接入摄像头 |

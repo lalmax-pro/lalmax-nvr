@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUnmarshalStructuredConfig(t *testing.T) {
@@ -29,6 +30,9 @@ func TestUnmarshalStructuredConfig(t *testing.T) {
 	cfg := GetConfig()
 	if !cfg.SrtConfig.Enable || cfg.SrtConfig.Addr != ":6001" {
 		t.Fatalf("unexpected srt config: %+v", cfg.SrtConfig)
+	}
+	if cfg.JT1078Config.Enable || cfg.JT1078Config.Addr != "" {
+		t.Fatalf("unexpected default jt1078 config: %+v", cfg.JT1078Config)
 	}
 	if cfg.ServerId != "lalmax-1" {
 		t.Fatalf("unexpected server id: %s", cfg.ServerId)
@@ -83,6 +87,47 @@ func TestUnmarshalLegacyConfig(t *testing.T) {
 	}
 	if len(cfg.LalRawContent) != 0 {
 		t.Fatalf("legacy config should not set lal raw content: %s", string(cfg.LalRawContent))
+	}
+}
+
+func TestUnmarshalJT1078Config(t *testing.T) {
+	raw := []byte(`{
+		"lalmax": {
+			"jt1078_config": {
+				"enable": true,
+				"addr": ":1078"
+			}
+		}
+	}`)
+	if err := Unmarshal(raw); err != nil {
+		t.Fatalf("unmarshal jt1078 config: %v", err)
+	}
+	cfg := GetConfig()
+	if !cfg.JT1078Config.Enable || cfg.JT1078Config.Addr != ":1078" {
+		t.Fatalf("unexpected jt1078 config: %+v", cfg.JT1078Config)
+	}
+	if !cfg.JT1078Config.UDPEnabled() || cfg.JT1078Config.UDPListenAddr() != ":1078" {
+		t.Fatalf("udp should follow enable when udp_enable is omitted: %+v", cfg.JT1078Config)
+	}
+}
+
+func TestJT1078UDPConfigOverrides(t *testing.T) {
+	off := false
+	cfg := JT1078Config{
+		Enable:           true,
+		Addr:             ":1078",
+		UDPEnable:        &off,
+		UDPAddr:          ":2078",
+		UDPIdleTimeoutMs: 3000,
+	}
+	if cfg.UDPEnabled() {
+		t.Fatal("explicit udp_enable=false should win")
+	}
+	if cfg.UDPListenAddr() != ":2078" {
+		t.Fatalf("udp addr=%s", cfg.UDPListenAddr())
+	}
+	if cfg.UDPIdleTimeout() != 3*time.Second {
+		t.Fatalf("idle=%s", cfg.UDPIdleTimeout())
 	}
 }
 
