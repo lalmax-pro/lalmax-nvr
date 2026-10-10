@@ -37,13 +37,23 @@ lalmax-nvr 是叠在内嵌 [lalmax](https://github.com/q191201771/lal) 引擎上
 flowchart LR
   Cam[摄像头 RTSP / ONVIF] -->|拉流| Group[lalmax group]
   GB[GB28181] -->|INVITE 后 RTP 推流| Group
-  SIP[VoIP SIP 终端] -->|RTP / SRTP| Group
   JT[JT1078] -->|TCP/UDP :1078| Group
   Push[RTMP / SRT / WHIP / RTSP 推流] --> Group
+
+  Phone[SIP 电话 / 可视门禁] -->|REGISTER / INVITE| VoIPSIP[VoIP SIP 信令]
+  VoIPSIP <-->|注册 / 主动外呼| PBX[上级 SIP PBX]
+  Phone <-->|RTP / SRTP| VoIPMedia[VoIP 媒体桥接]
+  VoIPMedia -->|发布通话流| Group
+  Browser[Web 浏览器] -->|拨号 / 接听 / DTMF| API[NVR Web API]
+  API --> VoIPSIP
+  Browser <-->|WebRTC 麦克风 / 音频| Talk[WebRTC 对讲桥接]
+  Talk <-->|双向语音| VoIPMedia
+
   Group --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
   Group -->|AddSubscriber| Rec[组写入器]
   Plan[录像计划] -->|写盘开关| Rec
   Rec --> Disk[(MP4 + SQLite)]
+  VoIPSIP -->|通话记录| Disk
   Disk --> VOD[连续 VOD]
 ```
 

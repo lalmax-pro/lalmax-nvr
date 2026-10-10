@@ -37,13 +37,23 @@ lalmax-nvr is a business NVR on top of an embedded [lalmax](https://github.com/q
 flowchart LR
   Cam[Camera RTSP / ONVIF] -->|pull| Group[lalmax group]
   GB[GB28181] -->|RTP push after INVITE| Group
-  SIP[VoIP SIP terminals] -->|RTP / SRTP| Group
   JT[JT1078] -->|TCP/UDP :1078| Group
   Push[RTMP / SRT / WHIP / RTSP publish] --> Group
+
+  Phone[SIP phone / video door station] -->|REGISTER / INVITE| VoIPSIP[VoIP SIP signaling]
+  VoIPSIP <-->|REGISTER / outbound calls| PBX[Upstream SIP PBX]
+  Phone <-->|RTP / SRTP| VoIPMedia[VoIP media bridge]
+  VoIPMedia -->|publish call stream| Group
+  Browser[Web browser] -->|dial / answer / DTMF| API[NVR Web API]
+  API --> VoIPSIP
+  Browser <-->|WebRTC microphone / audio| Talk[WebRTC talk bridge]
+  Talk <-->|duplex audio| VoIPMedia
+
   Group --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
   Group -->|AddSubscriber| Rec[Group writer]
   Plan[Recording plan] -->|write switch| Rec
   Rec --> Disk[(MP4 + SQLite)]
+  VoIPSIP -->|call history| Disk
   Disk --> VOD[Continuous VOD]
 ```
 
