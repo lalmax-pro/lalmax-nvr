@@ -9,8 +9,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/q191201771/lal/pkg/base"
+	"github.com/q191201771/lal/pkg/logic"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGroupToStreamInfoAudioOnlyCustomizePublisherActive(t *testing.T) {
+	pub := logic.NewCustomizePubSessionContext("voip_audio")
+	defer pub.Dispose()
+	// Use lal's actual statistics representation: audio publishers have no video FPS.
+	data, err := json.Marshal(base.StatGroup{
+		StreamName: "voip_audio", AudioCodec: "OPUS", StatPub: base.Session2StatPub(pub),
+	})
+	require.NoError(t, err)
+	var group groupPayload
+	require.NoError(t, json.Unmarshal(data, &group))
+	info := groupToStreamInfo(group)
+	require.True(t, info.Active)
+	require.Equal(t, "OPUS", info.AudioCodec)
+	require.Zero(t, info.InFPS)
+	require.NotNil(t, info.Publisher)
+	require.Equal(t, pub.UniqueKey(), info.Publisher.SessionID)
+	require.Equal(t, "CUSTOMIZE", info.Publisher.Protocol)
+}
 
 func TestGroupToStreamInfoRuntimeStats(t *testing.T) {
 	t.Parallel()

@@ -20,15 +20,16 @@ const groupGOPLimit = 300
 // recSession is one camera's subscriber queue. OnMsg only enqueues.
 // Disk IO and the write switch run on loop.
 type recSession struct {
-	cameraID string
-	subID    string
-	audio    bool
-	segDur   time.Duration
-	store    segmentStore
-	db       recordingDB
-	bus      *event.EventBus
-	group    subscribeGroup
-	owner    *GroupWriter
+	cameraID  string
+	subID     string
+	audio     bool
+	audioOnly bool
+	segDur    time.Duration
+	store     segmentStore
+	db        recordingDB
+	bus       *event.EventBus
+	group     subscribeGroup
+	owner     *GroupWriter
 
 	queue   chan base.RtmpMsg
 	stop    chan struct{}
@@ -216,7 +217,17 @@ func (s *recSession) apply(msg base.RtmpMsg) {
 }
 
 func (s *recSession) writeAudio(msg base.RtmpMsg, af audioFrame) {
-	if s.mux == nil || len(af.frame) == 0 {
+	if len(af.frame) == 0 {
+		return
+	}
+	if s.audioOnly && s.mux == nil {
+		s.codec = af.codec
+		if err := s.openSegment(); err != nil {
+			slog.Error("audio recording open failed", "error", err)
+			return
+		}
+	}
+	if s.mux == nil {
 		return
 	}
 	if s.audioTrack == 0 {
@@ -239,8 +250,14 @@ func (s *recSession) writeAudio(msg base.RtmpMsg, af audioFrame) {
 		s.audioCodec = af.codec
 	}
 	dts := time.Duration(msg.Dts()) * time.Millisecond
-	if err := s.mux.WriteTimedSample(s.audioTrack, af.frame, dts, dts, time.Millisecond); err != nil {
+	if err := s.mux.WriteTimedSample(s.audioTrack, af.frame, dts, dts, audioDuration(af)); err != nil {
 		slog.Error("group recorder failed to write audio", "camera_id", s.cameraID, "error", err)
+	}
+	if s.audioOnly {
+		s.frames++
+		if time.Since(s.segStart) >= s.segDur {
+			s.closeSegment()
+		}
 	}
 }
 
@@ -251,7 +268,9 @@ func (s *recSession) openSegment() error {
 	}
 	m := muxer.NewMP4Muxer(tempPath)
 	var trackID int
-	if s.codec == string(model.FormatH265) {
+	if s.audioOnly {
+		// The first media packet supplies the audio track.
+	} else if s.codec == string(model.FormatH265) {
 		trackID, err = m.AddH265Track(s.vps, s.sps, s.pps)
 	} else {
 		trackID, err = m.AddH264Track(s.sps, s.pps)
@@ -350,4 +369,36 @@ func bytesEqual(a, b []byte) bool {
 		}
 	}
 	return true
+}
+
+func audioDuration(af audioFrame) time.Duration {
+	if af.codec == "g711" {
+		return time.Duration(len(af.frame)) * time.Second / 8000
+	}
+	if af.codec == "opus" && len(af.frame) > 0 {
+		c := af.frame[0] >> 3
+		var us int
+		switch {
+		case c >= 16:
+			us = 2500 << (c & 3)
+		case c >= 12:
+			us = 10000 << (c & 1)
+		default:
+			us = []int{10000, 20000, 40000, 60000}[c&3]
+		}
+		frames := 1
+		switch af.frame[0] & 3 {
+		case 1, 2:
+			frames = 2
+		case 3:
+			if len(af.frame) < 2 {
+				return time.Millisecond
+			}
+			frames = int(af.frame[1] & 63)
+		}
+		if frames > 0 && us*frames <= 120000 {
+			return time.Duration(us*frames) * time.Microsecond
+		}
+	}
+	return time.Millisecond
 }

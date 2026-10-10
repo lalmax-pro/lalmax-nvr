@@ -168,6 +168,11 @@ func decryptConfig(cfg *Config, key []byte) {
 			cfg.Cameras[i].Password = v
 		}
 	}
+	for i := range cfg.VoIP.Users {
+		if v, err := Decrypt(cfg.VoIP.Users[i].Password, key); err == nil {
+			cfg.VoIP.Users[i].Password = v
+		}
+	}
 	// Metrics auth password
 	if v, err := Decrypt(cfg.MetricsAuth.Password, key); err == nil {
 		cfg.MetricsAuth.Password = v
@@ -226,6 +231,14 @@ func encryptConfig(cfg *Config, key []byte) []string {
 			}
 		}
 	}
+	for i := range cfg.VoIP.Users {
+		if password := cfg.VoIP.Users[i].Password; password != "" && !IsEncrypted(password) {
+			if v, err := Encrypt(password, key); err == nil {
+				cfg.VoIP.Users[i].Password = v
+				encrypted = append(encrypted, fmt.Sprintf("voip.users[%d].password", i))
+			}
+		}
+	}
 	// Metrics auth password
 	if cfg.MetricsAuth.Password != "" && !IsEncrypted(cfg.MetricsAuth.Password) {
 		if v, err := Encrypt(cfg.MetricsAuth.Password, key); err == nil {
@@ -272,12 +285,19 @@ func SensitiveFieldPaths(cfg *Config) []string {
 		fields = append(fields, "auto_discover.default_password")
 	}
 
+	for i, u := range cfg.VoIP.Users {
+		if u.Password != "" && !IsEncrypted(u.Password) {
+			fields = append(fields, fmt.Sprintf("voip.users[%d].password", i))
+		}
+	}
+
 	return fields
 }
 
 // snapshotSensitive captures the current plaintext values of sensitive fields
 // so they can be restored after an encrypted save.
 type sensitiveSnapshot struct {
+	VoIPPasswords        []string
 	AuthPassword         string
 	MQTTPassword         string
 	XiaomiUserID         string
@@ -294,16 +314,25 @@ func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 		XiaomiUserID:         cfg.Xiaomi.UserID,
 		XiaomiToken:          cfg.Xiaomi.Token,
 		CameraPasswords:      make([]string, len(cfg.Cameras)),
+		VoIPPasswords:        make([]string, len(cfg.VoIP.Users)),
 		MetricsAuthPassword:  cfg.MetricsAuth.Password,
 		AutoDiscoverPassword: cfg.AutoDiscover.DefaultPassword,
 	}
 	for i := range cfg.Cameras {
 		s.CameraPasswords[i] = cfg.Cameras[i].Password
 	}
+	for i, u := range cfg.VoIP.Users {
+		s.VoIPPasswords[i] = u.Password
+	}
 	return s
 }
 
 func (s sensitiveSnapshot) restore(cfg *Config) {
+	for i := range cfg.VoIP.Users {
+		if i < len(s.VoIPPasswords) {
+			cfg.VoIP.Users[i].Password = s.VoIPPasswords[i]
+		}
+	}
 	cfg.Auth.Password = s.AuthPassword
 	cfg.MQTT.Password = s.MQTTPassword
 	cfg.Xiaomi.UserID = s.XiaomiUserID

@@ -33,6 +33,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
 	"github.com/lalmax-pro/lalmax-nvr/internal/relay"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
+	"github.com/lalmax-pro/lalmax-nvr/internal/voip"
 )
 
 var logger = slog.Default().With("component", "api")
@@ -144,6 +145,8 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
+	voipSettingsMu     sync.Mutex
+	voipRestarter      VoIPRestarter
 	db                 *storage.DB
 	store              *storage.Manager
 	authMW             func(http.Handler) http.Handler
@@ -203,6 +206,12 @@ type GB28181StreamStatus interface {
 type GB28181Restarter interface {
 	RestartGB28181(ctx context.Context, cfg *config.GB28181Config) error
 }
+
+type VoIPRestarter interface {
+	RestartVoIP(context.Context, *voip.Config) error
+}
+
+func (h *Handler) SetVoIPRestarter(r VoIPRestarter) { h.voipRestarter = r }
 
 type GB28181ServerProvider interface {
 	CurrentGB28181Server() *gb28181.Server
@@ -507,6 +516,19 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
 		r.Get("/api/settings/auto-discover", h.handleGetAutoDiscoverSettings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/auto-discover", h.handleUpdateAutoDiscoverSettings)
+		r.Get("/api/voip/status", h.handleVoIPStatus)
+		r.Get("/api/voip/calls/history", h.handleVoIPCallHistory)
+		r.With(middleware.RequireOperatePermission()).Post("/api/voip/calls", h.handleVoIPDial)
+		r.With(middleware.RequireOperatePermission()).Post("/api/voip/calls/{call_id}/talk-token", h.handleVoIPTalkToken)
+		r.With(middleware.RequireOperatePermission()).Post("/api/voip/calls/{call_id}/talk", h.handleVoIPTalk)
+		r.With(middleware.RequireOperatePermission()).Post("/api/voip/calls/{call_id}/talk/detach", h.handleVoIPTalkDetach)
+		r.With(middleware.RequireOperatePermission()).Post("/api/voip/calls/{call_id}/dtmf", h.handleVoIPDTMF)
+		r.With(middleware.RequireOperatePermission()).Post("/api/voip/calls/{call_id}/keepalive", h.handleVoIPTalkKeepalive)
+		r.With(middleware.RequireOperatePermission()).Post("/api/voip/calls/{call_id}/hangup", h.handleVoIPHangup)
+		r.With(middleware.RequireOperatePermission()).Post("/api/voip/calls/{call_id}/answer", h.handleVoIPAnswer)
+		r.With(middleware.RequireOperatePermission()).Post("/api/voip/calls/{call_id}/reject", h.handleVoIPReject)
+		r.Get("/api/settings/voip", h.handleGetVoIPSettings)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings/voip", h.handleUpdateVoIPSettings)
 		r.Get("/api/settings/gb28181", h.handleGetGB28181Settings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/gb28181", h.handleUpdateGB28181Settings)
 		r.Get("/api/settings/hls", h.handleGetHLSSettings)

@@ -455,6 +455,9 @@ func inferCustomizePushSource(info *media.StreamInfo, remoteAddr string) string 
 }
 
 func inferStreamSourceType(info media.StreamInfo, managed bool) string {
+	if isVoIPStreamID(info.StreamID) {
+		return "voip"
+	}
 	// IPTV channels are pulled by the NVR's HLS client and published into the
 	// embedded media engine. Their customize publisher session is an internal
 	// implementation detail, not an external WHIP ingest.
@@ -488,7 +491,14 @@ func isIPTVStreamID(streamID string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(streamID)), "iptv_")
 }
 
+func isVoIPStreamID(streamID string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(streamID)), "voip_")
+}
+
 func inferStreamSourceTypeForID(streamID, protocol string) string {
+	if isVoIPStreamID(streamID) {
+		return "voip"
+	}
 	if isIPTVStreamID(streamID) {
 		return "iptv"
 	}
@@ -512,6 +522,9 @@ func inferStreamSourceTypeFromProtocol(protocol string) string {
 }
 
 func (h *Handler) inferPromoteSourceType(ctx context.Context, streamID string, info *media.StreamInfo) string {
+	if isVoIPStreamID(streamID) {
+		return "voip"
+	}
 	if info != nil && info.Publisher != nil {
 		if src := pushSourceTypeFromProtocol(info.Publisher.Protocol); src != "" {
 			return src
@@ -614,6 +627,9 @@ func (h *Handler) attachStreamURLs(ctx context.Context, item *streamSummary) {
 		appName = "live"
 	}
 	item.PlayURLs = h.buildStreamURLs(ctx, item.StreamID, appName, []string{"hls", "ll-hls", "flv", "ws-flv", "webrtc", "fmp4", "rtmp", "rtsp"})
+	if item.SourceType == "voip" {
+		return
+	}
 	if !item.Managed {
 		if item.SourceType == "relay_pull" {
 			return

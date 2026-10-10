@@ -130,6 +130,22 @@ func TestInferStreamSourceType_IPTVIsNotWHIP(t *testing.T) {
 	require.Equal(t, "iptv", inferStreamSourceTypeForID(info.StreamID, "customize"))
 }
 
+func TestVoIPStreamSourceAndURLs(t *testing.T) {
+	t.Parallel()
+	h := &Handler{}
+	info := media.StreamInfo{
+		StreamID: "voip_1001_localcall", VideoCodec: "h264", AudioCodec: "opus",
+		Publisher: &media.SessionInfo{Protocol: "CUSTOMIZE"},
+	}
+	require.Equal(t, "voip", inferStreamSourceType(info, false))
+	require.Equal(t, "voip", inferStreamSourceType(info, true))
+	require.Equal(t, "voip", inferStreamSourceTypeForID(info.StreamID, "customize"))
+	require.Equal(t, "voip", h.inferPromoteSourceType(context.Background(), info.StreamID, &info))
+	item := streamSummary{StreamID: info.StreamID, SourceType: "voip"}
+	h.attachStreamURLs(context.Background(), &item)
+	require.Empty(t, item.IngestURLs, "a SIP call must not advertise WHIP/RTMP ingest URLs")
+}
+
 func TestResolveCameraSourceType_PrefersStoredValue(t *testing.T) {
 	t.Helper()
 	t.Parallel()

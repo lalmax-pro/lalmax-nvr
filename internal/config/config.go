@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/lalmax-pro/lalmax-nvr/internal/voip"
 )
 
 const (
@@ -27,6 +28,7 @@ const (
 )
 
 type Config struct {
+	VoIP          voip.Config         `yaml:"voip"`
 	Server        ServerConfig        `yaml:"server"`
 	Storage       StorageConfig       `yaml:"storage"`
 	Media         MediaConfig         `yaml:"media"`
@@ -630,6 +632,7 @@ func Save(path string, cfg *Config) error {
 	// Cameras are stored in SQLite, not in the YAML config file.
 	saveCfg := *cfg
 	saveCfg.Cameras = nil
+	saveCfg.VoIP = cfg.VoIP.Clone()
 
 	// Snapshot and encrypt sensitive fields if key is available
 	key := GetEncryptionKey()
@@ -669,6 +672,14 @@ func Save(path string, cfg *Config) error {
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
+	}
+	if cfg.VoIP.Enable {
+		if cfg.Media.Mode != "embedded" {
+			return fmt.Errorf("voip requires media.mode=embedded")
+		}
+		if err := cfg.VoIP.Validate(); err != nil {
+			return err
+		}
 	}
 	// cameras must have id and url
 	seen := make(map[string]int)
@@ -1317,6 +1328,8 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.WHIP.StreamKeys == nil {
 		cfg.WHIP.StreamKeys = make(map[string]string)
 	}
+
+	cfg.VoIP.Normalize()
 
 	// GB28181 defaults
 	if cfg.GB28181.Enabled == nil {

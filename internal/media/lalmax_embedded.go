@@ -1078,3 +1078,10 @@ func (e *EmbeddedLalmax) shutdownAndClear(server *lalmaxserver.LalMaxServer) {
 	cancel()
 	e.clearServer(server)
 }
+
+func (w *customizePubSessionWrapper) ResetMedia() error {
+	if ctx, ok := w.ctx.(interface{ ResetMedia() error }); ok {
+		return ctx.ResetMedia()
+	}
+	return nil
+}

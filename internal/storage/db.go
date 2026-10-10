@@ -149,6 +149,9 @@ func (d *DB) Init(ctx context.Context) error {
 	if err := d.createAITables(ctx); err != nil {
 		return err
 	}
+	if err := d.createVoIPCallTable(ctx); err != nil {
+		return err
+	}
 	// indices
 	idx1 := `CREATE INDEX IF NOT EXISTS idx_recordings_camera ON recordings(camera_id);`
 	idx2 := `CREATE INDEX IF NOT EXISTS idx_recordings_time ON recordings(started_at);`

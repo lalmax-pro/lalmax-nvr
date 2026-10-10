@@ -183,6 +183,7 @@ export interface AutoDiscoverSettings {
   scan_interval: string;
   default_username?: string;
   has_password?: boolean;
+  record_calls?: boolean;
   network_interface?: string;
 }
 
@@ -277,4 +278,112 @@ export async function updateHLSSettings(
     body: JSON.stringify(config),
     signal,
   });
+}
+
+// --- VoIP settings ---
+export interface VoIPUser {
+  username: string;
+  password?: string;
+  has_password?: boolean;
+  record_calls?: boolean;
+}
+export interface VoIPConfig {
+  enabled: boolean;
+  supported?: boolean;
+  manual_answer: boolean;
+  ring_timeout_ms: number;
+  pbx_server: string;
+  pbx_transport: 'udp' | 'tcp' | 'tls';
+  pbx_domain: string;
+  pbx_tls_server_name: string;
+  pbx_tls_ca_file: string;
+  pbx_username: string;
+  pbx_password?: string;
+  pbx_has_password?: boolean;
+  pbx_register_expires: number;
+  sip_listen_addr: string;
+  sip_tcp_listen_addr: string;
+  sip_tls_listen_addr: string;
+  sip_dtls_listen_addr: string;
+  sip_ws_listen_addr: string;
+  sip_wss_listen_addr: string;
+  sip_tls_cert_file: string;
+  sip_tls_key_file: string;
+  sip_ip: string;
+  media_ip: string;
+  media_port_min: number;
+  media_port_max: number;
+  realm: string;
+  auth_enable: boolean;
+  users: VoIPUser[];
+  rtp_timeout_ms: number;
+  ack_timeout_ms: number;
+  srtp_enable: boolean;
+  srtp_mandatory: boolean;
+  bundle_enable: boolean;
+}
+export function defaultVoIPConfig(): VoIPConfig {
+  return {
+    enabled: false, manual_answer: false, ring_timeout_ms: 30000,
+    pbx_server: '', pbx_transport: 'udp', pbx_domain: '', pbx_tls_server_name: '', pbx_tls_ca_file: '',
+    pbx_username: '', pbx_password: '', pbx_register_expires: 3600,
+    sip_listen_addr: '0.0.0.0:5070', sip_tcp_listen_addr: '',
+    sip_tls_listen_addr: '', sip_dtls_listen_addr: '', sip_ws_listen_addr: '', sip_wss_listen_addr: '',
+    sip_tls_cert_file: '', sip_tls_key_file: '', sip_ip: '', media_ip: '',
+    media_port_min: 41000, media_port_max: 42000, realm: 'lalmax-nvr',
+    auth_enable: false, users: [], rtp_timeout_ms: 15000, ack_timeout_ms: 32000,
+    srtp_enable: false, srtp_mandatory: false, bundle_enable: false,
+  };
+}
+export async function getVoIPSettings(signal?: AbortSignal): Promise<VoIPConfig> {
+  return apiRequest<VoIPConfig>('/settings/voip', { signal });
+}
+export async function updateVoIPSettings(config: VoIPConfig, signal?: AbortSignal): Promise<{ status: string }> {
+  const { supported, pbx_has_password, users, ...settings } = config;
+  return apiRequest<{ status: string }>('/settings/voip', {
+    method: 'PUT',
+    body: JSON.stringify({ ...settings, users: users.map(({ username, password, record_calls }) => ({ username, password, record_calls })) }),
+    signal,
+  });
+}
+
+export interface VoIPStatus {
+ enabled:boolean;
+ incoming_calls_need_answer:boolean;
+ upstream_registration:{configured:boolean;server?:string;transport?:string;username?:string;state:string;expires_at?:string;last_error?:string};
+ endpoints:{user:string;contact:string;user_agent:string;expires_at:string;remote_addr:string;transport:string}[];
+ calls:{call_id:string;stream_id:string;from_user:string;to_user:string;state:string;direction?:string;incoming_pending?:boolean;failure_reason?:string;browser_ready?:boolean;talk_available?:boolean;dtmf_available?:boolean;held:boolean;started_at:string;duration_seconds:number;remote_addr:string;transport:string;audio_codec?:string;video_codec?:string}[];
+}
+export interface VoIPCallHistoryEntry {
+ call_id:string;direction:string;from_user:string;to_user:string;outcome:string;started_at:string;answered_at?:string;ended_at:string;
+ duration_seconds:number;failure_reason?:string;remote_addr?:string;transport?:string;audio_codec?:string;video_codec?:string;stream_id?:string;
+}
+export interface VoIPCallHistory {
+ items:VoIPCallHistoryEntry[];total:number;limit:number;offset:number;
+}
+export function getVoIPCallHistory(limit=20,offset=0,signal?:AbortSignal):Promise<VoIPCallHistory> {
+ return apiRequest(`/voip/calls/history?limit=${limit}&offset=${offset}`,{signal});
+}
+export function getVoIPStatus(signal?:AbortSignal):Promise<VoIPStatus> {return apiRequest('/voip/status',{signal});}
+export function hangupVoIPCall(id:string):Promise<{status:string}> {return apiRequest(`/voip/calls/${encodeURIComponent(id)}/hangup`,{method:'POST'});}
+export function answerVoIPCall(id:string):Promise<{status:string}> {return apiRequest(`/voip/calls/${encodeURIComponent(id)}/answer`,{method:'POST'});}
+export function rejectVoIPCall(id:string):Promise<{status:string}> {return apiRequest(`/voip/calls/${encodeURIComponent(id)}/reject`,{method:'POST'});}
+export type VoIPMediaSecurity = '' | 'rtp' | 'sdes' | 'dtls';
+export function dialVoIPCall(user:string,security:VoIPMediaSecurity,sdp:string,signal?:AbortSignal):Promise<{call_id:string;state:string;talk_token:string}> {
+ return apiRequest('/voip/calls',{method:'POST',body:JSON.stringify({user,security,sdp}),signal});
+}
+export function attachVoIPTalk(id:string,talk_token:string,sdp:string,signal?:AbortSignal):Promise<{type:'answer';sdp:string}> {
+ return apiRequest(`/voip/calls/${encodeURIComponent(id)}/talk`,{method:'POST',body:JSON.stringify({talk_token,sdp}),signal});
+}
+export function claimVoIPTalk(id:string):Promise<{talk_token:string}> {
+ return apiRequest(`/voip/calls/${encodeURIComponent(id)}/talk-token`,{method:'POST'});
+}
+export function detachVoIPTalk(id:string,talk_token:string):Promise<{status:string}> {
+ return apiRequest(`/voip/calls/${encodeURIComponent(id)}/talk/detach`,{method:'POST',body:JSON.stringify({talk_token})});
+}
+export function sendVoIPDTMF(id:string,digit:string):Promise<{status:string}> {
+ return apiRequest(`/voip/calls/${encodeURIComponent(id)}/dtmf`,{method:'POST',body:JSON.stringify({digit})});
+}
+export function keepVoIPTalk(id:string,talk_token:string):Promise<{status:string}> {
+ return apiRequest(`/voip/calls/${encodeURIComponent(id)}/keepalive`,{method:'POST',body:JSON.stringify({talk_token})});
 }

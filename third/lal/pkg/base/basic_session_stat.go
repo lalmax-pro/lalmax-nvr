@@ -44,8 +44,11 @@ func NewBasicSessionStat(sessionType SessionType, remoteAddr string) BasicSessio
 	s.stat.StartTime = ReadableNowTime()
 	s.stat.RemoteAddr = remoteAddr
 
-	// TODO(chef): [fix] 为customize pub添加 202205
 	switch sessionType {
+	case SessionTypeCustomizePub:
+		s.stat.SessionId = GenUkCustomizePubSession()
+		s.stat.BaseType = SessionBaseTypePubStr
+		s.stat.Protocol = SessionProtocolCustomizeStr
 	case SessionTypeRtmpServerSession:
 		s.stat.SessionId = GenUkRtmpServerSession()
 		s.stat.BaseType = SessionBaseTypePubSubStr

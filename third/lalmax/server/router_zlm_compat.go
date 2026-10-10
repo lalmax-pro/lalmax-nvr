@@ -128,7 +128,7 @@ func (s *LalMaxServer) zlmCloseStreamsHandler(c *gin.Context) {
 // ---------- getServerConfig ----------
 
 func (s *LalMaxServer) zlmGetServerConfigHandler(c *gin.Context) {
-	cfg := buildZlmServerConfig(s.conf)
+	cfg := buildZlmServerConfig(s.configuration())
 	c.JSON(http.StatusOK, ZlmGetServerConfigResp{Code: 0, Data: []map[string]any{cfg}})
 }
 
@@ -143,6 +143,8 @@ func (s *LalMaxServer) zlmSetServerConfigHandler(c *gin.Context) {
 		return
 	}
 
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	changed := 0
 	zlmCfg := s.conf.HttpNotifyConfig.ZlmCompatHookConfig
 
@@ -191,7 +193,7 @@ func (s *LalMaxServer) zlmSetServerConfigHandler(c *gin.Context) {
 
 	if changed > 0 {
 		s.conf.HttpNotifyConfig.Enable = true
-		s.notifyHub.UpdateZlmHookConfig(zlmCfg)
+		s.notifyHub.UpdateZlmHookConfig(zlmCfg, s.conf.HttpNotifyConfig)
 		s.conf.HttpNotifyConfig.ZlmCompatHookConfig = zlmCfg
 
 		// 同步清零 conf 中的原有 hook URL
@@ -281,7 +283,7 @@ func (s *LalMaxServer) zlmStartRecordHandler(c *gin.Context) {
 		return
 	}
 
-	rtmpAddr := extractHostPort(s.conf, "rtmp")
+	rtmpAddr := extractHostPort(s.configuration(), "rtmp")
 	if rtmpAddr == "" {
 		c.JSON(http.StatusOK, ZlmStartRecordResp{ZlmFixedHeader: ZlmFixedHeader{Code: -1, Msg: "rtmp not configured"}})
 		return
@@ -379,7 +381,7 @@ func (s *LalMaxServer) zlmWebrtcHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
-		"id":   s.conf.ServerId,
+		"id":   s.configuration().ServerId,
 		"sdp":  sdp,
 		"type": "answer",
 	})

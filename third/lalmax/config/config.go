@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sync"
 	"time"
 )
 
 var defaultConfig Config
+var defaultConfigMu sync.RWMutex
 
 type Config struct {
 	SrtConfig        SrtConfig        `json:"srt_config"`      // srt配置
@@ -222,7 +224,9 @@ func Unmarshal(data []byte) error {
 		}
 	}
 
+	defaultConfigMu.Lock()
 	defaultConfig = cfg
+	defaultConfigMu.Unlock()
 	return nil
 }
 
@@ -267,7 +271,23 @@ func unmarshalConfig(data []byte, cfg *Config) error {
 }
 
 func GetConfig() *Config {
-	return &defaultConfig
+	defaultConfigMu.RLock()
+	defer defaultConfigMu.RUnlock()
+	return defaultConfig.Clone()
+}
+
+// Clone detaches mutable slices and pointer options from another server instance.
+func (c *Config) Clone() *Config {
+	cfg := *c
+	cfg.LalRawContent = append([]byte(nil), cfg.LalRawContent...)
+	cfg.RtcConfig.ICEHostNATToIPs = append([]string(nil), cfg.RtcConfig.ICEHostNATToIPs...)
+	cfg.HttpConfig.CtrlAuthWhitelist.IPs = append([]string(nil), cfg.HttpConfig.CtrlAuthWhitelist.IPs...)
+	cfg.HttpConfig.CtrlAuthWhitelist.Secrets = append([]string(nil), cfg.HttpConfig.CtrlAuthWhitelist.Secrets...)
+	if cfg.JT1078Config.UDPEnable != nil {
+		enabled := *cfg.JT1078Config.UDPEnable
+		cfg.JT1078Config.UDPEnable = &enabled
+	}
+	return &cfg
 }
 
 // SaveToFile 将当前配置持久化到配置文件

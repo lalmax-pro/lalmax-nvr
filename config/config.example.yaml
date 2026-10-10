@@ -271,3 +271,32 @@ observability:
 #         target_codec: "h264"    # Target codec: h264, h265 (default: same as source)
 #         preset: "ultrafast"     # FFmpeg preset: ultrafast, faster, medium (default: ultrafast)
 #         bitrate: "2M"           # Target bitrate (e.g. "1M", "2M", "500K")
+
+# SIP inbound calls are published as voip_<caller>_<short-call-id> streams.
+# Requires media.mode: embedded. SIP port 5070 avoids GB28181's 5060.
+voip:
+  enabled: false
+  manual_answer: false       # true to ring in the Web UI and require an operator to answer
+  ring_timeout_ms: 30000
+  pbx_server: ""              # e.g. "pbx.example.com:5060"
+  pbx_transport: udp           # udp | tcp | tls
+  pbx_domain: ""              # optional SIP domain; defaults to the PBX server host
+  pbx_tls_server_name: ""     # optional TLS certificate name override
+  pbx_tls_ca_file: ""         # optional private CA PEM; empty uses system trust roots
+  pbx_username: ""
+  pbx_password: ""            # secret is retained when omitted from Web settings updates
+  pbx_register_expires: 3600
+  sip_listen_addr: "0.0.0.0:5070"
+  sip_tcp_listen_addr: ""  # set to "0.0.0.0:5070" to enable TCP
+  sip_ip: ""             # advertised IPv4; configure for remote clients
+  media_ip: ""           # advertised RTP IPv4; sockets bind on all interfaces
+  media_port_min: 41000
+  media_port_max: 42000
+  realm: "lalmax-nvr"
+  auth_enable: false
+  users: []              # [{username: "door", password: "change-me", record_calls: true}]，录制须启用 auth_enable
+  rtp_timeout_ms: 15000
+  ack_timeout_ms: 32000
+  srtp_enable: false
+  srtp_mandatory: false
+  bundle_enable: false
