@@ -24,7 +24,7 @@ type track struct {
 	vps         []byte
 	isH265      bool
 	isAudio     bool
-	audioCodec  string // "aac" or "g711"
+	audioCodec  string // "aac", "g711" or "opus"
 	audioConfig []byte // AAC AudioSpecificConfig bytes
 	g711MULaw   bool   // true=μ-law, false=A-law
 	g711Rate    int    // sample rate (typically 8000)
@@ -131,7 +131,7 @@ func (m *MP4Muxer) AddH265Track(vps, sps, pps []byte) (int, error) {
 }
 
 // AddAudioTrack adds an audio track for the given codec.
-// Supported codecs: "aac" (AudioSpecificConfig required), "g711" (audioConfig ignored).
+// Supported codecs: "aac" (AudioSpecificConfig required), "g711" and "opus".
 // For G.711, muLaw=true selects μ-law (PT=0), muLaw=false selects A-law (PT=8).
 // sampleRate is typically 8000 for G.711.
 // Returns the track ID (1-based) or an error.
@@ -143,8 +143,8 @@ func (m *MP4Muxer) AddAudioTrack(codec string, audioConfig []byte) (int, error) 
 		return 0, errors.New("muxer is closed")
 	}
 
-	if codec != "aac" && codec != "g711" {
-		return 0, fmt.Errorf("unsupported audio codec: %s (only aac and g711 are supported)", codec)
+	if codec != "aac" && codec != "g711" && codec != "opus" {
+		return 0, fmt.Errorf("unsupported audio codec: %s (aac, g711 and opus are supported)", codec)
 	}
 
 	t := &track{
@@ -494,6 +494,11 @@ func writeTrak(w *mp4.Writer, tr *track) error {
 	}
 	_ = bi2
 
+	if tr.isAudio && tr.audioCodec == "opus" {
+		if err := writeOpusEdit(w, tr); err != nil {
+			return err
+		}
+	}
 	// mdia
 	if err := writeMdia(w, tr); err != nil {
 		return err
@@ -649,7 +654,11 @@ func writeStbl(w *mp4.Writer, tr *track) error {
 		return err
 	}
 	if tr.isAudio {
-		if tr.audioCodec == "g711" {
+		if tr.audioCodec == "opus" {
+			if err := writeOpusSampleEntry(w); err != nil {
+				return err
+			}
+		} else if tr.audioCodec == "g711" {
 			if err := writeG711SampleEntry(w, tr); err != nil {
 				return err
 			}
@@ -697,6 +706,12 @@ func writeStbl(w *mp4.Writer, tr *track) error {
 	}
 	if err := writeSTSS(w, tr); err != nil {
 		return err
+	}
+
+	if tr.isAudio && tr.audioCodec == "opus" {
+		if err := writeOpusRecovery(w, tr); err != nil {
+			return err
+		}
 	}
 
 	// stsc — one sample per chunk so audio/video can be interleaved in mdat.
@@ -1435,4 +1450,131 @@ func stripAnnexBPrefix(data []byte) []byte {
 	default:
 		return data
 	}
+}
+
+// Opus-in-ISOBMFF uses an Opus sample entry and a dOps configuration box.
+// RTP Opus has a 48 kHz clock. The first 80 ms primes the decoder. Mapping family 0
+// covers mono/stereo streams; the receiver exposes a stereo output track.
+func writeOpusSampleEntry(w *mp4.Writer) error {
+	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("Opus")}); err != nil {
+		return err
+	}
+	data := make([]byte, 28)
+	data[7] = 1
+	data[17] = 2
+	data[19] = 16
+	binary.BigEndian.PutUint32(data[24:], 48000<<16)
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("dOps")}); err != nil {
+		return err
+	}
+	cfg := make([]byte, 11)
+	cfg[1] = 2
+	binary.BigEndian.PutUint16(cfg[2:], 3840) // 80 ms decoder pre-roll
+	binary.BigEndian.PutUint32(cfg[4:], 48000)
+	if _, err := w.Write(cfg); err != nil {
+		return err
+	}
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_, err := w.EndBox()
+	return err
+}
+
+// Opus requires 80 ms recovery after seeking. Distances are sample counts,
+// calculated from packet durations rather than assuming 20 ms packets.
+func writeOpusRecovery(w *mp4.Writer, tr *track) error {
+	distances := []int16{}
+	indices := make([]uint32, len(tr.samples))
+	for i := range tr.samples {
+		duration := time.Duration(0)
+		count := 0
+		for j := i - 1; j >= 0 && duration < 80*time.Millisecond; j-- {
+			duration += tr.samples[j].duration
+			count++
+		}
+		if count == 0 {
+			count = 1
+		}
+		distance := int16(-count)
+		index := 0
+		for j, d := range distances {
+			if d == distance {
+				index = j + 1
+				break
+			}
+		}
+		if index == 0 {
+			distances = append(distances, distance)
+			index = len(distances)
+		}
+		indices[i] = uint32(index)
+	}
+	description := make([]byte, 16+2*len(distances))
+	description[0] = 1
+	copy(description[4:8], "roll")
+	binary.BigEndian.PutUint32(description[8:], 2)
+	binary.BigEndian.PutUint32(description[12:], uint32(len(distances)))
+	for i, d := range distances {
+		binary.BigEndian.PutUint16(description[16+2*i:], uint16(d))
+	}
+	if err := writeRawBox(w, "sgpd", description); err != nil {
+		return err
+	}
+	type run struct{ count, index uint32 }
+	runs := []run{}
+	for _, index := range indices {
+		if len(runs) > 0 && runs[len(runs)-1].index == index {
+			runs[len(runs)-1].count++
+		} else {
+			runs = append(runs, run{1, index})
+		}
+	}
+	groups := make([]byte, 12+8*len(runs))
+	copy(groups[4:8], "roll")
+	binary.BigEndian.PutUint32(groups[8:], uint32(len(runs)))
+	for i, r := range runs {
+		binary.BigEndian.PutUint32(groups[12+8*i:], r.count)
+		binary.BigEndian.PutUint32(groups[16+8*i:], r.index)
+	}
+	return writeRawBox(w, "sbgp", groups)
+}
+func writeRawBox(w *mp4.Writer, kind string, data []byte) error {
+	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType(kind)}); err != nil {
+		return err
+	}
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	_, err := w.EndBox()
+	return err
+}
+
+// Keep the media timeline aligned with video while using the first packets
+// for decoder priming. An empty edit covers the discarded startup interval.
+func writeOpusEdit(w *mp4.Writer, tr *track) error {
+	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("edts")}); err != nil {
+		return err
+	}
+	duration := trackDurationMs(tr)
+	skip := uint32(80)
+	if duration < skip {
+		skip = duration
+	}
+	data := make([]byte, 32)
+	binary.BigEndian.PutUint32(data[4:], 2)
+	binary.BigEndian.PutUint32(data[8:], skip)
+	binary.BigEndian.PutUint32(data[12:], math.MaxUint32)
+	binary.BigEndian.PutUint16(data[16:], 1)
+	binary.BigEndian.PutUint32(data[20:], duration-skip)
+	binary.BigEndian.PutUint32(data[24:], skip)
+	binary.BigEndian.PutUint16(data[28:], 1)
+	if err := writeRawBox(w, "elst", data); err != nil {
+		return err
+	}
+	_, err := w.EndBox()
+	return err
 }

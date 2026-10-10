@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -50,6 +51,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/streamhistory"
 	ui "github.com/lalmax-pro/lalmax-nvr/internal/ui"
 	"github.com/lalmax-pro/lalmax-nvr/internal/upload"
+	"github.com/lalmax-pro/lalmax-nvr/internal/voip"
 	"github.com/lalmax-pro/lalmax-nvr/internal/webdav"
 	_ "github.com/lalmax-pro/lalmax-nvr/internal/xiaomi"
 	lalmaxserver "github.com/q191201771/lalmax/server"
@@ -400,13 +402,17 @@ type App struct {
 	apiHandler   *api.Handler
 
 	// Optional network services (nil when disabled)
-	mqttClient *mqtt.Client
-	ftpServer  *ftp.Server
-	rtmpIngest *media.IngestHandler
-	srtIngest  *media.IngestHandler
-	whipIngest *media.IngestHandler
-	gb28181Svr *gb28181.Server
-	jt808Svr   *jt808.Server
+	mqttClient  *mqtt.Client
+	ftpServer   *ftp.Server
+	rtmpIngest  *media.IngestHandler
+	srtIngest   *media.IngestHandler
+	whipIngest  *media.IngestHandler
+	gb28181Svr  *gb28181.Server
+	jt808Svr    *jt808.Server
+	voipSvr     *voip.Server
+	voipMu      sync.Mutex
+	voipApplied voip.Config
+	voipStopped bool
 
 	// Stream management
 	banMgr     *ban.Manager
@@ -855,6 +861,7 @@ func (a *App) buildRouter() http.Handler {
 		handler.SetJT808Server(a.jt808Svr)
 	}
 	handler.SetGB28181Restarter(a)
+	handler.SetVoIPRestarter(a)
 	handler.SetWSManager(a.media.WS())
 	handler.SetHealthManager(a.healthMgr)
 	handler.SetStabilityProvider(a.healthMgr)
@@ -1207,6 +1214,16 @@ func (a *App) Start() error {
 		}
 	}
 
+	if a.cfg != nil && a.cfg.VoIP.Enable {
+		if err := a.RestartVoIP(ctx, &a.cfg.VoIP); err != nil {
+			cancel()
+			if a.jt808Svr != nil {
+				a.jt808Svr.Stop()
+			}
+			return fmt.Errorf("start VoIP signaling: %w", err)
+		}
+	}
+
 	// Recording plans are the only thing that starts recording. Load them before
 	// the camera manager starts so its first decision already sees them.
 	if err := a.recPlanner.Refresh(ctx); err != nil {
@@ -1516,6 +1533,8 @@ func (a *App) Stop() error {
 			log.Info("stopping JT808 signaling server")
 			a.jt808Svr.Stop()
 		}
+		a.stopVoIP()
+
 		if a.mediaEngine != nil {
 			log.Info("stopping media engine")
 			_ = a.mediaEngine.Shutdown(shutdownCtx)

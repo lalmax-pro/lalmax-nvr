@@ -64,6 +64,8 @@
     switch (stream.source_type) {
       case 'camera':
         return t('streams.sourceCamera');
+      case 'voip':
+        return t('streams.sourceVoIP');
       case 'iptv':
         return t('streams.sourceIPTV');
       case 'rtmp_push':

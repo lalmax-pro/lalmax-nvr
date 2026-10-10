@@ -11,7 +11,7 @@ func (s *LalMaxServer) InitRouter(router *gin.Engine) {
 	s.initRtcRouter(router)
 	s.initFmp4Router(router)
 
-	auth := Authentication(s.conf.HttpConfig.CtrlAuthWhitelist.Secrets, s.conf.HttpConfig.CtrlAuthWhitelist.IPs)
+	auth := Authentication(s.configuration().HttpConfig.CtrlAuthWhitelist.Secrets, s.configuration().HttpConfig.CtrlAuthWhitelist.IPs)
 	s.initHookRouter(router, auth)
 	s.initStatRouter(router, auth)
 	s.initCtrlRouter(router, auth)

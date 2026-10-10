@@ -1350,3 +1350,16 @@ func TestAIConfigDefaults(t *testing.T) {
 	require.Equal(t, 0.3, cfg.AI.ConfidenceThreshold)
 	require.Equal(t, "disabled", cfg.AI.Backend)
 }
+
+func TestVoIPConfiguration(t *testing.T) {
+	cfg := &Config{}
+	cfg.ApplyDefaults()
+	cfg.VoIP.Enable = true
+	require.Equal(t, "0.0.0.0:5070", cfg.VoIP.SipListenAddr)
+	require.NoError(t, Validate(cfg))
+	cfg.Media.Mode = "http"
+	require.ErrorContains(t, Validate(cfg), "embedded")
+	cfg.Media.Mode = "embedded"
+	cfg.VoIP.MediaPortMax = cfg.VoIP.MediaPortMin - 1
+	require.ErrorContains(t, Validate(cfg), "port range")
+}

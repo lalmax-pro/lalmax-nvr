@@ -20,6 +20,7 @@
     Radio,
     Link,
     BarChart3,
+    Phone,
     Settings,
     ChevronLeft,
     ChevronRight,
@@ -100,6 +101,7 @@
     { href: '#/users', labelKey: 'nav.users', route: '/users', icon: Users },
     { href: '#/logs', labelKey: 'nav.logs', route: '/logs', icon: ClipboardList },
     { href: '#/stats', labelKey: 'nav.stats', route: '/stats', icon: BarChart3 },
+    { href: '#/voip', labelKey: 'nav.voip', route: '/voip', icon: Phone },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings', icon: Settings },
   ];
 

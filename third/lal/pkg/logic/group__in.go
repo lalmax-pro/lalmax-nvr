@@ -42,6 +42,22 @@ func (group *Group) AddCustomizePubSession(streamName string) (ICustomizePubSess
 	}
 
 	group.customizePubSession.WithOnRtmpMsg(group.OnReadRtmpAvMsg)
+	ctx := group.customizePubSession
+	ctx.resetMedia = func() error {
+		group.mutex.Lock()
+		defer group.mutex.Unlock()
+		if group.customizePubSession != ctx {
+			return base.ErrDisposedInStream
+		}
+		group.sdpCtx = nil
+		group.rtmpGopCache.Clear()
+		group.httpflvGopCache.Clear()
+		group.httptsGopCache.Clear()
+		if group.shouldStartRtspRemuxer() {
+			group.rtmp2RtspRemuxer = remux.NewRtmp2RtspRemuxer(group.onSdpFromRemux, group.onRtpPacketFromRemux)
+		}
+		return nil
+	}
 
 	return group.customizePubSession, nil
 }

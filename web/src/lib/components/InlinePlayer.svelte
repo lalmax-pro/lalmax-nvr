@@ -24,13 +24,15 @@
   let videoLoading = $state(false);
   let error = $state('');
   let mjpegPlayer: MjpegPlayer | undefined = $state();
-  let videoEl: HTMLVideoElement | undefined = $state();
+  let videoEl: HTMLMediaElement | undefined = $state();
   let lastLoadedId = $state('');
 
   let currentIndex = $derived(allRecordings.findIndex(r => r.id === recording.id));
   let hasPrevious = $derived(currentIndex > 0);
   let hasNext = $derived(currentIndex < allRecordings.length - 1);
+  let isAudioFormat = $derived(['aac','g711','opus'].includes(recording.format));
   let isVideoFormat = $derived(
+    isAudioFormat ||
     recording.format === 'h264' || recording.format === 'h265' || recording.format === 'timelapse'
   );
 
@@ -183,19 +185,19 @@
     {:else if recording.format === 'mjpeg'}
       <MjpegPlayer bind:this={mjpegPlayer} recordingId={recording.id} oninitdone={() => {}} />
     {:else if videoSrc}
-      <video
+      <svelte:element this={isAudioFormat ? 'audio' : 'video'}
         bind:this={videoEl}
         controls
         preload="metadata"
-        class={embedded ? 'w-full h-full object-contain' : 'w-full max-h-[60vh]'}
+        class={isAudioFormat ? 'w-full p-4' : embedded ? 'w-full h-full object-contain' : 'w-full max-h-[60vh]'}
         src={videoSrc}
         onended={handleVideoEnded}
         onerror={handleVideoError}
         ontimeupdate={() => onTime?.(videoEl?.currentTime || 0)}
       >
         <track kind="captions" />
-        Your browser does not support video.
-      </video>
+        Your browser does not support this media.
+      </svelte:element>
     {/if}
   </div>
 </div>

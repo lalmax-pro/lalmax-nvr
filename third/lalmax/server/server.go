@@ -10,7 +10,9 @@ import (
 
 	"github.com/q191201771/lalmax/srt"
 
+	"github.com/pion/rtp"
 	"github.com/q191201771/lalmax/rtc"
+	"github.com/q191201771/lalmax/voip/sdp"
 
 	"github.com/q191201771/lalmax/gb28181/rtppub"
 	"github.com/q191201771/lalmax/jt1078"
@@ -48,6 +50,7 @@ type LalMaxServer struct {
 	udptsMgr    *udpts.Manager
 	recorder    *ffmpegRecorder
 
+	configMu sync.RWMutex
 	mu       sync.Mutex
 	started  bool
 	ready    bool
@@ -100,6 +103,7 @@ func (s *LalMaxServer) PushJT1078(pkt jt1078.Packet) error {
 }
 
 func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxServer, error) {
+	conf = conf.Clone()
 	var serverOpts lalMaxServerOptions
 	for _, opt := range opts {
 		opt(&serverOpts)
@@ -273,7 +277,7 @@ func (s *LalMaxServer) Start(ctx context.Context) error {
 		}
 		go func(server *http.Server) {
 			nazalog.Infof("lalmax https listen. addr=%s", server.Addr)
-			if err := server.ListenAndServeTLS(s.conf.HttpConfig.HttpsCertFile, s.conf.HttpConfig.HttpsKeyFile); err != nil && err != http.ErrServerClosed {
+			if err := server.ListenAndServeTLS(s.configuration().HttpConfig.HttpsCertFile, s.configuration().HttpConfig.HttpsKeyFile); err != nil && err != http.ErrServerClosed {
 				nazalog.Infof("lalmax https stop. addr=%s err=%v", server.Addr, err)
 			}
 		}(s.httpsServer)
@@ -399,6 +403,12 @@ func (s *LalMaxServer) Close() {
 	go s.lalsvr.Dispose()
 }
 
+func (s *LalMaxServer) configuration() *config.Config {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.conf.Clone()
+}
+
 func (s *LalMaxServer) Ready() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -436,7 +446,7 @@ func (s *LalMaxServer) runPeriodicUpdate(ctx context.Context) {
 		return
 	}
 
-	intervalSec := s.conf.HttpNotifyConfig.UpdateIntervalSec
+	intervalSec := s.configuration().HttpNotifyConfig.UpdateIntervalSec
 	if intervalSec <= 0 {
 		return
 	}
@@ -462,7 +472,7 @@ func (s *LalMaxServer) runPeriodicKeepalive(ctx context.Context) {
 		return
 	}
 
-	intervalSec := s.conf.HttpNotifyConfig.KeepaliveIntervalSec
+	intervalSec := s.configuration().HttpNotifyConfig.KeepaliveIntervalSec
 	if intervalSec <= 0 {
 		return
 	}
@@ -497,6 +507,9 @@ func (s *LalMaxServer) SetHlsEnabled(enable bool) {
 	if s == nil {
 		return
 	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
 	if s.lalsvr != nil {
 		s.lalsvr.SetHlsEnabled(enable)
 	}
@@ -511,6 +524,9 @@ func (s *LalMaxServer) SetHlsOnDemand(onDemand bool, idleTimeoutMs int) {
 	if s == nil {
 		return
 	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
 	if s.lalsvr != nil {
 		s.lalsvr.SetHlsOnDemand(onDemand, idleTimeoutMs)
 	}
@@ -521,4 +537,12 @@ func (s *LalMaxServer) SetHlsOnDemand(onDemand bool, idleTimeoutMs int) {
 	if s.hlssvr != nil {
 		s.hlssvr.SetOnDemand(onDemand, idleTimeoutMs)
 	}
+}
+
+// NewTalkSession shares the configured WebRTC ICE addresses and mux listeners.
+func (s *LalMaxServer) NewTalkSession(ctx context.Context, offer string, codec sdp.Payload, onRTP func(*rtp.Packet), onDisconnected func()) (*rtc.TalkSession, string, error) {
+	if s.rtcsvr == nil {
+		return nil, "", fmt.Errorf("WebRTC is disabled")
+	}
+	return s.rtcsvr.NewTalkSession(ctx, offer, codec, onRTP, onDisconnected)
 }

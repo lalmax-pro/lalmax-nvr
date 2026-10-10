@@ -209,7 +209,7 @@ func (w *GroupWriter) Attach(cameraID string) {
 
 // AttachCamera subscribes cam when its group exists and the camera is accepted.
 func (w *GroupWriter) AttachCamera(cam config.CameraConfig) {
-	if w == nil || cam.ID == "" || media.IsSubStreamID(cam.ID) || !w.Accepts(cam) {
+	if w == nil || cam.ID == "" || media.IsSubStreamID(cam.ID) || (cam.Protocol != "voip" && !w.Accepts(cam)) {
 		return
 	}
 	w.mu.Lock()
@@ -227,18 +227,19 @@ func (w *GroupWriter) AttachCamera(cam config.CameraConfig) {
 		return
 	}
 	s := &recSession{
-		cameraID: cam.ID,
-		subID:    "nvr-record-" + cam.ID,
-		audio:    cam.AudioEnabled,
-		segDur:   w.segDur,
-		store:    w.store,
-		db:       w.db,
-		bus:      w.bus,
-		group:    group,
-		owner:    w,
-		queue:    make(chan base.RtmpMsg, groupQueueSize),
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
+		cameraID:  cam.ID,
+		subID:     "nvr-record-" + cam.ID,
+		audio:     cam.AudioEnabled,
+		audioOnly: cam.Encoding == "audio",
+		segDur:    w.segDur,
+		store:     w.store,
+		db:        w.db,
+		bus:       w.bus,
+		group:     group,
+		owner:     w,
+		queue:     make(chan base.RtmpMsg, groupQueueSize),
+		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
 	}
 	w.mu.Lock()
 	if _, exists := w.sessions[cam.ID]; exists {
@@ -465,4 +466,34 @@ func (r *recSubscriber) OnStop() {
 		return
 	}
 	r.s.halt()
+}
+
+// AttachVoIP records one call without creating a persistent per-call plan.
+func (w *GroupWriter) AttachVoIP(id string, audioOnly bool) {
+	if w == nil {
+		return
+	}
+	w.DetachVoIP(id)
+	w.SetWriting(id, true)
+	encoding := "h264"
+	if audioOnly {
+		encoding = "audio"
+	}
+	w.AttachCamera(config.CameraConfig{ID: id, Protocol: "voip", Encoding: encoding, Enabled: true, AudioEnabled: true})
+}
+func (w *GroupWriter) DetachVoIP(id string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	s := w.sessions[id]
+	w.mu.Unlock()
+	w.Detach(id)
+	if s != nil {
+		<-s.done
+	}
+	w.mu.Lock()
+	delete(w.desired, id)
+	delete(w.desiredSet, id)
+	w.mu.Unlock()
 }

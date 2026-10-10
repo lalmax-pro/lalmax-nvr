@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"sync"
 
 	"github.com/q191201771/naza/pkg/nazaerrors"
 )
@@ -33,6 +34,8 @@ type LocalAddrCtx struct {
 }
 
 type HttpServerManager struct {
+	mutex          sync.Mutex
+	disposed       bool
 	addr2ServerCtx map[string]*ServerCtx
 }
 
@@ -70,6 +73,11 @@ type Handler func(http.ResponseWriter, *http.Request)
 //	注意，如果是`/`，则在其他所有pattern都匹配失败后，做为兜底匹配成功。
 //	相同的pattern不能绑定不同的`handler`回调函数（显然，我们无法为相同的监听地址，相同的路径绑定多个回调函数）。
 func (s *HttpServerManager) AddListen(addrCtx LocalAddrCtx, pattern string, handler Handler) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if s.disposed {
+		return http.ErrServerClosed
+	}
 	var (
 		ctx *ServerCtx
 		mux *http.ServeMux
@@ -117,9 +125,22 @@ func (s *HttpServerManager) AddListen(addrCtx LocalAddrCtx, pattern string, hand
 }
 
 func (s *HttpServerManager) RunLoop() error {
-	errChan := make(chan error, len(s.addr2ServerCtx))
+	s.mutex.Lock()
+	if s.disposed {
+		s.mutex.Unlock()
+		return http.ErrServerClosed
+	}
+	contexts := make([]*ServerCtx, 0, len(s.addr2ServerCtx))
+	for _, ctx := range s.addr2ServerCtx {
+		contexts = append(contexts, ctx)
+	}
+	s.mutex.Unlock()
+	if len(contexts) == 0 {
+		return nil
+	}
+	errChan := make(chan error, len(contexts))
 
-	for _, v := range s.addr2ServerCtx {
+	for _, v := range contexts {
 		go func(ctx *ServerCtx) {
 			errChan <- ctx.httpServer.Serve(ctx.listener)
 
@@ -132,9 +153,14 @@ func (s *HttpServerManager) RunLoop() error {
 }
 
 func (s *HttpServerManager) Dispose() error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.disposed = true
 	var es []error
 	for _, v := range s.addr2ServerCtx {
 		err := v.httpServer.Close()
+		// Close also releases listeners that have not entered Serve yet.
+		_ = v.listener.Close()
 		es = append(es, err)
 	}
 	return nazaerrors.CombineErrors(es...)

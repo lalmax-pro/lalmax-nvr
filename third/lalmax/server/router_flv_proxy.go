@@ -73,7 +73,7 @@ func (s *LalMaxServer) initFlvProxy(router *gin.Engine) {
 
 // getLalHttpflvAddr 从 lal 原始配置中提取 httpflv 服务地址
 func (s *LalMaxServer) getLalHttpflvAddr() string {
-	if len(s.conf.LalRawContent) == 0 {
+	if len(s.configuration().LalRawContent) == 0 {
 		return ""
 	}
 
@@ -83,7 +83,7 @@ func (s *LalMaxServer) getLalHttpflvAddr() string {
 		} `json:"default_http"`
 	}
 
-	if err := json.Unmarshal(s.conf.LalRawContent, &raw); err != nil {
+	if err := json.Unmarshal(s.configuration().LalRawContent, &raw); err != nil {
 		return ""
 	}
 

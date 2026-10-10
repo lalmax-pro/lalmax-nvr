@@ -173,8 +173,8 @@ func TestNewBasicSessionStat(t *testing.T) {
 			want: BasicSessionStat{
 				stat: StatSession{
 					SessionId: "",
-					BaseType:  "",
-					Protocol:  "",
+					BaseType:  SessionBaseTypePubStr,
+					Protocol:  SessionProtocolCustomizeStr,
 				},
 			},
 		},

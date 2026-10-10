@@ -64,7 +64,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 	uuid := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	switch strings.ToLower(format) {
-	case "h264", "h265":
+	case "h264", "h265", "aac", "g711", "opus":
 		tempPath = filepath.Join(cameraDir, uuid+".tmp")
 		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s.mp4", cameraID, now, uuid))
 		f, err := os.Create(tempPath)

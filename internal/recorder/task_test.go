@@ -13,7 +13,6 @@ import (
 type stubTaskEngine struct {
 	info *media.StreamInfo
 	byID map[string]*media.StreamInfo
-	subs int
 }
 
 func (s *stubTaskEngine) Start(context.Context) error { return nil }
@@ -67,7 +66,6 @@ func (s *stubTaskEngine) SubscribeWHIPEvents(context.Context) (<-chan media.WHIP
 	return nil, nil
 }
 func (s *stubTaskEngine) SubscribeFrames(context.Context, media.SubscribeFramesRequest) (media.FrameSubscription, error) {
-	s.subs++
 	return &stubFrameSub{}, nil
 }
 

@@ -26,6 +26,7 @@ type CustomizePubSessionContext struct {
 
 	streamName string
 	remuxer    *remux.AvPacket2RtmpRemuxer
+	resetMedia func() error
 	onRtmpMsg  func(msg base.RtmpMsg)
 	option     CustomizePubSessionOption
 	dumpFile   *base.DumpFile
@@ -37,11 +38,11 @@ type CustomizePubSessionContext struct {
 
 func NewCustomizePubSessionContext(streamName string) *CustomizePubSessionContext {
 	s := &CustomizePubSessionContext{
-		uniqueKey:  base.GenUkCustomizePubSession(),
 		streamName: streamName,
 		remuxer:    remux.NewAvPacket2RtmpRemuxer(),
 	}
 	s.sessionStat = base.NewBasicSessionStat(base.SessionTypeCustomizePub, "")
+	s.uniqueKey = s.sessionStat.UniqueKey()
 	nazalog.Infof("[%s] NewCustomizePubSessionContext.", s.uniqueKey)
 	return s
 }
@@ -140,5 +141,23 @@ func (ctx *CustomizePubSessionContext) FeedRtmpMsg(msg base.RtmpMsg) error {
 		return base.ErrDisposedInStream
 	}
 	ctx.onRtmpMsg(msg)
+	return nil
+}
+
+// ResetMedia renegotiates codec tracks while retaining this publisher identity.
+// The caller must serialize it with FeedAvPacket and FeedAudioSpecificConfig.
+func (ctx *CustomizePubSessionContext) ResetMedia() error {
+	if ctx.disposeFlag.Load() {
+		return base.ErrDisposedInStream
+	}
+	if ctx.resetMedia != nil {
+		if err := ctx.resetMedia(); err != nil {
+			return err
+		}
+	}
+	var option base.AvPacketStreamOption
+	ctx.remuxer.WithOption(func(o *base.AvPacketStreamOption) { option = *o })
+	ctx.remuxer = remux.NewAvPacket2RtmpRemuxer().WithOnRtmpMsg(ctx.onRtmpMsg)
+	ctx.remuxer.WithOption(func(o *base.AvPacketStreamOption) { *o = option })
 	return nil
 }

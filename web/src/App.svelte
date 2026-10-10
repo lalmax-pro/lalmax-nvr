@@ -10,6 +10,7 @@
   import Events from './routes/Events.svelte';
   import Stats from './routes/Stats.svelte';
   import Settings from './routes/Settings.svelte';
+  import VoIP from './routes/VoIP.svelte';
   import LiveView from './routes/LiveView.svelte';
   import Dashboard from './routes/Dashboard.svelte';
   import Setup from './routes/Setup.svelte';
@@ -146,6 +147,10 @@
 
     if (segments[0] === 'settings') {
       return { route: 'settings', params: {} };
+    }
+
+    if (segments[0] === 'voip') {
+      return { route: 'voip', params: {} };
     }
 
     if (segments[0] === 'dashboard') {
@@ -286,6 +291,8 @@
         <Stats />
       {:else if currentRoute === 'settings'}
         <Settings />
+      {:else if currentRoute === 'voip'}
+        <VoIP />
       {:else if currentRoute === 'dashboard'}
         <Dashboard initialTab={params.tab || 'dashboard'} />
       {:else if currentRoute === 'device-groups'}

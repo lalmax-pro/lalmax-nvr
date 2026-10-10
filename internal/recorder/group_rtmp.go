@@ -115,6 +115,8 @@ func parseAudio(msg base.RtmpMsg) (audioFrame, bool) {
 			return audioFrame{}, false
 		}
 		return audioFrame{codec: "aac", frame: msg.Payload[2:]}, len(msg.Payload) > 2
+	case base.RtmpSoundFormatOpus:
+		return audioFrame{codec: "opus", frame: msg.Payload[1:]}, len(msg.Payload) > 1
 	case base.RtmpSoundFormatG711A:
 		return audioFrame{codec: "g711", config: []byte{0, 0, 0, 0x1f, 0x40}, frame: msg.Payload[1:]}, len(msg.Payload) > 1
 	case base.RtmpSoundFormatG711U:

@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"github.com/lalmax-pro/lalmax-nvr/internal/voip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -593,4 +594,31 @@ func TestEncryptConfigFileAlreadyEncrypted(t *testing.T) {
 	require.NoError(t, err)
 	rawStr := string(raw)
 	require.Contains(t, rawStr, "password: ENC:")
+}
+
+func TestVoIPCredentialsEncryption(t *testing.T) {
+	key := helperGenerateKey(t)
+	cfg := &Config{}
+	cfg.ApplyDefaults()
+	cfg.VoIP.Users = []voip.User{{Username: "door", Password: "voip-secret"}}
+	snapshot := snapshotSensitive(cfg)
+	fields := encryptConfig(cfg, key)
+	require.Contains(t, fields, "voip.users[0].password")
+	require.True(t, IsEncrypted(cfg.VoIP.Users[0].Password))
+	decryptConfig(cfg, key)
+	require.Equal(t, "voip-secret", cfg.VoIP.Users[0].Password)
+	encryptConfig(cfg, key)
+	snapshot.restore(cfg)
+	require.Equal(t, "voip-secret", cfg.VoIP.Users[0].Password)
+	helperSetEnvKey(t, key)
+	t.Cleanup(func() { encryptionKey = nil })
+	path := filepath.Join(t.TempDir(), "nvr.yaml")
+	require.NoError(t, Save(path, cfg))
+	require.Equal(t, "voip-secret", cfg.VoIP.Users[0].Password)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "voip-secret")
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "voip-secret", loaded.VoIP.Users[0].Password)
 }

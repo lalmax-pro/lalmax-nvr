@@ -34,6 +34,10 @@ tags:
     description: |
       摄像头增删改查、启停录像、云台与地图坐标。
       Camera CRUD, recorder start/stop, PTZ, and map coordinates.
+  - name: RecordingPlans
+    description: |
+      挂在流上的录像计划；SIP 用户还可单独启用自动通话录制。把流登记为设备不会开录。
+      Stream-keyed recording plans. SIP users may also enable automatic call recording; registering a stream as a device does not start recording.
   - name: Recordings
     description: |
       录像列表、锁定、下载与删除。
@@ -62,7 +66,112 @@ tags:
     description: |
       磁盘占用与录像数量统计。
       Storage usage and recording counts.
+  - name: Logs
+    description: |
+      进程服务日志环形缓冲（快照 + SSE）。
+      In-memory process service logs (snapshot + SSE).
+  - name: IPTV
+    description: |
+      独立 IPTV 模块：导入并检测 M3U，浏览器通过同源 HLS 代理播放；频道可发布到 NVR，发布与录像计划共享同一个 HLS 拉流。
+      Independent IPTV module: import and probe M3U, play in the browser through the same-origin HLS proxy, or publish to NVR with one HLS pull shared by publication and recording plans.
+  - name: VoIP
+    description: SIP 注册终端、入站通话状态及控制。
 paths:
+  /api/iptv/imports:
+    post:
+      tags: [IPTV]
+      summary: 导入 M3U · Import M3U
+      description: |
+        解析播放列表并创建检测草稿，不会立即拉流。
+        Parse a playlist into a validation draft. Does not start pulls.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                playlist_url: { type: string }
+                playlist_text: { type: string }
+      responses:
+        "202":
+          description: Import job created
+  /api/iptv/channels:
+    get:
+      tags: [IPTV]
+      summary: 已纳管 IPTV 频道 · Enrolled IPTV channels
+      responses:
+        "200":
+          description: Channel list
+  /api/iptv/channels/{id}/playback:
+    get:
+      tags: [IPTV]
+      summary: 获取频道代理播放地址 · Get same-origin proxied channel playback details
+      description: |
+        返回同源 HLS 代理 URL。代理转发播放列表、分片和密钥请求；响应不缓存。
+        Returns the same-origin HLS proxy URL. The proxy fetches playlists, segments, and keys; the response is not cacheable.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Playback details
+        "404":
+          description: Channel not found
+  /api/iptv/channels/{id}/hls:
+    get:
+      tags: [IPTV]
+      summary: 代理 IPTV HLS 清单和媒体资源 · Proxy IPTV HLS manifests and media resources
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: url
+          in: query
+          required: false
+          description: Upstream resource URI; omitted for the channel's main playlist.
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Rewritten HLS manifest or media segment
+        "206":
+          description: Partial media resource
+        "502":
+          description: Upstream resource could not be fetched or rewritten
+  /api/iptv/channels/{id}:
+    put:
+      tags: [IPTV]
+      summary: 更新 IPTV 频道 · Update IPTV channel
+      description: |
+        更新名称、启用、收藏和发布状态。`publish_enabled` 会将频道发布为 NVR 流；发布和录像计划共享服务端 HLS 拉流。发布仅支持 `media.mode: embedded`。
+        Updates name, enabled, favorite, and publication state. `publish_enabled` publishes the channel as an NVR stream; publication and recording plans share a server-side HLS pull. Publication requires `media.mode: embedded`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                enabled: { type: boolean }
+                favorite: { type: boolean }
+                publish_enabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated channel
+        "400":
+          description: Invalid channel state or unsupported codec
+        "503":
+          description: IPTV publishing requires embedded media mode
   /api/health:
     get:
       tags: [Health]
@@ -186,6 +295,7 @@ paths:
                   username: admin
                   has_password: true
                   retention_days: 30
+                  stream_id: front-door
                   recording_mode: continuous
                   recording_paused: false
                   archived: false
@@ -219,7 +329,6 @@ paths:
                   password: secret
                   enabled: true
                   retention_days: 30
-                  recording_mode: continuous
                   longitude: 121.4737
                   latitude: 31.2304
               onvif:
@@ -313,7 +422,6 @@ paths:
             example:
               name: Front Door (west)
               enabled: true
-              recording_mode: event
               longitude: 121.4737
               latitude: 31.2304
       responses:
@@ -492,6 +600,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
               example: { error: "no recordings in export window" }
+  /api/recording-plans:
+    get:
+      tags: [RecordingPlans]
+      summary: 列出录像计划 · List recording plans
+      description: |
+        计划挂在 `stream_id` 上。没有计划的流不会录制。
+        Plans hang off `stream_id`. A stream with no plan is not recorded.
+      operationId: listRecordingPlans
+      responses:
+        "200":
+          description: 计划列表 / Plan list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plans:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RecordingPlan"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [RecordingPlans]
+      summary: 创建录像计划 · Create recording plan
+      description: |
+        同一 `stream_id` 已有计划时返回 409。不会因为登记设备而自动创建。
+        409 if the stream already has a plan. Registering a stream as a device does not create one.
+      operationId: createRecordingPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordingPlanRequest"
+            example:
+              stream_id: obs-1
+              name: OBS
+              mode: continuous
+              enabled: true
+      responses:
+        "201":
+          description: 已创建 / Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordingPlan"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: 该流已有计划 / Stream already has a plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/recording-plans/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    get:
+      tags: [RecordingPlans]
+      summary: 获取录像计划 · Get recording plan
+      operationId: getRecordingPlan
+      responses:
+        "200":
+          description: 计划 / Plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordingPlan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [RecordingPlans]
+      summary: 更新录像计划 · Update recording plan
+      operationId: updateRecordingPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordingPlanRequest"
+      responses:
+        "200":
+          description: 已更新 / Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordingPlan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [RecordingPlans]
+      summary: 删除录像计划 · Delete recording plan
+      operationId: deleteRecordingPlan
+      responses:
+        "200":
+          description: 已删除 / Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: deleted }
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/recordings:
     get:
       tags: [Recordings]
@@ -733,6 +951,71 @@ paths:
           description: 分片内容（Range）/ Partial content (Range)
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/service-logs:
+    get:
+      tags: [Logs]
+      summary: 服务日志快照 · Service log snapshot
+      description: |
+        返回进程内存环形缓冲里最近的 slog 记录。重启后清空。需要操作权限。
+        Recent slog records from the in-process ring buffer. Cleared on restart. Requires operate permission.
+      operationId: listServiceLogs
+      parameters:
+        - in: query
+          name: level
+          schema: { type: string, enum: [debug, info, warn, error], default: info }
+        - in: query
+          name: q
+          schema: { type: string }
+          description: 匹配消息或属性 / Match message or attributes
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 0, default: 200 }
+        - in: query
+          name: after_seq
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: 服务日志列表 / Service logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceLogEntry"
+                  count: { type: integer }
+                  capacity: { type: integer }
+                  buffered: { type: integer }
+                  truncated: { type: boolean }
+  /api/service-logs/stream:
+    get:
+      tags: [Logs]
+      summary: 服务日志实时推送 · Service log SSE stream
+      description: |
+        `Content-Type: text/event-stream`。事件名为 `log`。浏览器 `EventSource` 用 `?token=`。
+        Named event is `log`. Use `?token=` when Basic Auth cannot be set.
+      operationId: serviceLogsStream
+      parameters:
+        - in: query
+          name: level
+          schema: { type: string, enum: [debug, info, warn, error] }
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: token
+          schema: { type: string }
+      responses:
+        "200":
+          description: SSE 流 / SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
   /api/events:
     get:
       tags: [Events]
@@ -1118,6 +1401,391 @@ paths:
                 used_bytes: 12884901888
                 recording_count: 420
                 camera_count: 8
+  /api/settings/voip:
+    get:
+      tags: [VoIP]
+      summary: 获取 VoIP 配置
+      description: 用户和 PBX 密码都不回显；返回 has_password 标记。supported 表示当前媒体模式可否开启 VoIP。
+      responses:
+        '200':
+          description: VoIP 配置与运行支持状态
+          content:
+            application/json:
+              schema: {type: object}
+    put:
+      tags: [VoIP]
+      summary: 保存并立即应用 VoIP 配置
+      description: |
+        需要操作权限和 embedded 媒体模式。仅提交需更新的配置字段；users 若提交则替换整个用户列表。
+        同名用户密码省略或留空时保留已有密码；提交空 users 删除所有 SIP 用户。
+        record_calls 为 true 时必须开启 auth_enable。修改配置会结束当前通话。
+        PBX 上游注册和外呼支持 UDP、TCP、TLS；传输配置与 NVR 侧接收终端的监听配置相互独立。TLS 默认校验系统信任的证书，可配置私有 CA 文件及证书 Server Name。PBX 密码留空且账号未变时保留已有密码。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: {type: boolean}
+                manual_answer: {type: boolean, description: 呼入由 Web 接听；false 时自动接听}
+                ring_timeout_ms: {type: integer, minimum: 1000, maximum: 300000}
+                pbx_server: {type: string, description: "上游 SIP PBX 地址，host:port"}
+                pbx_transport: {type: string, enum: [udp, tcp, tls], default: udp}
+                pbx_domain: {type: string}
+                pbx_tls_server_name: {type: string, description: TLS 证书 Server Name 覆盖项，仅 TLS 传输使用}
+                pbx_tls_ca_file: {type: string, description: 私有 CA PEM 文件路径，仅 TLS 传输使用；留空使用系统 CA}
+                pbx_username: {type: string}
+                pbx_password: {type: string, writeOnly: true}
+                pbx_register_expires: {type: integer, minimum: 60, maximum: 86400}
+                auth_enable: {type: boolean}
+                sip_listen_addr: {type: string}
+                sip_tcp_listen_addr: {type: string}
+                sip_tls_listen_addr: {type: string}
+                sip_ws_listen_addr: {type: string}
+                sip_wss_listen_addr: {type: string}
+                sip_dtls_listen_addr: {type: string}
+                sip_ip: {type: string}
+                media_ip: {type: string}
+                media_port_min: {type: integer}
+                media_port_max: {type: integer}
+                realm: {type: string}
+                rtp_timeout_ms: {type: integer}
+                ack_timeout_ms: {type: integer}
+                srtp_enable: {type: boolean}
+                srtp_mandatory: {type: boolean}
+                bundle_enable: {type: boolean}
+                sip_tls_cert_file: {type: string}
+                sip_tls_key_file: {type: string}
+                users:
+                  type: array
+                  items:
+                    type: object
+                    required: [username]
+                    properties:
+                      username: {type: string}
+                      password: {type: string, writeOnly: true}
+                      record_calls: {type: boolean}
+      responses:
+        '200': {description: 配置已保存并生效}
+        '400': {description: 配置无效}
+        '403': {description: 无操作权限}
+        '409': {description: 配置文件被外部修改}
+        '500': {description: 应用或保存失败，已尝试恢复旧配置}
+        '503': {description: VoIP 运行服务不可用}
+
+  /api/voip/status:
+    get:
+      tags: [VoIP]
+      summary: 获取 VoIP 注册终端与当前通话
+      description: 状态包含 endpoints 和 calls，不返回密码、媒体密钥或完整 SDP。
+      responses:
+        '200':
+          description: VoIP 运行状态；关闭服务时返回空数组
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: {type: boolean}
+                  incoming_calls_need_answer: {type: boolean}
+                  upstream_registration:
+                    type: object
+                    properties:
+                      configured: {type: boolean}
+                      server: {type: string}
+                      transport: {type: string, enum: [UDP, TCP, TLS]}
+                      username: {type: string}
+                      state: {type: string, enum: [disabled, registering, registered, failed, unregistered, unregistering]}
+                      expires_at: {type: string, format: date-time}
+                      last_error: {type: string}
+                  endpoints:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        user: {type: string}
+                        contact: {type: string}
+                        user_agent: {type: string}
+                        expires_at: {type: string, format: date-time}
+                        remote_addr: {type: string}
+                        transport: {type: string}
+                  calls:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        call_id: {type: string}
+                        stream_id: {type: string}
+                        from_user: {type: string}
+                        to_user: {type: string}
+                        state: {type: string, enum: [early, confirmed, established, terminated, dialing, ringing, ended, failed]}
+                        direction: {type: string, enum: [inbound, outbound]}
+                        failure_reason: {type: string}
+                        browser_ready: {type: boolean}
+                        talk_available: {type: boolean, description: 呼入且音频已接通时可获取浏览器对讲令牌}
+                        incoming_pending: {type: boolean, description: 呼入等待 Web 操作员接听或拒绝}
+                        dtmf_available: {type: boolean, description: SIP 对端已协商 telephone-event 时支持发送 DTMF}
+                        audio_received_packets: {type: integer}
+                        audio_sent_packets: {type: integer}
+                        held: {type: boolean}
+                        started_at: {type: string, format: date-time}
+                        duration_seconds: {type: integer}
+                        transport: {type: string}
+                        remote_addr: {type: string}
+                        audio_codec: {type: string}
+                        video_codec: {type: string}
+  /api/voip/calls/history:
+    get:
+      tags: [VoIP]
+      summary: 分页查询已结束的 VoIP 通话记录
+      parameters:
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - in: query
+          name: offset
+          schema: {type: integer, minimum: 0, default: 0}
+      responses:
+        '200':
+          description: 按结束时间倒序返回通话记录
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        call_id: {type: string}
+                        direction: {type: string, enum: [inbound, outbound]}
+                        from_user: {type: string}
+                        to_user: {type: string}
+                        outcome: {type: string, enum: [completed, missed, rejected, cancelled, failed]}
+                        started_at: {type: string, format: date-time}
+                        answered_at: {type: string, format: date-time}
+                        ended_at: {type: string, format: date-time}
+                        duration_seconds: {type: integer}
+                        failure_reason: {type: string}
+                        remote_addr: {type: string}
+                        transport: {type: string}
+                        audio_codec: {type: string}
+                        video_codec: {type: string}
+                        stream_id: {type: string}
+                  total: {type: integer}
+                  limit: {type: integer}
+                  offset: {type: integer}
+        '400': {description: 分页参数无效}
+  /api/voip/calls:
+    post:
+      tags: [VoIP]
+      summary: 从 Web 呼叫 SIP 终端或 PBX 分机
+      description: 需要操作权限。先获取麦克风并创建 sendrecv 音频 SDP Offer，再发起外呼。仅支持 Opus、PCMA、PCMU。使用本地已注册终端，或已注册 PBX 账号通过配置的 UDP、TCP 或 TLS 传输路由到分机。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user, sdp]
+              additionalProperties: false
+              properties:
+                user: {type: string, description: 已注册的 SIP 用户名}
+                security: {type: string, enum: ['', rtp, sdes, dtls], description: 省略时按服务端 SRTP 策略选择}
+                sdp: {type: string, description: 浏览器音频 SDP Offer}
+      responses:
+        '202':
+          description: 已发起外呼；talk_token 只在创建时返回，请勿公开，用于绑定浏览器接入和心跳
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  call_id: {type: string}
+                  state: {type: string, enum: [dialing]}
+                  talk_token: {type: string}
+        '400': {description: 请求无效或 SDP 缺失}
+        '403': {description: 无操作权限}
+        '409': {description: 终端离线、忙碌、编码不支持或加密策略不允许}
+        '503': {description: 运行服务不可用}
+  /api/voip/calls/{call_id}/talk:
+    post:
+      tags: [VoIP]
+      summary: 为通话建立双向 WebRTC 音频
+      description: 需要操作权限和 talk_token。外呼使用创建外呼时返回的令牌；呼入先调用 talk-token 获取短时令牌。通话 state 为 established 后调用，同一路呼叫只允许一个浏览器接入；使用 sendrecv 音频 Offer。
+      parameters:
+        - in: path
+          name: call_id
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [talk_token, sdp]
+              additionalProperties: false
+              properties:
+                talk_token: {type: string}
+                sdp: {type: string}
+      responses:
+        '200':
+          description: WebRTC SDP Answer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type: {type: string, enum: [answer]}
+                  sdp: {type: string}
+        '400': {description: 请求无效}
+        '403': {description: 无操作权限}
+        '409': {description: 呼叫未接通、令牌无效、已绑定浏览器或 SDP 协商失败}
+        '503': {description: 运行服务不可用}
+  /api/voip/calls/{call_id}/talk-token:
+    post:
+      tags: [VoIP]
+      summary: 获取呼入通话的浏览器对讲令牌
+      description: 需要操作权限。仅当呼入 SIP 通话已接通且协商出音频时可用；返回的短时令牌用于建立浏览器 WebRTC 对讲和后续心跳。
+      parameters:
+        - in: path
+          name: call_id
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: 短时对讲令牌
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  talk_token: {type: string}
+        '403': {description: 无操作权限}
+        '409': {description: 呼入通话未接通、没有音频或已有浏览器加入}
+        '503': {description: 运行服务不可用}
+  /api/voip/calls/{call_id}/keepalive:
+    post:
+      tags: [VoIP]
+      summary: 延续浏览器对讲会话
+      description: 需要操作权限和 talk_token。每 10 秒调用一次；超过 45 秒没有心跳，服务端会断开浏览器对讲。呼入 SIP 通话继续保持，外呼则结束 SIP 通话。
+      parameters:
+        - in: path
+          name: call_id
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [talk_token]
+              properties:
+                talk_token: {type: string}
+      responses:
+        '200': {description: 会话已延续}
+        '400': {description: 请求无效}
+        '403': {description: 无操作权限}
+        '404': {description: 呼叫结束或令牌无效}
+        '503': {description: 运行服务不可用}
+  /api/voip/calls/{call_id}/talk/detach:
+    post:
+      tags: [VoIP]
+      summary: 离开浏览器对讲
+      description: 需要操作权限和 talk_token。释放浏览器音频连接及麦克风；对呼入通话只离开对讲，SIP 通话仍继续，挂断 SIP 通话请调用 hangup。
+      parameters:
+        - in: path
+          name: call_id
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [talk_token]
+              properties:
+                talk_token: {type: string}
+      responses:
+        '200': {description: 浏览器已离开对讲}
+        '400': {description: 请求无效}
+        '403': {description: 无操作权限}
+        '404': {description: 呼叫结束或令牌无效}
+        '503': {description: 运行服务不可用}
+  /api/voip/calls/{call_id}/dtmf:
+    post:
+      tags: [VoIP]
+      summary: 向 SIP 通话发送 DTMF 按键
+      description: 需要操作权限。通话须已接通且 SIP 对端已协商 RFC 4733 telephone-event；浏览器对讲期间可发送 0-9、*、#。
+      parameters:
+        - in: path
+          name: call_id
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [digit]
+              properties:
+                digit: {type: string, enum: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '#']}
+      responses:
+        '200': {description: DTMF 事件已发出}
+        '400': {description: 按键无效}
+        '403': {description: 无操作权限}
+        '409': {description: 呼叫未接通或未协商 telephone-event}
+        '503': {description: 运行服务不可用}
+  /api/voip/calls/{call_id}/hangup:
+    post:
+      tags: [VoIP]
+      summary: 挂断指定 VoIP 通话
+      description: 需要操作权限。外呼响铃期间发送 CANCEL；接通后发送 BYE 并完成录制片段，不注销终端账号。
+      parameters:
+        - in: path
+          name: call_id
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {description: 通话已结束}
+        '403': {description: 无操作权限}
+        '404': {description: 通话不存在或已结束}
+
+  /api/voip/calls/{call_id}/answer:
+    post:
+      tags: [VoIP]
+      summary: 接听等待中的 SIP 呼入
+      description: 需要操作权限；仅 manual_answer 开启时可用于尚未接听的呼入。
+      parameters:
+        - in: path
+          name: call_id
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {description: 呼入已接听}
+        '403': {description: 无操作权限}
+        '409': {description: 呼入已处理或媒体协商失败}
+  /api/voip/calls/{call_id}/reject:
+    post:
+      tags: [VoIP]
+      summary: 拒绝等待中的 SIP 呼入
+      description: 需要操作权限；NVR 向主叫返回 603 Decline。
+      parameters:
+        - in: path
+          name: call_id
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {description: 呼入已拒绝}
+        '403': {description: 无操作权限}
+        '409': {description: 呼入已处理}
+
 components:
   securitySchemes:
     basicAuth:
@@ -1359,10 +2027,14 @@ components:
         recording_paused:
           type: boolean
           description: 录像是否暂停（拉流仍可能在）/ Recording paused (stream may still be up)
+        stream_id:
+          type: string
+          description: 绑定的 lalmax 流。播放走 `/api/streams/{stream_id}` / Bound lalmax stream. Play via `/api/streams/{stream_id}`
         recording_mode:
           type: string
           enum: [continuous, scheduled, off, event, adaptive]
-          description: 录像模式：连续 / 定时 / 关闭 / 事件 / 自适应 / Recording mode
+          description: 只读，来自该流的录像计划；没有计划则为 `off` / Read-only, from the stream plan; `off` if none
+          readOnly: true
         activation_state:
           type: string
           enum: [active, pending_activation]
@@ -1382,7 +2054,7 @@ components:
           description: IP 重发现用的额外网段 / Extra CIDRs for IP rediscovery
         adaptive:
           type: object
-          description: "`recording_mode=adaptive` 时的稀疏录像参数 / Sparse-recording settings when adaptive"
+          description: 计划 `mode=adaptive` 时的稀疏录像参数 / Sparse-recording settings when the plan mode is adaptive
           properties:
             timelapse_interval:
               type: string
@@ -1451,9 +2123,6 @@ components:
         subnet_hints:
           type: array
           items: { type: string }
-        recording_mode:
-          type: string
-          enum: [continuous, scheduled, off, event, adaptive]
         adaptive:
           type: object
           properties:
@@ -1485,9 +2154,6 @@ components:
         profile_token: { type: string }
         stream_encoding: { type: string }
         audio_enabled: { type: boolean }
-        recording_mode:
-          type: string
-          enum: [continuous, scheduled, off, event, adaptive]
         sub_stream_url: { type: string }
         sub_profile_token: { type: string }
         subnet_hints:
@@ -1552,6 +2218,9 @@ components:
       properties:
         id: { type: string }
         camera_id: { type: string }
+        stream_id:
+          type: string
+          description: 被录的 lalmax 流。无设备时与 `camera_id` 相同 / Recorded lalmax stream. Equals `camera_id` when there is no device
         file_path: { type: string }
         format:
           type: string
@@ -1591,6 +2260,57 @@ components:
             $ref: "#/components/schemas/Recording"
         total:
           type: integer
+    RecordingPlan:
+      title: 录像计划 · Recording plan
+      description: |
+        挂在 lalmax 流上的录像策略。没有计划就不录。
+        Recording policy attached to a lalmax stream. No plan means no recording.
+      type: object
+      required: [id, stream_id, mode, enabled]
+      properties:
+        id: { type: string }
+        stream_id: { type: string }
+        name: { type: string }
+        mode:
+          type: string
+          enum: [continuous, scheduled, off, event, adaptive]
+        enabled: { type: boolean }
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScheduleWindow"
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RecordingPlanRequest:
+      title: 录像计划请求 · Recording plan request
+      type: object
+      properties:
+        stream_id: { type: string }
+        name: { type: string }
+        mode:
+          type: string
+          enum: [continuous, scheduled, off, event, adaptive]
+        enabled: { type: boolean }
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScheduleWindow"
+    ScheduleWindow:
+      title: 周计划窗口 · Weekly window
+      type: object
+      required: [day_of_week, start_time, end_time]
+      properties:
+        day_of_week:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 0=周日 … 6=周六 / 0=Sunday … 6=Saturday
+        start_time:
+          type: string
+          example: "09:00"
+        end_time:
+          type: string
+          example: "17:00"
     TimelineEntry:
       title: 时间轴条目 · Timeline entry
       type: object
@@ -1867,3 +2587,14 @@ components:
           format: int64
         recording_count: { type: integer }
         camera_count: { type: integer }
+    ServiceLogEntry:
+      title: 服务日志 · Service log entry
+      type: object
+      properties:
+        seq: { type: integer, format: int64 }
+        time: { type: string, format: date-time }
+        level: { type: string, example: INFO }
+        msg: { type: string }
+        attrs:
+          type: object
+          additionalProperties: true
