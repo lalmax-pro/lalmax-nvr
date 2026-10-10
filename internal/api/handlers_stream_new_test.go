@@ -1165,7 +1165,7 @@ func TestListStreams_RequiresMediaEngine(t *testing.T) {
 // --- Test helpers ---
 
 // bindTestStream registers the stream binding that AddCamera would create in production.
-func bindTestStream(t *testing.T, db *storage.DB, streamID, cameraID string) {
+func bindTestStream(t *testing.T, db storage.APIRepository, streamID, cameraID string) {
 	t.Helper()
 	require.NoError(t, db.BindStreamToCamera(context.Background(), streamID, cameraID))
 }
@@ -1193,7 +1193,7 @@ func seedCameraWithEncodings(t *testing.T, db *storage.DB, id, encoding, streamE
 }
 
 // seedBoundCamera inserts a named camera and binds it to its own stream.
-func seedBoundCamera(t *testing.T, db *storage.DB, id, name, protocol, encoding string) {
+func seedBoundCamera(t *testing.T, db storage.APIRepository, id, name, protocol, encoding string) {
 	t.Helper()
 	require.NoError(t, db.UpsertCamera(context.Background(), id, name, protocol, encoding, "rtsp://example.com/"+id, "", "", true, "", "", ""))
 	bindTestStream(t, db, id, id)

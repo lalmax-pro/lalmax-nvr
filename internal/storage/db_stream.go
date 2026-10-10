@@ -34,11 +34,11 @@ type StreamBan struct {
 func (d *DB) InsertStreamHistory(ctx context.Context, h *StreamHistory) error {
 	q := `INSERT INTO stream_history (stream_id, app_name, protocol, remote_addr, session_id, started_at)
 	      VALUES (?, ?, ?, ?, ?, ?);`
-	res, err := d.db.ExecContext(ctx, q, h.StreamID, h.AppName, h.Protocol, h.RemoteAddr, h.SessionID, timeToDB(h.StartedAt))
+	id, err := d.insertID(ctx, q, h.StreamID, h.AppName, h.Protocol, h.RemoteAddr, h.SessionID, timeToDB(h.StartedAt))
 	if err != nil {
 		return err
 	}
-	h.ID, _ = res.LastInsertId()
+	h.ID = id
 	return nil
 }
 
@@ -46,7 +46,7 @@ func (d *DB) InsertStreamHistory(ctx context.Context, h *StreamHistory) error {
 // Matches by session_id.
 func (d *DB) FinishStreamHistory(ctx context.Context, sessionID string, endedAt time.Time, bytesRead, bytesWritten uint64) error {
 	var startedAt time.Time
-	err := d.db.QueryRowContext(ctx,
+	err := d.queryRowContext(ctx,
 		`SELECT started_at FROM stream_history WHERE session_id = ? AND ended_at IS NULL ORDER BY id DESC LIMIT 1;`,
 		sessionID).Scan(parseTimeScan(&startedAt))
 	if err != nil {
@@ -59,7 +59,7 @@ func (d *DB) FinishStreamHistory(ctx context.Context, sessionID string, endedAt 
 	duration := endedAt.Sub(startedAt).Seconds()
 	q := `UPDATE stream_history SET ended_at = ?, duration_sec = ?, bytes_read = ?, bytes_written = ?
 	      WHERE session_id = ? AND ended_at IS NULL;`
-	_, err = d.db.ExecContext(ctx, q, timeToDB(endedAt), duration, bytesRead, bytesWritten, sessionID)
+	_, err = d.execContext(ctx, q, timeToDB(endedAt), duration, bytesRead, bytesWritten, sessionID)
 	return err
 }
 
@@ -89,11 +89,11 @@ func (d *DB) ListStreamHistory(ctx context.Context, streamID string, limit, offs
 	}
 
 	var total int
-	if err := d.db.QueryRowContext(ctx, countQ, countArgs...).Scan(&total); err != nil {
+	if err := d.queryRowContext(ctx, countQ, countArgs...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	rows, err := d.db.QueryContext(ctx, listQ, listArgs...)
+	rows, err := d.queryContext(ctx, listQ, listArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -142,7 +142,7 @@ func (d *DB) ListRecentStreamSnapshots(ctx context.Context, since time.Time, lim
 	      ) latest ON h.id = latest.max_id
 	      ORDER BY COALESCE(h.ended_at, h.started_at) DESC
 	      LIMIT ?;`
-	rows, err := d.db.QueryContext(ctx, q, timeToDB(since), limit)
+	rows, err := d.queryContext(ctx, q, timeToDB(since), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -167,24 +167,24 @@ func (d *DB) ListRecentStreamSnapshots(ctx context.Context, since time.Time, lim
 
 // DeleteStreamHistory deletes all history records for a stream.
 func (d *DB) DeleteStreamHistory(ctx context.Context, streamID string) error {
-	_, err := d.db.ExecContext(ctx, `DELETE FROM stream_history WHERE stream_id = ?;`, streamID)
+	_, err := d.execContext(ctx, `DELETE FROM stream_history WHERE stream_id = ?;`, streamID)
 	return err
 }
 
 // InsertStreamBan inserts a new stream ban.
 func (d *DB) InsertStreamBan(ctx context.Context, ban *StreamBan) error {
 	q := `INSERT INTO stream_bans (stream_id, reason, created_at, expires_at) VALUES (?, ?, ?, ?);`
-	res, err := d.db.ExecContext(ctx, q, ban.StreamID, ban.Reason, timeToDB(ban.CreatedAt), timeToDBPtr(ban.ExpiresAt))
+	id, err := d.insertID(ctx, q, ban.StreamID, ban.Reason, timeToDB(ban.CreatedAt), timeToDBPtr(ban.ExpiresAt))
 	if err != nil {
 		return err
 	}
-	ban.ID, _ = res.LastInsertId()
+	ban.ID = id
 	return nil
 }
 
 // DeleteStreamBan removes a ban for a stream.
 func (d *DB) DeleteStreamBan(ctx context.Context, streamID string) error {
-	res, err := d.db.ExecContext(ctx, `DELETE FROM stream_bans WHERE stream_id = ?;`, streamID)
+	res, err := d.execContext(ctx, `DELETE FROM stream_bans WHERE stream_id = ?;`, streamID)
 	if err != nil {
 		return err
 	}
@@ -200,7 +200,7 @@ func (d *DB) DeleteStreamBan(ctx context.Context, streamID string) error {
 func (d *DB) GetStreamBan(ctx context.Context, streamID string) (*StreamBan, error) {
 	var ban StreamBan
 	var expiresAt sql.NullTime
-	err := d.db.QueryRowContext(ctx,
+	err := d.queryRowContext(ctx,
 		`SELECT id, stream_id, reason, created_at, expires_at FROM stream_bans WHERE stream_id = ?;`,
 		streamID).Scan(&ban.ID, &ban.StreamID, &ban.Reason, parseTimeScan(&ban.CreatedAt), &expiresAt)
 	if err != nil {
@@ -215,7 +215,7 @@ func (d *DB) GetStreamBan(ctx context.Context, streamID string) (*StreamBan, err
 		// Check if ban has expired
 		if time.Now().After(t) {
 			// Auto-delete expired ban
-			_, _ = d.db.ExecContext(ctx, `DELETE FROM stream_bans WHERE id = ?;`, ban.ID)
+			_, _ = d.execContext(ctx, `DELETE FROM stream_bans WHERE id = ?;`, ban.ID)
 			return nil, nil
 		}
 	}
@@ -224,7 +224,7 @@ func (d *DB) GetStreamBan(ctx context.Context, streamID string) (*StreamBan, err
 
 // ListStreamBans returns all active (non-expired) bans.
 func (d *DB) ListStreamBans(ctx context.Context) ([]StreamBan, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		`SELECT id, stream_id, reason, created_at, expires_at FROM stream_bans ORDER BY created_at DESC;`)
 	if err != nil {
 		return nil, err

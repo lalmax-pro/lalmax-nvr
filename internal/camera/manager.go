@@ -62,7 +62,7 @@ const streamRecordingProtocol = "stream"
 type CameraManager struct {
 	cfg         *config.Config
 	store       *storage.Manager
-	db          *storage.DB
+	db          storage.CameraManagerRepository
 	configPath  string
 	recorders   map[string]model.Recorder // camera_id → Recorder
 	metrics     *metrics.Metrics
@@ -99,7 +99,7 @@ type CameraManager struct {
 	lifecycleLocks map[string]*sync.Mutex // per-camera Start/Stop/Restart serialization
 }
 
-func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
+func NewCameraManager(cfg *config.Config, store *storage.Manager, db storage.CameraManagerRepository, configPath string, opts ...interface{}) *CameraManager {
 	var m *metrics.Metrics
 	var mm *merge.MergeManager
 	for _, opt := range opts {

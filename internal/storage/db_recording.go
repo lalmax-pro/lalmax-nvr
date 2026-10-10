@@ -67,7 +67,7 @@ func (d *DB) InsertRecording(ctx context.Context, r *model.Recording) error {
 	if !r.ReconnectedAt.IsZero() {
 		reconnectedAt = timeToDB(r.ReconnectedAt)
 	}
-	_, err := d.db.ExecContext(ctx, q, r.ID, r.CameraID, recordingStreamID(r), r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatus, reconnectedAt, r.GapReason)
+	_, err := d.execContext(ctx, q, r.ID, r.CameraID, recordingStreamID(r), r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, boolToDBInt(r.Merged), mergeStatus, reconnectedAt, r.GapReason)
 	if err == nil {
 		d.invalidateRecordingsCache()
 	}
@@ -114,7 +114,7 @@ func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
 	if !r.ReconnectedAt.IsZero() {
 		reconnectedAt = timeToDB(r.ReconnectedAt)
 	}
-	_, err := d.db.ExecContext(ctx, q, r.CameraID, recordingStreamID(r), r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, r.MergeStatus, reconnectedAt, r.GapReason, r.ID)
+	_, err := d.execContext(ctx, q, r.CameraID, recordingStreamID(r), r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, boolToDBInt(r.Merged), r.MergeStatus, reconnectedAt, r.GapReason, r.ID)
 	if err == nil {
 		d.invalidateRecordingsCache()
 	}
@@ -122,7 +122,7 @@ func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
 }
 
 func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT `+recordingSelectCols+` FROM recordings WHERE id=?;`, id)
+	row := d.queryRowContext(ctx, `SELECT `+recordingSelectCols+` FROM recordings WHERE id=?;`, id)
 	var r model.Recording
 	if err := scanRecordingRow(row, &r); err != nil {
 		if err == sql.ErrNoRows {
@@ -138,7 +138,7 @@ func (d *DB) SetRecordingLocked(ctx context.Context, id string, locked bool) err
 	if locked {
 		val = 1
 	}
-	res, err := d.db.ExecContext(ctx, `UPDATE recordings SET locked=? WHERE id=?;`, val, id)
+	res, err := d.execContext(ctx, `UPDATE recordings SET locked=? WHERE id=?;`, val, id)
 	if err != nil {
 		return err
 	}
@@ -224,7 +224,7 @@ func (d *DB) listRecordingsUncached(ctx context.Context, filter model.RecordingF
 		sqlstr += fmt.Sprintf(" OFFSET %d", filter.Offset)
 	}
 	sqlstr += ";"
-	rows, err := d.db.QueryContext(ctx, sqlstr, args...)
+	rows, err := d.queryContext(ctx, sqlstr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +294,7 @@ func (d *DB) countRecordingsUncached(ctx context.Context, filter model.Recording
 		sqlstr += " WHERE " + strings.Join(where, " AND ")
 	}
 	var count int
-	err := d.db.QueryRowContext(ctx, sqlstr, args...).Scan(&count)
+	err := d.queryRowContext(ctx, sqlstr, args...).Scan(&count)
 	return count, err
 }
 
@@ -312,7 +312,7 @@ func (d *DB) GetRecordingsByPathSet(ctx context.Context, paths []string) (map[st
 		args[i] = p
 	}
 	q := "SELECT file_path FROM recordings WHERE file_path IN (" + strings.Join(placeholders, ",") + ")"
-	rows, err := d.db.QueryContext(ctx, q, args...)
+	rows, err := d.queryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +329,7 @@ func (d *DB) GetRecordingsByPathSet(ctx context.Context, paths []string) (map[st
 // InsertOrphanRecordings batch-inserts orphan recording metadata using INSERT OR IGNORE.
 // Returns the number of actually inserted rows (skips duplicates).
 func (d *DB) InsertOrphanRecordings(ctx context.Context, recordings []*model.Recording) (int, error) {
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -342,7 +342,7 @@ func (d *DB) InsertOrphanRecordings(ctx context.Context, recordings []*model.Rec
 		if !r.ReconnectedAt.IsZero() {
 			reconnectedAt = timeToDB(r.ReconnectedAt)
 		}
-		result, err := tx.ExecContext(ctx, q, r.ID, r.CameraID, recordingStreamID(r), r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatusFromBool(r.Merged), reconnectedAt, r.GapReason)
+		result, err := tx.ExecContext(ctx, q, r.ID, r.CameraID, recordingStreamID(r), r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, boolToDBInt(r.Merged), mergeStatusFromBool(r.Merged), reconnectedAt, r.GapReason)
 		if err != nil {
 			return 0, err
 		}
@@ -359,7 +359,7 @@ func (d *DB) InsertOrphanRecordings(ctx context.Context, recordings []*model.Rec
 }
 
 func (d *DB) DeleteRecording(ctx context.Context, id string) error {
-	_, err := d.db.ExecContext(ctx, `DELETE FROM recordings WHERE id=?;`, id)
+	_, err := d.execContext(ctx, `DELETE FROM recordings WHERE id=?;`, id)
 	if err == nil {
 		d.invalidateRecordingsCache()
 	}
@@ -368,7 +368,7 @@ func (d *DB) DeleteRecording(ctx context.Context, id string) error {
 
 // DeleteRecordingsByCamera deletes all recordings for a camera.
 func (d *DB) DeleteRecordingsByCamera(ctx context.Context, cameraID string) (int64, error) {
-	result, err := d.db.ExecContext(ctx, `DELETE FROM recordings WHERE camera_id=?;`, cameraID)
+	result, err := d.execContext(ctx, `DELETE FROM recordings WHERE camera_id=?;`, cameraID)
 	if err != nil {
 		return 0, err
 	}
@@ -382,7 +382,7 @@ func (d *DB) DeleteRecordingsBatch(ctx context.Context, ids []string) ([]string,
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +415,7 @@ func (d *DB) SetMerged(ctx context.Context, id string, merged bool) error {
 		val = 1
 	}
 	mergeStatus := mergeStatusFromBool(merged)
-	_, err := d.db.ExecContext(ctx, `UPDATE recordings SET merged=?, merge_status=? WHERE id=?;`, val, mergeStatus, id)
+	_, err := d.execContext(ctx, `UPDATE recordings SET merged=?, merge_status=? WHERE id=?;`, val, mergeStatus, id)
 	if err == nil {
 		d.invalidateRecordingsCache()
 	}
@@ -423,7 +423,7 @@ func (d *DB) SetMerged(ctx context.Context, id string, merged bool) error {
 }
 
 func (d *DB) CleanupIncomplete(ctx context.Context) error {
-	_, err := d.db.ExecContext(ctx, `DELETE FROM recordings WHERE ended_at IS NULL;`)
+	_, err := d.execContext(ctx, `DELETE FROM recordings WHERE ended_at IS NULL;`)
 	if err == nil {
 		d.invalidateRecordingsCache()
 	}
@@ -431,8 +431,9 @@ func (d *DB) CleanupIncomplete(ctx context.Context) error {
 }
 
 func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT ` + recordingSelectCols + ` FROM recordings WHERE ended_at IS NOT NULL AND archived=0 AND COALESCE(locked,0)=0 AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
-	rows, err := d.db.QueryContext(ctx, sqlstr, retentionDays)
+	cutoff := formatTime(time.Now().UTC().AddDate(0, 0, -retentionDays))
+	sqlstr := `SELECT ` + recordingSelectCols + ` FROM recordings WHERE ended_at IS NOT NULL AND archived=0 AND COALESCE(locked,0)=0 AND ended_at < ? ORDER BY ended_at ASC;`
+	rows, err := d.queryContext(ctx, sqlstr, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -450,8 +451,9 @@ func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]mo
 
 // ListExpiredRecordingsByCamera returns expired recordings for a specific camera
 func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT ` + recordingSelectCols + ` FROM recordings WHERE ended_at IS NOT NULL AND archived=0 AND COALESCE(locked,0)=0 AND camera_id=? AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
-	rows, err := d.db.QueryContext(ctx, sqlstr, cameraID, retentionDays)
+	cutoff := formatTime(time.Now().UTC().AddDate(0, 0, -retentionDays))
+	sqlstr := `SELECT ` + recordingSelectCols + ` FROM recordings WHERE ended_at IS NOT NULL AND archived=0 AND COALESCE(locked,0)=0 AND camera_id=? AND ended_at < ? ORDER BY ended_at ASC;`
+	rows, err := d.queryContext(ctx, sqlstr, cameraID, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -469,8 +471,9 @@ func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string,
 
 // ListExpiredArchivedRecordingsByCamera returns expired archived recordings for a specific camera.
 func (d *DB) ListExpiredArchivedRecordingsByCamera(ctx context.Context, cameraID string, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT ` + recordingSelectCols + ` FROM recordings WHERE ended_at IS NOT NULL AND archived=1 AND COALESCE(locked,0)=0 AND camera_id=? AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
-	rows, err := d.db.QueryContext(ctx, sqlstr, cameraID, retentionDays)
+	cutoff := formatTime(time.Now().UTC().AddDate(0, 0, -retentionDays))
+	sqlstr := `SELECT ` + recordingSelectCols + ` FROM recordings WHERE ended_at IS NOT NULL AND archived=1 AND COALESCE(locked,0)=0 AND camera_id=? AND ended_at < ? ORDER BY ended_at ASC;`
+	rows, err := d.queryContext(ctx, sqlstr, cameraID, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -488,7 +491,7 @@ func (d *DB) ListExpiredArchivedRecordingsByCamera(ctx context.Context, cameraID
 
 func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recording, error) {
 	sqlstr := `SELECT ` + recordingSelectCols + ` FROM recordings WHERE ended_at IS NOT NULL AND archived=0 AND COALESCE(locked,0)=0 ORDER BY ended_at ASC LIMIT ?;`
-	rows, err := d.db.QueryContext(ctx, sqlstr, limit)
+	rows, err := d.queryContext(ctx, sqlstr, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +509,7 @@ func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recor
 
 // ListRecordingPathsByCamera returns the basenames of all file_path values for a camera's recordings.
 func (d *DB) ListRecordingPathsByCamera(ctx context.Context, cameraID string) (map[string]bool, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT file_path FROM recordings WHERE camera_id=?`, cameraID)
+	rows, err := d.queryContext(ctx, `SELECT file_path FROM recordings WHERE camera_id=?`, cameraID)
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +529,7 @@ func (d *DB) ListRecordingPathsByCamera(ctx context.Context, cameraID string) (m
 // AND merge_status='pending' AND ended_at IS NOT NULL.
 func (d *DB) ListPendingMJPEGRecordings(ctx context.Context, cameraID string) ([]model.Recording, error) {
 	sqlstr := `SELECT ` + recordingSelectCols + ` FROM recordings WHERE camera_id = ? AND format IN ('mjpeg','jpeg') AND merge_status = 'pending' AND ended_at IS NOT NULL;`
-	rows, err := d.db.QueryContext(ctx, sqlstr, cameraID)
+	rows, err := d.queryContext(ctx, sqlstr, cameraID)
 	if err != nil {
 		return nil, err
 	}
@@ -547,7 +550,7 @@ func (d *DB) ListPendingMJPEGRecordings(ctx context.Context, cameraID string) ([
 // These are candidates for duration repair via ffprobe.
 func (d *DB) RepairZeroDurationRecordings(ctx context.Context) ([]model.Recording, error) {
 	sqlstr := `SELECT ` + recordingSelectCols + ` FROM recordings WHERE duration = 0 AND file_size > 1048576 AND format != 'mjpeg' AND ended_at IS NOT NULL AND merge_status = 'pending';`
-	rows, err := d.db.QueryContext(ctx, sqlstr)
+	rows, err := d.queryContext(ctx, sqlstr)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +568,7 @@ func (d *DB) RepairZeroDurationRecordings(ctx context.Context) ([]model.Recordin
 
 // ListDistinctRecordingOwners returns camera_id values that have at least one recording.
 func (d *DB) ListDistinctRecordingOwners(ctx context.Context) ([]string, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT DISTINCT camera_id FROM recordings WHERE camera_id != '' ORDER BY camera_id`)
+	rows, err := d.queryContext(ctx, `SELECT DISTINCT camera_id FROM recordings WHERE camera_id != '' ORDER BY camera_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -583,7 +586,7 @@ func (d *DB) ListDistinctRecordingOwners(ctx context.Context) ([]string, error) 
 
 // UpdateRecordingDuration updates the duration and ended_at for a recording.
 func (d *DB) UpdateRecordingDuration(ctx context.Context, id string, duration float64, endedAt time.Time) error {
-	_, err := d.db.ExecContext(ctx, `UPDATE recordings SET duration=?, ended_at=? WHERE id=?;`, duration, timeToDB(endedAt), id)
+	_, err := d.execContext(ctx, `UPDATE recordings SET duration=?, ended_at=? WHERE id=?;`, duration, timeToDB(endedAt), id)
 	if err == nil {
 		d.invalidateRecordingsCache()
 	}

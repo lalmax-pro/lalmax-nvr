@@ -36,7 +36,7 @@ type Service struct {
 	started bool
 }
 
-func New(cfg config.AutoDiscoverConfig, enroller AdderEnroller, db *storage.DB, bus *event.EventBus, infoFn DeviceInfoFunc) *Service {
+func New(cfg config.AutoDiscoverConfig, enroller AdderEnroller, db storage.CameraDiscoveryRepository, bus *event.EventBus, infoFn DeviceInfoFunc) *Service {
 	return &Service{
 		cfg:   cfg,
 		adder: NewAdder(cfg, enroller, db, bus, infoFn),

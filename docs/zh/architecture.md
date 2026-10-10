@@ -21,7 +21,7 @@ flowchart TB
     Merge[Merge / Rolling]
     Health[Health]
     Bus[Event Bus]
-    Store[(SQLite + 磁盘)]
+    Store[(SQLite / PostgreSQL / MySQL + 磁盘)]
     GBSIP[GB28181 SIP :5060]
     VoIP[VoIP SIP 信令 + 媒体桥接]
     MediaAdp[media 适配器]
@@ -74,7 +74,7 @@ flowchart TB
 ```
 
 - **lalmax / lal**：负责已接入 NVR 流的分发和转协议。IPTV 频道在浏览器中播放时走独立的同源 HLS 代理；启用发布或录像后才进入媒体引擎。
-- **NVR 层**：相机生命周期、ONVIF 发现、GB28181 SIP 上级、独立的 VoIP SIP 服务、录像策略、小时合并、健康修复、SQLite 与文件、Svelte UI。
+- **NVR 层**：相机生命周期、ONVIF 发现、GB28181 SIP 上级、独立的 VoIP SIP 服务、录像策略、小时合并、健康修复、数据库与文件、Svelte UI。
 - **`media.mode: embedded`（推荐）**：引擎跑在同一进程里。`http` 模式则连外部 lalmax。
 - **例外**：MJPEG / HTTP JPEG 仍由 NVR 直拉（lalmax 不吃这类源）。
 
@@ -176,7 +176,7 @@ sequenceDiagram
   participant Cam as 相机
   participant Group as lalmax group
   participant Rec as 组写入器
-  participant Disk as 磁盘 / SQLite
+  participant Disk as 磁盘 / 数据库
   participant Roll as Rolling merge
   participant VOD as VOD HLS
 
@@ -241,7 +241,7 @@ flowchart TB
 | `gb28181` | SIP 上级、目录、INVITE 后收 RTP 推流、回放、对讲 |
 | `voip` | 独立 SIP 终端 / PBX 注册与呼叫、Web 外呼、通话记录；浏览器对讲走 WebRTC |
 | `jt808` | JT/T 808 信令：注册鉴权、直播、回放、检索、上传、云台。媒体仍由 lalmax `:1078` 接收 |
-| `storage` | SQLite + 片段文件 |
+| `storage` | SQLite、PostgreSQL 或 MySQL + 片段文件 |
 
 ## 默认端口
 

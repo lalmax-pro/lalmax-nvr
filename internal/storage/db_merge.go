@@ -23,14 +23,14 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 	if len(oldIDs) == 0 {
 		return d.InsertRecording(ctx, merged)
 	}
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
 	q := `INSERT INTO recordings(id, camera_id, stream_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?);`
-	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, recordingStreamID(merged), merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, true, model.MergeStatusMerged)
+	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, recordingStreamID(merged), merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, 1, model.MergeStatusMerged)
 	if err != nil {
 		return err
 	}
@@ -52,7 +52,7 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 // ListMergeableSegments returns recordings for a camera within a time window,
 // excluding merged and incomplete segments.
 func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowStart, windowEnd time.Time) ([]*model.Recording, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		`SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND started_at >= ? AND started_at < ? ORDER BY started_at ASC;`,
 		cameraID, formatTime(windowStart), formatTime(windowEnd))
 	if err != nil {
@@ -85,8 +85,8 @@ func mergeWindowSeconds(window time.Duration) int64 {
 func (d *DB) ListCameraMergeWindows(ctx context.Context, cameraID string, minAge, window time.Duration) ([]MergeWindow, error) {
 	cutoff := time.Now().Add(-minAge).Format(sqliteTimeFormat)
 	secs := mergeWindowSeconds(window)
-	query := `SELECT (CAST(strftime('%s', substr(started_at, 1, 19)) AS INTEGER) / ?) * ? as bucket, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND ended_at < ? GROUP BY bucket, format HAVING COUNT(*) >= 2 ORDER BY bucket ASC;`
-	rows, err := d.db.QueryContext(ctx, query, secs, secs, cameraID, cutoff)
+	query := `SELECT CAST((CAST(strftime('%s', substr(started_at, 1, 19)) AS INTEGER) / ?) * ? AS BIGINT) as bucket, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND ended_at < ? GROUP BY bucket, format HAVING COUNT(*) >= 2 ORDER BY bucket ASC;`
+	rows, err := d.queryContext(ctx, query, secs, secs, cameraID, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +113,7 @@ func (d *DB) ListHourMergedRecordings(ctx context.Context, cameraID string, hour
 
 // ListWindowMergedRecordings returns already-merged recordings whose started_at falls in [windowStart, windowEnd).
 func (d *DB) ListWindowMergedRecordings(ctx context.Context, cameraID string, windowStart, windowEnd time.Time) ([]*model.Recording, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		`SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE camera_id = ? AND merge_status = 'merged' AND COALESCE(archived,0) = 0 AND ended_at IS NOT NULL AND started_at >= ? AND started_at < ? ORDER BY started_at ASC;`,
 		cameraID, formatTime(windowStart), formatTime(windowEnd))
 	if err != nil {
@@ -136,7 +136,7 @@ func (d *DB) ListWindowMergedRecordings(ctx context.Context, cameraID string, wi
 // CountPendingMerges returns how many pending (unmerged) closed segments a camera has.
 func (d *DB) CountPendingMerges(ctx context.Context, cameraID string) (int, error) {
 	var n int
-	err := d.db.QueryRowContext(ctx,
+	err := d.queryRowContext(ctx,
 		`SELECT COUNT(*) FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND COALESCE(archived,0) = 0;`,
 		cameraID).Scan(&n)
 	return n, err
@@ -160,7 +160,7 @@ func (d *DB) ListRecordingTimeline(ctx context.Context, cameraID string, start, 
 	if limit <= 0 || limit > 10000 {
 		limit = 10000
 	}
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		`SELECT id, camera_id, started_at, ended_at, duration, format, merged, COALESCE(gap_reason,''), COALESCE(locked,0) FROM recordings WHERE camera_id = ? AND COALESCE(archived,0) = 0 AND ended_at IS NOT NULL AND started_at < ? AND ended_at > ? ORDER BY started_at ASC LIMIT ?;`,
 		cameraID, formatTime(end), formatTime(start), limit)
 	if err != nil {
@@ -196,7 +196,7 @@ func (d *DB) UpsertCameraMerge(ctx context.Context, cameraID string, mergeEnable
 		merge_rolling_enabled = COALESCE(?, merge_rolling_enabled),
 		merge_rolling_debounce = COALESCE(?, merge_rolling_debounce)
 		WHERE id = ?;`
-	_, err := d.db.ExecContext(ctx, q,
+	_, err := d.execContext(ctx, q,
 		ptrToNullBool(mergeEnabled),
 		ptrToNullString(mergeCheckInterval),
 		ptrToNullString(mergeWindowSize),
@@ -211,7 +211,7 @@ func (d *DB) UpsertCameraMerge(ctx context.Context, cameraID string, mergeEnable
 
 // ListPendingMergeCameraIDs returns camera or stream ids that still have closed segments waiting to merge.
 func (d *DB) ListPendingMergeCameraIDs(ctx context.Context) ([]string, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT DISTINCT camera_id FROM recordings WHERE merge_status = 'pending' AND ended_at IS NOT NULL AND COALESCE(archived,0) = 0 ORDER BY camera_id;`)
+	rows, err := d.queryContext(ctx, `SELECT DISTINCT camera_id FROM recordings WHERE merge_status = 'pending' AND ended_at IS NOT NULL AND COALESCE(archived,0) = 0 ORDER BY camera_id;`)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func (d *DB) ListPendingMergeCameraIDs(ctx context.Context) ([]string, error) {
 
 // GrowMergedRecording updates an existing hour file's row and deletes the short segments it absorbed.
 func (d *DB) GrowMergedRecording(ctx context.Context, rec *model.Recording, deleteIDs []string) error {
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -267,7 +267,7 @@ func (d *DB) SetMergeStatus(ctx context.Context, ids []string, status string) er
 	if len(ids) == 0 {
 		return nil
 	}
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -310,7 +310,7 @@ func (d *DB) ListSingletonPendingRecordings(ctx context.Context, cameraID string
 					  = (CAST(strftime('%s', substr(r.started_at, 1, 19)) AS INTEGER) / ?) * ?
 			) = 1;
 		`
-	rows, err := d.db.QueryContext(ctx, query, cameraID, cutoff, secs, secs, secs, secs)
+	rows, err := d.queryContext(ctx, query, cameraID, cutoff, secs, secs, secs, secs)
 	if err != nil {
 		return nil, err
 	}

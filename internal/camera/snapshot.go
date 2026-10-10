@@ -42,7 +42,6 @@ func DefaultSnapshotConfig() SnapshotConfig {
 // SnapshotManager manages periodic snapshots from cameras.
 type SnapshotManager struct {
 	cfg         SnapshotConfig
-	db          *storage.DB
 	store       *storage.Manager
 	mediaEngine media.Engine
 	interval    time.Duration
@@ -54,7 +53,7 @@ type SnapshotManager struct {
 }
 
 // NewSnapshotManager creates a new snapshot manager.
-func NewSnapshotManager(cfg SnapshotConfig, db *storage.DB, store *storage.Manager, mediaEngine media.Engine) (*SnapshotManager, error) {
+func NewSnapshotManager(cfg SnapshotConfig, store *storage.Manager, mediaEngine media.Engine) (*SnapshotManager, error) {
 	interval, err := time.ParseDuration(cfg.Interval)
 	if err != nil {
 		interval = 5 * time.Minute
@@ -75,7 +74,6 @@ func NewSnapshotManager(cfg SnapshotConfig, db *storage.DB, store *storage.Manag
 
 	return &SnapshotManager{
 		cfg:         cfg,
-		db:          db,
 		store:       store,
 		mediaEngine: mediaEngine,
 		interval:    interval,

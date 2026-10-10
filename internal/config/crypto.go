@@ -145,6 +145,14 @@ func decryptConfig(cfg *Config, key []byte) {
 	if key == nil {
 		return
 	}
+	if v, err := Decrypt(cfg.Storage.DatabaseDSN, key); err == nil {
+		cfg.Storage.DatabaseDSN = v
+	}
+	if cfg.Storage.MigrationTarget != nil {
+		if v, err := Decrypt(cfg.Storage.MigrationTarget.DSN, key); err == nil {
+			cfg.Storage.MigrationTarget.DSN = v
+		}
+	}
 	// Auth password (plaintext, before auto-hash conversion)
 	if v, err := Decrypt(cfg.Auth.Password, key); err == nil {
 		cfg.Auth.Password = v
@@ -191,6 +199,18 @@ func encryptConfig(cfg *Config, key []byte) []string {
 	}
 
 	var encrypted []string
+	if cfg.Storage.DatabaseDSN != "" && !IsEncrypted(cfg.Storage.DatabaseDSN) {
+		if v, err := Encrypt(cfg.Storage.DatabaseDSN, key); err == nil {
+			cfg.Storage.DatabaseDSN = v
+			encrypted = append(encrypted, "storage.database_dsn")
+		}
+	}
+	if cfg.Storage.MigrationTarget != nil && cfg.Storage.MigrationTarget.DSN != "" && !IsEncrypted(cfg.Storage.MigrationTarget.DSN) {
+		if v, err := Encrypt(cfg.Storage.MigrationTarget.DSN, key); err == nil {
+			cfg.Storage.MigrationTarget.DSN = v
+			encrypted = append(encrypted, "storage.database_migration_target.dsn")
+		}
+	}
 
 	// Auth password (skip if empty or already encrypted)
 	if cfg.Auth.Password != "" && !IsEncrypted(cfg.Auth.Password) {
@@ -260,6 +280,9 @@ func encryptConfig(cfg *Config, key []byte) []string {
 // currently stored in plaintext (not encrypted).
 func SensitiveFieldPaths(cfg *Config) []string {
 	var fields []string
+	if cfg.Storage.DatabaseDSN != "" && !IsEncrypted(cfg.Storage.DatabaseDSN) {
+		fields = append(fields, "storage.database_dsn")
+	}
 
 	if cfg.Auth.Password != "" && !IsEncrypted(cfg.Auth.Password) {
 		fields = append(fields, "auth.password")
@@ -283,6 +306,9 @@ func SensitiveFieldPaths(cfg *Config) []string {
 	}
 	if cfg.AutoDiscover.DefaultPassword != "" && !IsEncrypted(cfg.AutoDiscover.DefaultPassword) {
 		fields = append(fields, "auto_discover.default_password")
+	}
+	if cfg.Storage.MigrationTarget != nil && cfg.Storage.MigrationTarget.DSN != "" && !IsEncrypted(cfg.Storage.MigrationTarget.DSN) {
+		fields = append(fields, "storage.database_migration_target.dsn")
 	}
 
 	for i, u := range cfg.VoIP.Users {

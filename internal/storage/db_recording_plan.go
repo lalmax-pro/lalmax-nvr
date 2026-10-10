@@ -52,7 +52,7 @@ func NewRecordingPlanID() string {
 // migrateRecordingPlans creates the stream-keyed recording plan tables.
 // Idempotent.
 func (d *DB) migrateRecordingPlans(ctx context.Context) error {
-	if _, err := d.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS recording_plans (
+	if _, err := d.execContext(ctx, `CREATE TABLE IF NOT EXISTS recording_plans (
 		id TEXT PRIMARY KEY,
 		stream_id TEXT NOT NULL UNIQUE,
 		name TEXT NOT NULL DEFAULT '',
@@ -63,10 +63,10 @@ func (d *DB) migrateRecordingPlans(ctx context.Context) error {
 	);`); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recording_plans_stream ON recording_plans(stream_id);`); err != nil {
+	if _, err := d.execContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recording_plans_stream ON recording_plans(stream_id);`); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS recording_plan_windows (
+	if _, err := d.execContext(ctx, `CREATE TABLE IF NOT EXISTS recording_plan_windows (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		plan_id TEXT NOT NULL,
 		day_of_week INTEGER NOT NULL,
@@ -76,7 +76,7 @@ func (d *DB) migrateRecordingPlans(ctx context.Context) error {
 	);`); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recording_plan_windows_plan ON recording_plan_windows(plan_id);`); err != nil {
+	if _, err := d.execContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recording_plan_windows_plan ON recording_plan_windows(plan_id);`); err != nil {
 		return err
 	}
 	return nil
@@ -84,7 +84,7 @@ func (d *DB) migrateRecordingPlans(ctx context.Context) error {
 
 // ListRecordingPlans returns all recording plans ordered by stream ID.
 func (d *DB) ListRecordingPlans(ctx context.Context) ([]RecordingPlan, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		`SELECT id, stream_id, name, mode, enabled, created_at, updated_at FROM recording_plans ORDER BY stream_id;`)
 	if err != nil {
 		return nil, err
@@ -119,7 +119,7 @@ func (d *DB) ListRecordingPlans(ctx context.Context) ([]RecordingPlan, error) {
 func (d *DB) GetRecordingPlan(ctx context.Context, id string) (*RecordingPlan, error) {
 	var p RecordingPlan
 	var createdAt, updatedAt sql.NullString
-	err := d.db.QueryRowContext(ctx,
+	err := d.queryRowContext(ctx,
 		`SELECT id, stream_id, name, mode, enabled, created_at, updated_at FROM recording_plans WHERE id=?;`, id).
 		Scan(&p.ID, &p.StreamID, &p.Name, &p.Mode, &p.Enabled, &createdAt, &updatedAt)
 	if err != nil {
@@ -141,7 +141,7 @@ func (d *DB) GetRecordingPlan(ctx context.Context, id string) (*RecordingPlan, e
 // GetRecordingPlanByStream returns the plan for a stream, or nil when absent.
 func (d *DB) GetRecordingPlanByStream(ctx context.Context, streamID string) (*RecordingPlan, error) {
 	var id string
-	err := d.db.QueryRowContext(ctx, `SELECT id FROM recording_plans WHERE stream_id=?;`, streamID).Scan(&id)
+	err := d.queryRowContext(ctx, `SELECT id FROM recording_plans WHERE stream_id=?;`, streamID).Scan(&id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -170,7 +170,7 @@ func (d *DB) UpsertRecordingPlan(ctx context.Context, p *RecordingPlan) error {
 		p.Name = p.StreamID
 	}
 
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -183,7 +183,7 @@ func (d *DB) UpsertRecordingPlan(ctx context.Context, p *RecordingPlan) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO recording_plans (id, stream_id, name, mode, enabled, created_at, updated_at)
 		VALUES (?,?,?,?,?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT(id) DO UPDATE SET stream_id=excluded.stream_id, name=excluded.name, mode=excluded.mode, enabled=excluded.enabled, updated_at=CURRENT_TIMESTAMP;`,
-		p.ID, p.StreamID, p.Name, p.Mode, p.Enabled); err != nil {
+		p.ID, p.StreamID, p.Name, p.Mode, boolToInt(p.Enabled)); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM recording_plan_windows WHERE plan_id=?;`, p.ID); err != nil {
@@ -201,7 +201,7 @@ func (d *DB) UpsertRecordingPlan(ctx context.Context, p *RecordingPlan) error {
 
 // DeleteRecordingPlan removes a plan and its windows.
 func (d *DB) DeleteRecordingPlan(ctx context.Context, id string) error {
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -229,7 +229,7 @@ func (d *DB) DeleteRecordingPlanByStream(ctx context.Context, streamID string) e
 }
 
 func (d *DB) listPlanWindows(ctx context.Context, planID string) ([]ScheduleWindow, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		`SELECT day_of_week, start_time, end_time FROM recording_plan_windows WHERE plan_id=? ORDER BY day_of_week, start_time;`, planID)
 	if err != nil {
 		return nil, err

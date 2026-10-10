@@ -11,7 +11,7 @@ import (
 // It is refreshed from recording_plans and consulted by the camera manager and
 // the recording scheduler, so a stream is recorded only when a plan says so.
 type RecordingPlanner struct {
-	db *storage.DB
+	db storage.RecordingPlanRepository
 
 	mu      sync.RWMutex
 	desired map[string]bool
@@ -19,7 +19,7 @@ type RecordingPlanner struct {
 	loaded  bool
 }
 
-func NewRecordingPlanner(db *storage.DB) *RecordingPlanner {
+func NewRecordingPlanner(db storage.RecordingPlanRepository) *RecordingPlanner {
 	return &RecordingPlanner{db: db, desired: make(map[string]bool), modes: make(map[string]string)}
 }
 

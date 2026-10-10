@@ -13,10 +13,10 @@ import (
 // Archiver persists runtime EventBus messages into the unified product event table.
 type Archiver struct {
 	bus *EventBus
-	db  *storage.DB
+	db  storage.EventRepository
 }
 
-func NewArchiver(bus *EventBus, db *storage.DB) *Archiver {
+func NewArchiver(bus *EventBus, db storage.EventRepository) *Archiver {
 	if bus == nil || db == nil {
 		return nil
 	}

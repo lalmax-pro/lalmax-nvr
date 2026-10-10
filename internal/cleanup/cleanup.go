@@ -23,7 +23,7 @@ var logger = slog.Default().With("component", "cleanup")
 //   - Time-based: delete recordings older than retention period
 //   - Disk-threshold: delete oldest recordings when disk usage exceeds threshold
 type CleanupManager struct {
-	db              *storage.DB
+	db              storage.CleanupRepository
 	store           *storage.Manager
 	retention       time.Duration
 	diskThreshold   int // percent
@@ -35,7 +35,7 @@ type CleanupManager struct {
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
-func NewCleanupManager(db *storage.DB, store *storage.Manager, cfg config.CleanupConfig, opts ...*metrics.Metrics) (*CleanupManager, error) {
+func NewCleanupManager(db storage.CleanupRepository, store *storage.Manager, cfg config.CleanupConfig, opts ...*metrics.Metrics) (*CleanupManager, error) {
 	var m *metrics.Metrics
 	if len(opts) > 0 {
 		m = opts[0]

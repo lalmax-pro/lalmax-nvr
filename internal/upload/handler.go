@@ -18,12 +18,12 @@ import (
 // Handler handles HTTP upload endpoints for camera frames and videos.
 type Handler struct {
 	storageMgr    *storage.Manager
-	db            *storage.DB
+	db            storage.UploadRepository
 	maxUploadSize int64
 }
 
 // NewHandler creates a new upload Handler.
-func NewHandler(mgr *storage.Manager, db *storage.DB, maxUploadSize int64) *Handler {
+func NewHandler(mgr *storage.Manager, db storage.UploadRepository, maxUploadSize int64) *Handler {
 	return &Handler{
 		storageMgr:    mgr,
 		db:            db,

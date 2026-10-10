@@ -24,13 +24,13 @@ type PresetGoto interface {
 }
 
 type Engine struct {
-	db       *storage.DB
+	db       storage.AlarmRuleRepository
 	recorder RecorderTrigger
 	ptz      PresetGoto
 	client   *http.Client
 }
 
-func New(db *storage.DB, recorder RecorderTrigger, ptz PresetGoto) *Engine {
+func New(db storage.AlarmRuleRepository, recorder RecorderTrigger, ptz PresetGoto) *Engine {
 	return &Engine{
 		db:       db,
 		recorder: recorder,

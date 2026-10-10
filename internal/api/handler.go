@@ -147,7 +147,7 @@ type snapshotCache struct {
 type Handler struct {
 	voipSettingsMu     sync.Mutex
 	voipRestarter      VoIPRestarter
-	db                 *storage.DB
+	db                 storage.APIRepository
 	store              *storage.Manager
 	authMW             func(http.Handler) http.Handler
 	multiUserMW        func(http.Handler) http.Handler
@@ -247,7 +247,7 @@ func (h *Handler) requestRestart() {
 	}
 }
 
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
+func NewHandler(db storage.APIRepository, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
 	h := &Handler{
 		db:               db,
 		store:            store,
@@ -510,6 +510,10 @@ func (h *Handler) Routes() http.Handler {
 		})
 		r.Get("/api/settings", h.handleGetSettings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings", h.handleUpdateSettings)
+		r.Get("/api/settings/database-migration", h.handleGetDatabaseMigrationSettings)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings/database-migration", h.handleUpdateDatabaseMigrationSettings)
+		r.With(middleware.RequireOperatePermission()).Post("/api/settings/database-migration/test", h.handleTestDatabaseMigrationTarget)
+		r.With(middleware.RequireOperatePermission()).Post("/api/settings/database-migration/run", h.handleRunDatabaseMigration)
 		r.Get("/api/settings/merge", h.handleGetMergeSettings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/merge", h.handleUpdateMergeSettings)
 		r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
@@ -784,7 +788,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 }
 
 // noopHandler is a helper for creating a Handler without real auth.
-func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
+func noopHandler(db storage.APIRepository, store *storage.Manager) *Handler {
 	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.readyzDiskUsage = func() (int64, int64, error) {
 		return 1_000_000_000_000, 100_000_000_000, nil
@@ -807,12 +811,12 @@ func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
 // --- Test helper exported for handler_test.go ---
 
 // TestHandler creates a Handler with a no-op auth middleware for testing.
-func TestHandler(db *storage.DB, store *storage.Manager) *Handler {
+func TestHandler(db storage.APIRepository, store *storage.Manager) *Handler {
 	return noopHandler(db, store)
 }
 
 // TestHandlerWithAuth creates a Handler with real auth middleware for testing.
-func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
+func TestHandlerWithAuth(db storage.APIRepository, store *storage.Manager, username, passwordHash string) *Handler {
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },

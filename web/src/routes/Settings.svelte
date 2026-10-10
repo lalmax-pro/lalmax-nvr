@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAutoDiscoverSettings, updateAutoDiscoverSettings, getAiSettings, saveAiSettings, detectAiBackend, getAiBackendConfig, updateAiBackendConfig, getGB28181Settings, updateGB28181Settings, reloadConfig, checkConfigChange, regenerateLalmaxConfig, getHLSSettings, updateHLSSettings, getLocalNetworkInterfaces, updateDLNASettings } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAutoDiscoverSettings, updateAutoDiscoverSettings, getAiSettings, saveAiSettings, detectAiBackend, getAiBackendConfig, updateAiBackendConfig, getGB28181Settings, updateGB28181Settings, reloadConfig, checkConfigChange, regenerateLalmaxConfig, getHLSSettings, updateHLSSettings, getLocalNetworkInterfaces, updateDLNASettings, getDatabaseMigrationSettings, saveDatabaseMigrationTarget, testDatabaseMigrationTarget, runDatabaseMigration } from '$lib/api';
   import type { AiBackendConfig } from '$lib/api';
   import type { SettingsConfig, FeatureFlags, StorageStats, Camera, StreamingConfig, GB28181Config, HLSConfig, NetworkInterface } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '../lib/preferences';
@@ -157,7 +157,18 @@ let activeSettingsTab = $state('general');
 let settingsTabs = $derived([
   { id: 'general', label: t('settings.tabs.general') },
   { id: 'advanced', label: t('settings.tabs.advanced') },
+  { id: 'database', label: t('settings.tabs.database') },
 ]);
+let databaseTargetDriver = $state<'postgres' | 'mysql' | 'sqlite'>('postgres');
+let databaseTargetDSN = $state('');
+let databaseTargetConfigured = $state(false);
+let databaseMigrationReason = $state('');
+let databaseTargetSaving = $state(false);
+let databaseTargetTesting = $state(false);
+let databaseTargetMigrating = $state(false);
+let databaseMigrationAvailable = $state(false);
+let databaseActiveDriver = $state('sqlite');
+let showDatabaseMigrationConfirm = $state(false);
 
 // Derived: is any setting dirty?
 let isDirty = $derived(() => {
@@ -604,11 +615,78 @@ function getAffectedCameraCount(protocol: string): number {
     loadAutoDiscoverConfig();
     loadAiSettings();
     loadAiBackendSettings();
+    loadDatabaseMigrationSettings();
     window.addEventListener('hashchange', handleHashChange);
     // Check for external config changes every 30s
     configCheckInterval = setInterval(checkForConfigChanges, 30000);
     checkForConfigChanges();
   });
+
+  async function loadDatabaseMigrationSettings() {
+    try {
+      const cfg = await getDatabaseMigrationSettings();
+      databaseTargetConfigured = cfg.target_configured;
+      databaseMigrationAvailable = cfg.migration_available;
+      databaseActiveDriver = cfg.active_driver;
+      databaseMigrationReason = cfg.migration_reason;
+      if (cfg.target_driver === 'postgres' || cfg.target_driver === 'mysql' || cfg.target_driver === 'sqlite') {
+        databaseTargetDriver = cfg.target_driver;
+      }
+      databaseTargetDSN = '';
+    } catch (e) {
+      console.warn('Failed to load database migration settings:', e);
+    }
+  }
+
+  async function testDatabaseTarget() {
+    databaseTargetTesting = true;
+    try {
+      const result = await testDatabaseMigrationTarget({ driver: databaseTargetDriver, dsn: databaseTargetDSN });
+      databaseMigrationReason = result.migration_reason;
+      databaseMigrationAvailable = result.migration_available;
+      showToast(t('settings.database.testSuccess'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.database.testFailed'), 'error');
+    } finally {
+      databaseTargetTesting = false;
+    }
+  }
+
+  async function saveDatabaseTarget() {
+    if (!databaseTargetDSN.trim()) {
+      showToast(t('settings.database.dsnRequired'), 'error');
+      return;
+    }
+    databaseTargetSaving = true;
+    try {
+      await saveDatabaseMigrationTarget({ driver: databaseTargetDriver, dsn: databaseTargetDSN.trim() });
+      databaseTargetConfigured = true;
+      databaseTargetDSN = '';
+      showToast(t('settings.database.saved'), 'success');
+      await loadDatabaseMigrationSettings();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.database.saveFailed'), 'error');
+    } finally {
+      databaseTargetSaving = false;
+    }
+  }
+
+  async function executeDatabaseMigration() {
+    showDatabaseMigrationConfirm = false;
+    databaseTargetMigrating = true;
+    try {
+      const result = await runDatabaseMigration();
+      databaseActiveDriver = result.active_driver;
+      databaseMigrationAvailable = false;
+      databaseMigrationReason = t('settings.database.migrationComplete', { values: { rows: result.total_rows } });
+      showToast(databaseMigrationReason, 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.database.migrationFailed'), 'error');
+      await loadDatabaseMigrationSettings();
+    } finally {
+      databaseTargetMigrating = false;
+    }
+  }
 
   onDestroy(() => {
     window.removeEventListener('hashchange', handleHashChange);
@@ -1171,7 +1249,7 @@ function getAffectedCameraCount(protocol: string): number {
             {/each}
           </div>
         </div>
-      {:else}
+      {:else if activeSettingsTab === 'advanced'}
         <!-- Merge Strategy -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('merge.title')}</h3>
@@ -2286,6 +2364,54 @@ type="button"
           </div>
         </div>
 
+      {:else}
+        <div class="card p-8 border th-border space-y-6">
+          <div>
+            <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.database.title')}</h3>
+            <p class="text-sm th-text-secondary">{t('settings.database.description')}</p>
+          </div>
+
+          <div class="rounded-lg border th-border p-4 th-bg-hover">
+            <div class="flex items-center gap-2 font-medium th-text-primary">
+              <CircleDot size={16} /> {t('settings.database.migrationStatus')}
+            </div>
+            <p class="text-sm th-text-secondary mt-2">{t('settings.database.activeDriver')} {databaseActiveDriver}</p>
+            <p class="text-sm th-text-tertiary mt-1">{databaseMigrationReason || t('settings.database.migrationUnavailable')}</p>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label for="database-target-driver" class="input-label">{t('settings.database.targetDriver')}</label>
+              <select id="database-target-driver" class="input" bind:value={databaseTargetDriver}>
+                <option value="postgres">PostgreSQL</option>
+                <option value="mysql">MySQL</option>
+                <option value="sqlite">SQLite</option>
+              </select>
+            </div>
+            <div>
+              <label for="database-target-dsn" class="input-label">{t('settings.database.connectionString')}</label>
+              <input id="database-target-dsn" type="password" class="input" bind:value={databaseTargetDSN} autocomplete="new-password" placeholder={databaseTargetConfigured ? t('settings.database.dsnSavedPlaceholder') : t('settings.database.dsnPlaceholder')} />
+            </div>
+          </div>
+
+          <p class="text-xs th-text-tertiary">{t('settings.database.secretHint')}</p>
+          {#if databaseTargetConfigured}
+            <p class="text-sm th-text-secondary">{t('settings.database.targetConfigured')}</p>
+          {/if}
+          <div class="flex flex-wrap items-center gap-3">
+            <button class="btn btn-secondary" onclick={testDatabaseTarget} disabled={databaseTargetTesting || (!databaseTargetDSN.trim() && !databaseTargetConfigured)}>
+              {#if databaseTargetTesting}<span class="spinner mr-2"></span>{/if}{t('settings.database.testConnection')}
+            </button>
+            <button class="btn btn-primary" onclick={saveDatabaseTarget} disabled={databaseTargetSaving || !databaseTargetDSN.trim()}>
+              {#if databaseTargetSaving}<span class="spinner mr-2"></span>{/if}{t('settings.database.saveTarget')}
+            </button>
+            {#if databaseMigrationAvailable && databaseTargetConfigured}
+              <button class="btn btn-danger" onclick={() => showDatabaseMigrationConfirm = true} disabled={databaseTargetMigrating}>
+                {t('settings.database.startMigration')}
+              </button>
+            {/if}
+          </div>
+        </div>
       {/if}
 
         <!-- Config conflict warning -->
@@ -2302,6 +2428,7 @@ type="button"
         {/if}
 
         <!-- Save + utility buttons -->
+        {#if activeSettingsTab !== 'database'}
         <div class="flex items-center gap-4 pt-2">
           <button
             onclick={save}
@@ -2324,6 +2451,7 @@ type="button"
             <RotateCw size={14} class="mr-1" /> {t('settings.lalmax.regenerate')}
           </button>
         </div>
+        {/if}
       </div>
     {/if}
   </main>
@@ -2338,6 +2466,17 @@ type="button"
       onconfirm={confirmNavigation}
       oncancel={cancelNavigation}
       variant="danger"
+    />
+  {/if}
+  {#if showDatabaseMigrationConfirm}
+    <ConfirmDialog
+      title={t('settings.database.confirmTitle')}
+      message={t('settings.database.confirmMessage')}
+      confirmText={t('settings.database.startMigration')}
+      onconfirm={executeDatabaseMigration}
+      oncancel={() => showDatabaseMigrationConfirm = false}
+      variant="danger"
+      loading={databaseTargetMigrating}
     />
   {/if}
 </div>

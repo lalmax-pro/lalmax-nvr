@@ -41,16 +41,12 @@ func (d *DB) InsertOperationLog(ctx context.Context, log model.OperationLog) (in
 		log.CreatedAt = time.Now().UTC()
 	}
 
-	result, err := d.db.ExecContext(ctx, `
+	return d.insertID(ctx, `
 		INSERT INTO operation_logs
 			(user_id, username, actor_type, action, resource, resource_id, status, message, metadata, ip_address, user_agent, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullableInt64(log.UserID), log.Username, log.ActorType, log.Action, log.Resource,
 		log.ResourceID, log.Status, log.Message, log.Metadata, log.IPAddress, log.UserAgent, timeToDB(log.CreatedAt))
-	if err != nil {
-		return 0, err
-	}
-	return result.LastInsertId()
 }
 
 // ListOperationLogs returns audit logs ordered from newest to oldest.
@@ -62,7 +58,7 @@ func (d *DB) ListOperationLogs(ctx context.Context, filter OperationLogsFilter) 
 	}
 
 	var total int
-	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM operation_logs"+whereClause, args...).Scan(&total); err != nil {
+	if err := d.queryRowContext(ctx, "SELECT COUNT(*) FROM operation_logs"+whereClause, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
@@ -79,7 +75,7 @@ func (d *DB) ListOperationLogs(ctx context.Context, filter OperationLogsFilter) 
 	}
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
-	rows, err := d.db.QueryContext(ctx, query, args...)
+	rows, err := d.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}

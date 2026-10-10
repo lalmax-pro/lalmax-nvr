@@ -108,7 +108,7 @@ func (g *GB28181API) handleCatalogResponse(deviceID string, body []byte) {
 	// 更新失踪计数
 	for _, chID := range existingChannels {
 		if !newChannelMap[chID] {
-			if err := g.store.GetDB().IncrementMissingCount(context.Background(), deviceID, chID); err != nil {
+			if err := g.store.db.IncrementMissingCount(context.Background(), deviceID, chID); err != nil {
 				slog.Error("failed to increment missing count",
 					"device_id", deviceID,
 					"channel_id", chID,
@@ -262,7 +262,7 @@ func channelHas2022Fields(ch Channel) bool {
 // getExistingChannelIDs returns existing channel IDs for a device.
 func (g *GB28181API) getExistingChannelIDs(deviceID string) []string {
 	ctx := context.Background()
-	channels, err := g.store.GetDB().ListGB28181Channels(ctx, deviceID)
+	channels, err := g.store.db.ListGB28181Channels(ctx, deviceID)
 	if err != nil {
 		slog.Error("failed to list existing channels", "device_id", deviceID, "error", err)
 		return nil

@@ -51,7 +51,7 @@ func (d *DB) InsertEvent(ctx context.Context, event model.Event) (int64, error) 
 
 	q := `INSERT INTO events(camera_id, source, type, severity, status, message, metadata, recording_id, snapshot_path, started_at, ended_at, acknowledged_at, created_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);`
-	res, err := d.db.ExecContext(ctx, q,
+	id, err := d.insertID(ctx, q,
 		event.CameraID,
 		event.Source,
 		event.Type,
@@ -66,10 +66,6 @@ func (d *DB) InsertEvent(ctx context.Context, event model.Event) (int64, error) 
 		acknowledgedAt,
 		formatTime(event.CreatedAt),
 	)
-	if err != nil {
-		return 0, err
-	}
-	id, err := res.LastInsertId()
 	if err != nil {
 		return 0, err
 	}
@@ -88,7 +84,7 @@ func (d *DB) ListEvents(ctx context.Context, filter EventsFilter) ([]model.Event
 
 	countSQL := "SELECT COUNT(*) FROM events" + whereClause
 	var total int
-	if err := d.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
+	if err := d.queryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
@@ -102,7 +98,7 @@ func (d *DB) ListEvents(ctx context.Context, filter EventsFilter) ([]model.Event
 	}
 	dataSQL += ";"
 
-	rows, err := d.db.QueryContext(ctx, dataSQL, args...)
+	rows, err := d.queryContext(ctx, dataSQL, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -122,7 +118,7 @@ func (d *DB) ListEvents(ctx context.Context, filter EventsFilter) ([]model.Event
 // GetEvent returns a single event by ID.
 func (d *DB) GetEvent(ctx context.Context, id int64) (*model.Event, error) {
 	q := `SELECT id, camera_id, source, type, severity, status, message, metadata, recording_id, snapshot_path, started_at, ended_at, acknowledged_at, created_at FROM events WHERE id=?;`
-	event, err := scanEvent(d.db.QueryRowContext(ctx, q, id))
+	event, err := scanEvent(d.queryRowContext(ctx, q, id))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -137,7 +133,7 @@ func (d *DB) AcknowledgeEvent(ctx context.Context, id int64, at time.Time) error
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	res, err := d.db.ExecContext(ctx,
+	res, err := d.execContext(ctx,
 		`UPDATE events SET status=?, acknowledged_at=? WHERE id=?;`,
 		model.EventStatusAcknowledged,
 		formatTime(at),
@@ -158,7 +154,7 @@ func (d *DB) AcknowledgeEvent(ctx context.Context, id int64, at time.Time) error
 
 // DeleteEvent deletes an event by ID.
 func (d *DB) DeleteEvent(ctx context.Context, id int64) error {
-	res, err := d.db.ExecContext(ctx, `DELETE FROM events WHERE id=?;`, id)
+	res, err := d.execContext(ctx, `DELETE FROM events WHERE id=?;`, id)
 	if err != nil {
 		return err
 	}

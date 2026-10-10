@@ -13,6 +13,7 @@
 | [配置说明](configuration.md) | 主要配置项与示例；实际配置文件可对照上方配置示例 |
 | [故障排除](troubleshooting.md) | 常见运行问题 |
 | [架构](architecture.md) | NVR、媒体引擎与常见接入路径 |
+| [数据库迁移](database-migration.md) | PostgreSQL/MySQL 配置以及从 SQLite 在线迁移 |
 
 ## 媒体接入与播放
 

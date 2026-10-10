@@ -26,7 +26,7 @@ type Server struct {
 	store      *storage.Manager
 	pathPrefix string
 	authMW     func(http.Handler) http.Handler
-	db         *storage.DB
+	db         storage.WebDAVRepository
 	readWrite  bool
 }
 
@@ -36,7 +36,7 @@ type Server struct {
 // authMW is an optional authentication middleware; pass nil to skip auth.
 // db is the database for registering uploaded recordings; may be nil if readWrite is false.
 // readWrite controls whether write operations (PUT, MKCOL, DELETE, etc.) are allowed.
-func NewServer(store *storage.Manager, pathPrefix string, authMW func(http.Handler) http.Handler, db *storage.DB, readWrite bool) *Server {
+func NewServer(store *storage.Manager, pathPrefix string, authMW func(http.Handler) http.Handler, db storage.WebDAVRepository, readWrite bool) *Server {
 	if pathPrefix == "" {
 		pathPrefix = "/dav"
 	}

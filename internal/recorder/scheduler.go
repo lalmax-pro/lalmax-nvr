@@ -15,7 +15,7 @@ var schedLogger = slog.Default().With("component", "recording-scheduler")
 // A task runs only when the stream is in lalmax and a plan (or an event
 // window) wants it written to disk. Device registration is not an input.
 type RecordingScheduler struct {
-	db      *storage.DB
+	db      storage.RecordingStateRepository
 	planner *RecordingPlanner
 	tasks   *TaskManager
 
@@ -31,7 +31,7 @@ type RecordingScheduler struct {
 	writeSwitch func(streamID string, want bool) bool
 }
 
-func NewRecordingScheduler(db *storage.DB) *RecordingScheduler {
+func NewRecordingScheduler(db storage.RecordingStateRepository) *RecordingScheduler {
 	return &RecordingScheduler{
 		db:     db,
 		stopCh: make(chan struct{}),

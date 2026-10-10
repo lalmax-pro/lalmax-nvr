@@ -42,7 +42,7 @@ const (
 
 type Service struct {
 	cfg     *config.Config
-	db      *storage.DB
+	db      storage.DLNARepository
 	store   *storage.Manager
 	engine  media.Engine
 	mu      sync.RWMutex
@@ -53,7 +53,7 @@ type Service struct {
 	wg      sync.WaitGroup
 }
 
-func NewService(cfg *config.Config, db *storage.DB, store *storage.Manager, engine media.Engine) *Service {
+func NewService(cfg *config.Config, db storage.DLNARepository, store *storage.Manager, engine media.Engine) *Service {
 	return &Service{cfg: cfg, db: db, store: store, engine: engine}
 }
 

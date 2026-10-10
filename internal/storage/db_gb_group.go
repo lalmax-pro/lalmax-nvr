@@ -33,13 +33,13 @@ func (d *DB) createGBGroupTables(ctx context.Context) error {
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		UNIQUE(device_id, business_group)
 	);`
-	if _, err := d.db.ExecContext(ctx, groupSQL); err != nil {
+	if _, err := d.execContext(ctx, groupSQL); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_gb_groups_business ON gb28181_groups(business_group);"); err != nil {
+	if _, err := d.execContext(ctx, "CREATE INDEX IF NOT EXISTS idx_gb_groups_business ON gb28181_groups(business_group);"); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_gb_groups_parent ON gb28181_groups(parent_id);"); err != nil {
+	if _, err := d.execContext(ctx, "CREATE INDEX IF NOT EXISTS idx_gb_groups_parent ON gb28181_groups(parent_id);"); err != nil {
 		return err
 	}
 	return nil
@@ -56,7 +56,7 @@ func scanGBGroup(rows scannable) (GBGroup, error) {
 
 // ListGBGroupsByParent 返回某父节点的直接子分组; parentID=0 取顶层业务分组(215)。
 func (d *DB) ListGBGroupsByParent(ctx context.Context, parentID int64) ([]GBGroup, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		"SELECT "+gbGroupCols+" FROM gb28181_groups WHERE parent_id = ? ORDER BY device_id;", parentID)
 	if err != nil {
 		return nil, err
@@ -75,7 +75,7 @@ func (d *DB) ListGBGroupsByParent(ctx context.Context, parentID int64) ([]GBGrou
 
 // GetGBGroup 按自增ID查询。
 func (d *DB) GetGBGroup(ctx context.Context, id int64) (*GBGroup, error) {
-	row := d.db.QueryRowContext(ctx, "SELECT "+gbGroupCols+" FROM gb28181_groups WHERE id = ?;", id)
+	row := d.queryRowContext(ctx, "SELECT "+gbGroupCols+" FROM gb28181_groups WHERE id = ?;", id)
 	g, err := scanGBGroup(row)
 	if err != nil {
 		return nil, err
@@ -85,7 +85,7 @@ func (d *DB) GetGBGroup(ctx context.Context, id int64) (*GBGroup, error) {
 
 // GetGBGroupByDeviceID 在指定业务分组内按编号查询, 不存在返回 nil,nil。
 func (d *DB) GetGBGroupByDeviceID(ctx context.Context, deviceID, businessGroup string) (*GBGroup, error) {
-	row := d.db.QueryRowContext(ctx,
+	row := d.queryRowContext(ctx,
 		"SELECT "+gbGroupCols+" FROM gb28181_groups WHERE device_id = ? AND business_group = ?;", deviceID, businessGroup)
 	g, err := scanGBGroup(row)
 	if err != nil {
@@ -109,20 +109,16 @@ func (d *DB) CreateGBGroup(ctx context.Context, g *GBGroup) (int64, error) {
 			g.ParentID = parent.ID
 		}
 	}
-	res, err := d.db.ExecContext(ctx,
+	id, err := d.insertID(ctx,
 		`INSERT INTO gb28181_groups (device_id, name, parent_device_id, parent_id, business_group, civil_code)
 		 VALUES (?, ?, ?, ?, ?, ?);`,
 		g.DeviceID, g.Name, g.ParentDeviceID, g.ParentID, g.BusinessGroup, g.CivilCode)
 	if err != nil {
 		return 0, err
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
 	g.ID = id
 	// 回填以本节点为父的孤立子节点
-	_, _ = d.db.ExecContext(ctx,
+	_, _ = d.execContext(ctx,
 		"UPDATE gb28181_groups SET parent_id = ? WHERE parent_device_id = ? AND business_group = ? AND parent_id = 0;",
 		id, g.DeviceID, g.BusinessGroup)
 	return id, nil
@@ -130,7 +126,7 @@ func (d *DB) CreateGBGroup(ctx context.Context, g *GBGroup) (int64, error) {
 
 // UpdateGBGroup 更新分组 (名称/编码)。
 func (d *DB) UpdateGBGroup(ctx context.Context, g *GBGroup) error {
-	_, err := d.db.ExecContext(ctx,
+	_, err := d.execContext(ctx,
 		`UPDATE gb28181_groups SET device_id = ?, name = ?, parent_device_id = ?, parent_id = ?,
 		 business_group = ?, civil_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;`,
 		g.DeviceID, g.Name, g.ParentDeviceID, g.ParentID, g.BusinessGroup, g.CivilCode, g.ID)
@@ -157,7 +153,7 @@ func (d *DB) GetGBGroupDescendants(ctx context.Context, id int64) ([]GBGroup, er
 
 // ListGBGroupsByBusinessGroup 返回某业务分组下全部节点 (含业务分组自身与所有虚拟组织)。
 func (d *DB) ListGBGroupsByBusinessGroup(ctx context.Context, businessGroup string) ([]GBGroup, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		"SELECT "+gbGroupCols+" FROM gb28181_groups WHERE business_group = ? ORDER BY device_id;", businessGroup)
 	if err != nil {
 		return nil, err
@@ -180,7 +176,7 @@ func (d *DB) DeleteGBGroups(ctx context.Context, ids []int64) error {
 		return nil
 	}
 	ph, args := int64Placeholders(ids)
-	_, err := d.db.ExecContext(ctx, "DELETE FROM gb28181_groups WHERE id IN ("+ph+");", args...)
+	_, err := d.execContext(ctx, "DELETE FROM gb28181_groups WHERE id IN ("+ph+");", args...)
 	return err
 }
 
@@ -189,7 +185,7 @@ func (d *DB) DeleteGBGroups(ctx context.Context, ids []int64) error {
 // CountChannelsByParentID 统计挂接在某虚拟组织下的通道数。
 func (d *DB) CountChannelsByParentID(ctx context.Context, parentID string) (int, error) {
 	var n int
-	err := d.db.QueryRowContext(ctx,
+	err := d.queryRowContext(ctx,
 		"SELECT COUNT(*) FROM gb28181_channels WHERE parent_id = ?;", parentID).Scan(&n)
 	return n, err
 }
@@ -199,7 +195,7 @@ func (d *DB) AttachChannelsToGroup(ctx context.Context, parentID, businessGroup 
 	if len(keys) == 0 {
 		return nil
 	}
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -223,7 +219,7 @@ func (d *DB) DetachChannelsFromGroup(ctx context.Context, keys []ChannelKey) err
 	if len(keys) == 0 {
 		return nil
 	}
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -244,14 +240,14 @@ func (d *DB) DetachChannelsFromGroup(ctx context.Context, keys []ChannelKey) err
 
 // DetachChannelsFromGroupByParent 解绑某虚拟组织下全部通道。
 func (d *DB) DetachChannelsFromGroupByParent(ctx context.Context, parentID string) error {
-	_, err := d.db.ExecContext(ctx,
+	_, err := d.execContext(ctx,
 		"UPDATE gb28181_channels SET parent_id = '', business_group_id = '' WHERE parent_id = ?;", parentID)
 	return err
 }
 
 // DetachChannelsFromBusinessGroup 解绑某业务分组下全部通道。
 func (d *DB) DetachChannelsFromBusinessGroup(ctx context.Context, businessGroup string) error {
-	_, err := d.db.ExecContext(ctx,
+	_, err := d.execContext(ctx,
 		"UPDATE gb28181_channels SET parent_id = '', business_group_id = '' WHERE business_group_id = ?;", businessGroup)
 	return err
 }

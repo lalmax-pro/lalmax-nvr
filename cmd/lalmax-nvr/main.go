@@ -449,7 +449,15 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	// Step 1: Open database
 	dbPath := filepath.Join(cfg.Storage.RootDir, "lalmax-nvr.db")
-	db, err := storage.New(dbPath)
+	databaseDriver := storage.DatabaseDriver(cfg.Storage.DatabaseDriver)
+	if databaseDriver == "" {
+		databaseDriver = storage.DriverSQLite
+	}
+	databaseDSN := cfg.Storage.DatabaseDSN
+	if databaseDSN == "" {
+		databaseDSN = dbPath
+	}
+	db, err := storage.Open(context.Background(), storage.DatabaseOptions{Driver: databaseDriver, DSN: databaseDSN})
 	if err != nil {
 		return nil, fmt.Errorf("db open: %w", err)
 	}

@@ -133,20 +133,15 @@ func (c *Channel) init(domain string) {
 // DeviceStore manages GB28181 devices with both memory cache and database persistence.
 type DeviceStore struct {
 	devices sync.Map
-	db      *storage.DB
+	db      storage.GB28181DeviceStoreRepository
 	hub     *WSHub
 }
 
-func NewDeviceStore(db *storage.DB, hub *WSHub) *DeviceStore {
+func NewDeviceStore(db storage.GB28181DeviceStoreRepository, hub *WSHub) *DeviceStore {
 	return &DeviceStore{
 		db:  db,
 		hub: hub,
 	}
-}
-
-// GetDB returns the underlying database.
-func (s *DeviceStore) GetDB() *storage.DB {
-	return s.db
 }
 
 // LoadFromDB loads all devices from database into memory.

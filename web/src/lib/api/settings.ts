@@ -79,6 +79,39 @@ export interface SettingsConfig {
   streaming?: StreamingConfig;
 }
 
+export interface DatabaseMigrationSettings {
+  active_driver: string;
+  migration_available: boolean;
+  migration_reason: string;
+  target_configured: boolean;
+  target_driver?: string;
+}
+
+export interface DatabaseMigrationTarget {
+  driver: 'postgres' | 'mysql' | 'sqlite';
+  dsn: string;
+}
+
+export async function getDatabaseMigrationSettings(signal?: AbortSignal): Promise<DatabaseMigrationSettings> {
+  return apiRequest<DatabaseMigrationSettings>('/settings/database-migration', { signal });
+}
+
+export async function saveDatabaseMigrationTarget(target: DatabaseMigrationTarget, signal?: AbortSignal): Promise<void> {
+  await apiRequest('/settings/database-migration', {
+    method: 'PUT', body: JSON.stringify(target), signal,
+  });
+}
+
+export async function testDatabaseMigrationTarget(target: DatabaseMigrationTarget, signal?: AbortSignal): Promise<{ status: string; driver: string; migration_available: boolean; migration_reason: string }> {
+  return apiRequest('/settings/database-migration/test', {
+    method: 'POST', body: JSON.stringify(target), signal,
+  });
+}
+
+export async function runDatabaseMigration(signal?: AbortSignal): Promise<{ status: string; active_driver: string; total_rows: number; rows_copied: Record<string, number> }> {
+  return apiRequest('/settings/database-migration/run', { method: 'POST', body: '{}', signal });
+}
+
 export interface MergeStatus {
   enabled: boolean;
   last_run_time: string;

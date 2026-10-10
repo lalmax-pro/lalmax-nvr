@@ -37,14 +37,14 @@ func (d *DB) InsertCreatedStream(ctx context.Context, stream CreatedStream) erro
 	if stream.InputMode == "" {
 		stream.InputMode = CreatedStreamPush
 	}
-	_, err := d.db.ExecContext(ctx,
+	_, err := d.execContext(ctx,
 		`INSERT INTO created_streams(stream_id, name, app_name, input_mode, source_url, created_at) VALUES(?,?,?,?,?,?);`,
 		stream.StreamID, stream.Name, stream.AppName, stream.InputMode, stream.SourceURL, timeToDB(stream.CreatedAt))
 	return err
 }
 
 func (d *DB) GetCreatedStream(ctx context.Context, streamID string) (*CreatedStream, error) {
-	row := d.db.QueryRowContext(ctx,
+	row := d.queryRowContext(ctx,
 		`SELECT stream_id, name, app_name, input_mode, source_url, created_at FROM created_streams WHERE stream_id = ?;`,
 		streamID)
 	stream, err := scanCreatedStream(row)
@@ -70,7 +70,7 @@ func (d *DB) SetCreatedStreamName(ctx context.Context, streamID, name string) er
 	if name == "" {
 		name = streamID
 	}
-	_, err := d.db.ExecContext(ctx,
+	_, err := d.execContext(ctx,
 		`INSERT INTO created_streams(stream_id, name, app_name, input_mode, source_url, created_at)
 		 VALUES(?,?,?,?,?,?)
 		 ON CONFLICT(stream_id) DO UPDATE SET name=excluded.name;`,
@@ -79,7 +79,7 @@ func (d *DB) SetCreatedStreamName(ctx context.Context, streamID, name string) er
 }
 
 func (d *DB) ListCreatedStreams(ctx context.Context) ([]CreatedStream, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		`SELECT stream_id, name, app_name, input_mode, source_url, created_at FROM created_streams ORDER BY created_at DESC;`)
 	if err != nil {
 		return nil, err
@@ -98,7 +98,7 @@ func (d *DB) ListCreatedStreams(ctx context.Context) ([]CreatedStream, error) {
 
 // DeleteCreatedStream removes a reserved push slot. The bool reports whether a row was deleted.
 func (d *DB) DeleteCreatedStream(ctx context.Context, streamID string) (bool, error) {
-	res, err := d.db.ExecContext(ctx, `DELETE FROM created_streams WHERE stream_id = ?;`, streamID)
+	res, err := d.execContext(ctx, `DELETE FROM created_streams WHERE stream_id = ?;`, streamID)
 	if err != nil {
 		return false, err
 	}

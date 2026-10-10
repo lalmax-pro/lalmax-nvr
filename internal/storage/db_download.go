@@ -31,25 +31,21 @@ func (d *DB) createDownloadTable(ctx context.Context) error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
-	if _, err := d.db.ExecContext(ctx, downloadSQL); err != nil {
+	if _, err := d.execContext(ctx, downloadSQL); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (d *DB) CreateDownload(ctx context.Context, dl *DownloadRecordRow) (int64, error) {
-	res, err := d.db.ExecContext(ctx, `
+	return d.insertID(ctx, `
 		INSERT INTO gb28181_downloads (device_id, channel_id, file_path, start_time, end_time, status)
 		VALUES (?, ?, ?, ?, ?, ?);`,
 		dl.DeviceID, dl.ChannelID, dl.FilePath, dl.StartTime, dl.EndTime, dl.Status)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
 }
 
 func (d *DB) UpdateDownloadStatus(ctx context.Context, id int64, status string, fileSize int64) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		UPDATE gb28181_downloads SET status=?, file_size=?, updated_at=CURRENT_TIMESTAMP WHERE id=?;`,
 		status, fileSize, id)
 	return err
@@ -57,7 +53,7 @@ func (d *DB) UpdateDownloadStatus(ctx context.Context, id int64, status string, 
 
 func (d *DB) GetDownload(ctx context.Context, id int64) (*DownloadRecordRow, error) {
 	var dl DownloadRecordRow
-	err := d.db.QueryRowContext(ctx, `
+	err := d.queryRowContext(ctx, `
 		SELECT id, device_id, channel_id, file_path, start_time, end_time, file_size, status, created_at, updated_at
 		FROM gb28181_downloads WHERE id = ?;`, id).Scan(
 		&dl.ID, &dl.DeviceID, &dl.ChannelID, &dl.FilePath, &dl.StartTime, &dl.EndTime,
@@ -86,14 +82,14 @@ func (d *DB) ListDownloads(ctx context.Context, deviceID, channelID string, limi
 	}
 
 	var total int
-	if err := d.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := d.queryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	listQuery += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	queryArgs := append(args, limit, offset)
 
-	rows, err := d.db.QueryContext(ctx, listQuery, queryArgs...)
+	rows, err := d.queryContext(ctx, listQuery, queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -4,7 +4,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/lalmax-pro/lalmax-nvr/ci.yml?style=flat&label=CI)](https://github.com/lalmax-pro/lalmax-nvr/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev/)
 [![Svelte](https://img.shields.io/badge/Svelte-FF3E00?style=flat&logo=svelte&logoColor=white)](https://svelte.dev/)
-[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![数据库](https://img.shields.io/badge/SQLite%20%7C%20PostgreSQL%20%7C%20MySQL-003B57?style=flat)](docs/zh/database-migration.md)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
 
@@ -52,7 +52,7 @@ flowchart LR
   Group --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
   Group -->|AddSubscriber| Rec[组写入器]
   Plan[录像计划] -->|写盘开关| Rec
-  Rec --> Disk[(MP4 + SQLite)]
+  Rec --> Disk[(MP4 + SQLite / PostgreSQL / MySQL)]
   VoIPSIP -->|通话记录| Disk
   Disk --> VOD[连续 VOD]
 ```
@@ -215,7 +215,7 @@ internal/              # 核心模块
   onvif/               # ONVIF 客户端适配器（NVR 侧）
   recorder/            # lalmax 组写入器、record task、MJPEG/HTTP-JPEG 采集器
   rediscovery/         # 按序列号重新发现 ONVIF 设备 IP
-  storage/             # SQLite 数据库 + 文件管理
+  storage/             # SQLite / PostgreSQL / MySQL + 文件管理
   streamhistory/       # 流历史记录
   ui/                  # 内嵌 SPA 静态文件
   upload/              # 文件上传处理

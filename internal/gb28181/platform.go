@@ -48,7 +48,7 @@ type Platform struct {
 	keepAliveReply int
 	registerCallID string
 	quit           chan struct{}
-	store          *storage.DB
+	store          storage.GB28181PlatformCatalogRepository
 }
 
 // PlatformManager manages all upstream platform connections.
@@ -60,11 +60,11 @@ type PlatformManager struct {
 	mediaIP   string
 	serial    string
 	password  string
-	store     *storage.DB
+	store     storage.GB28181PlatformCatalogRepository
 }
 
 // NewPlatformManager creates a new platform manager.
-func NewPlatformManager(client *sipgo.Client, sipIP, mediaIP, serial, password string, store *storage.DB) *PlatformManager {
+func NewPlatformManager(client *sipgo.Client, sipIP, mediaIP, serial, password string, store storage.GB28181PlatformCatalogRepository) *PlatformManager {
 	return &PlatformManager{
 		platforms: make(map[int64]*Platform),
 		client:    client,

@@ -79,7 +79,7 @@ type CameraRow struct {
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	rows, err := d.queryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge, merge_rolling_enabled, merge_rolling_debounce,
 		onvif_endpoint, profile_token, profile_name, stream_encoding,
 		archived, archived_at, archive_retention_days,
@@ -124,7 +124,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 
 // ListArchivedCameras returns only cameras marked as archived.
 func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	rows, err := d.queryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge, merge_rolling_enabled, merge_rolling_debounce,
 		onvif_endpoint, profile_token, profile_name, stream_encoding,
 		archived, archived_at, archive_retention_days,
@@ -178,7 +178,11 @@ func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url
 
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, encoding=excluded.encoding, rtsp_transport=excluded.rtsp_transport, url=excluded.url, username=excluded.username, password=excluded.password, enabled=excluded.enabled, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding;`
 
-	_, err := d.db.ExecContext(ctx, q, id, name, protocol, encoding, rtspTransport, url, username, password, enabled, onvifEndpoint, profileToken, streamEncoding)
+	enabledValue := 0
+	if enabled {
+		enabledValue = 1
+	}
+	_, err := d.execContext(ctx, q, id, name, protocol, encoding, rtspTransport, url, username, password, enabledValue, onvifEndpoint, profileToken, streamEncoding)
 
 	return err
 }
@@ -186,7 +190,7 @@ func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url
 // UpdateCameraProfileName updates the profile_name for a camera.
 func (d *DB) UpdateCameraProfileName(ctx context.Context, id, profileName string) error {
 	q := `UPDATE cameras SET profile_name=? WHERE id=?;`
-	_, err := d.db.ExecContext(ctx, q, profileName, id)
+	_, err := d.execContext(ctx, q, profileName, id)
 	return err
 }
 
@@ -196,7 +200,7 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge, mergeRollingDebounce sql.NullString
 	var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 	var archivedAtStr, createdAtStr sql.NullString
-	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	err := d.queryRowContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge, merge_rolling_enabled, merge_rolling_debounce,
 		onvif_endpoint, profile_token, profile_name, stream_encoding,
 		archived, archived_at, archive_retention_days,
@@ -233,7 +237,7 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 // DeleteCamera removes a camera record from the database.
 // Returns an error if the camera does not exist.
 func (d *DB) DeleteCamera(ctx context.Context, cameraID string) error {
-	res, err := d.db.ExecContext(ctx, `DELETE FROM cameras WHERE id = ?;`, cameraID)
+	res, err := d.execContext(ctx, `DELETE FROM cameras WHERE id = ?;`, cameraID)
 	if err != nil {
 		return err
 	}
@@ -247,7 +251,7 @@ func (d *DB) DeleteCamera(ctx context.Context, cameraID string) error {
 // UpdateCameraMetadata updates DB-only metadata fields for a camera.
 func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location, brand, model, serialNumber string, retentionDays int) error {
 	q := `UPDATE cameras SET description=?, location=?, brand=?, model=?, serial_number=?, retention_days=? WHERE id=?;`
-	_, err := d.db.ExecContext(ctx, q, description, location, brand, model, serialNumber, retentionDays, id)
+	_, err := d.execContext(ctx, q, description, location, brand, model, serialNumber, retentionDays, id)
 	return err
 }
 
@@ -255,7 +259,7 @@ func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location
 // The camera's extras carry the authoritative stream_id; stream_bindings is kept
 // in sync as the stream -> camera index (a camera has at most one binding).
 func (d *DB) SetCameraStream(ctx context.Context, cameraID, streamID string) error {
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -264,7 +268,8 @@ func (d *DB) SetCameraStream(ctx context.Context, cameraID, streamID string) err
 	if _, err := tx.ExecContext(ctx, `DELETE FROM stream_bindings WHERE camera_id = ?;`, cameraID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stream_bindings (stream_id, camera_id) VALUES (?, ?);`, streamID, cameraID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO stream_bindings (stream_id, camera_id) VALUES (?, ?)
+		ON CONFLICT(stream_id) DO UPDATE SET camera_id=excluded.camera_id;`, streamID, cameraID); err != nil {
 		return err
 	}
 
@@ -298,14 +303,15 @@ type StreamBinding struct {
 
 // BindStreamToCamera creates a binding between a stream and a camera.
 func (d *DB) BindStreamToCamera(ctx context.Context, streamID, cameraID string) error {
-	q := `INSERT OR REPLACE INTO stream_bindings (stream_id, camera_id) VALUES (?, ?);`
-	_, err := d.db.ExecContext(ctx, q, streamID, cameraID)
+	q := `INSERT INTO stream_bindings (stream_id, camera_id) VALUES (?, ?)
+		ON CONFLICT(stream_id) DO UPDATE SET camera_id=excluded.camera_id;`
+	_, err := d.execContext(ctx, q, streamID, cameraID)
 	return err
 }
 
 // UnbindStreamFromCamera removes the binding between a stream and a camera.
 func (d *DB) UnbindStreamFromCamera(ctx context.Context, streamID string) error {
-	res, err := d.db.ExecContext(ctx, `DELETE FROM stream_bindings WHERE stream_id = ?;`, streamID)
+	res, err := d.execContext(ctx, `DELETE FROM stream_bindings WHERE stream_id = ?;`, streamID)
 	if err != nil {
 		return err
 	}
@@ -319,7 +325,7 @@ func (d *DB) UnbindStreamFromCamera(ctx context.Context, streamID string) error 
 // GetStreamBinding returns the binding for a given stream.
 func (d *DB) GetStreamBinding(ctx context.Context, streamID string) (*StreamBinding, error) {
 	var b StreamBinding
-	err := d.db.QueryRowContext(ctx,
+	err := d.queryRowContext(ctx,
 		`SELECT stream_id, camera_id, created_at FROM stream_bindings WHERE stream_id = ?;`,
 		streamID).Scan(&b.StreamID, &b.CameraID, &b.CreatedAt)
 	if err != nil {
@@ -333,7 +339,7 @@ func (d *DB) GetStreamBinding(ctx context.Context, streamID string) (*StreamBind
 
 // ListStreamBindings returns all stream-camera bindings.
 func (d *DB) ListStreamBindings(ctx context.Context) ([]StreamBinding, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		`SELECT stream_id, camera_id, created_at FROM stream_bindings ORDER BY created_at DESC;`)
 	if err != nil {
 		return nil, err
@@ -353,7 +359,7 @@ func (d *DB) ListStreamBindings(ctx context.Context) ([]StreamBinding, error) {
 // GetBindingByCameraID returns the binding for a given camera.
 func (d *DB) GetBindingByCameraID(ctx context.Context, cameraID string) (*StreamBinding, error) {
 	var b StreamBinding
-	err := d.db.QueryRowContext(ctx,
+	err := d.queryRowContext(ctx,
 		`SELECT stream_id, camera_id, created_at FROM stream_bindings WHERE camera_id = ?;`,
 		cameraID).Scan(&b.StreamID, &b.CameraID, &b.CreatedAt)
 	if err != nil {

@@ -13,13 +13,13 @@ func (d *DB) SaveCameraExtras(ctx context.Context, cam config.CameraConfig) erro
 	if err != nil {
 		return err
 	}
-	_, err = d.db.ExecContext(ctx, `UPDATE cameras SET extras_json=? WHERE id=?`, raw, cam.ID)
+	_, err = d.execContext(ctx, `UPDATE cameras SET extras_json=? WHERE id=?`, raw, cam.ID)
 	return err
 }
 
 // ListCameraConfigs returns runtime camera configs from the database (including passwords).
 func (d *DB) ListCameraConfigs(ctx context.Context) ([]config.CameraConfig, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, username, password, enabled,
+	rows, err := d.queryContext(ctx, `SELECT id, name, protocol, encoding, rtsp_transport, url, username, password, enabled,
 		onvif_endpoint, profile_token, stream_encoding, extras_json,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge, merge_rolling_enabled, merge_rolling_debounce,
 		COALESCE(activation_state,'active'), COALESCE(stable_id,'')

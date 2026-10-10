@@ -28,7 +28,7 @@ type DownloadSession struct {
 	client      *sipgo.Client
 	cfg         *Config
 	mediaEngine media.Engine
-	store       *storage.DB
+	store       storage.GB28181DownloadRepository
 }
 
 // DownloadManager manages recording download sessions.
@@ -37,12 +37,12 @@ type DownloadManager struct {
 	client   *sipgo.Client
 	cfg      *Config
 	mediaEng media.Engine
-	store    *storage.DB
+	store    storage.GB28181DownloadRepository
 	dataDir  string
 }
 
 // NewDownloadManager creates a new download manager.
-func NewDownloadManager(client *sipgo.Client, cfg *Config, mediaEng media.Engine, store *storage.DB, dataDir string) *DownloadManager {
+func NewDownloadManager(client *sipgo.Client, cfg *Config, mediaEng media.Engine, store storage.GB28181DownloadRepository, dataDir string) *DownloadManager {
 	return &DownloadManager{
 		sessions: make(map[string]*DownloadSession),
 		client:   client,

@@ -9,12 +9,8 @@ import (
 )
 
 func (d *DB) InsertAlarmRule(ctx context.Context, rule *model.AlarmRule) error {
-	res, err := d.db.ExecContext(ctx, `INSERT INTO alarm_rules(name, enabled, camera_id, source, event_type, severity, action, action_target, created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+	id, err := d.insertID(ctx, `INSERT INTO alarm_rules(name, enabled, camera_id, source, event_type, severity, action, action_target, created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
 		rule.Name, boolToInt(rule.Enabled), rule.CameraID, rule.Source, rule.EventType, rule.Severity, rule.Action, rule.ActionTarget, timeToDB(time.Now().UTC()))
-	if err != nil {
-		return err
-	}
-	id, err := res.LastInsertId()
 	if err != nil {
 		return err
 	}
@@ -23,7 +19,7 @@ func (d *DB) InsertAlarmRule(ctx context.Context, rule *model.AlarmRule) error {
 }
 
 func (d *DB) ListAlarmRules(ctx context.Context) ([]model.AlarmRule, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, enabled, camera_id, source, event_type, severity, action, action_target, created_at FROM alarm_rules ORDER BY id DESC`)
+	rows, err := d.queryContext(ctx, `SELECT id, name, enabled, camera_id, source, event_type, severity, action, action_target, created_at FROM alarm_rules ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +40,7 @@ func (d *DB) ListAlarmRules(ctx context.Context) ([]model.AlarmRule, error) {
 }
 
 func (d *DB) DeleteAlarmRule(ctx context.Context, id int64) error {
-	res, err := d.db.ExecContext(ctx, `DELETE FROM alarm_rules WHERE id=?`, id)
+	res, err := d.execContext(ctx, `DELETE FROM alarm_rules WHERE id=?`, id)
 	if err != nil {
 		return err
 	}
@@ -59,7 +55,7 @@ func (d *DB) DeleteAlarmRule(ctx context.Context, id int64) error {
 }
 
 func (d *DB) SetAlarmRuleEnabled(ctx context.Context, id int64, enabled bool) error {
-	_, err := d.db.ExecContext(ctx, `UPDATE alarm_rules SET enabled=? WHERE id=?`, boolToInt(enabled), id)
+	_, err := d.execContext(ctx, `UPDATE alarm_rules SET enabled=? WHERE id=?`, boolToInt(enabled), id)
 	return err
 }
 

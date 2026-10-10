@@ -13,6 +13,7 @@ Find guides by task. For configuration examples, see [`config/config.example.yam
 | [Configuration](configuration.md) | Main settings and examples; compare with the configuration example above |
 | [Troubleshooting](troubleshooting.md) | Common runtime issues |
 | [Architecture](architecture.md) | The NVR, media engine, and common ingest paths |
+| [Database migration](database-migration.md) | PostgreSQL/MySQL setup and live migration from SQLite |
 
 ## Media sources and playback
 

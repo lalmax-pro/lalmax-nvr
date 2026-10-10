@@ -73,8 +73,18 @@ type ServerConfig struct {
 }
 
 type StorageConfig struct {
-	RootDir         string `yaml:"root_dir"`         // default "/mnt/data/nvr"
-	SegmentDuration string `yaml:"segment_duration"` // default "30s"
+	RootDir         string                `yaml:"root_dir"`         // default "/mnt/data/nvr"
+	SegmentDuration string                `yaml:"segment_duration"` // default "30s"
+	DatabaseDriver  string                `yaml:"database_driver,omitempty"`
+	DatabaseDSN     string                `yaml:"database_dsn,omitempty"`
+	MigrationTarget *DatabaseTargetConfig `yaml:"database_migration_target,omitempty"`
+}
+
+// DatabaseTargetConfig stores a tested destination connection for explicit
+// database migration. It does not change the active database by itself.
+type DatabaseTargetConfig struct {
+	Driver string `yaml:"driver"`
+	DSN    string `yaml:"dsn,omitempty"`
 }
 
 type MediaConfig struct {
@@ -633,6 +643,10 @@ func Save(path string, cfg *Config) error {
 	saveCfg := *cfg
 	saveCfg.Cameras = nil
 	saveCfg.VoIP = cfg.VoIP.Clone()
+	if cfg.Storage.MigrationTarget != nil {
+		target := *cfg.Storage.MigrationTarget
+		saveCfg.Storage.MigrationTarget = &target
+	}
 
 	// Snapshot and encrypt sensitive fields if key is available
 	key := GetEncryptionKey()
