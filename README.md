@@ -37,6 +37,7 @@ lalmax-nvr is a business NVR on top of an embedded [lalmax](https://github.com/q
 flowchart LR
   Cam[Camera RTSP / ONVIF] -->|pull| Group[lalmax group]
   GB[GB28181] -->|RTP push after INVITE| Group
+  SIP[VoIP SIP terminals] -->|RTP / SRTP| Group
   JT[JT1078] -->|TCP/UDP :1078| Group
   Push[RTMP / SRT / WHIP / RTSP publish] --> Group
   Group --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
@@ -74,6 +75,7 @@ G.711 covers both A-law (PCMA) and µ-law (PCMU). Audio codecs not listed for a 
 - **Media Engine**: lalmax-powered relay — unified ingest, no duplicate camera pulls
 - **Camera Protocols**: RTSP (H.264/H.265/MJPEG), HTTP JPEG, ONVIF discovery & management
 - **GB28181**: SIP platform (上级); devices REGISTER then **push PS/RTP** after INVITE; cascade, recording query & playback with timeline, multi-protocol streaming (ws-flv, flv, hls, webrtc, etc.), playback control (pause/resume/speed/seek), batch download, platform event history, voice broadcast/intercom (SIP INVITE, UDP/TCP)
+- **SIP VoIP**: Register SIP phones and video door stations, or register the NVR to an upstream PBX and call its extensions from the Web UI. Browser-to-terminal duplex talk uses WebRTC; call status, DTMF, and persistent call history are available separately from GB28181 intercom. See the [VoIP guide (Chinese)](docs/zh/voip.md)
 - **Recording**: embedded H.264/H.265 subscribes to the lalmax group. A plan (`continuous` / `scheduled` / `event` / `off`) only turns disk writing on or off; the pull or push stays up. `adaptive` and `media.mode: http` still use a record task. Promoting a stream to a device does not start recording. Retention, AAC + G.711 audio. Details: [Recording flow](docs/en/recording-flow.md)
 - **Recording Playback**: 24h timeline, hour zoom, single-file player, or **continuous VOD** (HLS fMP4 across a day, seek across gaps)
 - **Live View**: WebCodecs, fMP4, WebRTC, HTTP-FLV, WS-FLV, HLS, LL-HLS, copyable **RTSP** (`:15544`) and **RTMP** (`:11935`)
@@ -160,6 +162,7 @@ Full catalog: **[docs/en/README.md](docs/en/README.md)**.
 | [Configuration](docs/en/configuration.md) | YAML reference |
 | [API Reference](docs/en/api-reference.md) | REST API |
 | [GB28181](docs/en/gb28181-guide.md) | National-standard devices, playback, talk |
+| [VoIP](docs/zh/voip.md) *(Chinese)* | SIP endpoints and PBX, Web outbound calls, WebRTC duplex talk, and call history |
 | [JT1078 / JT808](docs/en/configuration.md#jt1078-ingest-configuration) | `:1078` media ingest and optional `:808` signaling |
 | [ONVIF](docs/en/onvif-guide.md) | Discovery, PTZ |
 | [Camera Guide](docs/en/camera-guide.md) | RTSP / HTTP setup |
@@ -185,6 +188,7 @@ internal/              # Core packages
   event/               # Event bus
   ftp/                 # FTP server
   gb28181/             # GB28181 SIP server (device mgmt, cascade, playback, intercom)
+  voip/                # SIP VoIP signaling, registration, calls, and WebRTC talk integration
   health/              # Camera health monitoring
   iptv/                # M3U import, HLS proxy, and channel publish
   jt808/               # JT/T 808 signaling (register, live, playback, query, upload, PTZ)
