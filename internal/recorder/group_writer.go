@@ -83,7 +83,7 @@ type GroupWriter struct {
 
 // NewGroupWriter records from the in-process lalmax group manager.
 // engine may be nil in tests; Run then only reconciles groups on its ticker.
-func NewGroupWriter(store *storage.Manager, db *storage.DB, bus *event.EventBus, engine media.Engine, segDur time.Duration) *GroupWriter {
+func NewGroupWriter(store *storage.Manager, db RecordingDB, bus *event.EventBus, engine media.Engine, segDur time.Duration) *GroupWriter {
 	if segDur <= 0 {
 		segDur = DefaultSegmentDur
 	}

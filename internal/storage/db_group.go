@@ -62,29 +62,29 @@ func (d *DB) createGroupTables(ctx context.Context) error {
 		FOREIGN KEY (group_id) REFERENCES device_groups(id) ON DELETE CASCADE
 	);`
 
-	if _, err := d.db.ExecContext(ctx, groupSQL); err != nil {
+	if _, err := d.execContext(ctx, groupSQL); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, channelSQL); err != nil {
+	if _, err := d.execContext(ctx, channelSQL); err != nil {
 		return err
 	}
 
 	// Create indexes
-	if _, err := d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_device_groups_parent ON device_groups(parent_id);"); err != nil {
+	if _, err := d.execContext(ctx, "CREATE INDEX IF NOT EXISTS idx_device_groups_parent ON device_groups(parent_id);"); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_device_group_channels_group ON device_group_channels(group_id);"); err != nil {
+	if _, err := d.execContext(ctx, "CREATE INDEX IF NOT EXISTS idx_device_group_channels_group ON device_group_channels(group_id);"); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_device_group_channels_device ON device_group_channels(device_id);"); err != nil {
+	if _, err := d.execContext(ctx, "CREATE INDEX IF NOT EXISTS idx_device_group_channels_device ON device_group_channels(device_id);"); err != nil {
 		return err
 	}
 
 	// Insert default root group if not exists
 	var count int
-	err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM device_groups WHERE parent_id = 0 AND name = '默认分组';").Scan(&count)
+	err := d.queryRowContext(ctx, "SELECT COUNT(*) FROM device_groups WHERE parent_id = 0 AND name = '默认分组';").Scan(&count)
 	if err == nil && count == 0 {
-		_, _ = d.db.ExecContext(ctx, `INSERT INTO device_groups (name, parent_id, level, sort_order) VALUES ('默认分组', 0, 0, 0);`)
+		_, _ = d.execContext(ctx, `INSERT INTO device_groups (name, parent_id, level, sort_order) VALUES ('默认分组', 0, 0, 0);`)
 	}
 
 	return nil
@@ -92,7 +92,7 @@ func (d *DB) createGroupTables(ctx context.Context) error {
 
 // ListDeviceGroups returns all device groups.
 func (d *DB) ListDeviceGroups(ctx context.Context) ([]DeviceGroup, error) {
-	rows, err := d.db.QueryContext(ctx, `
+	rows, err := d.queryContext(ctx, `
 		SELECT id, name, parent_id, level, sort_order, created_at, updated_at
 		FROM device_groups
 		ORDER BY level, sort_order, id;`)
@@ -115,7 +115,7 @@ func (d *DB) ListDeviceGroups(ctx context.Context) ([]DeviceGroup, error) {
 // GetDeviceGroup returns a single device group by ID.
 func (d *DB) GetDeviceGroup(ctx context.Context, id int64) (*DeviceGroup, error) {
 	var g DeviceGroup
-	err := d.db.QueryRowContext(ctx, `
+	err := d.queryRowContext(ctx, `
 		SELECT id, name, parent_id, level, sort_order, created_at, updated_at
 		FROM device_groups WHERE id = ?;`, id).Scan(
 		&g.ID, &g.Name, &g.ParentID, &g.Level, &g.SortOrder, &g.CreatedAt, &g.UpdatedAt)
@@ -127,19 +127,15 @@ func (d *DB) GetDeviceGroup(ctx context.Context, id int64) (*DeviceGroup, error)
 
 // CreateDeviceGroup creates a new device group.
 func (d *DB) CreateDeviceGroup(ctx context.Context, group *DeviceGroup) (int64, error) {
-	result, err := d.db.ExecContext(ctx, `
+	return d.insertID(ctx, `
 		INSERT INTO device_groups (name, parent_id, level, sort_order)
 		VALUES (?, ?, ?, ?);`,
 		group.Name, group.ParentID, group.Level, group.SortOrder)
-	if err != nil {
-		return 0, err
-	}
-	return result.LastInsertId()
 }
 
 // UpdateDeviceGroup updates an existing device group.
 func (d *DB) UpdateDeviceGroup(ctx context.Context, group *DeviceGroup) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		UPDATE device_groups
 		SET name = ?, parent_id = ?, level = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?;`,
@@ -150,18 +146,18 @@ func (d *DB) UpdateDeviceGroup(ctx context.Context, group *DeviceGroup) error {
 // DeleteDeviceGroup deletes a device group and its children.
 func (d *DB) DeleteDeviceGroup(ctx context.Context, id int64) error {
 	// Delete children first
-	_, err := d.db.ExecContext(ctx, "DELETE FROM device_groups WHERE parent_id = ?;", id)
+	_, err := d.execContext(ctx, "DELETE FROM device_groups WHERE parent_id = ?;", id)
 	if err != nil {
 		return err
 	}
 	// Delete the group itself
-	_, err = d.db.ExecContext(ctx, "DELETE FROM device_groups WHERE id = ?;", id)
+	_, err = d.execContext(ctx, "DELETE FROM device_groups WHERE id = ?;", id)
 	return err
 }
 
 // ListGroupChannels returns all channels in a group.
 func (d *DB) ListGroupChannels(ctx context.Context, groupID int64) ([]DeviceGroupChannelDetail, error) {
-	rows, err := d.db.QueryContext(ctx, `
+	rows, err := d.queryContext(ctx, `
 		SELECT
 			gc.id, gc.group_id, gc.device_id, gc.channel_id, gc.created_at,
 			COALESCE(NULLIF(d.name, ''), cam.name, '') as device_name,
@@ -196,7 +192,7 @@ func (d *DB) ListGroupChannels(ctx context.Context, groupID int64) ([]DeviceGrou
 
 // AddGroupChannel adds a channel to a group.
 func (d *DB) AddGroupChannel(ctx context.Context, groupID int64, deviceID, channelID string) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		INSERT OR IGNORE INTO device_group_channels (group_id, device_id, channel_id)
 		VALUES (?, ?, ?);`, groupID, deviceID, channelID)
 	return err
@@ -204,7 +200,7 @@ func (d *DB) AddGroupChannel(ctx context.Context, groupID int64, deviceID, chann
 
 // RemoveGroupChannel removes a channel from a group.
 func (d *DB) RemoveGroupChannel(ctx context.Context, groupID int64, deviceID, channelID string) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		DELETE FROM device_group_channels
 		WHERE group_id = ? AND device_id = ? AND channel_id = ?;`,
 		groupID, deviceID, channelID)
@@ -213,26 +209,26 @@ func (d *DB) RemoveGroupChannel(ctx context.Context, groupID int64, deviceID, ch
 
 // RemoveGroupChannelsByDeviceID removes all group channel associations for a device.
 func (d *DB) RemoveGroupChannelsByDeviceID(ctx context.Context, deviceID string) error {
-	_, err := d.db.ExecContext(ctx, "DELETE FROM device_group_channels WHERE device_id = ?;", deviceID)
+	_, err := d.execContext(ctx, "DELETE FROM device_group_channels WHERE device_id = ?;", deviceID)
 	return err
 }
 
 // RemoveGroupChannelByID removes a channel from a group by its ID.
 func (d *DB) RemoveGroupChannelByID(ctx context.Context, id int64) error {
-	_, err := d.db.ExecContext(ctx, "DELETE FROM device_group_channels WHERE id = ?;", id)
+	_, err := d.execContext(ctx, "DELETE FROM device_group_channels WHERE id = ?;", id)
 	return err
 }
 
 // CountGroupChannels returns the number of channels in a group.
 func (d *DB) CountGroupChannels(ctx context.Context, groupID int64) (int, error) {
 	var count int
-	err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM device_group_channels WHERE group_id = ?;", groupID).Scan(&count)
+	err := d.queryRowContext(ctx, "SELECT COUNT(*) FROM device_group_channels WHERE group_id = ?;", groupID).Scan(&count)
 	return count, err
 }
 
 // GetGroupChannelStats returns channel count and online count for a group.
 func (d *DB) GetGroupChannelStats(ctx context.Context, groupID int64) (total int, online int, err error) {
-	err = d.db.QueryRowContext(ctx, `
+	err = d.queryRowContext(ctx, `
 		SELECT
 			COUNT(*),
 			SUM(CASE WHEN COALESCE(d.is_online, 0) = 1 THEN 1 ELSE 0 END)

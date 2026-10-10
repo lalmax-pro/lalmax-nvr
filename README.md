@@ -4,7 +4,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/lalmax-pro/lalmax-nvr/ci.yml?style=flat&label=CI)](https://github.com/lalmax-pro/lalmax-nvr/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev/)
 [![Svelte](https://img.shields.io/badge/Svelte-FF3E00?style=flat&logo=svelte&logoColor=white)](https://svelte.dev/)
-[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Databases](https://img.shields.io/badge/SQLite%20%7C%20PostgreSQL%20%7C%20MySQL-003B57?style=flat)](docs/en/database-migration.md)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
 
@@ -52,7 +52,7 @@ flowchart LR
   Group --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
   Group -->|AddSubscriber| Rec[Group writer]
   Plan[Recording plan] -->|write switch| Rec
-  Rec --> Disk[(MP4 + SQLite)]
+  Rec --> Disk[(MP4 + SQLite / PostgreSQL / MySQL)]
   VoIPSIP -->|call history| Disk
   Disk --> VOD[Continuous VOD]
 ```
@@ -62,7 +62,7 @@ flowchart LR
 - **`media.mode: embedded`** — engine in-process, so recording can `AddSubscriber` on the lalmax group. `http` talks to an external lalmax and keeps a record task
 - MJPEG / HTTP JPEG / timelapse still write through their own collectors (lalmax limitation)
 
-Full diagrams, ports, and module map: **[Architecture](docs/en/architecture.md)**. Documentation index: **[docs/en](docs/en/README.md)**.
+Full diagrams, ports, and module map: **[Architecture](docs/en/architecture.md)**. Database setup and SQLite migration: **[Database guide](docs/en/database-migration.md)**. Documentation index: **[docs/en](docs/en/README.md)**.
 
 ## Streaming Protocols
 
@@ -215,7 +215,7 @@ internal/              # Core packages
   onvif/               # ONVIF client adapter (NVR-side)
   recorder/            # lalmax group writer; record tasks; MJPEG/HTTP-JPEG collectors
   rediscovery/         # Rediscover ONVIF device IPs by serial
-  storage/             # SQLite DB + file manager
+  storage/             # SQLite / PostgreSQL / MySQL + file manager
   streamhistory/       # Stream history tracking
   ui/                  # Embedded SPA static files
   upload/              # File upload handling

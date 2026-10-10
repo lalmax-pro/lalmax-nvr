@@ -31,13 +31,13 @@ type Server struct {
 	username   string
 	password   string
 	storageMgr *storage.Manager
-	db         *storage.DB
+	db         storage.RecordingRepository
 	ftpServer  *ftpserverlib.FtpServer
 }
 
 // NewServer creates a new FTP server bound to addr with the given credentials.
 // portRange should be in "start-end" format (e.g. "50000-50100") for passive transfers.
-func NewServer(addr, portRange, username, password string, storageMgr *storage.Manager, db *storage.DB) *Server {
+func NewServer(addr, portRange, username, password string, storageMgr *storage.Manager, db storage.RecordingRepository) *Server {
 	return &Server{
 		addr:       addr,
 		portRange:  portRange,

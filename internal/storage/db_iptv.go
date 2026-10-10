@@ -94,7 +94,7 @@ func (d *DB) migrateIPTV(ctx context.Context) error {
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL
 	);`
-	if _, err := d.db.ExecContext(ctx, sourceSQL); err != nil {
+	if _, err := d.execContext(ctx, sourceSQL); err != nil {
 		return err
 	}
 	channelSQL := `CREATE TABLE IF NOT EXISTS iptv_channels (
@@ -121,7 +121,7 @@ func (d *DB) migrateIPTV(ctx context.Context) error {
 		updated_at DATETIME NOT NULL,
 		UNIQUE(source_id, external_id)
 	);`
-	if _, err := d.db.ExecContext(ctx, channelSQL); err != nil {
+	if _, err := d.execContext(ctx, channelSQL); err != nil {
 		return err
 	}
 	jobSQL := `CREATE TABLE IF NOT EXISTS iptv_import_jobs (
@@ -135,7 +135,7 @@ func (d *DB) migrateIPTV(ctx context.Context) error {
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL
 	);`
-	if _, err := d.db.ExecContext(ctx, jobSQL); err != nil {
+	if _, err := d.execContext(ctx, jobSQL); err != nil {
 		return err
 	}
 	itemSQL := `CREATE TABLE IF NOT EXISTS iptv_import_items (
@@ -160,15 +160,15 @@ func (d *DB) migrateIPTV(ctx context.Context) error {
 		recordable INTEGER NOT NULL DEFAULT 0,
 		checked_at DATETIME
 	);`
-	if _, err := d.db.ExecContext(ctx, itemSQL); err != nil {
+	if _, err := d.execContext(ctx, itemSQL); err != nil {
 		return err
 	}
-	_, _ = d.db.ExecContext(ctx, `ALTER TABLE iptv_import_items ADD COLUMN request_headers TEXT NOT NULL DEFAULT ''`)
-	_, _ = d.db.ExecContext(ctx, `ALTER TABLE iptv_channels ADD COLUMN request_headers TEXT NOT NULL DEFAULT ''`)
-	_, _ = d.db.ExecContext(ctx, `ALTER TABLE iptv_channels ADD COLUMN publish_enabled INTEGER NOT NULL DEFAULT 0`)
-	_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_iptv_channels_source ON iptv_channels(source_id, group_name)`)
-	_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_iptv_import_items_job ON iptv_import_items(job_id, row_no)`)
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='32' WHERE key='schema_version'")
+	_, _ = d.execContext(ctx, `ALTER TABLE iptv_import_items ADD COLUMN request_headers TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.execContext(ctx, `ALTER TABLE iptv_channels ADD COLUMN request_headers TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.execContext(ctx, `ALTER TABLE iptv_channels ADD COLUMN publish_enabled INTEGER NOT NULL DEFAULT 0`)
+	_, _ = d.execContext(ctx, `CREATE INDEX IF NOT EXISTS idx_iptv_channels_source ON iptv_channels(source_id, group_name)`)
+	_, _ = d.execContext(ctx, `CREATE INDEX IF NOT EXISTS idx_iptv_import_items_job ON iptv_import_items(job_id, row_no)`)
+	_, _ = d.execContext(ctx, "UPDATE schema_meta SET value='32' WHERE key='schema_version'")
 	return nil
 }
 
@@ -179,20 +179,20 @@ func (d *DB) InsertIPTVImportJob(ctx context.Context, job IPTVImportJob) error {
 	if job.UpdatedAt.IsZero() {
 		job.UpdatedAt = job.CreatedAt
 	}
-	_, err := d.db.ExecContext(ctx, `INSERT INTO iptv_import_jobs(id, name, playlist_url, request_headers, status, error, total_items, created_at, updated_at)
+	_, err := d.execContext(ctx, `INSERT INTO iptv_import_jobs(id, name, playlist_url, request_headers, status, error, total_items, created_at, updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?)`, job.ID, job.Name, job.PlaylistURL, job.RequestHeaders, job.Status, job.Error, job.TotalItems, timeToDB(job.CreatedAt), timeToDB(job.UpdatedAt))
 	return err
 }
 
 func (d *DB) UpdateIPTVImportJob(ctx context.Context, job IPTVImportJob) error {
 	job.UpdatedAt = time.Now()
-	_, err := d.db.ExecContext(ctx, `UPDATE iptv_import_jobs SET name=?, status=?, error=?, total_items=?, updated_at=? WHERE id=?`,
+	_, err := d.execContext(ctx, `UPDATE iptv_import_jobs SET name=?, status=?, error=?, total_items=?, updated_at=? WHERE id=?`,
 		job.Name, job.Status, job.Error, job.TotalItems, timeToDB(job.UpdatedAt), job.ID)
 	return err
 }
 
 func (d *DB) GetIPTVImportJob(ctx context.Context, id string) (*IPTVImportJob, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT id, name, playlist_url, request_headers, status, error, total_items, created_at, updated_at FROM iptv_import_jobs WHERE id=?`, id)
+	row := d.queryRowContext(ctx, `SELECT id, name, playlist_url, request_headers, status, error, total_items, created_at, updated_at FROM iptv_import_jobs WHERE id=?`, id)
 	var job IPTVImportJob
 	var created, updated sql.NullString
 	err := row.Scan(&job.ID, &job.Name, &job.PlaylistURL, &job.RequestHeaders, &job.Status, &job.Error, &job.TotalItems, &created, &updated)
@@ -211,7 +211,7 @@ func (d *DB) InsertIPTVImportItems(ctx context.Context, items []IPTVImportItem) 
 	if len(items) == 0 {
 		return nil
 	}
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -232,7 +232,7 @@ func (d *DB) InsertIPTVImportItems(ctx context.Context, items []IPTVImportItem) 
 }
 
 func (d *DB) UpdateIPTVImportItem(ctx context.Context, item IPTVImportItem) error {
-	_, err := d.db.ExecContext(ctx, `UPDATE iptv_import_items SET status=?, error=?, http_status=?, content_type=?, video_codec=?, audio_codec=?, encrypted=?, drm=?, playable=?, recordable=?, checked_at=? WHERE id=?`,
+	_, err := d.execContext(ctx, `UPDATE iptv_import_items SET status=?, error=?, http_status=?, content_type=?, video_codec=?, audio_codec=?, encrypted=?, drm=?, playable=?, recordable=?, checked_at=? WHERE id=?`,
 		item.Status, item.Error, item.HTTPStatus, item.ContentType, item.VideoCodec, item.AudioCodec, boolToInt(item.Encrypted), boolToInt(item.DRM), boolToInt(item.Playable), boolToInt(item.Recordable), timeToDBPtr(item.CheckedAt), item.ID)
 	return err
 }
@@ -250,7 +250,7 @@ func (d *DB) ListIPTVImportItems(ctx context.Context, jobID, status, q string) (
 		args = append(args, like, like, like)
 	}
 	query += ` ORDER BY row_no ASC`
-	rows, err := d.db.QueryContext(ctx, query, args...)
+	rows, err := d.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +267,7 @@ func (d *DB) ListIPTVImportItems(ctx context.Context, jobID, status, q string) (
 }
 
 func (d *DB) GetIPTVImportItem(ctx context.Context, id string) (*IPTVImportItem, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT id, job_id, row_no, external_id, name, group_name, logo_url, channel_no, source_url, status, error, http_status, content_type, video_codec, audio_codec, encrypted, drm, playable, recordable, checked_at, request_headers FROM iptv_import_items WHERE id=?`, id)
+	row := d.queryRowContext(ctx, `SELECT id, job_id, row_no, external_id, name, group_name, logo_url, channel_no, source_url, status, error, http_status, content_type, video_codec, audio_codec, encrypted, drm, playable, recordable, checked_at, request_headers FROM iptv_import_items WHERE id=?`, id)
 	item, err := scanIPTVImportItem(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -289,7 +289,7 @@ func (d *DB) GetIPTVImportItemsByIDs(ctx context.Context, jobID string, ids []st
 		args = append(args, id)
 	}
 	query := `SELECT id, job_id, row_no, external_id, name, group_name, logo_url, channel_no, source_url, status, error, http_status, content_type, video_codec, audio_codec, encrypted, drm, playable, recordable, checked_at, request_headers FROM iptv_import_items WHERE job_id=? AND id IN (` + strings.Join(placeholders, ",") + `)`
-	rows, err := d.db.QueryContext(ctx, query, args...)
+	rows, err := d.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -313,13 +313,13 @@ func (d *DB) InsertIPTVSource(ctx context.Context, src IPTVSource) error {
 	if src.UpdatedAt.IsZero() {
 		src.UpdatedAt = now
 	}
-	_, err := d.db.ExecContext(ctx, `INSERT INTO iptv_sources(id, name, playlist_url, request_headers, enabled, refresh_interval_sec, last_refreshed_at, last_error, created_at, updated_at)
+	_, err := d.execContext(ctx, `INSERT INTO iptv_sources(id, name, playlist_url, request_headers, enabled, refresh_interval_sec, last_refreshed_at, last_error, created_at, updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?)`, src.ID, src.Name, src.PlaylistURL, src.RequestHeaders, boolToInt(src.Enabled), src.RefreshIntervalSec, timeToDBPtr(src.LastRefreshedAt), src.LastError, timeToDB(src.CreatedAt), timeToDB(src.UpdatedAt))
 	return err
 }
 
 func (d *DB) ListIPTVSources(ctx context.Context) ([]IPTVSource, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, playlist_url, request_headers, enabled, refresh_interval_sec, last_refreshed_at, last_error, created_at, updated_at FROM iptv_sources ORDER BY name`)
+	rows, err := d.queryContext(ctx, `SELECT id, name, playlist_url, request_headers, enabled, refresh_interval_sec, last_refreshed_at, last_error, created_at, updated_at FROM iptv_sources ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +336,7 @@ func (d *DB) ListIPTVSources(ctx context.Context) ([]IPTVSource, error) {
 }
 
 func (d *DB) GetIPTVSource(ctx context.Context, id string) (*IPTVSource, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT id, name, playlist_url, request_headers, enabled, refresh_interval_sec, last_refreshed_at, last_error, created_at, updated_at FROM iptv_sources WHERE id=?`, id)
+	row := d.queryRowContext(ctx, `SELECT id, name, playlist_url, request_headers, enabled, refresh_interval_sec, last_refreshed_at, last_error, created_at, updated_at FROM iptv_sources WHERE id=?`, id)
 	src, err := scanIPTVSource(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -348,10 +348,10 @@ func (d *DB) GetIPTVSource(ctx context.Context, id string) (*IPTVSource, error) 
 }
 
 func (d *DB) DeleteIPTVSource(ctx context.Context, id string) error {
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM iptv_channels WHERE source_id=?`, id); err != nil {
+	if _, err := d.execContext(ctx, `DELETE FROM iptv_channels WHERE source_id=?`, id); err != nil {
 		return err
 	}
-	_, err := d.db.ExecContext(ctx, `DELETE FROM iptv_sources WHERE id=?`, id)
+	_, err := d.execContext(ctx, `DELETE FROM iptv_sources WHERE id=?`, id)
 	return err
 }
 
@@ -361,7 +361,7 @@ func (d *DB) UpsertIPTVChannel(ctx context.Context, ch IPTVChannel) error {
 		ch.CreatedAt = now
 	}
 	ch.UpdatedAt = now
-	_, err := d.db.ExecContext(ctx, `INSERT INTO iptv_channels(id, source_id, external_id, stream_id, channel_no, name, group_name, logo_url, source_url, enabled, favorite, probe_status, probe_error, video_codec, audio_codec, playable, recordable, publish_enabled, last_checked_at, created_at, updated_at, request_headers)
+	_, err := d.execContext(ctx, `INSERT INTO iptv_channels(id, source_id, external_id, stream_id, channel_no, name, group_name, logo_url, source_url, enabled, favorite, probe_status, probe_error, video_codec, audio_codec, playable, recordable, publish_enabled, last_checked_at, created_at, updated_at, request_headers)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(source_id, external_id) DO UPDATE SET
 			name=excluded.name, group_name=excluded.group_name, logo_url=excluded.logo_url, channel_no=excluded.channel_no,
@@ -394,7 +394,7 @@ func (d *DB) ListIPTVChannels(ctx context.Context, sourceID, group, q string, fa
 		args = append(args, like, like, like)
 	}
 	query += ` ORDER BY group_name, name`
-	rows, err := d.db.QueryContext(ctx, query, args...)
+	rows, err := d.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +411,7 @@ func (d *DB) ListIPTVChannels(ctx context.Context, sourceID, group, q string, fa
 }
 
 func (d *DB) GetIPTVChannel(ctx context.Context, id string) (*IPTVChannel, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT id, source_id, external_id, stream_id, channel_no, name, group_name, logo_url, source_url, enabled, favorite, probe_status, probe_error, video_codec, audio_codec, playable, recordable, publish_enabled, last_checked_at, created_at, updated_at, request_headers FROM iptv_channels WHERE id=?`, id)
+	row := d.queryRowContext(ctx, `SELECT id, source_id, external_id, stream_id, channel_no, name, group_name, logo_url, source_url, enabled, favorite, probe_status, probe_error, video_codec, audio_codec, playable, recordable, publish_enabled, last_checked_at, created_at, updated_at, request_headers FROM iptv_channels WHERE id=?`, id)
 	ch, err := scanIPTVChannel(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -423,18 +423,18 @@ func (d *DB) GetIPTVChannel(ctx context.Context, id string) (*IPTVChannel, error
 }
 
 func (d *DB) UpdateIPTVChannelMeta(ctx context.Context, id, name string, enabled, favorite, publishEnabled bool) error {
-	_, err := d.db.ExecContext(ctx, `UPDATE iptv_channels SET name=?, enabled=?, favorite=?, publish_enabled=?, updated_at=? WHERE id=?`,
+	_, err := d.execContext(ctx, `UPDATE iptv_channels SET name=?, enabled=?, favorite=?, publish_enabled=?, updated_at=? WHERE id=?`,
 		name, boolToInt(enabled), boolToInt(favorite), boolToInt(publishEnabled), timeToDB(time.Now()), id)
 	return err
 }
 
 func (d *DB) DeleteIPTVChannel(ctx context.Context, id string) error {
-	_, err := d.db.ExecContext(ctx, `DELETE FROM iptv_channels WHERE id=?`, id)
+	_, err := d.execContext(ctx, `DELETE FROM iptv_channels WHERE id=?`, id)
 	return err
 }
 
 func (d *DB) ListIPTVGroups(ctx context.Context) ([]string, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT DISTINCT group_name FROM iptv_channels WHERE group_name != '' ORDER BY group_name`)
+	rows, err := d.queryContext(ctx, `SELECT DISTINCT group_name FROM iptv_channels WHERE group_name != '' ORDER BY group_name`)
 	if err != nil {
 		return nil, err
 	}

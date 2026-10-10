@@ -17,14 +17,14 @@ var logger = slog.Default().With("component", "stream-history")
 
 // Manager subscribes to lalmax pub start/stop events and records stream history.
 type Manager struct {
-	db           *storage.DB
+	db           storage.StreamHistoryRepository
 	engine       media.Engine
 	cancelFunc   context.CancelFunc
 	mu           sync.Mutex
 	iptvSessions map[string]string
 }
 
-func NewManager(db *storage.DB, engine media.Engine) *Manager {
+func NewManager(db storage.StreamHistoryRepository, engine media.Engine) *Manager {
 	return &Manager{db: db, engine: engine, iptvSessions: make(map[string]string)}
 }
 

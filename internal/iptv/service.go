@@ -28,7 +28,7 @@ const (
 var logger = slog.Default().With("component", "iptv")
 
 type Service struct {
-	db         *storage.DB
+	db         storage.IPTVRepository
 	puller     media.HLSPuller
 	httpClient *http.Client
 
@@ -42,7 +42,7 @@ type PlaybackDetails struct {
 	URL string `json:"url"`
 }
 
-func NewService(db *storage.DB, puller media.HLSPuller) *Service {
+func NewService(db storage.IPTVRepository, puller media.HLSPuller) *Service {
 	return &Service{
 		db:     db,
 		puller: puller,

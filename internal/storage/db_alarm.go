@@ -29,7 +29,7 @@ func (d *DB) createAlarmTable(ctx context.Context) error {
 		description TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
-	if _, err := d.db.ExecContext(ctx, alarmSQL); err != nil {
+	if _, err := d.execContext(ctx, alarmSQL); err != nil {
 		return err
 	}
 	return nil
@@ -48,14 +48,14 @@ func (d *DB) ListAlarms(ctx context.Context, deviceID string, limit, offset int)
 	}
 
 	var total int
-	if err := d.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := d.queryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	listQuery += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	queryArgs := append(args, limit, offset)
 
-	rows, err := d.db.QueryContext(ctx, listQuery, queryArgs...)
+	rows, err := d.queryContext(ctx, listQuery, queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -74,12 +74,8 @@ func (d *DB) ListAlarms(ctx context.Context, deviceID string, limit, offset int)
 }
 
 func (d *DB) CreateAlarm(ctx context.Context, a *AlarmRow) (int64, error) {
-	res, err := d.db.ExecContext(ctx, `
+	return d.insertID(ctx, `
 		INSERT INTO gb28181_alarms (device_id, channel_id, alarm_type, alarm_time, priority, method, description)
 		VALUES (?, ?, ?, ?, ?, ?, ?);`,
 		a.DeviceID, a.ChannelID, a.AlarmType, a.AlarmTime, a.Priority, a.Method, a.Description)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
 }

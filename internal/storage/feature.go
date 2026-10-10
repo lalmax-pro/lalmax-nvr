@@ -7,7 +7,7 @@ import (
 
 // GetFeatureFlags returns all feature flags as a map.
 func (d *DB) GetFeatureFlags(ctx context.Context) (map[string]bool, error) {
-	rows, err := d.db.QueryContext(ctx, "SELECT key, value FROM feature_flags")
+	rows, err := d.queryContext(ctx, "SELECT key, value FROM feature_flags")
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func (d *DB) GetFeatureFlags(ctx context.Context) (map[string]bool, error) {
 // Returns the default value if the flag doesn't exist.
 func (d *DB) GetFeatureFlag(ctx context.Context, key string, defaultValue bool) (bool, error) {
 	var value bool
-	err := d.db.QueryRowContext(ctx, "SELECT value FROM feature_flags WHERE key = ?", key).Scan(&value)
+	err := d.queryRowContext(ctx, "SELECT value FROM feature_flags WHERE key = ?", key).Scan(&value)
 	if err != nil {
 		return defaultValue, nil
 	}
@@ -38,7 +38,7 @@ func (d *DB) GetFeatureFlag(ctx context.Context, key string, defaultValue bool) 
 
 // SetFeatureFlag sets a feature flag value and updates the timestamp.
 func (d *DB) SetFeatureFlag(ctx context.Context, key string, value bool) error {
-	_, err := d.db.ExecContext(ctx,
+	_, err := d.execContext(ctx,
 		"INSERT INTO feature_flags (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
 		key, value, timeToDB(time.Now()))
 	return err

@@ -40,14 +40,14 @@ func (d *DB) createAITables(ctx context.Context) error {
 		metadata_json TEXT NOT NULL DEFAULT '{}',
 		created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
 	);`
-	if _, err := d.db.ExecContext(ctx, detectionSQL); err != nil {
+	if _, err := d.execContext(ctx, detectionSQL); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, analysisSQL); err != nil {
+	if _, err := d.execContext(ctx, analysisSQL); err != nil {
 		return err
 	}
-	_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_ai_detections_camera_time ON ai_detections(camera_id, timestamp DESC)`)
-	_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_ai_analyses_camera_time ON ai_analyses(camera_id, timestamp DESC)`)
+	_, _ = d.execContext(ctx, `CREATE INDEX IF NOT EXISTS idx_ai_detections_camera_time ON ai_detections(camera_id, timestamp DESC)`)
+	_, _ = d.execContext(ctx, `CREATE INDEX IF NOT EXISTS idx_ai_analyses_camera_time ON ai_analyses(camera_id, timestamp DESC)`)
 	return nil
 }
 
@@ -59,7 +59,7 @@ func (d *DB) InsertAIDetection(ctx context.Context, result ai.DetectionResult) e
 	if err != nil {
 		return err
 	}
-	_, err = d.db.ExecContext(ctx, `
+	_, err = d.execContext(ctx, `
 		INSERT INTO ai_detections (camera_id, pts, timestamp, image_url, detections_json)
 		VALUES (?, ?, ?, ?, ?)`,
 		result.CameraID, result.PTS, result.Timestamp, result.ImageURL, string(payload),
@@ -93,7 +93,7 @@ func (d *DB) InsertAIAnalysis(ctx context.Context, raw interface{}) error {
 	if err != nil {
 		return err
 	}
-	_, err = d.db.ExecContext(ctx, `
+	_, err = d.execContext(ctx, `
 		INSERT INTO ai_analyses (camera_id, timestamp, analysis, labels_json, confidence, image_url, trigger_detections_json, metadata_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		result.CameraID, result.Timestamp, result.Analysis, string(labels), result.Confidence, result.ImageURL, string(triggers), string(metadata),
@@ -106,11 +106,11 @@ func (d *DB) ListAIDetections(ctx context.Context, filter AIHistoryFilter) ([]ai
 	where, args := aiHistoryWhere(filter.CameraID, filter.Label)
 
 	var total int
-	if err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ai_detections `+where, args...).Scan(&total); err != nil {
+	if err := d.queryRowContext(ctx, `SELECT COUNT(*) FROM ai_detections `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, limit, offset)
-	rows, err := d.db.QueryContext(ctx, `
+	rows, err := d.queryContext(ctx, `
 		SELECT camera_id, pts, timestamp, image_url, detections_json
 		FROM ai_detections `+where+`
 		ORDER BY timestamp DESC, id DESC
@@ -138,11 +138,11 @@ func (d *DB) ListAIAnalyses(ctx context.Context, filter AIHistoryFilter) ([]mult
 	where, args := aiHistoryWhere(filter.CameraID, "")
 
 	var total int
-	if err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ai_analyses `+where, args...).Scan(&total); err != nil {
+	if err := d.queryRowContext(ctx, `SELECT COUNT(*) FROM ai_analyses `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, limit, offset)
-	rows, err := d.db.QueryContext(ctx, `
+	rows, err := d.queryContext(ctx, `
 		SELECT camera_id, timestamp, analysis, labels_json, confidence, image_url, trigger_detections_json, metadata_json
 		FROM ai_analyses `+where+`
 		ORDER BY timestamp DESC, id DESC

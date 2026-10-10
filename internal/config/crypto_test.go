@@ -622,3 +622,30 @@ func TestVoIPCredentialsEncryption(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "voip-secret", loaded.VoIP.Users[0].Password)
 }
+
+func TestDatabaseMigrationTargetDSNEncryption(t *testing.T) {
+	key := helperGenerateKey(t)
+	helperSetEnvKey(t, key)
+	t.Cleanup(func() { encryptionKey = nil })
+
+	cfg := &Config{Storage: StorageConfig{
+		DatabaseDriver: "postgres",
+		DatabaseDSN:    "postgres://nvr:active-secret@127.0.0.1:5432/active",
+		MigrationTarget: &DatabaseTargetConfig{
+			Driver: "postgres",
+			DSN:    "postgres://nvr:db-secret@127.0.0.1:5432/nvr",
+		},
+	}}
+	path := filepath.Join(t.TempDir(), "nvr.yaml")
+	require.NoError(t, Save(path, cfg))
+	require.Equal(t, "postgres://nvr:db-secret@127.0.0.1:5432/nvr", cfg.Storage.MigrationTarget.DSN)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "db-secret")
+	require.NotContains(t, string(data), "active-secret")
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "postgres://nvr:db-secret@127.0.0.1:5432/nvr", loaded.Storage.MigrationTarget.DSN)
+	require.Equal(t, "postgres", loaded.Storage.DatabaseDriver)
+	require.Equal(t, "postgres://nvr:active-secret@127.0.0.1:5432/active", loaded.Storage.DatabaseDSN)
+}

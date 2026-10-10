@@ -216,7 +216,7 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if h.db != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		err := h.db.DB().PingContext(ctx)
+		err := h.db.Ping(ctx)
 		if err != nil {
 			resp.Checks["database"] = HealthCheck{Status: "error", Message: err.Error()}
 			hasError = true
@@ -385,7 +385,7 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	} else {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		if err := h.db.DB().PingContext(ctx); err != nil {
+		if err := h.db.Ping(ctx); err != nil {
 			checks["database"] = HealthCheck{Status: "error", Message: err.Error()}
 			allOK = false
 		} else {

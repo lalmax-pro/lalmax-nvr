@@ -56,13 +56,13 @@ func (d *DB) createGBRegionTables(ctx context.Context) error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
-	if _, err := d.db.ExecContext(ctx, regionSQL); err != nil {
+	if _, err := d.execContext(ctx, regionSQL); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_gb_regions_parent ON gb28181_regions(parent_id);"); err != nil {
+	if _, err := d.execContext(ctx, "CREATE INDEX IF NOT EXISTS idx_gb_regions_parent ON gb28181_regions(parent_id);"); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_gb_regions_parent_device ON gb28181_regions(parent_device_id);"); err != nil {
+	if _, err := d.execContext(ctx, "CREATE INDEX IF NOT EXISTS idx_gb_regions_parent_device ON gb28181_regions(parent_device_id);"); err != nil {
 		return err
 	}
 	return nil
@@ -78,7 +78,7 @@ const gbRegionCols = "id, device_id, name, parent_device_id, parent_id, created_
 
 // ListGBRegionsByParent 返回某父节点的直接子区划; parentID=0 取顶层。
 func (d *DB) ListGBRegionsByParent(ctx context.Context, parentID int64) ([]GBRegion, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		"SELECT "+gbRegionCols+" FROM gb28181_regions WHERE parent_id = ? ORDER BY device_id;", parentID)
 	if err != nil {
 		return nil, err
@@ -97,7 +97,7 @@ func (d *DB) ListGBRegionsByParent(ctx context.Context, parentID int64) ([]GBReg
 
 // GetGBRegion 按自增ID查询。
 func (d *DB) GetGBRegion(ctx context.Context, id int64) (*GBRegion, error) {
-	row := d.db.QueryRowContext(ctx, "SELECT "+gbRegionCols+" FROM gb28181_regions WHERE id = ?;", id)
+	row := d.queryRowContext(ctx, "SELECT "+gbRegionCols+" FROM gb28181_regions WHERE id = ?;", id)
 	r, err := scanGBRegion(row)
 	if err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func (d *DB) GetGBRegion(ctx context.Context, id int64) (*GBRegion, error) {
 
 // GetGBRegionByDeviceID 按区划编码查询, 不存在返回 nil,nil。
 func (d *DB) GetGBRegionByDeviceID(ctx context.Context, deviceID string) (*GBRegion, error) {
-	row := d.db.QueryRowContext(ctx, "SELECT "+gbRegionCols+" FROM gb28181_regions WHERE device_id = ?;", deviceID)
+	row := d.queryRowContext(ctx, "SELECT "+gbRegionCols+" FROM gb28181_regions WHERE device_id = ?;", deviceID)
 	r, err := scanGBRegion(row)
 	if err != nil {
 		if isNoRows(err) {
@@ -125,26 +125,22 @@ func (d *DB) CreateGBRegion(ctx context.Context, r *GBRegion) (int64, error) {
 			r.ParentID = parent.ID
 		}
 	}
-	res, err := d.db.ExecContext(ctx,
+	id, err := d.insertID(ctx,
 		`INSERT INTO gb28181_regions (device_id, name, parent_device_id, parent_id) VALUES (?, ?, ?, ?);`,
 		r.DeviceID, r.Name, r.ParentDeviceID, r.ParentID)
 	if err != nil {
 		return 0, err
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
 	r.ID = id
 	// 回填以本节点为父的孤立子节点
-	_, _ = d.db.ExecContext(ctx,
+	_, _ = d.execContext(ctx,
 		"UPDATE gb28181_regions SET parent_id = ? WHERE parent_device_id = ? AND parent_id = 0;", id, r.DeviceID)
 	return id, nil
 }
 
 // UpdateGBRegion 更新区划 (名称/编码)。编码变化时同步子节点与通道由上层处理。
 func (d *DB) UpdateGBRegion(ctx context.Context, r *GBRegion) error {
-	_, err := d.db.ExecContext(ctx,
+	_, err := d.execContext(ctx,
 		`UPDATE gb28181_regions SET device_id = ?, name = ?, parent_device_id = ?, parent_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;`,
 		r.DeviceID, r.Name, r.ParentDeviceID, r.ParentID, r.ID)
 	return err
@@ -174,14 +170,14 @@ func (d *DB) DeleteGBRegions(ctx context.Context, ids []int64) error {
 		return nil
 	}
 	ph, args := int64Placeholders(ids)
-	_, err := d.db.ExecContext(ctx, "DELETE FROM gb28181_regions WHERE id IN ("+ph+");", args...)
+	_, err := d.execContext(ctx, "DELETE FROM gb28181_regions WHERE id IN ("+ph+");", args...)
 	return err
 }
 
 // SyncRegionsFromChannels 从通道已有的 civil_code 反向补建缺失的区划节点，
 // 借助内置 GB/T 2260 编码表补全名称与完整父链。返回新建节点数。
 func (d *DB) SyncRegionsFromChannels(ctx context.Context) (int, error) {
-	rows, err := d.db.QueryContext(ctx, `
+	rows, err := d.queryContext(ctx, `
 		SELECT DISTINCT civil_code FROM gb28181_channels
 		WHERE civil_code <> '' AND civil_code NOT IN (SELECT device_id FROM gb28181_regions);`)
 	if err != nil {
@@ -268,7 +264,7 @@ func (d *DB) ensureRegions(ctx context.Context, codes []string) (int, error) {
 // CountChannelsByCivilCode 统计挂接在某区划下的通道数。
 func (d *DB) CountChannelsByCivilCode(ctx context.Context, civilCode string) (int, error) {
 	var n int
-	err := d.db.QueryRowContext(ctx,
+	err := d.queryRowContext(ctx,
 		"SELECT COUNT(*) FROM gb28181_channels WHERE civil_code = ?;", civilCode).Scan(&n)
 	return n, err
 }
@@ -285,7 +281,7 @@ func (d *DB) DetachChannelsFromRegion(ctx context.Context, keys []ChannelKey) er
 
 // DetachChannelsFromRegionByCode 解绑某区划下全部通道。
 func (d *DB) DetachChannelsFromRegionByCode(ctx context.Context, civilCode string) error {
-	_, err := d.db.ExecContext(ctx,
+	_, err := d.execContext(ctx,
 		"UPDATE gb28181_channels SET civil_code = '' WHERE civil_code = ?;", civilCode)
 	return err
 }
@@ -295,7 +291,7 @@ func (d *DB) updateChannelsField(ctx context.Context, field, value string, keys 
 	if len(keys) == 0 {
 		return nil
 	}
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -345,7 +341,7 @@ func scanGBChannelBriefs(rows *sql.Rows) ([]GBChannelBrief, error) {
 
 // ListChannelsByCivilCode 列出挂接到某区划的通道。
 func (d *DB) ListChannelsByCivilCode(ctx context.Context, civilCode string) ([]GBChannelBrief, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		"SELECT "+gbChannelBriefCols+" FROM gb28181_channels WHERE civil_code = ? ORDER BY device_id, channel_id;", civilCode)
 	if err != nil {
 		return nil, err
@@ -355,7 +351,7 @@ func (d *DB) ListChannelsByCivilCode(ctx context.Context, civilCode string) ([]G
 
 // ListChannelsByParentID 列出挂接到某虚拟组织的通道。
 func (d *DB) ListChannelsByParentID(ctx context.Context, parentID string) ([]GBChannelBrief, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		"SELECT "+gbChannelBriefCols+" FROM gb28181_channels WHERE parent_id = ? ORDER BY device_id, channel_id;", parentID)
 	if err != nil {
 		return nil, err
@@ -380,7 +376,7 @@ func (d *DB) SearchChannelsBrief(ctx context.Context, q string, unassignedRegion
 		sb += " AND parent_id = ''"
 	}
 	sb += " ORDER BY device_id, channel_id;"
-	rows, err := d.db.QueryContext(ctx, sb, args...)
+	rows, err := d.queryContext(ctx, sb, args...)
 	if err != nil {
 		return nil, err
 	}

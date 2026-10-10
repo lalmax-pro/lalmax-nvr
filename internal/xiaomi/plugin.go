@@ -43,7 +43,7 @@ func extractDID(rawURL string) string {
 	return strings.TrimPrefix(rawURL, "xiaomi://")
 }
 
-func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manager, db *storage.DB, opts ...*metrics.Metrics) model.Recorder {
+func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manager, db RecordingDB, opts ...*metrics.Metrics) model.Recorder {
 	did := cfg.DID
 	if did == "" {
 		did = extractDID(cfg.URL)
@@ -60,7 +60,7 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 	return NewXiaomiRecorder(recCfg, store, opts...)
 }
 
-func (p *XiaomiPlugin) NewRecorderWithMediaEngine(cfg config.CameraConfig, store *storage.Manager, db *storage.DB, mediaEngine media.Engine, opts ...*metrics.Metrics) model.Recorder {
+func (p *XiaomiPlugin) NewRecorderWithMediaEngine(cfg config.CameraConfig, store *storage.Manager, db RecordingDB, mediaEngine media.Engine, opts ...*metrics.Metrics) model.Recorder {
 	did := cfg.DID
 	if did == "" {
 		did = extractDID(cfg.URL)

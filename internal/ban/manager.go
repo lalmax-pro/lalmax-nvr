@@ -16,11 +16,11 @@ var logger = slog.Default().With("component", "ban")
 // Manager enforces stream bans via lal's IAuthentication interface.
 // All protocols (RTMP, RTSP, SRT, WHIP, GB28181) are checked uniformly.
 type Manager struct {
-	db       *storage.DB
+	db       storage.StreamBanRepository
 	kickFunc func(ctx context.Context, sessionID string) error
 }
 
-func NewManager(db *storage.DB) *Manager {
+func NewManager(db storage.StreamBanRepository) *Manager {
 	return &Manager{db: db}
 }
 

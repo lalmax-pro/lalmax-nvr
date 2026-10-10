@@ -17,6 +17,10 @@ server:
 storage:
   root_dir: "/var/lib/lalmax-nvr"   # Change to your preferred path (e.g. /mnt/external/nvr)
   segment_duration: "30s"          # MP4 segment duration (max 30s on RPi)
+  # Optional: start directly with PostgreSQL or MySQL. Leave both unset for SQLite.
+  # database_driver: "postgres"     # postgres | mysql
+  # database_dsn: "postgres://nvr:password@127.0.0.1:5432/lalmax_nvr?sslmode=disable"
+  # database_dsn: "nvr:password@tcp(127.0.0.1:3306)/lalmax_nvr?parseTime=true"
 
 # lal/lalmax media engine configuration.
 media:

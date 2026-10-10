@@ -24,13 +24,13 @@ type AlarmMessage struct {
 
 // AlarmManager handles alarm subscriptions and notifications.
 type AlarmManager struct {
-	store  *storage.DB
+	store  storage.GB28181AlarmRepository
 	client *sipgo.Client
 	cfg    *Config
 }
 
 // NewAlarmManager creates a new alarm manager.
-func NewAlarmManager(client *sipgo.Client, cfg *Config, store *storage.DB) *AlarmManager {
+func NewAlarmManager(client *sipgo.Client, cfg *Config, store storage.GB28181AlarmRepository) *AlarmManager {
 	return &AlarmManager{
 		store:  store,
 		client: client,

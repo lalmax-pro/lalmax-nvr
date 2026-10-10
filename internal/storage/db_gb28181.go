@@ -167,10 +167,10 @@ func (d *DB) createGB28181Tables(ctx context.Context) error {
 		FOREIGN KEY (device_id) REFERENCES gb28181_devices(device_id) ON DELETE CASCADE
 	);`
 
-	if _, err := d.db.ExecContext(ctx, deviceSQL); err != nil {
+	if _, err := d.execContext(ctx, deviceSQL); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, channelSQL); err != nil {
+	if _, err := d.execContext(ctx, channelSQL); err != nil {
 		return err
 	}
 
@@ -233,7 +233,7 @@ func (d *DB) createGB28181Tables(ctx context.Context) error {
 	}
 
 	for _, migration := range migrations {
-		_, err := d.db.ExecContext(ctx, migration)
+		_, err := d.execContext(ctx, migration)
 		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err
 		}
@@ -244,7 +244,7 @@ func (d *DB) createGB28181Tables(ctx context.Context) error {
 
 // ListGB28181Devices returns all GB28181 devices.
 func (d *DB) ListGB28181Devices(ctx context.Context) ([]GB28181DeviceRow, error) {
-	rows, err := d.db.QueryContext(ctx, `
+	rows, err := d.queryContext(ctx, `
 		SELECT device_id, name, manufacturer, model, firmware, gb_version, is_online, address,
 			   last_keepalive_at, last_register_at, created_at, updated_at
 		FROM gb28181_devices 
@@ -279,7 +279,7 @@ func (d *DB) ListGB28181Devices(ctx context.Context) ([]GB28181DeviceRow, error)
 func (d *DB) GetGB28181Device(ctx context.Context, deviceID string) (*GB28181DeviceRow, error) {
 	var dev GB28181DeviceRow
 	var lastKeepalive, lastRegister sql.NullString
-	err := d.db.QueryRowContext(ctx, `
+	err := d.queryRowContext(ctx, `
 		SELECT device_id, name, manufacturer, model, firmware, gb_version, is_online, address,
 			   last_keepalive_at, last_register_at, created_at, updated_at
 		FROM gb28181_devices WHERE device_id = ?;`, deviceID).Scan(
@@ -301,7 +301,7 @@ func (d *DB) GetGB28181Device(ctx context.Context, deviceID string) (*GB28181Dev
 
 // UpsertGB28181Device creates or updates a GB28181 device.
 func (d *DB) UpsertGB28181Device(ctx context.Context, device *GB28181DeviceRow) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		INSERT INTO gb28181_devices (device_id, name, manufacturer, model, firmware, gb_version, is_online, address, last_keepalive_at, last_register_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(device_id) DO UPDATE SET
@@ -316,26 +316,26 @@ func (d *DB) UpsertGB28181Device(ctx context.Context, device *GB28181DeviceRow) 
 			last_register_at = COALESCE(excluded.last_register_at, last_register_at),
 			updated_at = CURRENT_TIMESTAMP;`,
 		device.DeviceID, device.Name, device.Manufacturer, device.Model, device.Firmware, device.GBVersion,
-		device.IsOnline, device.Address, device.LastKeepaliveAt, device.LastRegisterAt)
+		boolToInt(device.IsOnline), device.Address, device.LastKeepaliveAt, device.LastRegisterAt)
 	return err
 }
 
 // UpdateGB28181DeviceStatus updates the online status and address of a device.
 func (d *DB) UpdateGB28181DeviceStatus(ctx context.Context, deviceID string, isOnline bool, address string) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		INSERT INTO gb28181_devices (device_id, is_online, address, last_keepalive_at, updated_at)
 		VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT(device_id) DO UPDATE SET
 			is_online = excluded.is_online,
 			address = excluded.address,
 			last_keepalive_at = CURRENT_TIMESTAMP,
-			updated_at = CURRENT_TIMESTAMP;`, deviceID, isOnline, address)
+			updated_at = CURRENT_TIMESTAMP;`, deviceID, boolToInt(isOnline), address)
 	return err
 }
 
 // UpdateGB28181DeviceRegistration updates device info after registration.
 func (d *DB) UpdateGB28181DeviceRegistration(ctx context.Context, deviceID, address string) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		INSERT INTO gb28181_devices (device_id, is_online, address, last_register_at, updated_at)
 		VALUES (?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT(device_id) DO UPDATE SET
@@ -348,22 +348,22 @@ func (d *DB) UpdateGB28181DeviceRegistration(ctx context.Context, deviceID, addr
 
 // UpdateGB28181DeviceOnlineStatus sets a device offline.
 func (d *DB) UpdateGB28181DeviceOnlineStatus(ctx context.Context, deviceID string, isOnline bool) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		UPDATE gb28181_devices 
 		SET is_online = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE device_id = ?;`, isOnline, deviceID)
+		WHERE device_id = ?;`, boolToInt(isOnline), deviceID)
 	return err
 }
 
 // DeleteGB28181Device removes a GB28181 device and its channels.
 func (d *DB) DeleteGB28181Device(ctx context.Context, deviceID string) error {
-	_, err := d.db.ExecContext(ctx, "DELETE FROM gb28181_devices WHERE device_id = ?;", deviceID)
+	_, err := d.execContext(ctx, "DELETE FROM gb28181_devices WHERE device_id = ?;", deviceID)
 	return err
 }
 
 // ListGB28181Channels returns all channels for a device.
 func (d *DB) ListGB28181Channels(ctx context.Context, deviceID string) ([]GB28181ChannelRow, error) {
-	rows, err := d.db.QueryContext(ctx, `
+	rows, err := d.queryContext(ctx, `
 		SELECT device_id, channel_id, name, last_seen_at, status, missing_count, created_at,
 			manufacturer, model, owner, civil_code, block, address, parental, parent_id,
 			safety_way, register_way, cert_num, certifiable, err_code, end_time, secrecy,
@@ -413,7 +413,7 @@ func (d *DB) ListGB28181Channels(ctx context.Context, deviceID string) ([]GB2818
 func (d *DB) GetGB28181Channel(ctx context.Context, deviceID, channelID string) (*GB28181ChannelRow, error) {
 	var ch GB28181ChannelRow
 	var lastSeenAt sql.NullString
-	err := d.db.QueryRowContext(ctx, `
+	err := d.queryRowContext(ctx, `
 		SELECT device_id, channel_id, name, last_seen_at, status, missing_count, created_at,
 			manufacturer, model, owner, civil_code, block, address, parental, parent_id,
 			safety_way, register_way, cert_num, certifiable, err_code, end_time, secrecy,
@@ -450,7 +450,7 @@ func (d *DB) GetGB28181Channel(ctx context.Context, deviceID, channelID string) 
 
 // UpsertGB28181Channel creates or updates a channel.
 func (d *DB) UpsertGB28181Channel(ctx context.Context, channel *GB28181ChannelRow) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		INSERT INTO gb28181_channels (
 			device_id, channel_id, name, last_seen_at, status, missing_count,
 			manufacturer, model, owner, civil_code, block, address, parental, parent_id,
@@ -548,7 +548,7 @@ func (d *DB) UpsertGB28181Channel(ctx context.Context, channel *GB28181ChannelRo
 // BatchUpsertChannels performs incremental update of channels for a device.
 // It deletes channels that no longer exist and inserts/updates new channels.
 func (d *DB) BatchUpsertChannels(ctx context.Context, deviceID string, channels []GB28181ChannelRow) error {
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -680,7 +680,7 @@ func (d *DB) BatchUpsertChannels(ctx context.Context, deviceID string, channels 
 
 // ReplaceGB28181Channels replaces all channels for a device.
 func (d *DB) ReplaceGB28181Channels(ctx context.Context, deviceID string, channels []GB28181ChannelRow) error {
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -728,19 +728,19 @@ func (d *DB) ReplaceGB28181Channels(ctx context.Context, deviceID string, channe
 
 // DeleteGB28181Channel removes a specific channel.
 func (d *DB) DeleteGB28181Channel(ctx context.Context, deviceID, channelID string) error {
-	_, err := d.db.ExecContext(ctx, "DELETE FROM gb28181_channels WHERE device_id = ? AND channel_id = ?;", deviceID, channelID)
+	_, err := d.execContext(ctx, "DELETE FROM gb28181_channels WHERE device_id = ? AND channel_id = ?;", deviceID, channelID)
 	return err
 }
 
 // DeleteGB28181ChannelsForDevice removes all channels for a device.
 func (d *DB) DeleteGB28181ChannelsForDevice(ctx context.Context, deviceID string) error {
-	_, err := d.db.ExecContext(ctx, "DELETE FROM gb28181_channels WHERE device_id = ?;", deviceID)
+	_, err := d.execContext(ctx, "DELETE FROM gb28181_channels WHERE device_id = ?;", deviceID)
 	return err
 }
 
 // ListMissingChannels returns channels with missing_count >= threshold.
 func (d *DB) ListMissingChannels(ctx context.Context, threshold int) ([]GB28181ChannelRow, error) {
-	rows, err := d.db.QueryContext(ctx, `
+	rows, err := d.queryContext(ctx, `
 		SELECT device_id, channel_id, name, last_seen_at, status, missing_count, created_at,
 			manufacturer, model, owner, civil_code, block, address, parental, parent_id,
 			safety_way, register_way, cert_num, certifiable, err_code, end_time, secrecy,
@@ -788,7 +788,7 @@ func (d *DB) ListMissingChannels(ctx context.Context, threshold int) ([]GB28181C
 
 // UpdateChannelStatus updates the status of a channel.
 func (d *DB) UpdateChannelStatus(ctx context.Context, deviceID, channelID, status string) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		UPDATE gb28181_channels 
 		SET status = ?
 		WHERE device_id = ? AND channel_id = ?;`, status, deviceID, channelID)
@@ -797,7 +797,7 @@ func (d *DB) UpdateChannelStatus(ctx context.Context, deviceID, channelID, statu
 
 // IncrementMissingCount increments the missing_count for a channel.
 func (d *DB) IncrementMissingCount(ctx context.Context, deviceID, channelID string) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		UPDATE gb28181_channels 
 		SET missing_count = missing_count + 1
 		WHERE device_id = ? AND channel_id = ?;`, deviceID, channelID)

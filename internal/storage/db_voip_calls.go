@@ -26,7 +26,7 @@ type VoIPCall struct {
 }
 
 func (d *DB) createVoIPCallTable(ctx context.Context) error {
-	_, err := d.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS voip_calls (
+	_, err := d.execContext(ctx, `CREATE TABLE IF NOT EXISTS voip_calls (
 		call_id TEXT PRIMARY KEY,
 		direction TEXT NOT NULL,
 		from_user TEXT NOT NULL DEFAULT '',
@@ -47,7 +47,7 @@ func (d *DB) createVoIPCallTable(ctx context.Context) error {
 }
 
 func (d *DB) SaveVoIPCall(ctx context.Context, call VoIPCall) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO voip_calls
+	_, err := d.execContext(ctx, `INSERT INTO voip_calls
 		(call_id,direction,from_user,to_user,outcome,started_at,answered_at,ended_at,duration_seconds,failure_reason,remote_addr,transport,audio_codec,video_codec,stream_id)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(call_id) DO UPDATE SET
 		direction=excluded.direction,from_user=excluded.from_user,to_user=excluded.to_user,outcome=excluded.outcome,
@@ -62,10 +62,10 @@ func (d *DB) SaveVoIPCall(ctx context.Context, call VoIPCall) error {
 
 func (d *DB) ListVoIPCalls(ctx context.Context, limit, offset int) ([]VoIPCall, int, error) {
 	var total int
-	if err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM voip_calls`).Scan(&total); err != nil {
+	if err := d.queryRowContext(ctx, `SELECT COUNT(*) FROM voip_calls`).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := d.db.QueryContext(ctx, `SELECT call_id,direction,from_user,to_user,outcome,started_at,answered_at,ended_at,
+	rows, err := d.queryContext(ctx, `SELECT call_id,direction,from_user,to_user,outcome,started_at,answered_at,ended_at,
 		duration_seconds,failure_reason,remote_addr,transport,audio_codec,video_codec,stream_id
 		FROM voip_calls ORDER BY ended_at DESC, call_id DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {

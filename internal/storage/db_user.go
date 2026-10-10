@@ -21,16 +21,16 @@ func (d *DB) CreateUserTable(ctx context.Context) error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
-	if _, err := d.db.ExecContext(ctx, tblSQL); err != nil {
+	if _, err := d.execContext(ctx, tblSQL); err != nil {
 		return err
 	}
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+	_, _ = d.execContext(ctx, "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+	_, _ = d.execContext(ctx, "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
 	return nil
 }
 
 func (d *DB) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
-	row := d.db.QueryRowContext(ctx,
+	row := d.queryRowContext(ctx,
 		`SELECT id, username, password_hash, role, display_name, enabled, created_at, updated_at
 		 FROM users WHERE username = ?`, strings.TrimSpace(username))
 	u := &model.User{}
@@ -46,7 +46,7 @@ func (d *DB) GetUserByUsername(ctx context.Context, username string) (*model.Use
 }
 
 func (d *DB) GetUserByID(ctx context.Context, id int64) (*model.User, error) {
-	row := d.db.QueryRowContext(ctx,
+	row := d.queryRowContext(ctx,
 		`SELECT id, username, password_hash, role, display_name, enabled, created_at, updated_at
 		 FROM users WHERE id = ?`, id)
 	u := &model.User{}
@@ -69,7 +69,7 @@ func (d *DB) CreateUser(ctx context.Context, u *model.User) error {
 	if u.DisplayName == "" {
 		u.DisplayName = u.Username
 	}
-	result, err := d.db.ExecContext(ctx,
+	id, err := d.insertID(ctx,
 		`INSERT INTO users (username, password_hash, role, display_name, enabled, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		u.Username, u.PasswordHash, string(u.Role), u.DisplayName, enabled,
@@ -77,7 +77,6 @@ func (d *DB) CreateUser(ctx context.Context, u *model.User) error {
 	if err != nil {
 		return err
 	}
-	id, err := result.LastInsertId()
 	if err == nil {
 		u.ID = id
 	}
@@ -90,21 +89,21 @@ func (d *DB) UpdateUser(ctx context.Context, u *model.User) error {
 		enabled = 1
 	}
 	u.UpdatedAt = time.Now().UTC()
-	_, err := d.db.ExecContext(ctx,
+	_, err := d.execContext(ctx,
 		`UPDATE users SET password_hash=?, role=?, display_name=?, enabled=?, updated_at=? WHERE id=?`,
 		u.PasswordHash, string(u.Role), u.DisplayName, enabled, timeToDB(u.UpdatedAt), u.ID)
 	return err
 }
 
 func (d *DB) UpdateUserPassword(ctx context.Context, id int64, passwordHash string) error {
-	_, err := d.db.ExecContext(ctx,
+	_, err := d.execContext(ctx,
 		`UPDATE users SET password_hash=?, updated_at=? WHERE id=?`,
 		passwordHash, timeToDB(time.Now().UTC()), id)
 	return err
 }
 
 func (d *DB) DeleteUser(ctx context.Context, id int64) error {
-	result, err := d.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	result, err := d.execContext(ctx, `DELETE FROM users WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -116,7 +115,7 @@ func (d *DB) DeleteUser(ctx context.Context, id int64) error {
 }
 
 func (d *DB) ListUsers(ctx context.Context) ([]*model.User, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.queryContext(ctx,
 		`SELECT id, username, password_hash, role, display_name, enabled, created_at, updated_at
 		 FROM users ORDER BY id`)
 	if err != nil {
@@ -138,12 +137,12 @@ func (d *DB) ListUsers(ctx context.Context) ([]*model.User, error) {
 
 func (d *DB) CountUsers(ctx context.Context) (int, error) {
 	var count int
-	err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count)
+	err := d.queryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count)
 	return count, err
 }
 
 func (d *DB) HasSuperAdmin(ctx context.Context) (bool, error) {
 	var count int
-	err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'super_admin'`).Scan(&count)
+	err := d.queryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'super_admin'`).Scan(&count)
 	return count > 0, err
 }

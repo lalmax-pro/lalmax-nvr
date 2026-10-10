@@ -111,7 +111,7 @@ type StatsHistory struct {
 
 // Manager manages relay push tasks.
 type Manager struct {
-	db     *storage.DB
+	db     storage.RelayTaskRepository
 	engine media.Engine
 
 	mu       sync.RWMutex
@@ -128,7 +128,7 @@ type activeTask struct {
 }
 
 // NewManager creates a new relay manager.
-func NewManager(db *storage.DB, engine media.Engine) *Manager {
+func NewManager(db storage.RelayTaskRepository, engine media.Engine) *Manager {
 	m := &Manager{
 		db:     db,
 		engine: engine,
@@ -558,107 +558,53 @@ func (m *Manager) updateTaskStoppedAt(taskID string, stoppedAt *time.Time) {
 // Database methods
 
 func (m *Manager) saveTask(task *Task) error {
-	query := `INSERT OR REPLACE INTO relay_tasks (id, stream_id, target_url, status, error_msg, created_at, started_at, stopped_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-
-	_, err := m.db.DB().Exec(query,
-		task.ID,
-		task.StreamID,
-		task.TargetURL,
-		task.Status,
-		task.ErrorMsg,
-		task.CreatedAt.UTC().Format("2006-01-02 15:04:05.999999999"),
-		timeToDB(task.StartedAt),
-		timeToDB(task.StoppedAt),
-	)
-	return err
+	return m.db.SaveRelayTask(context.Background(), storage.RelayTaskRecord{
+		ID:        task.ID,
+		StreamID:  task.StreamID,
+		TargetURL: task.TargetURL,
+		Status:    string(task.Status),
+		ErrorMsg:  task.ErrorMsg,
+		CreatedAt: task.CreatedAt,
+		StartedAt: task.StartedAt,
+		StoppedAt: task.StoppedAt,
+	})
 }
 
 func (m *Manager) loadTask(taskID string) (*Task, error) {
-	query := `SELECT id, stream_id, target_url, status, error_msg, created_at, started_at, stopped_at
-		FROM relay_tasks WHERE id = ?`
-
-	task := &Task{}
-	var createdAt string
-	var startedAt, stoppedAt *string
-
-	err := m.db.DB().QueryRow(query, taskID).Scan(
-		&task.ID,
-		&task.StreamID,
-		&task.TargetURL,
-		&task.Status,
-		&task.ErrorMsg,
-		&createdAt,
-		&startedAt,
-		&stoppedAt,
-	)
+	row, err := m.db.GetRelayTask(context.Background(), taskID)
 	if err != nil {
 		return nil, fmt.Errorf("task %s not found", taskID)
 	}
-
-	task.CreatedAt, _ = parseTime(createdAt)
-	if startedAt != nil {
-		t, _ := parseTime(*startedAt)
-		task.StartedAt = &t
-	}
-	if stoppedAt != nil {
-		t, _ := parseTime(*stoppedAt)
-		task.StoppedAt = &t
-	}
-
-	return task, nil
+	return relayTaskFromRecord(row), nil
 }
 
 func (m *Manager) loadAllTasks() ([]*Task, error) {
-	query := `SELECT id, stream_id, target_url, status, error_msg, created_at, started_at, stopped_at
-		FROM relay_tasks ORDER BY created_at DESC`
-
-	rows, err := m.db.DB().Query(query)
+	rows, err := m.db.ListRelayTasks(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var tasks []*Task
-	for rows.Next() {
-		task := &Task{}
-		var createdAt string
-		var startedAt, stoppedAt *string
-
-		err := rows.Scan(
-			&task.ID,
-			&task.StreamID,
-			&task.TargetURL,
-			&task.Status,
-			&task.ErrorMsg,
-			&createdAt,
-			&startedAt,
-			&stoppedAt,
-		)
-		if err != nil {
-			continue
-		}
-
-		task.CreatedAt, _ = parseTime(createdAt)
-		if startedAt != nil {
-			t, _ := parseTime(*startedAt)
-			task.StartedAt = &t
-		}
-		if stoppedAt != nil {
-			t, _ := parseTime(*stoppedAt)
-			task.StoppedAt = &t
-		}
-
-		tasks = append(tasks, task)
+	tasks := make([]*Task, 0, len(rows))
+	for i := range rows {
+		tasks = append(tasks, relayTaskFromRecord(&rows[i]))
 	}
-
 	return tasks, nil
 }
 
 func (m *Manager) deleteTask(taskID string) error {
-	query := `DELETE FROM relay_tasks WHERE id = ?`
-	_, err := m.db.DB().Exec(query, taskID)
-	return err
+	return m.db.DeleteRelayTask(context.Background(), taskID)
+}
+
+func relayTaskFromRecord(record *storage.RelayTaskRecord) *Task {
+	return &Task{
+		ID:        record.ID,
+		StreamID:  record.StreamID,
+		TargetURL: record.TargetURL,
+		Status:    TaskStatus(record.Status),
+		ErrorMsg:  record.ErrorMsg,
+		CreatedAt: record.CreatedAt,
+		StartedAt: record.StartedAt,
+		StoppedAt: record.StoppedAt,
+	}
 }
 
 // GetTaskStatsHistory returns historical statistics for a task from memory ring buffer.

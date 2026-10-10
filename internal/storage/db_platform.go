@@ -79,17 +79,17 @@ func (d *DB) createPlatformTables(ctx context.Context) error {
 		FOREIGN KEY (platform_id) REFERENCES gb28181_platforms(id) ON DELETE CASCADE
 	);`
 
-	if _, err := d.db.ExecContext(ctx, platformSQL); err != nil {
+	if _, err := d.execContext(ctx, platformSQL); err != nil {
 		return err
 	}
-	if _, err := d.db.ExecContext(ctx, channelSQL); err != nil {
+	if _, err := d.execContext(ctx, channelSQL); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (d *DB) ListPlatforms(ctx context.Context) ([]PlatformRow, error) {
-	rows, err := d.db.QueryContext(ctx, `
+	rows, err := d.queryContext(ctx, `
 		SELECT id, name, enable, server_gb_id, server_gb_domain, server_ip, server_port,
 			   device_gb_id, device_gb_domain, device_ip, device_port, username, password,
 			   transport, character_set, expires, keep_timeout, max_timeout_count, status,
@@ -123,7 +123,7 @@ func (d *DB) ListPlatforms(ctx context.Context) ([]PlatformRow, error) {
 func (d *DB) GetPlatform(ctx context.Context, id int64) (*PlatformRow, error) {
 	var p PlatformRow
 	var lastReg *string
-	err := d.db.QueryRowContext(ctx, `
+	err := d.queryRowContext(ctx, `
 		SELECT id, name, enable, server_gb_id, server_gb_domain, server_ip, server_port,
 			   device_gb_id, device_gb_domain, device_ip, device_port, username, password,
 			   transport, character_set, expires, keep_timeout, max_timeout_count, status,
@@ -145,40 +145,36 @@ func (d *DB) GetPlatform(ctx context.Context, id int64) (*PlatformRow, error) {
 }
 
 func (d *DB) CreatePlatform(ctx context.Context, p *PlatformRow) (int64, error) {
-	res, err := d.db.ExecContext(ctx, `
+	return d.insertID(ctx, `
 		INSERT INTO gb28181_platforms (name, enable, server_gb_id, server_gb_domain, server_ip, server_port,
 			device_gb_id, device_gb_domain, device_ip, device_port, username, password, transport,
 			character_set, expires, keep_timeout, max_timeout_count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-		p.Name, p.Enable, p.ServerGBID, p.ServerGBDomain, p.ServerIP, p.ServerPort,
+		p.Name, boolToInt(p.Enable), p.ServerGBID, p.ServerGBDomain, p.ServerIP, p.ServerPort,
 		p.DeviceGBID, p.DeviceGBDomain, p.DeviceIP, p.DevicePort, p.Username, p.Password,
 		p.Transport, p.CharacterSet, p.Expires, p.KeepTimeout, p.MaxTimeoutCount)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
 }
 
 func (d *DB) UpdatePlatform(ctx context.Context, p *PlatformRow) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		UPDATE gb28181_platforms SET name=?, enable=?, server_gb_id=?, server_gb_domain=?,
 			server_ip=?, server_port=?, device_gb_id=?, device_gb_domain=?, device_ip=?,
 			device_port=?, username=?, password=?, transport=?, character_set=?, expires=?,
 			keep_timeout=?, max_timeout_count=?, updated_at=CURRENT_TIMESTAMP
 		WHERE id=?;`,
-		p.Name, p.Enable, p.ServerGBID, p.ServerGBDomain, p.ServerIP, p.ServerPort,
+		p.Name, boolToInt(p.Enable), p.ServerGBID, p.ServerGBDomain, p.ServerIP, p.ServerPort,
 		p.DeviceGBID, p.DeviceGBDomain, p.DeviceIP, p.DevicePort, p.Username, p.Password,
 		p.Transport, p.CharacterSet, p.Expires, p.KeepTimeout, p.MaxTimeoutCount, p.ID)
 	return err
 }
 
 func (d *DB) DeletePlatform(ctx context.Context, id int64) error {
-	_, err := d.db.ExecContext(ctx, "DELETE FROM gb28181_platforms WHERE id = ?;", id)
+	_, err := d.execContext(ctx, "DELETE FROM gb28181_platforms WHERE id = ?;", id)
 	return err
 }
 
 func (d *DB) UpdatePlatformStatus(ctx context.Context, id int64, status bool) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		UPDATE gb28181_platforms SET status=?, last_register_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
 		WHERE id=?;`, status, id)
 	return err
@@ -198,7 +194,7 @@ func (d *DB) ListPlatformChannels(ctx context.Context, platformID int64, shared 
 	}
 	query += " ORDER BY id;"
 
-	rows, err := d.db.QueryContext(ctx, query, args...)
+	rows, err := d.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +213,7 @@ func (d *DB) ListPlatformChannels(ctx context.Context, platformID int64, shared 
 }
 
 func (d *DB) UpsertPlatformChannel(ctx context.Context, ch *PlatformChannelRow) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		INSERT INTO gb28181_platform_channels (platform_id, channel_id, device_id, custom_id, custom_name, stream_path, is_shared)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(platform_id, channel_id) DO UPDATE SET
@@ -231,13 +227,13 @@ func (d *DB) UpsertPlatformChannel(ctx context.Context, ch *PlatformChannelRow) 
 }
 
 func (d *DB) DeletePlatformChannel(ctx context.Context, platformID int64, channelID string) error {
-	_, err := d.db.ExecContext(ctx, "DELETE FROM gb28181_platform_channels WHERE platform_id = ? AND channel_id = ?;",
+	_, err := d.execContext(ctx, "DELETE FROM gb28181_platform_channels WHERE platform_id = ? AND channel_id = ?;",
 		platformID, channelID)
 	return err
 }
 
 func (d *DB) SetPlatformChannelShared(ctx context.Context, platformID int64, channelID string, shared bool) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.execContext(ctx, `
 		UPDATE gb28181_platform_channels SET is_shared = ? WHERE platform_id = ? AND channel_id = ?;`,
 		shared, platformID, channelID)
 	return err

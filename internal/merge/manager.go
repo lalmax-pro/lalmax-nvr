@@ -28,7 +28,7 @@ type MergeStatus struct {
 type MergeManager struct {
 	mu           sync.RWMutex
 	status       MergeStatus
-	db           *storage.DB
+	db           storage.MergeRepository
 	store        *storage.Manager
 	getGlobalCfg func() config.MergeConfig
 	getCameraCfg func(cameraID string) *config.MergeConfig
@@ -41,7 +41,7 @@ type MergeManager struct {
 // getGlobalCfg is called on each RunOnce to support config hot-reload.
 // getCameraCfg returns per-camera merge config override (nil = use global).
 func NewMergeManager(
-	db *storage.DB,
+	db storage.MergeRepository,
 	store *storage.Manager,
 	getGlobalCfg func() config.MergeConfig,
 	getCameraCfg func(cameraID string) *config.MergeConfig,

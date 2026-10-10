@@ -475,7 +475,7 @@ func restoreJournalFile(mp4Path string, j mergeJournal) error {
 // reconcileMergeJournal finishes or undoes an append that was interrupted.
 // If any absorbed segment is still in the database, the hour file is restored
 // and hidden sources are put back. If those rows are gone, the append is kept.
-func reconcileMergeJournal(ctx context.Context, db *storage.DB, mp4Path string) error {
+func reconcileMergeJournal(ctx context.Context, db storage.MergeRepository, mp4Path string) error {
 	j, err := readMergeJournal(mp4Path)
 	if err != nil {
 		if os.IsNotExist(err) {

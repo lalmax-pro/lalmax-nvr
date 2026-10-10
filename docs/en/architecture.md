@@ -21,7 +21,7 @@ flowchart TB
     Merge[Merge / Rolling]
     Health[Health]
     Bus[Event Bus]
-    Store[(SQLite + disk)]
+    Store[(SQLite / PostgreSQL / MySQL + disk)]
     GBSIP[GB SIP :5060]
     VoIP[VoIP SIP signaling + media bridge]
     MediaAdp[media adapter]
@@ -74,7 +74,7 @@ flowchart TB
 ```
 
 - **lalmax / lal** distributes NVR streams and converts playback protocols. IPTV browser playback uses a separate same-origin HLS proxy; a channel enters the media engine when publication or recording needs it.
-- **NVR layer** owns camera lifecycle, ONVIF discovery, the GB28181 SIP platform, a separate VoIP SIP service, recording policy, hour merge, health repair, SQLite/files, and the Svelte UI.
+- **NVR layer** owns camera lifecycle, ONVIF discovery, the GB28181 SIP platform, a separate VoIP SIP service, recording policy, hour merge, health repair, database/files, and the Svelte UI.
 - **`media.mode: embedded` (recommended)** runs the engine in-process. `http` talks to an external lalmax.
 - **Exception:** MJPEG / HTTP JPEG are still pulled by the NVR (lalmax does not ingest them).
 
@@ -241,7 +241,7 @@ flowchart TB
 | `gb28181` | SIP platform, catalog, RTP receive after INVITE, playback, talk |
 | `voip` | Separate SIP endpoint / PBX registration and calls, Web outbound dialing, call history; browser talk uses WebRTC |
 | `jt808` | JT/T 808 signaling: register, live, playback, query, upload, PTZ. Media stays on lalmax `:1078` |
-| `storage` | SQLite + segment files |
+| `storage` | SQLite, PostgreSQL, or MySQL + segment files |
 
 ## Default ports
 

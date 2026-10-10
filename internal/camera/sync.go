@@ -10,7 +10,7 @@ import (
 
 // SyncCamerasFromStorage makes the database the source of truth for cameras.
 // Legacy cameras listed in YAML are migrated into the DB once, then stripped from the config file.
-func SyncCamerasFromStorage(ctx context.Context, cfg *config.Config, db *storage.DB, configPath string) error {
+func SyncCamerasFromStorage(ctx context.Context, cfg *config.Config, db storage.CameraSyncRepository, configPath string) error {
 	if cfg == nil || db == nil {
 		return nil
 	}

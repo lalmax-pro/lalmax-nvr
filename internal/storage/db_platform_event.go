@@ -47,22 +47,22 @@ const platformEventsSQL = `CREATE TABLE IF NOT EXISTS platform_events (
 )`
 
 func (db *DB) initPlatformEvents() error {
-	_, err := db.db.Exec(platformEventsSQL)
+	_, err := db.exec(platformEventsSQL)
 	if err != nil {
 		return err
 	}
 	// Index for faster queries
-	_, err = db.db.Exec(`CREATE INDEX IF NOT EXISTS idx_platform_events_platform_id ON platform_events(platform_id)`)
+	_, err = db.exec(`CREATE INDEX IF NOT EXISTS idx_platform_events_platform_id ON platform_events(platform_id)`)
 	if err != nil {
 		return err
 	}
-	_, err = db.db.Exec(`CREATE INDEX IF NOT EXISTS idx_platform_events_created_at ON platform_events(created_at)`)
+	_, err = db.exec(`CREATE INDEX IF NOT EXISTS idx_platform_events_created_at ON platform_events(created_at)`)
 	return err
 }
 
 // AddPlatformEvent adds a new platform event record.
 func (db *DB) AddPlatformEvent(ctx context.Context, event PlatformEventRow) error {
-	_, err := db.db.ExecContext(ctx,
+	_, err := db.execContext(ctx,
 		`INSERT INTO platform_events (platform_id, platform_name, event_type, server_ip, server_port, channel_id, stream_id, details)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.PlatformID, event.PlatformName, event.EventType,
@@ -88,7 +88,7 @@ func (db *DB) ListPlatformEvents(ctx context.Context, platformID int64, eventTyp
 	}
 
 	var total int
-	err := db.db.QueryRowContext(ctx, countQuery, args...).Scan(&total)
+	err := db.queryRowContext(ctx, countQuery, args...).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -96,7 +96,7 @@ func (db *DB) ListPlatformEvents(ctx context.Context, platformID int64, eventTyp
 	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
-	rows, err := db.db.QueryContext(ctx, query, args...)
+	rows, err := db.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -120,7 +120,7 @@ func (db *DB) ListPlatformEvents(ctx context.Context, platformID int64, eventTyp
 
 // GetPlatformStatus returns the current status of all platforms.
 func (db *DB) GetPlatformStatus(ctx context.Context) ([]PlatformStatusRow, error) {
-	rows, err := db.db.QueryContext(ctx, `
+	rows, err := db.queryContext(ctx, `
 		SELECT 
 			p.id,
 			p.name,

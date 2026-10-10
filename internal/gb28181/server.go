@@ -21,6 +21,7 @@ type Server struct {
 	client    *sipgo.Client
 	gb        *GB28181API
 	cfg       *Config
+	db        storage.GB28181Repository
 	store     *DeviceStore
 	cancel    context.CancelFunc
 	platforms *PlatformManager
@@ -32,7 +33,7 @@ type Server struct {
 }
 
 // NewServer creates and starts a GB28181 SIP server.
-func NewServer(cfg *Config, mediaEngine media.Engine, db *storage.DB) (*Server, func()) {
+func NewServer(cfg *Config, mediaEngine media.Engine, db storage.GB28181Repository) (*Server, func()) {
 	hub := NewWSHub()
 	store := NewDeviceStore(db, hub)
 
@@ -75,6 +76,7 @@ func NewServer(cfg *Config, mediaEngine media.Engine, db *storage.DB) (*Server, 
 		srv:    srv,
 		client: client,
 		cfg:    cfg,
+		db:     db,
 		store:  store,
 		hub:    hub,
 	}
@@ -84,11 +86,11 @@ func NewServer(cfg *Config, mediaEngine media.Engine, db *storage.DB) (*Server, 
 	s.gb = api
 
 	// Initialize managers
-	s.platforms = NewPlatformManager(client, cfg.Host, cfg.MediaIP, cfg.ID, cfg.Password, store.GetDB())
+	s.platforms = NewPlatformManager(client, cfg.Host, cfg.MediaIP, cfg.ID, cfg.Password, db)
 	s.broadcast = NewBroadcastManager(client, cfg, store)
 	s.talk = NewTalkManager(client, cfg, store)
-	s.alarm = NewAlarmManager(client, cfg, store.GetDB())
-	s.download = NewDownloadManager(client, cfg, mediaEngine, store.GetDB(), "")
+	s.alarm = NewAlarmManager(client, cfg, db)
+	s.download = NewDownloadManager(client, cfg, mediaEngine, db, "")
 
 	// Register SIP handlers
 	srv.OnRegister(api.handlerRegister)
@@ -187,7 +189,7 @@ func (s *Server) scanMissingChannels() {
 	ctx := context.Background()
 
 	// 查询 missing_count >= 3 的通道
-	channels, err := s.store.GetDB().ListMissingChannels(ctx, 3)
+	channels, err := s.db.ListMissingChannels(ctx, 3)
 	if err != nil {
 		slog.Error("failed to list missing channels", "error", err)
 		return
@@ -195,7 +197,7 @@ func (s *Server) scanMissingChannels() {
 
 	for _, ch := range channels {
 		// 标记为离线
-		if err := s.store.GetDB().UpdateChannelStatus(ctx,
+		if err := s.db.UpdateChannelStatus(ctx,
 			ch.DeviceID, ch.ChannelID, "offline"); err != nil {
 			slog.Error("failed to update channel status",
 				"device_id", ch.DeviceID,
@@ -419,11 +421,6 @@ func (s *Server) GetDeviceStore() *DeviceStore {
 	return s.store
 }
 
-// GetDB returns the database.
-func (s *Server) GetDB() *storage.DB {
-	return s.store.db
-}
-
 // GetConfig returns the GB28181 configuration.
 func (s *Server) GetConfig() *Config {
 	return s.cfg
@@ -605,7 +602,7 @@ func (s *Server) ListDevices() []map[string]interface{} {
 		}
 
 		// Try to get additional info from database
-		if dbDev, err := s.store.GetDB().GetGB28181Device(context.Background(), deviceID); err == nil && dbDev != nil {
+		if dbDev, err := s.db.GetGB28181Device(context.Background(), deviceID); err == nil && dbDev != nil {
 			deviceInfo["name"] = dbDev.Name
 			deviceInfo["manufacturer"] = dbDev.Manufacturer
 			deviceInfo["model"] = dbDev.Model

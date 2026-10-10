@@ -18,7 +18,7 @@ const dedupWindow = 5 * time.Minute
 type Adder struct {
 	cfg      config.AutoDiscoverConfig
 	enroller AdderEnroller
-	db       *storage.DB
+	db       storage.CameraDiscoveryRepository
 	bus      *event.EventBus
 	infoFn   DeviceInfoFunc
 
@@ -26,7 +26,7 @@ type Adder struct {
 	seen map[string]time.Time
 }
 
-func NewAdder(cfg config.AutoDiscoverConfig, enroller AdderEnroller, db *storage.DB, bus *event.EventBus, infoFn DeviceInfoFunc) *Adder {
+func NewAdder(cfg config.AutoDiscoverConfig, enroller AdderEnroller, db storage.CameraDiscoveryRepository, bus *event.EventBus, infoFn DeviceInfoFunc) *Adder {
 	if infoFn == nil {
 		infoFn = defaultDeviceInfo
 	}

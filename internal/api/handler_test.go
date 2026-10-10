@@ -44,7 +44,7 @@ func setupTestDB(t *testing.T) (*storage.DB, *storage.Manager) {
 	return db, store
 }
 
-func seedRecording(t *testing.T, db *storage.DB, r *model.Recording) {
+func seedRecording(t *testing.T, db storage.APIRepository, r *model.Recording) {
 	t.Helper()
 	if err := db.InsertRecording(context.Background(), r); err != nil {
 		t.Fatalf("failed to seed recording: %v", err)
