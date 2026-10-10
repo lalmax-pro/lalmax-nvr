@@ -21,6 +21,7 @@ Find guides by task. For configuration examples, see [`config/config.example.yam
 | [Cameras](camera-guide.md) | RTSP and HTTP cameras, codecs |
 | [ONVIF](onvif-guide.md) | Discovery, stream access, and PTZ |
 | [GB28181](gb28181-guide.md) | GB28181 device ingest and operations |
+| [VoIP](../zh/voip.md) *(Chinese)* | SIP endpoints and PBX, Web outbound calls, WebRTC duplex talk, and call history |
 | [JT1078 / JT808](configuration.md#jt1078-ingest-configuration) | `:1078` media ingest and optional `:808` signaling |
 | [IPTV](iptv.md) | Import and probe M3U, play in the browser, publish to NVR for other protocols, or create recording plans |
 | [Xiaomi cameras](xiaomi-setup.md) | Xiaomi camera ingest |

@@ -37,6 +37,7 @@ lalmax-nvr 是叠在内嵌 [lalmax](https://github.com/q191201771/lal) 引擎上
 flowchart LR
   Cam[摄像头 RTSP / ONVIF] -->|拉流| Group[lalmax group]
   GB[GB28181] -->|INVITE 后 RTP 推流| Group
+  SIP[VoIP SIP 终端] -->|RTP / SRTP| Group
   JT[JT1078] -->|TCP/UDP :1078| Group
   Push[RTMP / SRT / WHIP / RTSP 推流] --> Group
   Group --> Live[HLS / FLV / WebRTC / fMP4 / RTSP]
@@ -74,6 +75,7 @@ G.711 包括 A-law（PCMA）和 µ-law（PCMU）。表中未列出的音频不�
 - **媒体引擎**：基于 lalmax 的统一中继——摄录分离，无重复拉流
 - **摄像头协议**：RTSP（H.264/H.265/MJPEG）、HTTP JPEG、ONVIF 设备发现与管理
 - **国标 GB28181**：作为 SIP **上级平台**；设备 REGISTER，INVITE 后 **推送 PS/RTP**；级联、录像查询与回放（带时间轴）、多协议流媒体（ws-flv、flv、hls、webrtc 等）、播放控制（暂停/恢复/倍速/拖动）、批量下载、平台事件历史、语音对讲（SIP INVITE，UDP/TCP）
+- **SIP VoIP**：接入 SIP 电话和可视门禁，也可让 NVR 注册到上级 PBX 并从网页呼叫分机；浏览器通过 WebRTC 与终端双向语音，支持 DTMF、当前通话管理和持久化通话记录。VoIP 与 GB28181 对讲使用独立配置和服务，详见 [VoIP 呼叫与对讲](docs/zh/voip.md)
 - **视频录像**：嵌入式 H.264/H.265 订阅 lalmax group。计划（连续 / 定时 / 事件 / 关闭）只拨写盘开关，拉流或推流保持。`adaptive` 和 `media.mode: http` 仍走 record task。把流登记为设备不会自动开录。按相机保留天数、AAC + G.711 音频。详见 [录制流程](docs/zh/recording-flow.md)
 - **录像回放**：24 小时时间轴、小时缩放、单文件播放，或 **连续 VOD**（按天 HLS fMP4，缺口可 seek）
 - **实时直播**：WebCodecs、fMP4、WebRTC、HTTP-FLV、WS-FLV、HLS、LL-HLS，可复制 **RTSP**（`:15544`）和 **RTMP**（`:11935`）
@@ -160,6 +162,7 @@ media:
 | [配置说明](docs/zh/configuration.md) | YAML 参考 |
 | [API 文档](docs/zh/api-reference.md) | REST API |
 | [GB28181](docs/zh/gb28181-guide.md) | 国标设备、回放、对讲 |
+| [VoIP 呼叫与对讲](docs/zh/voip.md) | SIP 终端、PBX、网页外呼、WebRTC 双向对讲和通话记录 |
 | [JT1078 / JT808](docs/zh/configuration.md#jt1078-推流配置) | `:1078` 媒体收流，以及可选的 `:808` 信令 |
 | [ONVIF](docs/zh/onvif-guide.md) | 发现、云台 |
 | [摄像头指南](docs/zh/camera-guide.md) | RTSP / HTTP 接入 |
@@ -185,6 +188,7 @@ internal/              # 核心模块
   event/               # 事件总线
   ftp/                 # FTP 服务
   gb28181/             # GB28181 SIP 服务（设备管理、级联、回放、对讲）
+  voip/                # SIP VoIP 信令、注册、呼叫及 WebRTC 对讲接入
   health/              # 摄像头健康监控
   iptv/                # M3U 导入、HLS 代理与频道发布
   jt808/               # JT/T 808 信令（注册鉴权、直播、回放、检索、上传、云台）
