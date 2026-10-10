@@ -2,7 +2,7 @@
 
 lalmax-nvr 是一层 **业务 NVR**，叠在内嵌的 **lal / lalmax 媒体引擎** 上。每路摄像头只收一次：lalmax 负责收流、转协议、给观众播；NVR 负责设备、录像、存储和 Web UI。
 
-相关入口：[快速入门](getting-started.md) · [配置](configuration.md) · [部署](deployment.md) · [ONVIF](onvif-guide.md) · [GB28181](gb28181-guide.md)
+相关入口：[快速入门](getting-started.md) · [配置](configuration.md) · [部署](deployment.md) · [ONVIF](onvif-guide.md) · [GB28181](gb28181-guide.md) · [VoIP](voip.md)
 
 ## 总体分层
 
@@ -22,26 +22,35 @@ flowchart TB
     Health[Health]
     Bus[Event Bus]
     Store[(SQLite + 磁盘)]
-    SIP[GB SIP :5060]
+    GBSIP[GB28181 SIP :5060]
+    VoIP[VoIP SIP 信令 + 媒体桥接]
     MediaAdp[media 适配器]
   end
 
   subgraph engine [内嵌 lalmax / lal]
     Group["stream group live/{camera_id}"]
     Out[HLS / LL-HLS / FLV / WebRTC / fMP4 / RTSP / RTMP]
+    Talk[WebRTC 浏览器对讲]
   end
 
   subgraph sources [源]
     RTSP[RTSP / ONVIF 拉流]
     GB[GB28181 设备]
+    Phone[SIP 电话 / 可视门禁 / PBX 分机]
+    PBX[上级 SIP PBX]
     Push[RTMP / SRT / WHIP 推流]
     JT[JT1078 终端]
   end
 
   RTSP --> MediaAdp
-  GB -->|REGISTER / Catalog| SIP
-  SIP -->|INVITE| GB
+  GB -->|REGISTER / Catalog| GBSIP
+  GBSIP -->|INVITE| GB
   GB -->|PS/RTP 推流| Group
+  Phone -->|REGISTER / INVITE| VoIP
+  Phone -->|RTP / SRTP| VoIP
+  VoIP <-->|REGISTER / 外呼 INVITE| PBX
+  PBX -->|路由到分机| Phone
+  VoIP -->|发布通话媒体| Group
   JT -->|TCP/UDP :1078| Group
   Push --> Group
   MediaAdp --> Group
@@ -57,12 +66,15 @@ flowchart TB
   API --> CamMgr
   Browser --> API
   Browser --> Out
+  Browser <-->|WebRTC 麦克风对讲| Talk
+  API -->|拨号 / 接听 / DTMF| VoIP
+  VoIP --> Store
   Player --> Out
   Files --> Store
 ```
 
 - **lalmax / lal**：负责已接入 NVR 流的分发和转协议。IPTV 频道在浏览器中播放时走独立的同源 HLS 代理；启用发布或录像后才进入媒体引擎。
-- **NVR 层**：相机生命周期、ONVIF 发现、GB28181 SIP 上级、录像策略、小时合并、健康修复、SQLite 与文件、Svelte UI。
+- **NVR 层**：相机生命周期、ONVIF 发现、GB28181 SIP 上级、独立的 VoIP SIP 服务、录像策略、小时合并、健康修复、SQLite 与文件、Svelte UI。
 - **`media.mode: embedded`（推荐）**：引擎跑在同一进程里。`http` 模式则连外部 lalmax。
 - **例外**：MJPEG / HTTP JPEG 仍由 NVR 直拉（lalmax 不吃这类源）。
 
@@ -75,6 +87,7 @@ flowchart TB
 | RTSP | 无（URL 直连） | NVR **拉** RTSP | [摄像头指南](camera-guide.md) |
 | ONVIF | SOAP：发现 / `GetStreamUri` | 解析出 RTSP 后再 **拉** | [ONVIF 指南](onvif-guide.md) |
 | GB28181 | SIP：设备 REGISTER，平台 INVITE | 设备向 `media_ip` **推** PS/RTP | [GB28181 指南](gb28181-guide.md) |
+| SIP VoIP | SIP：终端注册并呼入；也可由 NVR 经 PBX 外呼 | 终端发送 RTP/SRTP，NVR 桥接为实时流；网页对讲使用 WebRTC | [VoIP 指南](voip.md) |
 | RTMP / SRT / WHIP | 编码器主动连入 | 编码器 **推** | 配置里的 `rtmp` / `srt` / `whip` |
 | JT1078 | 可选 JT808：注册鉴权后下发 0x9101 直播或 0x9201 回放 | 终端向 `:1078` **推** TCP/UDP 帧。启用信令后，未授权通道会被拒绝 | [配置](configuration.md) |
 | 小米 CS2 | 云端鉴权 + P2P | NVR 连相机取帧再注入 lalmax | [小米摄像头](xiaomi-setup.md) |
@@ -86,8 +99,13 @@ flowchart TB
     ONVIF["ONVIF GetStreamUri → RTSP"]
   end
   subgraph gb [GB28181 推流]
-    SIP["SIP REGISTER / Catalog / INVITE"]
+    GBSIP["SIP REGISTER / Catalog / INVITE"]
     RTP["设备 PS/RTP → media_ip"]
+  end
+  subgraph voip [SIP VoIP]
+    VoIPSIP["VoIP SIP 注册 / 呼叫"]
+    VoIPMedia["终端 RTP / SRTP → NVR 媒体桥接"]
+    PBX[上级 SIP PBX]
   end
   subgraph pub [编码器推流]
     RTMP[RTMP :11935]
@@ -97,8 +115,11 @@ flowchart TB
   Group["lalmax group live/{id}"]
   RTSP --> Group
   ONVIF --> Group
-  SIP -.-> RTP
+  GBSIP -.-> RTP
   RTP --> Group
+  VoIPSIP -.-> VoIPMedia
+  VoIPSIP <-->|注册 / 外呼| PBX
+  VoIPMedia --> Group
   RTMP --> Group
   SRT --> Group
   WHIP --> Group
@@ -112,6 +133,7 @@ flowchart TB
 flowchart LR
   RTSP[RTSP / ONVIF] -->|拉流一次| G["lalmax group"]
   GB[GB28181 设备] -->|INVITE 后 PS/RTP 推流| G
+  VoIP[SIP VoIP 终端] -->|RTP / SRTP 桥接| G
   Push[RTMP / SRT / WHIP] -->|推流| G
   JT[JT1078 :1078] -->|TCP/UDP 推流| G
   G -->|AddSubscriber| Rec[组写入器]
@@ -145,7 +167,7 @@ flowchart LR
   SetUI --> API
 ```
 
-浏览器直播通常只访问 **`:9090`**（API 反代 HLS/FLV/WebRTC/fMP4）。给 VLC 的 RTSP、以及 RTMP/SRT/WHIP 推流，才需要把 **15544 / 11935 / 19000 / 12090 / 4888** 暴露出去。`docker-compose.yml` 默认映射 9090、12090、4888、15544、5060、2121。
+浏览器直播通常只访问 **`:9090`**（API 反代 HLS/FLV/WebRTC/fMP4）。Web VoIP 对讲还会使用 WebRTC ICE 端口 `4888/udp`；SIP 终端需访问已启用的 SIP 监听端口和媒体 UDP 端口范围。给 VLC 的 RTSP、以及 RTMP/SRT/WHIP 推流，才需要把对应端口暴露出去。`docker-compose.yml` 默认映射 9090、12090、4888、15544、5060、2121。
 
 ## 录像与连续回放
 
@@ -185,15 +207,19 @@ flowchart TB
   Main --> Store[internal/storage]
   Main --> Bus[internal/event]
   Main --> GB[internal/gb28181]
+  Main --> VoIP[internal/voip]
   Main --> ONVIF[internal/onvif]
   API --> Cam
   API --> Media
   API --> Store
   API --> VOD[internal/vod]
   API --> GB
+  API --> VoIP
   Cam --> Media
   Cam --> Rec
   GB --> Media
+  VoIP --> Media
+  VoIP --> Store
   ONVIF --> Cam
   Rec --> Store
   Rec --> Bus
@@ -213,6 +239,7 @@ flowchart TB
 | `health` | 多层探活与自动修复 |
 | `autodiscover` / `onvif` | WS-Discovery、Hello、PTZ |
 | `gb28181` | SIP 上级、目录、INVITE 后收 RTP 推流、回放、对讲 |
+| `voip` | 独立 SIP 终端 / PBX 注册与呼叫、Web 外呼、通话记录；浏览器对讲走 WebRTC |
 | `jt808` | JT/T 808 信令：注册鉴权、直播、回放、检索、上传、云台。媒体仍由 lalmax `:1078` 接收 |
 | `storage` | SQLite + 片段文件 |
 
@@ -231,6 +258,8 @@ flowchart TB
 | **808/tcp** | JT808 信令（配置启用时） |
 | **2121** | FTP |
 | **5060** | GB28181 SIP |
+| **5070/udp** | VoIP SIP（默认监听；需启用 VoIP 并按部署映射） |
+| **41000–42000/udp** | VoIP RTP/SRTP 媒体端口（默认范围，可配置） |
 | **8200** | DLNA HTTP（启用时，另需 UDP 1900 组播发现；见 [DLNA](dlna.md)） |
 
 ```mermaid
@@ -240,6 +269,8 @@ flowchart TB
     P808[":808 JT808 信令"]
     P2121[":2121 FTP"]
     P5060[":5060 GB28181 SIP"]
+    P5070[":5070 VoIP SIP（启用时）"]
+    PVoIPRTP["UDP 41000–42000 VoIP RTP / SRTP"]
   end
   subgraph lalPort [lalmax / lal]
     P12090[":12090 WHIP / WHEP / LL-HLS / fMP4"]

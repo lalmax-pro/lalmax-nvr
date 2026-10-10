@@ -2,7 +2,7 @@
 
 lalmax-nvr is a **business NVR layer** on top of an embedded **lal / lalmax media engine**. Each camera is ingested once: lalmax relays and transcodes for viewers; the NVR owns devices, recording, storage, and the web UI.
 
-See also: [Getting Started](getting-started.md) · [Configuration](configuration.md) · [Deployment](deployment.md) · [ONVIF](onvif-guide.md) · [GB28181](gb28181-guide.md)
+See also: [Getting Started](getting-started.md) · [Configuration](configuration.md) · [Deployment](deployment.md) · [ONVIF](onvif-guide.md) · [GB28181](gb28181-guide.md) · [VoIP](../zh/voip.md) *(Chinese)*
 
 ## Layers
 
@@ -22,26 +22,35 @@ flowchart TB
     Health[Health]
     Bus[Event Bus]
     Store[(SQLite + disk)]
-    SIP[GB SIP :5060]
+    GBSIP[GB SIP :5060]
+    VoIP[VoIP SIP signaling + media bridge]
     MediaAdp[media adapter]
   end
 
   subgraph engine [Embedded lalmax / lal]
     Group["stream group live/{camera_id}"]
     Out[HLS / LL-HLS / FLV / WebRTC / fMP4 / RTSP / RTMP]
+    Talk[WebRTC browser talk]
   end
 
   subgraph sources [Sources]
     RTSP[RTSP / ONVIF pull]
     GB[GB28181 device]
+    Phone[SIP phone / video door station / PBX extension]
+    PBX[Upstream SIP PBX]
     Push[RTMP / SRT / WHIP publish]
     JT[JT1078 terminal]
   end
 
   RTSP --> MediaAdp
-  GB -->|REGISTER / Catalog| SIP
-  SIP -->|INVITE| GB
+  GB -->|REGISTER / Catalog| GBSIP
+  GBSIP -->|INVITE| GB
   GB -->|PS/RTP push| Group
+  Phone -->|REGISTER / INVITE| VoIP
+  Phone -->|RTP / SRTP| VoIP
+  VoIP <-->|REGISTER / outbound INVITE| PBX
+  PBX -->|route to extension| Phone
+  VoIP -->|publish call media| Group
   JT -->|TCP/UDP :1078| Group
   Push --> Group
   MediaAdp --> Group
@@ -57,12 +66,15 @@ flowchart TB
   API --> CamMgr
   Browser --> API
   Browser --> Out
+  Browser <-->|WebRTC microphone talk| Talk
+  API -->|dial / answer / DTMF| VoIP
+  VoIP --> Store
   Player --> Out
   Files --> Store
 ```
 
 - **lalmax / lal** distributes NVR streams and converts playback protocols. IPTV browser playback uses a separate same-origin HLS proxy; a channel enters the media engine when publication or recording needs it.
-- **NVR layer** owns camera lifecycle, ONVIF discovery, GB28181 SIP platform, recording policy, hour merge, health repair, SQLite/files, and the Svelte UI.
+- **NVR layer** owns camera lifecycle, ONVIF discovery, the GB28181 SIP platform, a separate VoIP SIP service, recording policy, hour merge, health repair, SQLite/files, and the Svelte UI.
 - **`media.mode: embedded` (recommended)** runs the engine in-process. `http` talks to an external lalmax.
 - **Exception:** MJPEG / HTTP JPEG are still pulled by the NVR (lalmax does not ingest them).
 
@@ -75,6 +87,7 @@ How a stream enters the group differs by protocol. GB28181 is not RTSP pull.
 | RTSP | none (URL) | NVR **pulls** RTSP | [Camera Guide](camera-guide.md) |
 | ONVIF | SOAP: discovery / `GetStreamUri` | resolve RTSP, then **pull** | [ONVIF Guide](onvif-guide.md) |
 | GB28181 | SIP: device REGISTER, platform INVITE | device **pushes** PS/RTP to `media_ip` | [GB28181 Guide](gb28181-guide.md) |
+| SIP VoIP | SIP: terminal registration and inbound call; NVR can also call through a PBX | terminal sends RTP/SRTP, bridged by NVR into a live stream; Web talk uses WebRTC | [VoIP guide (Chinese)](../zh/voip.md) |
 | RTMP / SRT / WHIP | encoder connects in | encoder **publishes** | `rtmp` / `srt` / `whip` in config |
 | JT1078 | optional JT808: after register/auth, 0x9101 live or 0x9201 playback | terminal **publishes** TCP/UDP frames to `:1078`. With signaling enabled, ungranted channels are rejected | [configuration](configuration.md) |
 | Xiaomi CS2 | cloud auth + P2P | NVR fetches frames, injects lalmax | [Xiaomi](xiaomi-setup.md) |
@@ -86,8 +99,13 @@ flowchart TB
     ONVIF["ONVIF GetStreamUri → RTSP"]
   end
   subgraph gb [GB28181 push]
-    SIP["SIP REGISTER / Catalog / INVITE"]
+    GBSIP["SIP REGISTER / Catalog / INVITE"]
     RTP["device PS/RTP → media_ip"]
+  end
+  subgraph voip [SIP VoIP]
+    VoIPSIP["VoIP SIP registration / call"]
+    VoIPMedia["terminal RTP / SRTP → NVR media bridge"]
+    PBX[Upstream SIP PBX]
   end
   subgraph pub [Encoder publish]
     RTMP[RTMP :11935]
@@ -97,8 +115,11 @@ flowchart TB
   Group["lalmax group live/{id}"]
   RTSP --> Group
   ONVIF --> Group
-  SIP -.-> RTP
+  GBSIP -.-> RTP
   RTP --> Group
+  VoIPSIP -.-> VoIPMedia
+  VoIPSIP <-->|registration / outbound call| PBX
+  VoIPMedia --> Group
   RTMP --> Group
   SRT --> Group
   WHIP --> Group
@@ -112,6 +133,7 @@ One camera maps to one lalmax group, usually `live/{camera_id}`. The sub-stream 
 flowchart LR
   RTSP[RTSP / ONVIF] -->|single pull| G["lalmax group"]
   GB[GB28181 device] -->|PS/RTP push after INVITE| G
+  VoIP[SIP VoIP terminal] -->|RTP / SRTP bridge| G
   Push[RTMP / SRT / WHIP] -->|publish| G
   JT[JT1078 :1078] -->|TCP/UDP publish| G
   G -->|AddSubscriber| Rec[Group writer]
@@ -145,7 +167,7 @@ flowchart LR
   SetUI --> API
 ```
 
-The browser usually talks only to **`:9090`** (the API proxies HLS/FLV/WebRTC/fMP4). Expose **15544 / 11935 / 19000 / 12090 / 4888** when you need RTSP for VLC or RTMP/SRT/WHIP ingest. `docker-compose.yml` maps 9090, 12090, 4888, 15544, 5060, and 2121 by default.
+The browser usually talks only to **`:9090`** (the API proxies HLS/FLV/WebRTC/fMP4). Web VoIP talk also uses the WebRTC ICE port `4888/udp`; SIP terminals need access to the enabled SIP listener and configured RTP UDP range. Expose other ports only for the protocols you use. `docker-compose.yml` maps 9090, 12090, 4888, 15544, 5060, and 2121 by default.
 
 ## Recording and continuous VOD
 
@@ -185,15 +207,19 @@ flowchart TB
   Main --> Store[internal/storage]
   Main --> Bus[internal/event]
   Main --> GB[internal/gb28181]
+  Main --> VoIP[internal/voip]
   Main --> ONVIF[internal/onvif]
   API --> Cam
   API --> Media
   API --> Store
   API --> VOD[internal/vod]
   API --> GB
+  API --> VoIP
   Cam --> Media
   Cam --> Rec
   GB --> Media
+  VoIP --> Media
+  VoIP --> Store
   ONVIF --> Cam
   Rec --> Store
   Rec --> Bus
@@ -213,6 +239,7 @@ flowchart TB
 | `health` | Multi-layer probes and auto-remediation |
 | `autodiscover` / `onvif` | WS-Discovery, Hello, PTZ |
 | `gb28181` | SIP platform, catalog, RTP receive after INVITE, playback, talk |
+| `voip` | Separate SIP endpoint / PBX registration and calls, Web outbound dialing, call history; browser talk uses WebRTC |
 | `jt808` | JT/T 808 signaling: register, live, playback, query, upload, PTZ. Media stays on lalmax `:1078` |
 | `storage` | SQLite + segment files |
 
@@ -231,6 +258,8 @@ flowchart TB
 | **808/tcp** | JT808 signaling (when configured) |
 | **2121** | FTP |
 | **5060** | GB28181 SIP |
+| **5070/udp** | VoIP SIP (default listener; enable VoIP and map it for deployment) |
+| **41000–42000/udp** | VoIP RTP/SRTP media range (default, configurable) |
 | **8200** | DLNA HTTP (when enabled; discovery also needs UDP 1900 multicast; see [DLNA](dlna.md)) |
 
 ```mermaid
@@ -240,6 +269,8 @@ flowchart TB
     P808[":808 JT808 signaling"]
     P2121[":2121 FTP"]
     P5060[":5060 GB28181 SIP"]
+    P5070[":5070 VoIP SIP (when enabled)"]
+    PVoIPRTP["UDP 41000–42000 VoIP RTP / SRTP"]
   end
   subgraph lalPort [lalmax / lal]
     P12090[":12090 WHIP / WHEP / LL-HLS / fMP4"]
