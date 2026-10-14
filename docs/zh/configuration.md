@@ -601,7 +601,7 @@ HLS 播放与录像拉流相互独立：关闭 `hls.enabled` 或启用按需切�
 
 `media.rtsp_auth_enable` 控制是否对 RTSP 播放启用鉴权。要正常使用鉴权，需要同时配置 `media.rtsp_username` 和 `media.rtsp_password`；`media.rtsp_auth_method` 为 `0`（Basic）或 `1`（Digest）。配置加密密钥启用后，保存配置时会加密 RTSP 密码。
 
-embedded 模式下，lalmax HTTP 端口（默认 `12090`）的直连播放入口，包括 WHEP、LL-HLS、HTTP-fMP4 和 HTTP-FLV 代理，使用 NVR 本地账号认证。播放器需支持 HTTP Basic Auth，或使用 NVR API 支持的 `token` 查询参数。若同时配置了 `auth.playback_tokens`，媒体播放令牌也通过 `?token=...` 传入，此时请用 HTTP Basic Auth 传递 NVR 账号，避免两个用途的令牌冲突。WHEP、Jessibuca 和 ZLM 兼容 WebRTC 播放也会校验公共的单流播放令牌。应用内 `/api/cameras/.../stream` 播放地址继续由 NVR API 认证保护。RTMP、SRT、独立 lal HTTP（默认 `18080`）及 RTSP 原生监听端口不经过这层 HTTP 认证；请分别配置协议鉴权。
+embedded 模式下，lalmax HTTP 端口（默认 `12090`）的直连播放入口，包括 WHEP、LL-HLS、HTTP-fMP4 和 HTTP-FLV 代理，使用 NVR 本地账号认证。播放器需支持 HTTP Basic Auth，或使用 NVR API 支持的 `token` 查询参数。若同时配置了 `auth.playback_tokens`，媒体播放令牌也通过 `?token=...` 传入，此时请用 HTTP Basic Auth 传递 NVR 账号，避免两个用途的令牌冲突。LL-HLS 清单会将媒体令牌传递给分片；LL-HLS、HTTP-fMP4、WHEP、Jessibuca 和 ZLM 兼容 WebRTC 播放都会校验公共的单流播放令牌。应用内 `/api/cameras/.../stream` 播放地址继续由 NVR API 认证保护。RTMP、SRT、独立 lal HTTP（默认 `18080`）及 RTSP 原生监听端口不经过这层 HTTP 认证；请分别配置协议鉴权。
 
 ## DLNA 配置
 

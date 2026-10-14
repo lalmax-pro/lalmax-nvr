@@ -52,14 +52,15 @@ type LalMaxServer struct {
 	udptsMgr        *udpts.Manager
 	recorder        *ffmpegRecorder
 
-	configMu sync.RWMutex
-	mu       sync.Mutex
-	started  bool
-	ready    bool
-	cancel   context.CancelFunc
-	runDone  chan error
-	hookOnce sync.Once
-	playAuth func(http.Handler) http.Handler
+	configMu           sync.RWMutex
+	mu                 sync.Mutex
+	started            bool
+	ready              bool
+	cancel             context.CancelFunc
+	runDone            chan error
+	hookOnce           sync.Once
+	playAuth           func(http.Handler) http.Handler
+	playbackAuthorizer func(protocol, streamID, token string) error
 }
 
 // LalMaxServerOption allows customizing LalMaxServer behavior.
@@ -185,14 +186,15 @@ func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxSe
 	})
 
 	maxsvr := &LalMaxServer{
-		lalsvr:    lalsvr,
-		conf:      conf,
-		stats:     maxlogic.NewStatAggregator(maxlogic.GetGroupManagerInstance()),
-		notifyHub: notifyHub,
-		rtpPubMgr: rtppub.NewManager(lalsvr, conf.GB28181Config.MediaConfig),
-		udptsMgr:  udpts.NewManager(lalsvr),
-		recorder:  newFfmpegRecorder(""),
-		playAuth:  serverOpts.playAuth,
+		lalsvr:             lalsvr,
+		conf:               conf,
+		stats:              maxlogic.NewStatAggregator(maxlogic.GetGroupManagerInstance()),
+		notifyHub:          notifyHub,
+		rtpPubMgr:          rtppub.NewManager(lalsvr, conf.GB28181Config.MediaConfig),
+		udptsMgr:           udpts.NewManager(lalsvr),
+		recorder:           newFfmpegRecorder(""),
+		playAuth:           serverOpts.playAuth,
+		playbackAuthorizer: serverOpts.subscriberAuthorizer,
 	}
 
 	// 注入 sub 数量查询，用于 on_stream_none_reader 判断

@@ -6,6 +6,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func (s *LalMaxServer) authorizeHTTPPlayback(c *gin.Context, protocol, streamID string) bool {
+	if s.playbackAuthorizer == nil {
+		return true
+	}
+	if err := s.playbackAuthorizer(protocol, streamID, c.Query("token")); err != nil {
+		c.Status(http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
 // protectHTTPPlay applies the application authentication middleware to a
 // direct media-play request while retaining Gin's response writer and route
 // context. OPTIONS is left public so browser clients can complete CORS

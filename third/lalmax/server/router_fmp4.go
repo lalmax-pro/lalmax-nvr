@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	maxlogic "github.com/q191201771/lalmax/logic"
@@ -15,6 +16,9 @@ func (s *LalMaxServer) initFmp4Router(router *gin.Engine) {
 
 func (s *LalMaxServer) HandleHls(c *gin.Context) {
 	if s.hlssvr != nil {
+		if !s.authorizeHTTPPlayback(c, "hls", c.Param("streamid")) {
+			return
+		}
 		if s.hlssvr.OnDemandEnabled() {
 			key := maxlogic.NewStreamKey(c.Query("app_name"), c.Param("streamid"))
 			if _, group := maxlogic.GetGroupManagerInstance().GetGroup(key); group != nil &&
@@ -31,6 +35,10 @@ func (s *LalMaxServer) HandleHls(c *gin.Context) {
 
 func (s *LalMaxServer) HandleHttpFmp4(c *gin.Context) {
 	if s.httpfmp4svr != nil {
+		streamID := strings.TrimSuffix(c.Param("streamid"), ".mp4")
+		if !s.authorizeHTTPPlayback(c, "http-fmp4", streamID) {
+			return
+		}
 		s.httpfmp4svr.HandleRequest(c)
 	} else {
 		nazalog.Error("http-fmp4 is disable")
