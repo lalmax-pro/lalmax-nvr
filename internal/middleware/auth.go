@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 )
 
 var logger = slog.Default().With("component", "auth")
@@ -16,7 +16,6 @@ var logger = slog.Default().With("component", "auth")
 const (
 	authMaxFailures   = 20
 	authWindowMinutes = 1
-	authCacheTTL      = 5 * time.Minute
 )
 
 type rateLimitEntry struct {
@@ -123,42 +122,12 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string) (func(ht
 
 // HashPassword generates a bcrypt hash from a plaintext password.
 func HashPassword(password string) (string, error) {
-	b, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
+	return coreauth.HashPassword(password)
 }
 
-type authCacheEntry struct {
-	hash       string
-	verifiedAt time.Time
-}
-
-var authCache sync.Map
-
-// CheckPassword compares a plaintext password against a bcrypt hash.
-// Results are cached for authCacheTTL to avoid repeated bcrypt overhead.
+// CheckPassword delegates credential validation to the shared auth module.
 func CheckPassword(password, hash string) bool {
-	if strings.TrimSpace(hash) == "" {
-		return false
-	}
-
-	cacheKey := password + "\x00" + hash
-
-	if v, ok := authCache.Load(cacheKey); ok {
-		entry := v.(authCacheEntry)
-		if entry.hash == hash && time.Since(entry.verifiedAt) < authCacheTTL {
-			return true
-		}
-		authCache.Delete(cacheKey)
-	}
-
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	if err == nil {
-		authCache.Store(cacheKey, authCacheEntry{hash: hash, verifiedAt: time.Now()})
-	}
-	return err == nil
+	return coreauth.CheckPassword(password, hash)
 }
 
 func extractIP(remoteAddr string) string {

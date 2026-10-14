@@ -25,6 +25,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai/webhook"
 	"github.com/lalmax-pro/lalmax-nvr/internal/api"
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/autodiscover"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ban"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
@@ -419,6 +420,7 @@ type App struct {
 	voipStopped bool
 
 	// Stream management
+	mediaAuth  *coreauth.MediaAuthorizer
 	banMgr     *ban.Manager
 	historyMgr *streamhistory.Manager
 	relayMgr   *relay.Manager
@@ -613,10 +615,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.media = media.NewRuntime(cfg, a.metrics)
 
 	// Create ban manager before media engine (provides IAuthentication)
-	a.banMgr = ban.NewManager(db)
-	a.banMgr.SetPublishTokens("rtmp", cfg.RTMP.StreamKeys)
-	a.banMgr.SetPublishTokens("srt", cfg.SRT.StreamKeys)
-	a.banMgr.SetPublishTokens("whip", cfg.WHIP.PublishTokens)
+	a.mediaAuth = coreauth.NewMediaAuthorizer()
+	a.mediaAuth.SetPublishTokens("rtmp", cfg.RTMP.StreamKeys)
+	a.mediaAuth.SetPublishTokens("srt", cfg.SRT.StreamKeys)
+	a.mediaAuth.SetPublishTokens("whip", cfg.WHIP.PublishTokens)
+	a.banMgr = ban.NewManager(db, a.mediaAuth)
 
 	// Create media engine with ban manager's auth for proactive rejection
 	engine, err := newMediaEngine(cfg,
