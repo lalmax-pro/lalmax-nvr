@@ -66,12 +66,13 @@ type LalMaxServer struct {
 type LalMaxServerOption func(*lalMaxServerOptions)
 
 type lalMaxServerOptions struct {
-	authentication        logic.IAuthentication
-	publisherAuthorizer   func(protocol, streamID, token string) error
-	subscriberAuthorizer  func(protocol, streamID, token string) error
-	playAuth              func(http.Handler) http.Handler
-	rtspDigestNonceIssuer rtsp.DigestNonceIssuer
-	rtspDigestVerifier    rtsp.DigestVerifier
+	authentication                 logic.IAuthentication
+	publisherAuthorizer            func(protocol, streamID, token string) error
+	subscriberAuthorizer           func(protocol, streamID, token string) error
+	playAuth                       func(http.Handler) http.Handler
+	rtspDigestNonceIssuer          rtsp.DigestNonceIssuer
+	rtspDigestVerifier             rtsp.DigestVerifier
+	rtspDigestAuthorizationBuilder rtsp.DigestAuthorizationBuilder
 }
 
 // WithAuthentication injects a custom IAuthentication into the underlying lal server.
@@ -95,6 +96,14 @@ func WithRTSPDigestVerifier(verifier rtsp.DigestVerifier) LalMaxServerOption {
 func WithRTSPDigestNonceIssuer(issuer rtsp.DigestNonceIssuer) LalMaxServerOption {
 	return func(o *lalMaxServerOptions) {
 		o.rtspDigestNonceIssuer = issuer
+	}
+}
+
+// WithRTSPDigestAuthorizationBuilder installs the shared Digest header builder
+// for outbound RTSP pulls.
+func WithRTSPDigestAuthorizationBuilder(builder rtsp.DigestAuthorizationBuilder) LalMaxServerOption {
+	return func(o *lalMaxServerOptions) {
+		o.rtspDigestAuthorizationBuilder = builder
 	}
 }
 
@@ -171,6 +180,7 @@ func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxSe
 		}
 		option.RTSPDigestNonceIssuer = serverOpts.rtspDigestNonceIssuer
 		option.RTSPDigestVerifier = serverOpts.rtspDigestVerifier
+		option.RTSPDigestAuthorizationBuilder = serverOpts.rtspDigestAuthorizationBuilder
 	})
 
 	maxsvr := &LalMaxServer{

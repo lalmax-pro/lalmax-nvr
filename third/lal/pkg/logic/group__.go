@@ -67,7 +67,8 @@ import (
 //                                                                                                                                              -> ...
 
 type GroupOption struct {
-	onHookSession func(appName string, uniqueKey string, streamName string) ICustomizeHookSessionContext
+	onHookSession                  func(appName string, uniqueKey string, streamName string) ICustomizeHookSessionContext
+	rtspDigestAuthorizationBuilder rtsp.DigestAuthorizationBuilder
 }
 
 type IGroupObserver interface {

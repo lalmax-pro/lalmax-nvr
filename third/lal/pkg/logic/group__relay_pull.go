@@ -235,6 +235,7 @@ func (group *Group) pullIfNeeded() (string, error) {
 		rtspSession = rtsp.NewPullSession(group, func(option *rtsp.PullSessionOption) {
 			option.PullTimeoutMs = group.pullProxy.pullTimeoutMs
 			option.OverTcp = group.pullProxy.rtspMode == 0
+			option.DigestAuthorizationBuilder = group.option.rtspDigestAuthorizationBuilder
 		}).WithOnDescribeResponse(func() {
 			err := group.AddRtspPullSession(rtspSession)
 			if err != nil {

@@ -40,8 +40,9 @@ const (
 )
 
 type ClientCommandSessionOption struct {
-	DoTimeoutMs int
-	OverTcp     bool
+	DoTimeoutMs                int
+	OverTcp                    bool
+	DigestAuthorizationBuilder DigestAuthorizationBuilder
 }
 
 var defaultClientCommandSessionOption = ClientCommandSessionOption{
@@ -572,7 +573,17 @@ func (session *ClientCommandSession) writeCmd(method, uri string, headers map[st
 	}
 
 	// 鉴权时固定用RawUrlWithoutUserInfo
-	auth := session.auth.MakeAuthorization(method, session.urlCtx.RawUrlWithoutUserInfo)
+	var auth string
+	if session.auth.Typ == AuthTypeDigest && session.option.DigestAuthorizationBuilder != nil {
+		var err error
+		auth, err = session.option.DigestAuthorizationBuilder(method, session.urlCtx.RawUrlWithoutUserInfo,
+			session.auth.Username, session.auth.Password, session.auth.Realm, session.auth.Nonce)
+		if err != nil {
+			return err
+		}
+	} else {
+		auth = session.auth.MakeAuthorization(method, session.urlCtx.RawUrlWithoutUserInfo)
+	}
 	if auth != "" {
 		headers[HeaderAuthorization] = auth
 	}

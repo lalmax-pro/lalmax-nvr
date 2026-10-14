@@ -148,8 +148,9 @@ type Option struct {
 
 	// RTSPDigestVerifier delegates RTSP protocol Digest checks to the embedding
 	// application's shared authentication implementation when provided.
-	RTSPDigestNonceIssuer rtsp.DigestNonceIssuer
-	RTSPDigestVerifier    rtsp.DigestVerifier
+	RTSPDigestNonceIssuer          rtsp.DigestNonceIssuer
+	RTSPDigestVerifier             rtsp.DigestVerifier
+	RTSPDigestAuthorizationBuilder rtsp.DigestAuthorizationBuilder
 }
 
 var defaultOption = Option{

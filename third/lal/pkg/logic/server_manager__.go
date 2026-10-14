@@ -786,7 +786,8 @@ func (sm *ServerManager) CreateGroup(appName string, streamName string) *Group {
 		config = sm.config
 	}
 	option := GroupOption{
-		onHookSession: sm.onHookSession,
+		onHookSession:                  sm.onHookSession,
+		rtspDigestAuthorizationBuilder: sm.option.RTSPDigestAuthorizationBuilder,
 	}
 	return NewGroup(appName, streamName, config, option, sm)
 }

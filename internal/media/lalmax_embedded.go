@@ -109,6 +109,9 @@ func NewEmbeddedLalmax(cfg EmbeddedLalmaxConfig, svrOpts ...lalmaxserver.LalMaxS
 		lalmaxserver.WithRTSPDigestVerifier(func(method, username, password, authorization string) bool {
 			return coreauth.VerifyDigestAuthorizationAndConsumeNonce(method, username, base.LalRtspRealm, password, authorization, digestNonces)
 		}),
+		lalmaxserver.WithRTSPDigestAuthorizationBuilder(func(method, uri, username, password, realm, nonce string) (string, error) {
+			return coreauth.BuildDigestAuthorization(method, uri, username, password, realm, nonce, "")
+		}),
 	)
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = config.DefaultLalmaxHTTPAddr

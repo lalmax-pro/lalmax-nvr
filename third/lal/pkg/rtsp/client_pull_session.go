@@ -27,6 +27,8 @@ type PullSessionOption struct {
 	PullTimeoutMs int
 
 	OverTcp bool // 是否使用interleaved模式，也即是否通过rtsp command tcp连接传输rtp/rtcp数据
+
+	DigestAuthorizationBuilder DigestAuthorizationBuilder
 }
 
 var defaultPullSessionOption = PullSessionOption{
@@ -62,6 +64,7 @@ func NewPullSession(observer IPullSessionObserver, modOptions ...ModPullSessionO
 	cmdSession := NewClientCommandSession(CcstPullSession, baseInSession.UniqueKey(), s, func(opt *ClientCommandSessionOption) {
 		opt.DoTimeoutMs = option.PullTimeoutMs
 		opt.OverTcp = option.OverTcp
+		opt.DigestAuthorizationBuilder = option.DigestAuthorizationBuilder
 	})
 	s.baseInSession = baseInSession
 	s.cmdSession = cmdSession

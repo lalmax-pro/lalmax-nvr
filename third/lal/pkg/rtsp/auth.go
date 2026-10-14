@@ -42,6 +42,10 @@ type Auth struct {
 	Stale            string // 暂时没用
 }
 
+// DigestAuthorizationBuilder creates a Digest Authorization header from the
+// active request and the credentials/challenge received from the RTSP server.
+type DigestAuthorizationBuilder func(method, uri, username, password, realm, nonce string) (string, error)
+
 // ParseAuthorization 解析字段，server side使用
 func (a *Auth) ParseAuthorization(authStr string) (err error) {
 	a.RawAuthorization = authStr
