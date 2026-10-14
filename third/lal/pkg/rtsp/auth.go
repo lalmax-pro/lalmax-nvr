@@ -9,14 +9,11 @@
 package rtsp
 
 import (
-	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"strings"
 
 	"github.com/q191201771/lal/pkg/base"
-
-	"github.com/q191201771/naza/pkg/nazamd5"
 )
 
 // TODO chef: 考虑部分内容移入naza中
@@ -40,18 +37,19 @@ type Auth struct {
 	RawAuthorization string
 	Opaque           string // 暂时没用
 	Stale            string // 暂时没用
+	digestChallenge  string
 }
 
 // DigestAuthorizationBuilder creates a Digest Authorization header from the
 // active request and the credentials/challenge received from the RTSP server.
-type DigestAuthorizationBuilder func(method, uri, username, password, realm, nonce string) (string, error)
+type DigestAuthorizationBuilder func(method, uri, username, password, challenge string, nonceCount uint32) (string, error)
 
 // ParseAuthorization 解析字段，server side使用
 func (a *Auth) ParseAuthorization(authStr string) (err error) {
 	a.RawAuthorization = authStr
 	switch {
 	case strings.HasPrefix(authStr, "Basic "):
-		a.Typ = AuthTypeDigest
+		a.Typ = AuthTypeBasic
 		authBase64Str := strings.TrimPrefix(authStr, "Basic ")
 
 		authInfo, err := base64.StdEncoding.DecodeString(authBase64Str)
@@ -98,6 +96,7 @@ func (a *Auth) FeedWwwAuthenticate(auths []string, username, password string) {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, AuthTypeBasic) {
 		a.Typ = AuthTypeBasic
+		a.digestChallenge = ""
 		return
 	}
 	if !strings.HasPrefix(s, AuthTypeDigest) {
@@ -106,6 +105,7 @@ func (a *Auth) FeedWwwAuthenticate(auths []string, username, password string) {
 	}
 
 	a.Typ = AuthTypeDigest
+	a.digestChallenge = s
 	a.Realm = a.getV(s, `realm="`)
 	a.Nonce = a.getV(s, `nonce="`)
 	a.Algorithm = a.getV(s, `algorithm="`)
@@ -136,11 +136,6 @@ func (a *Auth) MakeAuthorization(method, uri string) string {
 	case AuthTypeBasic:
 		base1 := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf(`%s:%s`, a.Username, a.Password)))
 		return fmt.Sprintf(`%s %s`, a.Typ, base1)
-	case AuthTypeDigest:
-		ha1 := nazamd5.Md5([]byte(fmt.Sprintf("%s:%s:%s", a.Username, a.Realm, a.Password)))
-		ha2 := nazamd5.Md5([]byte(fmt.Sprintf("%s:%s", method, uri)))
-		response := nazamd5.Md5([]byte(fmt.Sprintf("%s:%s:%s", ha1, a.Nonce, ha2)))
-		return fmt.Sprintf(`%s username="%s", realm="%s", nonce="%s", uri="%s", response="%s", algorithm="%s"`, a.Typ, a.Username, a.Realm, a.Nonce, uri, response, a.Algorithm)
 	}
 
 	return ""
@@ -151,7 +146,7 @@ func (a *Auth) MakeAuthenticate(method string) string {
 	if method != AuthTypeDigest {
 		return a.MakeAuthenticateWithNonce(method, "")
 	}
-	return a.MakeAuthenticateWithNonce(method, a.nonce())
+	return ""
 }
 
 // MakeAuthenticateWithNonce creates a challenge with a nonce issued by the
@@ -173,16 +168,6 @@ func (a *Auth) CheckAuthorization(method, username, password string) bool {
 		if username == a.Username && password == a.Password {
 			return true
 		}
-	case AuthTypeDigest:
-		// The "response" field is computed as:
-		// md5(md5(<username>:<realm>:<password>):<nonce>:md5(<cmd>:<url>))
-
-		ha1 := nazamd5.Md5([]byte(fmt.Sprintf("%s:%s:%s", username, a.Realm, password)))
-		ha2 := nazamd5.Md5([]byte(fmt.Sprintf("%s:%s", method, a.Uri)))
-		response := nazamd5.Md5([]byte(fmt.Sprintf("%s:%s:%s", ha1, a.Nonce, ha2)))
-		if a.Response == response {
-			return true
-		}
 	}
 	return false
 }
@@ -199,14 +184,4 @@ func (a *Auth) getV(s string, pre string) string {
 		return ""
 	}
 	return s[b+len(pre) : b+len(pre)+e]
-}
-
-func (a *Auth) nonce() string {
-	k := make([]byte, 32)
-	for bytes := 0; bytes < len(k); {
-		n, _ := rand.Read(k[bytes:])
-		bytes += n
-	}
-
-	return nazamd5.Md5(k)
 }

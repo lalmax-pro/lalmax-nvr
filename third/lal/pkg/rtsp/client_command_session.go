@@ -78,6 +78,7 @@ type ClientCommandSession struct {
 	cseq                        int
 	methodGetParameterSupported bool
 	auth                        Auth
+	digestNonceCount            uint32
 
 	sdpCtx sdp.LogicContext
 
@@ -574,10 +575,17 @@ func (session *ClientCommandSession) writeCmd(method, uri string, headers map[st
 
 	// 鉴权时固定用RawUrlWithoutUserInfo
 	var auth string
-	if session.auth.Typ == AuthTypeDigest && session.option.DigestAuthorizationBuilder != nil {
+	if session.auth.Typ == AuthTypeDigest {
+		if session.option.DigestAuthorizationBuilder == nil {
+			return fmt.Errorf("RTSP Digest Authorization builder is not configured")
+		}
+		if session.digestNonceCount == ^uint32(0) {
+			return fmt.Errorf("RTSP Digest nonce count exhausted")
+		}
+		session.digestNonceCount++
 		var err error
 		auth, err = session.option.DigestAuthorizationBuilder(method, session.urlCtx.RawUrlWithoutUserInfo,
-			session.auth.Username, session.auth.Password, session.auth.Realm, session.auth.Nonce)
+			session.auth.Username, session.auth.Password, session.auth.digestChallenge, session.digestNonceCount)
 		if err != nil {
 			return err
 		}
@@ -619,6 +627,7 @@ func (session *ClientCommandSession) writeCmdReadResp(method, uri string, header
 		}
 
 		session.auth.FeedWwwAuthenticate(ctx.Headers.Values(HeaderWwwAuthenticate), session.urlCtx.Username, session.urlCtx.Password)
+		session.digestNonceCount = 0
 	}
 
 	err = nazaerrors.Wrap(base.ErrRtsp)

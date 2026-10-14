@@ -107,10 +107,29 @@ func NewEmbeddedLalmax(cfg EmbeddedLalmaxConfig, svrOpts ...lalmaxserver.LalMaxS
 	svrOpts = append(append([]lalmaxserver.LalMaxServerOption(nil), svrOpts...),
 		lalmaxserver.WithRTSPDigestNonceIssuer(digestNonces.Issue),
 		lalmaxserver.WithRTSPDigestVerifier(func(method, username, password, authorization string) bool {
-			return coreauth.VerifyDigestAuthorizationAndConsumeNonce(method, username, base.LalRtspRealm, password, authorization, digestNonces)
+			params, ok := coreauth.ParseDigestAuthorization(authorization)
+			if !ok || params["username"] != username {
+				return false
+			}
+			nonceCount, ok := coreauth.DigestNonceCount(params)
+			if !ok || !coreauth.VerifyDigest(method, username, base.LalRtspRealm, password, params) {
+				return false
+			}
+			return digestNonces.Use(params["nonce"], nonceCount)
 		}),
-		lalmaxserver.WithRTSPDigestAuthorizationBuilder(func(method, uri, username, password, realm, nonce string) (string, error) {
-			return coreauth.BuildDigestAuthorization(method, uri, username, password, realm, nonce, "")
+		lalmaxserver.WithRTSPDigestAuthorizationBuilder(func(method, uri, username, password, challenge string, nonceCount uint32) (string, error) {
+			params, ok := coreauth.ParseDigestAuthorization(challenge)
+			if !ok || params["realm"] == "" || params["nonce"] == "" {
+				return "", fmt.Errorf("invalid RTSP Digest challenge")
+			}
+			if algorithm := params["algorithm"]; algorithm != "" && !strings.EqualFold(algorithm, "MD5") {
+				return "", fmt.Errorf("unsupported RTSP Digest algorithm %q", algorithm)
+			}
+			qop, err := coreauth.NormalizeDigestQop(params["qop"])
+			if err != nil {
+				return "", err
+			}
+			return coreauth.BuildDigestAuthorizationWithNonceCount(method, uri, username, password, params["realm"], params["nonce"], qop, nonceCount)
 		}),
 	)
 	if cfg.HTTPAddr == "" {

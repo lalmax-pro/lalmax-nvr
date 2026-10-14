@@ -191,6 +191,12 @@ func VerifyDigest(method, username, realm, password string, params DigestParams)
 // BuildDigestAuthorization creates a Digest Authorization header for qop=auth
 // or legacy no-qop challenges.
 func BuildDigestAuthorization(method, uri, username, password, realm, nonce, qop string) (string, error) {
+	return BuildDigestAuthorizationWithNonceCount(method, uri, username, password, realm, nonce, qop, 1)
+}
+
+// BuildDigestAuthorizationWithNonceCount creates a Digest Authorization header
+// using the supplied nonce count for qop=auth exchanges.
+func BuildDigestAuthorizationWithNonceCount(method, uri, username, password, realm, nonce, qop string, nonceCount uint32) (string, error) {
 	if method == "" || uri == "" || username == "" || realm == "" || nonce == "" {
 		return "", fmt.Errorf("incomplete digest authentication challenge")
 	}
@@ -207,12 +213,15 @@ func BuildDigestAuthorization(method, uri, username, password, realm, nonce, qop
 	}
 	response := ""
 	if qop == "auth" {
+		if nonceCount == 0 {
+			return "", fmt.Errorf("digest nonce count must be positive")
+		}
 		var random [16]byte
 		if _, err := rand.Read(random[:]); err != nil {
 			return "", fmt.Errorf("create digest cnonce: %w", err)
 		}
 		cnonce := hex.EncodeToString(random[:])
-		nc := "00000001"
+		nc := fmt.Sprintf("%08x", nonceCount)
 		response = DigestResponse(method, username, realm, password, uri, nonce, qop, nc, cnonce)
 		fields = append(fields, "qop=auth", "nc="+nc, `cnonce="`+cnonce+`"`)
 	} else {
