@@ -356,7 +356,7 @@ func (session *ServerCommandSession) handleAuthorized(requestCtx nazahttp.HttpRe
 			session.auth.Typ == AuthTypeDigest && session.authConf.AuthMethod == 1 {
 			authorized := false
 			if session.auth.Typ == AuthTypeDigest && session.authConf.DigestVerifier != nil {
-				authorized = session.authConf.DigestVerifier(requestCtx.Method, session.auth.Username, session.auth.Realm, session.authConf.PassWord, session.auth.RawAuthorization)
+				authorized = session.authConf.DigestVerifier(requestCtx.Method, session.auth.Username, session.authConf.PassWord, session.auth.RawAuthorization)
 			} else {
 				authorized = session.auth.CheckAuthorization(requestCtx.Method, session.authConf.UserName, session.authConf.PassWord)
 			}
@@ -376,7 +376,16 @@ func (session *ServerCommandSession) handleAuthorized(requestCtx nazahttp.HttpRe
 			return resp, nil
 		} else if session.authConf.AuthMethod == 1 {
 			// Digest鉴权
-			authenticate := session.auth.MakeAuthenticate(AuthTypeDigest)
+			authenticate := ""
+			if session.authConf.DigestNonceIssuer != nil {
+				nonce, err := session.authConf.DigestNonceIssuer()
+				if err != nil {
+					return "", fmt.Errorf("issue RTSP digest nonce: %w", err)
+				}
+				authenticate = session.auth.MakeAuthenticateWithNonce(AuthTypeDigest, nonce)
+			} else {
+				authenticate = session.auth.MakeAuthenticate(AuthTypeDigest)
+			}
 			resp := PackResponseAuthorized(requestCtx.Headers.Get(HeaderCSeq), authenticate)
 			return resp, nil
 		} else {

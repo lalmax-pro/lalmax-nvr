@@ -66,11 +66,12 @@ type LalMaxServer struct {
 type LalMaxServerOption func(*lalMaxServerOptions)
 
 type lalMaxServerOptions struct {
-	authentication       logic.IAuthentication
-	publisherAuthorizer  func(protocol, streamID, token string) error
-	subscriberAuthorizer func(protocol, streamID, token string) error
-	playAuth             func(http.Handler) http.Handler
-	rtspDigestVerifier   rtsp.DigestVerifier
+	authentication        logic.IAuthentication
+	publisherAuthorizer   func(protocol, streamID, token string) error
+	subscriberAuthorizer  func(protocol, streamID, token string) error
+	playAuth              func(http.Handler) http.Handler
+	rtspDigestNonceIssuer rtsp.DigestNonceIssuer
+	rtspDigestVerifier    rtsp.DigestVerifier
 }
 
 // WithAuthentication injects a custom IAuthentication into the underlying lal server.
@@ -86,6 +87,14 @@ func WithAuthentication(auth logic.IAuthentication) LalMaxServerOption {
 func WithRTSPDigestVerifier(verifier rtsp.DigestVerifier) LalMaxServerOption {
 	return func(o *lalMaxServerOptions) {
 		o.rtspDigestVerifier = verifier
+	}
+}
+
+// WithRTSPDigestNonceIssuer installs the shared nonce source for RTSP Digest
+// challenges.
+func WithRTSPDigestNonceIssuer(issuer rtsp.DigestNonceIssuer) LalMaxServerOption {
+	return func(o *lalMaxServerOptions) {
+		o.rtspDigestNonceIssuer = issuer
 	}
 }
 
@@ -160,6 +169,7 @@ func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxSe
 		if serverOpts.authentication != nil {
 			option.Authentication = serverOpts.authentication
 		}
+		option.RTSPDigestNonceIssuer = serverOpts.rtspDigestNonceIssuer
 		option.RTSPDigestVerifier = serverOpts.rtspDigestVerifier
 	})
 

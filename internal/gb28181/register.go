@@ -1,13 +1,10 @@
 package gb28181
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/emiago/sipgo"
@@ -18,27 +15,26 @@ import (
 
 // GB28181API is the core API for GB28181 signaling.
 type GB28181API struct {
-	cfg         *Config
-	store       *DeviceStore
-	streams     *streamsManager
-	svr         *Server
-	client      *sipgo.Client
-	mediaEngine media.Engine
-	hub         *WSHub
-	digestMu    sync.Mutex
-	digestNonce map[string]time.Time
+	cfg          *Config
+	store        *DeviceStore
+	streams      *streamsManager
+	svr          *Server
+	client       *sipgo.Client
+	mediaEngine  media.Engine
+	hub          *WSHub
+	digestNonces *coreauth.DigestNonceStore
 }
 
 // NewGB28181API creates a new GB28181API instance.
 func NewGB28181API(cfg *Config, store *DeviceStore, client *sipgo.Client, mediaEngine media.Engine) *GB28181API {
 	return &GB28181API{
-		cfg:         cfg,
-		store:       store,
-		streams:     globalStreams,
-		client:      client,
-		mediaEngine: mediaEngine,
-		hub:         store.hub,
-		digestNonce: make(map[string]time.Time),
+		cfg:          cfg,
+		store:        store,
+		streams:      globalStreams,
+		client:       client,
+		mediaEngine:  mediaEngine,
+		hub:          store.hub,
+		digestNonces: coreauth.NewDigestNonceStore(5*time.Minute, 8192),
 	}
 }
 
@@ -158,39 +154,13 @@ func (g *GB28181API) logout(deviceID string) {
 	}
 }
 
-const digestNonceTTL = 5 * time.Minute
-
 func (g *GB28181API) respondDigestChallenge(req *sip.Request, tx sip.ServerTransaction) {
-	nonceBytes := make([]byte, 24)
-	if _, err := rand.Read(nonceBytes); err != nil {
+	nonce, err := g.digestNonces.Issue()
+	if err != nil {
 		slog.Error("[SIP] failed to create digest nonce", "error", err)
 		tx.Respond(sip.NewResponseFromRequest(req, 500, "Server Error", nil))
 		return
 	}
-	nonce := base64.RawURLEncoding.EncodeToString(nonceBytes)
-	g.digestMu.Lock()
-	now := time.Now()
-	for existing, expiresAt := range g.digestNonce {
-		if !now.Before(expiresAt) {
-			delete(g.digestNonce, existing)
-		}
-	}
-	if g.digestNonce == nil {
-		g.digestNonce = make(map[string]time.Time)
-	}
-	if len(g.digestNonce) >= 8192 {
-		var oldest string
-		var earliest time.Time
-		for existing, expiresAt := range g.digestNonce {
-			if oldest == "" || expiresAt.Before(earliest) {
-				oldest, earliest = existing, expiresAt
-			}
-		}
-		delete(g.digestNonce, oldest)
-	}
-	g.digestNonce[nonce] = now.Add(digestNonceTTL)
-	g.digestMu.Unlock()
-
 	res := sip.NewResponseFromRequest(req, 401, "Unauthorized", nil)
 	res.AppendHeader(sip.NewHeader("WWW-Authenticate", fmt.Sprintf(
 		`Digest realm="%s",qop="auth",algorithm=MD5,nonce="%s"`, g.cfg.GetDomain(), nonce)))
@@ -223,25 +193,14 @@ func (g *GB28181API) verifyDigestAuth(req *sip.Request, password, realm string) 
 	if err != nil || nonceCount == 0 {
 		return false
 	}
-	if !g.consumeDigestNonce(nonce) {
-		return false
-	}
 	if !coreauth.VerifyDigest(req.Method.String(), username, realm, password, params) {
 		return false
 	}
-	return true
+	return g.digestNonces.Consume(nonce)
 }
 
 func parseDigestAuthorization(header string) (map[string]string, bool) {
 	return coreauth.ParseDigestAuthorization(header)
-}
-
-func (g *GB28181API) consumeDigestNonce(nonce string) bool {
-	g.digestMu.Lock()
-	defer g.digestMu.Unlock()
-	expiresAt, ok := g.digestNonce[nonce]
-	delete(g.digestNonce, nonce)
-	return ok && time.Now().Before(expiresAt)
 }
 
 // calcDigestResponse computes the legacy no-qop response used when this NVR

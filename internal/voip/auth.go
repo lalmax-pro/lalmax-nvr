@@ -1,51 +1,16 @@
 package voip
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"strings"
-	"sync"
-	"time"
 
 	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 )
 
-const digestNonceTTL = 5 * time.Minute
-
-type digestNonceStore struct {
-	nonces sync.Map
-}
-
-type digestNonce struct {
-	expires time.Time
-}
+type digestNonceStore = coreauth.DigestNonceStore
 
 func newDigestNonceStore() *digestNonceStore {
-	return &digestNonceStore{}
-}
-
-func (s *digestNonceStore) New() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	nonce := hex.EncodeToString(b[:])
-	s.nonces.Store(nonce, digestNonce{expires: time.Now().Add(digestNonceTTL)})
-	return nonce
-}
-
-func (s *digestNonceStore) Valid(nonce string) bool {
-	val, ok := s.nonces.Load(nonce)
-	if !ok {
-		return false
-	}
-	n := val.(digestNonce)
-	if time.Now().After(n.expires) {
-		s.nonces.Delete(nonce)
-		return false
-	}
-	return true
+	return coreauth.NewDigestNonceStore(0, 0)
 }
 
 func buildDigestChallenge(realm, nonce string) string {

@@ -103,9 +103,13 @@ func lalmaxListenAddr(httpAddr string) string {
 
 func NewEmbeddedLalmax(cfg EmbeddedLalmaxConfig, svrOpts ...lalmaxserver.LalMaxServerOption) (*EmbeddedLalmax, error) {
 	installLalLogBridge()
-	svrOpts = append(append([]lalmaxserver.LalMaxServerOption(nil), svrOpts...), lalmaxserver.WithRTSPDigestVerifier(func(method, username, realm, password, authorization string) bool {
-		return coreauth.VerifyDigestAuthorization(method, username, realm, password, authorization)
-	}))
+	digestNonces := coreauth.NewDigestNonceStore(0, 0)
+	svrOpts = append(append([]lalmaxserver.LalMaxServerOption(nil), svrOpts...),
+		lalmaxserver.WithRTSPDigestNonceIssuer(digestNonces.Issue),
+		lalmaxserver.WithRTSPDigestVerifier(func(method, username, password, authorization string) bool {
+			return coreauth.VerifyDigestAuthorizationAndConsumeNonce(method, username, base.LalRtspRealm, password, authorization, digestNonces)
+		}),
+	)
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = config.DefaultLalmaxHTTPAddr
 	}

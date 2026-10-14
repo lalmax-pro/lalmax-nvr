@@ -144,11 +144,20 @@ func (a *Auth) MakeAuthorization(method, uri string) string {
 
 // MakeAuthenticate 生成第一轮的回复，server side使用
 func (a *Auth) MakeAuthenticate(method string) string {
+	if method != AuthTypeDigest {
+		return a.MakeAuthenticateWithNonce(method, "")
+	}
+	return a.MakeAuthenticateWithNonce(method, a.nonce())
+}
+
+// MakeAuthenticateWithNonce creates a challenge with a nonce issued by the
+// embedding application's authentication module.
+func (a *Auth) MakeAuthenticateWithNonce(method, nonce string) string {
 	switch method {
 	case AuthTypeBasic:
 		return fmt.Sprintf("%s realm=\"%s\"", method, base.LalRtspRealm)
 	case AuthTypeDigest:
-		return fmt.Sprintf("%s realm=\"%s\", nonce=\"%s\"", method, base.LalRtspRealm, a.nonce())
+		return fmt.Sprintf("%s realm=\"%s\", nonce=\"%s\"", method, base.LalRtspRealm, nonce)
 	}
 	return ""
 }

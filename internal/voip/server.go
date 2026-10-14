@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/pion/dtls/v3"
 	"github.com/pion/rtp"
 	"github.com/q191201771/lal/pkg/base"
@@ -1060,11 +1061,13 @@ func (s *Server) authenticateRequest(msg *Message, username string) (bool, strin
 	if params["username"] != username || params["realm"] != s.config.Realm || params["uri"] == "" || params["response"] == "" {
 		return false, s.buildAuthChallenge(msg)
 	}
-	if !s.nonceStore.Valid(params["nonce"]) {
+	nonceCount, ok := coreauth.DigestNonceCount(params)
+	if !ok || !verifyDigestResponse(string(msg.Method), username, s.config.Realm, user.Password, params) {
+		s.log.Warnf("sip digest auth failed for user: %s", username)
 		return false, s.buildAuthChallenge(msg)
 	}
-	if !verifyDigestResponse(string(msg.Method), username, s.config.Realm, user.Password, params) {
-		s.log.Warnf("sip digest auth failed for user: %s", username)
+	if !s.nonceStore.Use(params["nonce"], nonceCount) {
+		s.log.Warnf("sip digest nonce expired or replayed for user: %s", username)
 		return false, s.buildAuthChallenge(msg)
 	}
 	return true, ""
@@ -1081,7 +1084,11 @@ func (s *Server) findUser(username string) (User, bool) {
 
 func (s *Server) buildAuthChallenge(msg *Message) string {
 	resp := BuildResponse(msg, 401, "Unauthorized", "")
-	nonce := s.nonceStore.New()
+	nonce, err := s.nonceStore.Issue()
+	if err != nil {
+		s.log.Errorf("failed to issue sip digest nonce: %v", err)
+		return BuildResponse(msg, 500, "Server Error", "")
+	}
 	challenge := buildDigestChallenge(s.config.Realm, nonce)
 	return insertHeaderBeforeContentLength(resp, "WWW-Authenticate", challenge)
 }

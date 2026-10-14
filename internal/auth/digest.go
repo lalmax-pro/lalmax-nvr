@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -115,6 +116,33 @@ func VerifyDigestAuthorization(method, username, realm, password, header string)
 	return VerifyDigestResponse(method, username, realm, password, params["uri"], params["nonce"], params["response"])
 }
 
+// VerifyDigestAuthorizationAndConsumeNonce verifies an RTSP-style Digest
+// header and consumes its nonce only after the response is valid.
+func VerifyDigestAuthorizationAndConsumeNonce(method, username, realm, password, header string, nonces *DigestNonceStore) bool {
+	if nonces == nil {
+		return false
+	}
+	params, ok := ParseDigestAuthorization(header)
+	if !ok || !VerifyDigestAuthorization(method, username, realm, password, header) {
+		return false
+	}
+	return nonces.Consume(params["nonce"])
+}
+
+// DigestNonceCount extracts and validates the eight-hex-digit nonce count used
+// by qop=auth. Requests without qop return a zero count.
+func DigestNonceCount(params DigestParams) (uint32, bool) {
+	if strings.ToLower(params["qop"]) == "" {
+		return 0, true
+	}
+	nc := params["nc"]
+	if len(nc) != 8 {
+		return 0, false
+	}
+	count, err := strconv.ParseUint(nc, 16, 32)
+	return uint32(count), err == nil && count > 0
+}
+
 // VerifyDigest validates a Digest parameter set, including qop=auth requests.
 // Replay prevention and nonce expiry remain the protocol adapter's job.
 func VerifyDigest(method, username, realm, password string, params DigestParams) bool {
@@ -127,6 +155,11 @@ func VerifyDigest(method, username, realm, password string, params DigestParams)
 	}
 	if qop == "auth" && (params["nc"] == "" || params["cnonce"] == "") {
 		return false
+	}
+	if qop == "auth" {
+		if _, ok := DigestNonceCount(params); !ok {
+			return false
+		}
 	}
 	if algorithm := params["algorithm"]; algorithm != "" && !strings.EqualFold(algorithm, "MD5") {
 		return false

@@ -103,6 +103,9 @@ Doc: %s
 	if sm.option.RTSPDigestVerifier != nil {
 		sm.config.RtspConfig.ServerAuthConfig.DigestVerifier = sm.option.RTSPDigestVerifier
 	}
+	if sm.option.RTSPDigestNonceIssuer != nil {
+		sm.config.RtspConfig.ServerAuthConfig.DigestNonceIssuer = sm.option.RTSPDigestNonceIssuer
+	}
 	base.LogoutStartInfo()
 
 	if sm.config.HlsConfig.Enable && sm.config.HlsConfig.UseMemoryAsDiskFlag {
