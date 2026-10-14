@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
@@ -403,16 +405,31 @@ func (p *Platform) Register() error {
 
 		slog.Debug("[Platform] received auth challenge", "name", cfg.Name, "header", wwwAuth.Value())
 
-		// Simple digest auth
-		nonce := extractNonce(wwwAuth.Value())
+		challenge, ok := coreauth.ParseDigestAuthorization(wwwAuth.Value())
+		if !ok {
+			return fmt.Errorf("invalid digest challenge")
+		}
+		realm := challenge["realm"]
+		nonce := challenge["nonce"]
+		if realm == "" || nonce == "" {
+			return fmt.Errorf("digest challenge missing realm or nonce")
+		}
+		if algorithm := challenge["algorithm"]; algorithm != "" && !strings.EqualFold(algorithm, "MD5") {
+			return fmt.Errorf("unsupported digest algorithm %q", algorithm)
+		}
+		qop, err := coreauth.NormalizeDigestQop(challenge["qop"])
+		if err != nil {
+			return fmt.Errorf("unsupported digest challenge: %w", err)
+		}
 		uri := fmt.Sprintf("sip:%s", serverDomain)
-		response := calcDigestResponse(cfg.Username, serverDomain, cfg.Password, "REGISTER", uri, nonce)
+		authorization, err := coreauth.BuildDigestAuthorization("REGISTER", uri, cfg.Username, cfg.Password, realm, nonce, qop)
+		if err != nil {
+			return fmt.Errorf("build digest authorization: %w", err)
+		}
 
 		newReq := req.Clone()
 		newReq.RemoveHeader("Via")
-		authHeader := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="%s", algorithm=MD5`,
-			cfg.Username, serverDomain, nonce, uri, response)
-		newReq.AppendHeader(sip.NewHeader("Authorization", authHeader))
+		newReq.AppendHeader(sip.NewHeader("Authorization", authorization))
 		cseq2 := uint32(p.sn)
 		p.sn++
 		newReq.AppendHeader(&sip.CSeqHeader{SeqNo: cseq2, MethodName: sip.REGISTER})
@@ -795,40 +812,4 @@ func (p *Platform) handleAuthAndRetry(req *sip.Request, tx sip.ClientTransaction
 func (p *Platform) getManager() *PlatformManager {
 	// This is a helper to get the manager - in practice the manager is passed during init
 	return nil
-}
-
-func extractNonce(header string) string {
-	// Extract nonce from WWW-Authenticate header
-	for _, part := range splitHeader(header) {
-		if len(part) > 6 && part[:6] == "nonce=" {
-			val := part[6:]
-			if len(val) > 2 && val[0] == '"' {
-				val = val[1:]
-			}
-			if len(val) > 0 && val[len(val)-1] == '"' {
-				val = val[:len(val)-1]
-			}
-			return val
-		}
-	}
-	return ""
-}
-
-func splitHeader(header string) []string {
-	var parts []string
-	current := ""
-	for _, c := range header {
-		if c == ',' || c == ' ' {
-			if current != "" {
-				parts = append(parts, current)
-				current = ""
-			}
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		parts = append(parts, current)
-	}
-	return parts
 }

@@ -89,6 +89,21 @@ func DigestResponse(method, username, realm, password, uri, nonce, qop, nc, cnon
 	return md5Hex(ha1 + ":" + nonce + ":" + ha2)
 }
 
+// NormalizeDigestQop selects qop=auth from a challenge's comma-separated qop
+// list. An empty qop remains the legacy no-qop mode.
+func NormalizeDigestQop(qop string) (string, error) {
+	qop = strings.TrimSpace(qop)
+	if qop == "" {
+		return "", nil
+	}
+	for _, option := range strings.Split(qop, ",") {
+		if strings.EqualFold(strings.TrimSpace(option), "auth") {
+			return "auth", nil
+		}
+	}
+	return "", fmt.Errorf("unsupported digest qop %q", qop)
+}
+
 // VerifyDigestResponse validates a legacy no-qop Digest response in constant
 // time after checking that the supplied response is a valid MD5 hex digest.
 func VerifyDigestResponse(method, username, realm, password, uri, nonce, response string) bool {
@@ -179,9 +194,10 @@ func BuildDigestAuthorization(method, uri, username, password, realm, nonce, qop
 	if method == "" || uri == "" || username == "" || realm == "" || nonce == "" {
 		return "", fmt.Errorf("incomplete digest authentication challenge")
 	}
-	qop = strings.ToLower(strings.TrimSpace(qop))
-	if qop != "" && qop != "auth" {
-		return "", fmt.Errorf("unsupported digest qop %q", qop)
+	var err error
+	qop, err = NormalizeDigestQop(qop)
+	if err != nil {
+		return "", err
 	}
 	fields := []string{
 		`username="` + escapeDigest(username) + `"`,

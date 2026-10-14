@@ -203,12 +203,6 @@ func parseDigestAuthorization(header string) (map[string]string, bool) {
 	return coreauth.ParseDigestAuthorization(header)
 }
 
-// calcDigestResponse computes the legacy no-qop response used when this NVR
-// registers with an upstream GB28181 platform.
-func calcDigestResponse(username, realm, password, method, uri, nonce string) string {
-	return coreauth.DigestResponse(method, username, realm, password, uri, nonce, "", "", "")
-}
-
 // handlerMessage handles incoming SIP MESSAGE requests (notify, catalog response, device info response, etc.).
 func (g *GB28181API) handlerMessage(req *sip.Request, tx sip.ServerTransaction) {
 	deviceID := req.From().Address.User

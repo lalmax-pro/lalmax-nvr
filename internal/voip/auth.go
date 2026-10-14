@@ -2,7 +2,6 @@ package voip
 
 import (
 	"fmt"
-	"strings"
 
 	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 )
@@ -34,18 +33,10 @@ func verifyDigestResponse(method, username, realm, password string, params map[s
 }
 
 func buildDigestAuthorization(method, uri, username, password, realm, nonce, qop string) (string, error) {
-	if strings.Contains(qop, ",") {
-		supportsAuth := false
-		for _, option := range strings.Split(qop, ",") {
-			if strings.EqualFold(strings.TrimSpace(option), "auth") {
-				supportsAuth = true
-				break
-			}
-		}
-		if !supportsAuth {
-			return "", fmt.Errorf("PBX does not support digest qop auth")
-		}
-		qop = "auth"
+	var err error
+	qop, err = coreauth.NormalizeDigestQop(qop)
+	if err != nil {
+		return "", fmt.Errorf("PBX does not support digest qop auth: %w", err)
 	}
 	return coreauth.BuildDigestAuthorization(method, uri, username, password, realm, nonce, qop)
 }
