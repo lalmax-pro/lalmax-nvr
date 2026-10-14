@@ -286,6 +286,7 @@ type AuthConfig struct {
 	Username       string            `yaml:"username"`
 	PasswordHash   string            `yaml:"password_hash"`
 	Password       string            `yaml:"password"`
+	PublishTokens  map[string]string `yaml:"publish_tokens,omitempty"`  // stream_id → shared media publish token
 	PlaybackTokens map[string]string `yaml:"playback_tokens,omitempty"` // stream_id → shared media playback token
 }
 
@@ -677,6 +678,7 @@ func Save(path string, cfg *Config) error {
 	saveCfg := *cfg
 	saveCfg.Cameras = nil
 	saveCfg.VoIP = cfg.VoIP.Clone()
+	saveCfg.Auth.PublishTokens = cloneStringMap(cfg.Auth.PublishTokens)
 	saveCfg.Auth.PlaybackTokens = cloneStringMap(cfg.Auth.PlaybackTokens)
 	saveCfg.RTMP.StreamKeys = cloneStringMap(cfg.RTMP.StreamKeys)
 	saveCfg.SRT.StreamKeys = cloneStringMap(cfg.SRT.StreamKeys)

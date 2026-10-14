@@ -281,6 +281,11 @@ func decryptConfig(cfg *Config, key []byte) {
 			cfg.Auth.PlaybackTokens[streamID] = v
 		}
 	}
+	for streamID, token := range cfg.Auth.PublishTokens {
+		if v, err := Decrypt(token, key); err == nil {
+			cfg.Auth.PublishTokens[streamID] = v
+		}
+	}
 	if v, err := Decrypt(cfg.Media.RTSPPassword, key); err == nil {
 		cfg.Media.RTSPPassword = v
 	}
@@ -375,6 +380,14 @@ func encryptConfig(cfg *Config, key []byte) []string {
 			if v, err := Encrypt(token, key); err == nil {
 				cfg.Auth.PlaybackTokens[streamID] = v
 				encrypted = append(encrypted, fmt.Sprintf("auth.playback_tokens[%s]", streamID))
+			}
+		}
+	}
+	for streamID, token := range cfg.Auth.PublishTokens {
+		if token != "" && !IsEncrypted(token) {
+			if v, err := Encrypt(token, key); err == nil {
+				cfg.Auth.PublishTokens[streamID] = v
+				encrypted = append(encrypted, fmt.Sprintf("auth.publish_tokens[%s]", streamID))
 			}
 		}
 	}
@@ -531,6 +544,11 @@ func SensitiveFieldPaths(cfg *Config) []string {
 			fields = append(fields, fmt.Sprintf("auth.playback_tokens[%s]", streamID))
 		}
 	}
+	for streamID, token := range cfg.Auth.PublishTokens {
+		if token != "" && !IsEncrypted(token) {
+			fields = append(fields, fmt.Sprintf("auth.publish_tokens[%s]", streamID))
+		}
+	}
 
 	return fields
 }
@@ -543,6 +561,7 @@ type sensitiveSnapshot struct {
 	SRTStreamKeys        map[string]string
 	WHIPPublishTokens    map[string]string
 	AuthPassword         string
+	AuthPublishTokens    map[string]string
 	AuthPlaybackTokens   map[string]string
 	RTSPPassword         string
 	MQTTPassword         string
@@ -560,6 +579,7 @@ func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 		SRTStreamKeys:        cloneStringMap(cfg.SRT.StreamKeys),
 		WHIPPublishTokens:    cloneStringMap(cfg.WHIP.PublishTokens),
 		AuthPassword:         cfg.Auth.Password,
+		AuthPublishTokens:    cloneStringMap(cfg.Auth.PublishTokens),
 		AuthPlaybackTokens:   cloneStringMap(cfg.Auth.PlaybackTokens),
 		RTSPPassword:         cfg.Media.RTSPPassword,
 		MQTTPassword:         cfg.MQTT.Password,
@@ -587,6 +607,7 @@ func (s sensitiveSnapshot) restore(cfg *Config) {
 		}
 	}
 	cfg.Auth.Password = s.AuthPassword
+	cfg.Auth.PublishTokens = cloneStringMap(s.AuthPublishTokens)
 	cfg.Auth.PlaybackTokens = cloneStringMap(s.AuthPlaybackTokens)
 	cfg.Media.RTSPPassword = s.RTSPPassword
 	cfg.RTMP.StreamKeys = cloneStringMap(s.RTMPStreamKeys)

@@ -616,6 +616,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	// Create ban manager before media engine (provides IAuthentication)
 	a.mediaAuth = coreauth.NewMediaAuthorizer()
+	a.mediaAuth.SetPublishTokens("media", cfg.Auth.PublishTokens)
 	a.mediaAuth.SetPublishTokens("rtmp", cfg.RTMP.StreamKeys)
 	a.mediaAuth.SetPublishTokens("srt", cfg.SRT.StreamKeys)
 	a.mediaAuth.SetPublishTokens("whip", cfg.WHIP.PublishTokens)

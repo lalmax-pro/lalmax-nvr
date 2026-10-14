@@ -54,6 +54,13 @@ func (m *Manager) OnPubStart(info base.PubStartInfo) error {
 		}
 		return m.AuthorizePublish("rtmp", info.StreamName, token)
 	}
+	if strings.EqualFold(info.Protocol, base.SessionProtocolRtspStr) && m.mediaAuth.SharedPublishRequired() {
+		token, err := auth.QueryToken(info.UrlParam, "token")
+		if err != nil {
+			return fmt.Errorf("invalid RTSP publish parameters for stream %q", info.StreamName)
+		}
+		return m.AuthorizePublish("rtsp", info.StreamName, token)
+	}
 	return m.rejectBannedStream(info.StreamName, info.Protocol, false)
 }
 

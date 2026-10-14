@@ -85,6 +85,18 @@ func (a *MediaAuthorizer) PlaybackRequired() bool {
 	return false
 }
 
+// SharedPublishRequired reports whether the shared media publish-token map is
+// configured. It is used by protocol adapters whose native protocol auth is
+// optional, such as RTSP.
+func (a *MediaAuthorizer) SharedPublishRequired() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.tokens["publish"]["media"]) > 0
+}
+
 func (a *MediaAuthorizer) authorize(direction, protocol, streamID, token string) error {
 	protocol = normalizeProtocol(protocol)
 	streamID = strings.TrimSpace(streamID)
@@ -93,7 +105,7 @@ func (a *MediaAuthorizer) authorize(direction, protocol, streamID, token string)
 	}
 	a.mu.RLock()
 	want := a.tokens[direction][protocol][streamID]
-	if want == "" && direction == "playback" {
+	if want == "" {
 		want = a.tokens[direction]["media"][streamID]
 	}
 	a.mu.RUnlock()
