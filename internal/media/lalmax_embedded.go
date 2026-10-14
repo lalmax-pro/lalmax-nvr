@@ -20,6 +20,7 @@ import (
 	lalmaxserver "github.com/q191201771/lalmax/server"
 	"github.com/q191201771/naza/pkg/nazalog"
 
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/observability"
 	"go.opentelemetry.io/otel/attribute"
@@ -102,6 +103,9 @@ func lalmaxListenAddr(httpAddr string) string {
 
 func NewEmbeddedLalmax(cfg EmbeddedLalmaxConfig, svrOpts ...lalmaxserver.LalMaxServerOption) (*EmbeddedLalmax, error) {
 	installLalLogBridge()
+	svrOpts = append(append([]lalmaxserver.LalMaxServerOption(nil), svrOpts...), lalmaxserver.WithRTSPDigestVerifier(func(method, username, realm, password, authorization string) bool {
+		return coreauth.VerifyDigestAuthorization(method, username, realm, password, authorization)
+	}))
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = config.DefaultLalmaxHTTPAddr
 	}

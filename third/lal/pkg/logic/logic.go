@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/q191201771/lal/pkg/base"
+	"github.com/q191201771/lal/pkg/rtsp"
 )
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -144,6 +145,10 @@ type Option struct {
 	// Authentication
 	// This interface make authenticate customizable so that we can implement any authenticate strategy like jwt...
 	Authentication IAuthentication
+
+	// RTSPDigestVerifier delegates RTSP protocol Digest checks to the embedding
+	// application's shared authentication implementation when provided.
+	RTSPDigestVerifier rtsp.DigestVerifier
 }
 
 var defaultOption = Option{

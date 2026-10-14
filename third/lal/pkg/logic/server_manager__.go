@@ -100,6 +100,9 @@ Doc: %s
 		}
 	}
 	sm.config = LoadConfAndInitLog(rawContent)
+	if sm.option.RTSPDigestVerifier != nil {
+		sm.config.RtspConfig.ServerAuthConfig.DigestVerifier = sm.option.RTSPDigestVerifier
+	}
 	base.LogoutStartInfo()
 
 	if sm.config.HlsConfig.Enable && sm.config.HlsConfig.UseMemoryAsDiskFlag {

@@ -51,11 +51,16 @@ type IServerObserver interface {
 }
 
 type ServerAuthConfig struct {
-	AuthEnable bool   `json:"auth_enable"`
-	AuthMethod int    `json:"auth_method"`
-	UserName   string `json:"username"`
-	PassWord   string `json:"password"`
+	AuthEnable     bool           `json:"auth_enable"`
+	AuthMethod     int            `json:"auth_method"`
+	UserName       string         `json:"username"`
+	PassWord       string         `json:"password"`
+	DigestVerifier DigestVerifier `json:"-"`
 }
+
+// DigestVerifier delegates RTSP Digest response validation to the embedding
+// application's shared authentication module.
+type DigestVerifier func(method, username, realm, password, authorization string) bool
 
 type Server struct {
 	addr     string

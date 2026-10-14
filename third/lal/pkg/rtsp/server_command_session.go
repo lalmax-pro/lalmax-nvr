@@ -354,7 +354,13 @@ func (session *ServerCommandSession) handleAuthorized(requestCtx nazahttp.HttpRe
 		// 解析出的鉴权方式需要与配置的鉴权方式一致,防止鉴权降级
 		if session.auth.Typ == AuthTypeBasic && session.authConf.AuthMethod == 0 ||
 			session.auth.Typ == AuthTypeDigest && session.authConf.AuthMethod == 1 {
-			if session.auth.CheckAuthorization(requestCtx.Method, session.authConf.UserName, session.authConf.PassWord) {
+			authorized := false
+			if session.auth.Typ == AuthTypeDigest && session.authConf.DigestVerifier != nil {
+				authorized = session.authConf.DigestVerifier(requestCtx.Method, session.auth.Username, session.auth.Realm, session.authConf.PassWord, session.auth.RawAuthorization)
+			} else {
+				authorized = session.auth.CheckAuthorization(requestCtx.Method, session.authConf.UserName, session.authConf.PassWord)
+			}
+			if authorized {
 				return "", nil
 			}
 		}

@@ -1,10 +1,8 @@
 package gb28181
 
 import (
-	"crypto/md5"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -218,7 +216,7 @@ func (g *GB28181API) verifyDigestAuth(req *sip.Request, password, realm string) 
 	if username == "" || username != req.From().Address.User ||
 		params["realm"] != realm || nonce == "" || uri != req.Recipient.String() ||
 		!strings.EqualFold(params["algorithm"], "MD5") || qop != "auth" || cnonce == "" ||
-		len(nc) != 8 || len(response) != md5.Size*2 {
+		len(nc) != 8 || len(response) != 32 {
 		return false
 	}
 	nonceCount, err := strconv.ParseUint(nc, 16, 32)
@@ -228,84 +226,14 @@ func (g *GB28181API) verifyDigestAuth(req *sip.Request, password, realm string) 
 	if !g.consumeDigestNonce(nonce) {
 		return false
 	}
-	if _, err := hex.DecodeString(response); err != nil {
-		return false
-	}
-	ha1 := md5sum(username + ":" + realm + ":" + password)
-	ha2 := md5sum(req.Method.String() + ":" + uri)
-	want := md5sum(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2)
-	gotBytes, _ := hex.DecodeString(response)
-	wantBytes, _ := hex.DecodeString(want)
-	if !coreauth.ConstantTimeEqual(string(gotBytes), string(wantBytes)) {
+	if !coreauth.VerifyDigest(req.Method.String(), username, realm, password, params) {
 		return false
 	}
 	return true
 }
 
 func parseDigestAuthorization(header string) (map[string]string, bool) {
-	header = strings.TrimSpace(header)
-	scheme, rest, ok := strings.Cut(header, " ")
-	if !ok || !strings.EqualFold(scheme, "Digest") {
-		return nil, false
-	}
-	params := make(map[string]string)
-	for rest = strings.TrimSpace(rest); rest != ""; {
-		key, value, found := strings.Cut(rest, "=")
-		if !found {
-			return nil, false
-		}
-		key = strings.ToLower(strings.TrimSpace(key))
-		if key == "" {
-			return nil, false
-		}
-		rest = strings.TrimLeft(value, " \t")
-		var parsed string
-		if strings.HasPrefix(rest, `"`) {
-			rest = rest[1:]
-			var b strings.Builder
-			closed := false
-			for i := 0; i < len(rest); i++ {
-				switch rest[i] {
-				case '\\':
-					i++
-					if i >= len(rest) {
-						return nil, false
-					}
-					b.WriteByte(rest[i])
-				case '"':
-					parsed = b.String()
-					rest = rest[i+1:]
-					closed = true
-					i = len(rest)
-				default:
-					b.WriteByte(rest[i])
-				}
-			}
-			if !closed {
-				return nil, false
-			}
-		} else {
-			if parsed, rest, _ = strings.Cut(rest, ","); rest == "" {
-				// The final parameter has no trailing comma.
-			} else {
-				rest = "," + rest
-			}
-			parsed = strings.TrimSpace(parsed)
-		}
-		if _, duplicate := params[key]; duplicate {
-			return nil, false
-		}
-		params[key] = parsed
-		rest = strings.TrimLeft(rest, " \t")
-		if rest == "" {
-			break
-		}
-		if rest[0] != ',' {
-			return nil, false
-		}
-		rest = strings.TrimSpace(rest[1:])
-	}
-	return params, true
+	return coreauth.ParseDigestAuthorization(header)
 }
 
 func (g *GB28181API) consumeDigestNonce(nonce string) bool {
@@ -319,14 +247,7 @@ func (g *GB28181API) consumeDigestNonce(nonce string) bool {
 // calcDigestResponse computes the legacy no-qop response used when this NVR
 // registers with an upstream GB28181 platform.
 func calcDigestResponse(username, realm, password, method, uri, nonce string) string {
-	ha1 := md5sum(username + ":" + realm + ":" + password)
-	ha2 := md5sum(method + ":" + uri)
-	return md5sum(ha1 + ":" + nonce + ":" + ha2)
-}
-
-func md5sum(data string) string {
-	h := md5.Sum([]byte(data))
-	return hex.EncodeToString(h[:])
+	return coreauth.DigestResponse(method, username, realm, password, uri, nonce, "", "", "")
 }
 
 // handlerMessage handles incoming SIP MESSAGE requests (notify, catalog response, device info response, etc.).

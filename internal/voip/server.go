@@ -1063,7 +1063,7 @@ func (s *Server) authenticateRequest(msg *Message, username string) (bool, strin
 	if !s.nonceStore.Valid(params["nonce"]) {
 		return false, s.buildAuthChallenge(msg)
 	}
-	if expected := expectedDigestResponse(string(msg.Method), s.config.Realm, user.Password, params); !strings.EqualFold(expected, params["response"]) {
+	if !verifyDigestResponse(string(msg.Method), username, s.config.Realm, user.Password, params) {
 		s.log.Warnf("sip digest auth failed for user: %s", username)
 		return false, s.buildAuthChallenge(msg)
 	}

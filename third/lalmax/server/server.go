@@ -29,6 +29,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
+	"github.com/q191201771/lal/pkg/rtsp"
 	"github.com/q191201771/naza/pkg/nazalog"
 )
 
@@ -69,6 +70,7 @@ type lalMaxServerOptions struct {
 	publisherAuthorizer  func(protocol, streamID, token string) error
 	subscriberAuthorizer func(protocol, streamID, token string) error
 	playAuth             func(http.Handler) http.Handler
+	rtspDigestVerifier   rtsp.DigestVerifier
 }
 
 // WithAuthentication injects a custom IAuthentication into the underlying lal server.
@@ -76,6 +78,14 @@ type lalMaxServerOptions struct {
 func WithAuthentication(auth logic.IAuthentication) LalMaxServerOption {
 	return func(o *lalMaxServerOptions) {
 		o.authentication = auth
+	}
+}
+
+// WithRTSPDigestVerifier installs shared RTSP Digest validation for the
+// underlying lal RTSP server.
+func WithRTSPDigestVerifier(verifier rtsp.DigestVerifier) LalMaxServerOption {
+	return func(o *lalMaxServerOptions) {
+		o.rtspDigestVerifier = verifier
 	}
 }
 
@@ -150,6 +160,7 @@ func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxSe
 		if serverOpts.authentication != nil {
 			option.Authentication = serverOpts.authentication
 		}
+		option.RTSPDigestVerifier = serverOpts.rtspDigestVerifier
 	})
 
 	maxsvr := &LalMaxServer{

@@ -31,18 +31,20 @@ type Auth struct {
 	Username string
 	Password string
 
-	Typ       string
-	Realm     string
-	Nonce     string
-	Algorithm string
-	Uri       string
-	Response  string
-	Opaque    string // 暂时没用
-	Stale     string // 暂时没用
+	Typ              string
+	Realm            string
+	Nonce            string
+	Algorithm        string
+	Uri              string
+	Response         string
+	RawAuthorization string
+	Opaque           string // 暂时没用
+	Stale            string // 暂时没用
 }
 
 // ParseAuthorization 解析字段，server side使用
 func (a *Auth) ParseAuthorization(authStr string) (err error) {
+	a.RawAuthorization = authStr
 	switch {
 	case strings.HasPrefix(authStr, "Basic "):
 		a.Typ = AuthTypeDigest
