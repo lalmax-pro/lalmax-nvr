@@ -276,6 +276,11 @@ func decryptConfig(cfg *Config, key []byte) {
 	if v, err := Decrypt(cfg.Auth.Password, key); err == nil {
 		cfg.Auth.Password = v
 	} // if decrypt fails, leave as-is (might be plaintext)
+	for streamID, token := range cfg.Auth.PlaybackTokens {
+		if v, err := Decrypt(token, key); err == nil {
+			cfg.Auth.PlaybackTokens[streamID] = v
+		}
+	}
 	if v, err := Decrypt(cfg.Media.RTSPPassword, key); err == nil {
 		cfg.Media.RTSPPassword = v
 	}
@@ -363,6 +368,14 @@ func encryptConfig(cfg *Config, key []byte) []string {
 		if v, err := Encrypt(cfg.Media.RTSPPassword, key); err == nil {
 			cfg.Media.RTSPPassword = v
 			encrypted = append(encrypted, "media.rtsp_password")
+		}
+	}
+	for streamID, token := range cfg.Auth.PlaybackTokens {
+		if token != "" && !IsEncrypted(token) {
+			if v, err := Encrypt(token, key); err == nil {
+				cfg.Auth.PlaybackTokens[streamID] = v
+				encrypted = append(encrypted, fmt.Sprintf("auth.playback_tokens[%s]", streamID))
+			}
 		}
 	}
 
@@ -513,6 +526,11 @@ func SensitiveFieldPaths(cfg *Config) []string {
 			fields = append(fields, fmt.Sprintf("voip.users[%d].password", i))
 		}
 	}
+	for streamID, token := range cfg.Auth.PlaybackTokens {
+		if token != "" && !IsEncrypted(token) {
+			fields = append(fields, fmt.Sprintf("auth.playback_tokens[%s]", streamID))
+		}
+	}
 
 	return fields
 }
@@ -525,6 +543,7 @@ type sensitiveSnapshot struct {
 	SRTStreamKeys        map[string]string
 	WHIPPublishTokens    map[string]string
 	AuthPassword         string
+	AuthPlaybackTokens   map[string]string
 	RTSPPassword         string
 	MQTTPassword         string
 	XiaomiUserID         string
@@ -541,6 +560,7 @@ func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 		SRTStreamKeys:        cloneStringMap(cfg.SRT.StreamKeys),
 		WHIPPublishTokens:    cloneStringMap(cfg.WHIP.PublishTokens),
 		AuthPassword:         cfg.Auth.Password,
+		AuthPlaybackTokens:   cloneStringMap(cfg.Auth.PlaybackTokens),
 		RTSPPassword:         cfg.Media.RTSPPassword,
 		MQTTPassword:         cfg.MQTT.Password,
 		XiaomiUserID:         cfg.Xiaomi.UserID,
@@ -567,6 +587,7 @@ func (s sensitiveSnapshot) restore(cfg *Config) {
 		}
 	}
 	cfg.Auth.Password = s.AuthPassword
+	cfg.Auth.PlaybackTokens = cloneStringMap(s.AuthPlaybackTokens)
 	cfg.Media.RTSPPassword = s.RTSPPassword
 	cfg.RTMP.StreamKeys = cloneStringMap(s.RTMPStreamKeys)
 	cfg.SRT.StreamKeys = cloneStringMap(s.SRTStreamKeys)

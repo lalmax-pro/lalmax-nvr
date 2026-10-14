@@ -283,9 +283,10 @@ type CameraTimelapseConfig struct {
 }
 
 type AuthConfig struct {
-	Username     string `yaml:"username"`
-	PasswordHash string `yaml:"password_hash"`
-	Password     string `yaml:"password"`
+	Username       string            `yaml:"username"`
+	PasswordHash   string            `yaml:"password_hash"`
+	Password       string            `yaml:"password"`
+	PlaybackTokens map[string]string `yaml:"playback_tokens,omitempty"` // stream_id → shared media playback token
 }
 
 type FTPConfig struct {
@@ -676,6 +677,7 @@ func Save(path string, cfg *Config) error {
 	saveCfg := *cfg
 	saveCfg.Cameras = nil
 	saveCfg.VoIP = cfg.VoIP.Clone()
+	saveCfg.Auth.PlaybackTokens = cloneStringMap(cfg.Auth.PlaybackTokens)
 	saveCfg.RTMP.StreamKeys = cloneStringMap(cfg.RTMP.StreamKeys)
 	saveCfg.SRT.StreamKeys = cloneStringMap(cfg.SRT.StreamKeys)
 	saveCfg.WHIP.StreamKeys = cloneStringMap(cfg.WHIP.StreamKeys)

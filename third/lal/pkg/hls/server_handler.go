@@ -142,9 +142,17 @@ func (s *ServerHandler) ServeHTTPWithUrlCtx(resp http.ResponseWriter, req *http.
 	case "m3u8":
 		resp.Header().Add("Content-Type", "application/x-mpegurl")
 		resp.Header().Add("Server", base.LalHlsM3u8Server)
-		// 给ts文件都携带上session_id字段
+		// Propagate playback credentials and the optional HLS session ID to TS
+		// requests so each segment receives the same authorization check.
+		tsQuery := url.Values{}
 		if sessionIdHash != "" {
-			content = bytes.ReplaceAll(content, []byte(".ts"), []byte(".ts?session_id="+sessionIdHash))
+			tsQuery.Set("session_id", sessionIdHash)
+		}
+		if token := urlObj.Query().Get("token"); token != "" {
+			tsQuery.Set("token", token)
+		}
+		if encoded := tsQuery.Encode(); encoded != "" {
+			content = bytes.ReplaceAll(content, []byte(".ts"), []byte(".ts?"+encoded))
 		}
 	case "ts":
 		resp.Header().Add("Content-Type", "video/mp2t")

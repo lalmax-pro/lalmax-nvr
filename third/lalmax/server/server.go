@@ -65,9 +65,10 @@ type LalMaxServer struct {
 type LalMaxServerOption func(*lalMaxServerOptions)
 
 type lalMaxServerOptions struct {
-	authentication      logic.IAuthentication
-	publisherAuthorizer func(protocol, streamID, token string) error
-	playAuth            func(http.Handler) http.Handler
+	authentication       logic.IAuthentication
+	publisherAuthorizer  func(protocol, streamID, token string) error
+	subscriberAuthorizer func(protocol, streamID, token string) error
+	playAuth             func(http.Handler) http.Handler
 }
 
 // WithAuthentication injects a custom IAuthentication into the underlying lal server.
@@ -92,6 +93,13 @@ func WithHTTPPlayAuth(auth func(http.Handler) http.Handler) LalMaxServerOption {
 func WithPublisherAuthorizer(authorizer func(protocol, streamID, token string) error) LalMaxServerOption {
 	return func(o *lalMaxServerOptions) {
 		o.publisherAuthorizer = authorizer
+	}
+}
+
+// WithSubscriberAuthorizer installs per-stream authorization for SRT playback.
+func WithSubscriberAuthorizer(authorizer func(protocol, streamID, token string) error) LalMaxServerOption {
+	return func(o *lalMaxServerOptions) {
+		o.subscriberAuthorizer = authorizer
 	}
 }
 
@@ -173,6 +181,11 @@ func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxSe
 		if serverOpts.publisherAuthorizer != nil {
 			maxsvr.srtsvr.SetPublisherAuthorizer(func(streamID, token string) error {
 				return serverOpts.publisherAuthorizer("srt", streamID, token)
+			})
+		}
+		if serverOpts.subscriberAuthorizer != nil {
+			maxsvr.srtsvr.SetSubscriberAuthorizer(func(streamID, token string) error {
+				return serverOpts.subscriberAuthorizer("srt", streamID, token)
 			})
 		}
 	}

@@ -63,6 +63,11 @@ auth:
   username: "admin"
   password_hash: ""  # Use `lalmax-nvr hash-password <password>` to generate
   # password: ""      # Or set plaintext here (auto-hashed on first start)
+  # playback_tokens:   # Optional; when configured, LAL media subscriptions require a token.
+  #                    # Use ?token=<value> for RTMP/RTSP/HTTP-FLV/HTTP-TS/HLS URLs.
+  #                    # HLS playlists carry the token through to each TS segment.
+  #                    # For SRT request mode, pass the value as u=<token> in streamid.
+  #   front-door: "generate-a-long-random-token"
 
 # Camera configuration — add your cameras here
 # Each camera must have a unique ID and valid URL with scheme + host

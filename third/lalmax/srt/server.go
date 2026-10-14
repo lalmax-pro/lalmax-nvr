@@ -12,10 +12,11 @@ import (
 )
 
 type SrtServer struct {
-	addr       string
-	lalServer  logic.ILalServer
-	srtOpt     SrtOption
-	authorizer func(streamID, token string) error
+	addr                 string
+	lalServer            logic.ILalServer
+	srtOpt               SrtOption
+	authorizer           func(streamID, token string) error
+	subscriberAuthorizer func(streamID, token string) error
 
 	mu       sync.Mutex
 	listener srt.Listener
@@ -25,6 +26,13 @@ type SrtServer struct {
 func (s *SrtServer) SetPublisherAuthorizer(authorizer func(streamID, token string) error) {
 	s.mu.Lock()
 	s.authorizer = authorizer
+	s.mu.Unlock()
+}
+
+// SetSubscriberAuthorizer installs an admission check for SRT subscribers.
+func (s *SrtServer) SetSubscriberAuthorizer(authorizer func(streamID, token string) error) {
+	s.mu.Lock()
+	s.subscriberAuthorizer = authorizer
 	s.mu.Unlock()
 }
 
@@ -119,6 +127,16 @@ func (s *SrtServer) Run(ctx context.Context) {
 				if authorizer != nil {
 					if err := authorizer(info.StreamName, info.Token); err != nil {
 						nazalog.Warnf("reject unauthorized SRT publisher, stream:%s, error:%v", info.StreamName, err)
+						info.Mode = srt.REJECT
+					}
+				}
+			} else if info.Mode == srt.SUBSCRIBE {
+				s.mu.Lock()
+				authorizer := s.subscriberAuthorizer
+				s.mu.Unlock()
+				if authorizer != nil {
+					if err := authorizer(info.StreamName, info.Token); err != nil {
+						nazalog.Warnf("reject unauthorized SRT subscriber, stream:%s, error:%v", info.StreamName, err)
 						info.Mode = srt.REJECT
 					}
 				}

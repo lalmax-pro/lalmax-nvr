@@ -69,6 +69,22 @@ func (a *MediaAuthorizer) AuthorizePlayback(protocol, streamID, token string) er
 	return a.authorize("playback", protocol, streamID, token)
 }
 
+// PlaybackRequired reports whether any per-stream playback token policy is
+// configured. Empty configuration leaves playback open as before.
+func (a *MediaAuthorizer) PlaybackRequired() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, streams := range a.tokens["playback"] {
+		if len(streams) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *MediaAuthorizer) authorize(direction, protocol, streamID, token string) error {
 	protocol = normalizeProtocol(protocol)
 	streamID = strings.TrimSpace(streamID)
@@ -77,6 +93,9 @@ func (a *MediaAuthorizer) authorize(direction, protocol, streamID, token string)
 	}
 	a.mu.RLock()
 	want := a.tokens[direction][protocol][streamID]
+	if want == "" && direction == "playback" {
+		want = a.tokens[direction]["media"][streamID]
+	}
 	a.mu.RUnlock()
 	if want == "" {
 		return fmt.Errorf("%s %s is not configured for stream %q", protocol, direction, streamID)

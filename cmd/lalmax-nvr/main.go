@@ -619,12 +619,19 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.mediaAuth.SetPublishTokens("rtmp", cfg.RTMP.StreamKeys)
 	a.mediaAuth.SetPublishTokens("srt", cfg.SRT.StreamKeys)
 	a.mediaAuth.SetPublishTokens("whip", cfg.WHIP.PublishTokens)
+	a.mediaAuth.SetPlaybackTokens("media", cfg.Auth.PlaybackTokens)
 	a.banMgr = ban.NewManager(db, a.mediaAuth)
 
 	// Create media engine with ban manager's auth for proactive rejection
 	engine, err := newMediaEngine(cfg,
 		lalmaxserver.WithAuthentication(a.banMgr),
 		lalmaxserver.WithPublisherAuthorizer(a.banMgr.AuthorizePublish),
+		lalmaxserver.WithSubscriberAuthorizer(func(protocol, streamID, token string) error {
+			if !a.mediaAuth.PlaybackRequired() {
+				return nil
+			}
+			return a.mediaAuth.AuthorizePlayback(protocol, streamID, token)
+		}),
 		lalmaxserver.WithHTTPPlayAuth(a.multiUserMW),
 	)
 	if err != nil {

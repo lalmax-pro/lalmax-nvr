@@ -92,14 +92,29 @@ func (m *Manager) rejectBannedStream(streamID, protocol string, failClosed bool)
 	return nil
 }
 
-// OnSubStart allows all subscriptions.
+// OnSubStart applies the shared stream playback-token policy when configured.
 func (m *Manager) OnSubStart(info base.SubStartInfo) error {
-	return nil
+	if !m.mediaAuth.PlaybackRequired() {
+		return nil
+	}
+	token, err := auth.QueryToken(info.UrlParam, "token")
+	if err != nil {
+		return fmt.Errorf("invalid %s playback parameters for stream %q", info.Protocol, info.StreamName)
+	}
+	return m.mediaAuth.AuthorizePlayback(info.Protocol, info.StreamName, token)
 }
 
-// OnHls allows all HLS requests.
+// OnHls applies the shared stream playback-token policy to HLS playlists and
+// segments when configured.
 func (m *Manager) OnHls(streamName, urlParam string) error {
-	return nil
+	if !m.mediaAuth.PlaybackRequired() {
+		return nil
+	}
+	token, err := auth.QueryToken(urlParam, "token")
+	if err != nil {
+		return fmt.Errorf("invalid HLS playback parameters for stream %q", streamName)
+	}
+	return m.mediaAuth.AuthorizePlayback("hls", streamName, token)
 }
 
 // Ban adds a ban for a stream.

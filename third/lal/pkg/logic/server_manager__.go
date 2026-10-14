@@ -861,11 +861,13 @@ func (sm *ServerManager) serveHls(writer http.ResponseWriter, req *http.Request)
 		Log.Errorf("parse url. err=%+v", err)
 		return
 	}
-	if urlCtx.GetFileType() == "m3u8" {
+	fileType := urlCtx.GetFileType()
+	if fileType == "m3u8" || fileType == "ts" {
 		// TODO(chef): [refactor] 需要整理，这里使用 hls.PathStrategy 不太好 202207
 		streamName := hls.PathStrategy.GetRequestInfo(urlCtx, sm.config.HlsConfig.OutPath).StreamName
 		if err = sm.option.Authentication.OnHls(streamName, urlCtx.RawQuery); err != nil {
-			Log.Errorf("simple auth failed. err=%+v", err)
+			Log.Errorf("HLS authorization failed. err=%+v", err)
+			writer.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 	}
