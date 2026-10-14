@@ -634,6 +634,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 			return a.mediaAuth.AuthorizePlayback(protocol, streamID, token)
 		}),
 		lalmaxserver.WithHTTPPlayAuth(a.multiUserMW),
+		lalmaxserver.WithHTTPControlAuth(a.multiUserMW),
 	)
 	if err != nil {
 		db.Close()

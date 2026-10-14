@@ -60,6 +60,7 @@ type LalMaxServer struct {
 	runDone            chan error
 	hookOnce           sync.Once
 	playAuth           func(http.Handler) http.Handler
+	controlAuth        func(http.Handler) http.Handler
 	playbackAuthorizer func(protocol, streamID, token string) error
 }
 
@@ -71,6 +72,7 @@ type lalMaxServerOptions struct {
 	publisherAuthorizer            func(protocol, streamID, token string) error
 	subscriberAuthorizer           func(protocol, streamID, token string) error
 	playAuth                       func(http.Handler) http.Handler
+	controlAuth                    func(http.Handler) http.Handler
 	rtspDigestNonceIssuer          rtsp.DigestNonceIssuer
 	rtspDigestVerifier             rtsp.DigestVerifier
 	rtspDigestAuthorizationBuilder rtsp.DigestAuthorizationBuilder
@@ -114,6 +116,14 @@ func WithRTSPDigestAuthorizationBuilder(builder rtsp.DigestAuthorizationBuilder)
 func WithHTTPPlayAuth(auth func(http.Handler) http.Handler) LalMaxServerOption {
 	return func(o *lalMaxServerOptions) {
 		o.playAuth = auth
+	}
+}
+
+// WithHTTPControlAuth protects the lalmax control, stats, hook, and ZLM
+// compatibility APIs with the application's HTTP authentication middleware.
+func WithHTTPControlAuth(auth func(http.Handler) http.Handler) LalMaxServerOption {
+	return func(o *lalMaxServerOptions) {
+		o.controlAuth = auth
 	}
 }
 
@@ -194,6 +204,7 @@ func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxSe
 		udptsMgr:           udpts.NewManager(lalsvr),
 		recorder:           newFfmpegRecorder(""),
 		playAuth:           serverOpts.playAuth,
+		controlAuth:        serverOpts.controlAuth,
 		playbackAuthorizer: serverOpts.subscriberAuthorizer,
 	}
 

@@ -13,10 +13,16 @@ func (s *LalMaxServer) InitRouter(router *gin.Engine) {
 	s.initFmp4Router(router)
 
 	auth := Authentication(s.configuration().HttpConfig.CtrlAuthWhitelist.Secrets, s.configuration().HttpConfig.CtrlAuthWhitelist.IPs)
-	s.initHookRouter(router, auth)
-	s.initStatRouter(router, auth)
-	s.initCtrlRouter(router, auth)
-	s.initZlmCompatRouter(router, auth)
+	controlHandlers := []gin.HandlerFunc{auth}
+	if s.controlAuth != nil {
+		controlHandlers = append(controlHandlers, s.protectHTTPControl(func(c *gin.Context) {
+			c.Next()
+		}))
+	}
+	s.initHookRouter(router, controlHandlers...)
+	s.initStatRouter(router, controlHandlers...)
+	s.initCtrlRouter(router, controlHandlers...)
+	s.initZlmCompatRouter(router, controlHandlers...)
 
 	s.initFlvProxy(router)
 }
