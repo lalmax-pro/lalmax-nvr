@@ -3,7 +3,6 @@ package gb28181
 import (
 	"crypto/md5"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 )
 
@@ -236,7 +236,7 @@ func (g *GB28181API) verifyDigestAuth(req *sip.Request, password, realm string) 
 	want := md5sum(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2)
 	gotBytes, _ := hex.DecodeString(response)
 	wantBytes, _ := hex.DecodeString(want)
-	if subtle.ConstantTimeCompare(gotBytes, wantBytes) != 1 {
+	if !coreauth.ConstantTimeEqual(string(gotBytes), string(wantBytes)) {
 		return false
 	}
 	return true

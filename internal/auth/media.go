@@ -4,7 +4,6 @@
 package auth
 
 import (
-	"crypto/subtle"
 	"fmt"
 	"net/url"
 	"strings"
@@ -112,7 +111,7 @@ func (a *MediaAuthorizer) authorize(direction, protocol, streamID, token string)
 	if want == "" {
 		return fmt.Errorf("%s %s is not configured for stream %q", protocol, direction, streamID)
 	}
-	if token == "" || len(token) != len(want) || subtle.ConstantTimeCompare([]byte(token), []byte(want)) != 1 {
+	if !ConstantTimeEqual(token, want) {
 		return fmt.Errorf("invalid %s %s token for stream %q", protocol, direction, streamID)
 	}
 	return nil

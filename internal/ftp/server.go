@@ -15,8 +15,8 @@ import (
 	ftpserverlib "github.com/fclairamb/ftpserverlib"
 	"github.com/google/uuid"
 	"github.com/spf13/afero"
-	"golang.org/x/crypto/bcrypt"
 
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
@@ -124,10 +124,10 @@ func (s *Server) AuthUser(cc ftpserverlib.ClientContext, user, pass string) (ftp
 		return nil, fmt.Errorf("ftp: invalid credentials")
 	}
 	if s.passwordHash != "" {
-		if bcrypt.CompareHashAndPassword([]byte(s.passwordHash), []byte(pass)) != nil {
+		if !coreauth.CheckPassword(pass, s.passwordHash) {
 			return nil, fmt.Errorf("ftp: invalid credentials")
 		}
-	} else if pass != s.password {
+	} else if !coreauth.ConstantTimeEqual(pass, s.password) {
 		return nil, fmt.Errorf("ftp: invalid credentials")
 	}
 	cc.SetPath("/")

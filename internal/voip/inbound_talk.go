@@ -3,12 +3,12 @@ package voip
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
 
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/pion/rtp"
 	maxrtc "github.com/q191201771/lalmax/rtc"
 )
@@ -95,7 +95,7 @@ func (s *Server) AttachInboundTalk(ctx context.Context, callID, token, offer str
 		return "", fmt.Errorf("inbound audio call is not available")
 	}
 	t := d.talk
-	if token == "" || subtle.ConstantTimeCompare([]byte(t.token), []byte(token)) != 1 || time.Now().After(t.tokenExpires) {
+	if !coreauth.ConstantTimeEqual(token, t.token) || time.Now().After(t.tokenExpires) {
 		s.requestMu.Unlock()
 		return "", fmt.Errorf("talk ticket is invalid or expired")
 	}
@@ -137,7 +137,7 @@ func (s *Server) KeepInboundTalk(callID, token string) bool {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 	d := s.dialogManager.Get(callID)
-	if d == nil || d.talk == nil || !d.talk.attached || token == "" || subtle.ConstantTimeCompare([]byte(d.talk.token), []byte(token)) != 1 {
+	if d == nil || d.talk == nil || !d.talk.attached || !coreauth.ConstantTimeEqual(token, d.talk.token) {
 		return false
 	}
 	d.talk.lease = time.Now().Add(45 * time.Second)
@@ -148,7 +148,7 @@ func (s *Server) DetachInboundTalk(callID, token string) bool {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 	d := s.dialogManager.Get(callID)
-	if d == nil || d.talk == nil || token == "" || subtle.ConstantTimeCompare([]byte(d.talk.token), []byte(token)) != 1 {
+	if d == nil || d.talk == nil || !coreauth.ConstantTimeEqual(token, d.talk.token) {
 		return false
 	}
 	s.resetInboundTalk(d.talk)
@@ -159,7 +159,7 @@ func (s *Server) detachInboundTalk(callID, token string) {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 	d := s.dialogManager.Get(callID)
-	if d != nil && d.talk != nil && subtle.ConstantTimeCompare([]byte(d.talk.token), []byte(token)) == 1 {
+	if d != nil && d.talk != nil && coreauth.ConstantTimeEqual(token, d.talk.token) {
 		s.resetInboundTalk(d.talk)
 	}
 }

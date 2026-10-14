@@ -2,7 +2,6 @@ package jt808
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 )
 
 const (
@@ -498,7 +499,7 @@ func (s *Server) handlePacket(ss *session, p packet) {
 			}
 			auth = auth[1 : 1+size]
 		}
-		valid := subtle.ConstantTimeCompare(auth, []byte(s.cfg.AuthCode)) == 1
+		valid := coreauth.ConstantTimeEqual(string(auth), s.cfg.AuthCode)
 		result := byte(1)
 		if valid {
 			result = 0

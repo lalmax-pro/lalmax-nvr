@@ -3,7 +3,6 @@ package voip
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -11,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/pion/rtp"
 	"github.com/q191201771/lal/pkg/base"
 	maxrtc "github.com/q191201771/lalmax/rtc"
@@ -209,7 +209,7 @@ func (s *Server) AttachTalk(ctx context.Context, id, token, offer string) (strin
 		s.requestMu.Unlock()
 		return s.AttachInboundTalk(ctx, id, token, offer)
 	}
-	if subtle.ConstantTimeCompare([]byte(c.token), []byte(token)) != 1 || c.state != DialogStateEstablished {
+	if !coreauth.ConstantTimeEqual(token, c.token) || c.state != DialogStateEstablished {
 		s.requestMu.Unlock()
 		return "", fmt.Errorf("outgoing call is not connected")
 	}
@@ -253,7 +253,7 @@ func (s *Server) KeepTalk(id, token string) bool {
 		return s.KeepInboundTalk(id, token)
 	}
 	defer s.requestMu.Unlock()
-	if subtle.ConstantTimeCompare([]byte(c.token), []byte(token)) != 1 || c.state == "ended" || c.state == "failed" {
+	if !coreauth.ConstantTimeEqual(token, c.token) || c.state == "ended" || c.state == "failed" {
 		return false
 	}
 	c.lease = time.Now().Add(45 * time.Second)
