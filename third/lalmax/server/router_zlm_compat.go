@@ -372,7 +372,7 @@ func (s *LalMaxServer) zlmWebrtcHandler(c *gin.Context) {
 
 	Log.Infof("zlm compat webrtc play. app=%s, stream=%s", app, stream)
 
-	sdp, err := s.rtcsvr.HandleZlmWebrtcPlay(app, stream, string(body))
+	sdp, err := s.rtcsvr.HandleZlmWebrtcPlay(app, stream, c.Query("token"), string(body))
 	if err != nil {
 		Log.Errorf("zlm compat webrtc play failed. app=%s, stream=%s, err=%v", app, stream, err)
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})

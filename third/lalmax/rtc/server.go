@@ -21,17 +21,35 @@ import (
 type StreamNotFoundFn func(app, stream, schema string)
 
 type RtcServer struct {
-	config            config.RtcConfig
-	lalServer         logic.ILalServer
-	publishAuthorizer func(streamID, token string) error
-	udpMux            ice.UDPMux
-	tcpMux            ice.TCPMux
-	streamNotFoundFn  StreamNotFoundFn
+	config               config.RtcConfig
+	lalServer            logic.ILalServer
+	publishAuthorizer    func(streamID, token string) error
+	subscriberAuthorizer func(protocol, streamID, token string) error
+	udpMux               ice.UDPMux
+	tcpMux               ice.TCPMux
+	streamNotFoundFn     StreamNotFoundFn
 }
 
 // SetPublisherAuthorizer installs an admission check for WHIP publishers.
 func (s *RtcServer) SetPublisherAuthorizer(authorizer func(streamID, token string) error) {
 	s.publishAuthorizer = authorizer
+}
+
+// SetSubscriberAuthorizer installs an admission check for WebRTC playback.
+func (s *RtcServer) SetSubscriberAuthorizer(authorizer func(protocol, streamID, token string) error) {
+	s.subscriberAuthorizer = authorizer
+}
+
+func (s *RtcServer) authorizeSubscriber(c *gin.Context, protocol, streamID string) bool {
+	if s.subscriberAuthorizer == nil {
+		return true
+	}
+	if err := s.subscriberAuthorizer(protocol, streamID, c.Request.URL.Query().Get("token")); err != nil {
+		nazalog.Warnf("reject unauthorized WebRTC subscriber, protocol:%s, stream:%s, error:%v", protocol, streamID, err)
+		c.String(http.StatusUnauthorized, "unauthorized subscriber")
+		return false
+	}
+	return true
 }
 
 // SetStreamNotFoundFn 注入流不存在回调
@@ -203,6 +221,9 @@ func (s *RtcServer) HandleJessibuca(c *gin.Context) {
 		c.Status(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.authorizeSubscriber(c, "jessibuca", streamid) {
+		return
+	}
 	appName := c.Query("app_name")
 
 	body, err := c.GetRawData()
@@ -279,6 +300,9 @@ func (s *RtcServer) HandleWHEP(c *gin.Context) {
 		c.Status(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.authorizeSubscriber(c, "whep", streamid) {
+		return
+	}
 	appName := c.Request.URL.Query().Get("app_name")
 
 	body, err := c.GetRawData()
@@ -329,7 +353,12 @@ func (s *RtcServer) HandleWHEP(c *gin.Context) {
 
 // HandleZlmWebrtcPlay ZLM 兼容 WebRTC 播放，返回 SDP answer
 // 为什么独立方法：ZLM 信令格式为 JSON {"code":0,"sdp":"..."}，与 WHEP 纯 SDP 不同
-func (s *RtcServer) HandleZlmWebrtcPlay(app, stream, offer string) (string, error) {
+func (s *RtcServer) HandleZlmWebrtcPlay(app, stream, token, offer string) (string, error) {
+	if s.subscriberAuthorizer != nil {
+		if err := s.subscriberAuthorizer("zlm-webrtc", stream, token); err != nil {
+			return "", fmt.Errorf("unauthorized subscriber: %w", err)
+		}
+	}
 	if !s.waitStreamReady(app, stream, "rtsp") {
 		return "", fmt.Errorf("stream not found: %s/%s", app, stream)
 	}

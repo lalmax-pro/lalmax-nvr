@@ -124,7 +124,8 @@ func WithPublisherAuthorizer(authorizer func(protocol, streamID, token string) e
 	}
 }
 
-// WithSubscriberAuthorizer installs per-stream authorization for SRT playback.
+// WithSubscriberAuthorizer installs per-stream authorization for SRT and
+// custom WebRTC playback sessions.
 func WithSubscriberAuthorizer(authorizer func(protocol, streamID, token string) error) LalMaxServerOption {
 	return func(o *lalMaxServerOptions) {
 		o.subscriberAuthorizer = authorizer
@@ -245,6 +246,9 @@ func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxSe
 			maxsvr.rtcsvr.SetPublisherAuthorizer(func(streamID, token string) error {
 				return serverOpts.publisherAuthorizer("whip", streamID, token)
 			})
+		}
+		if serverOpts.subscriberAuthorizer != nil {
+			maxsvr.rtcsvr.SetSubscriberAuthorizer(serverOpts.subscriberAuthorizer)
 		}
 		maxsvr.rtcsvr.SetStreamNotFoundFn(func(app, stream, schema string) {
 			notifyHub.NotifyStreamNotFound(ZlmOnStreamNotFoundPayload{

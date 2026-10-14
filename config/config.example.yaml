@@ -65,8 +65,10 @@ auth:
   # password: ""      # Or set plaintext here (auto-hashed on first start)
   # publish_tokens:    # Optional shared tokens for media publishing (including RTSP).
   #   front-door: "generate-a-long-random-token"
-  # playback_tokens:   # Optional; when configured, LAL media subscriptions require a token.
-  #                    # Use ?token=<value> for RTMP/RTSP/HTTP-FLV/HTTP-TS/HLS URLs.
+  # playback_tokens:   # Optional; when configured, media playback requires a token.
+  #                    # Use ?token=<value> for RTMP/RTSP/HTTP-FLV/HTTP-TS/HLS/WebRTC URLs.
+  #                    # For embedded HTTP playback, use HTTP Basic for NVR account auth
+  #                    # when also passing this per-stream token.
   #                    # HLS playlists carry the token through to each TS segment.
   #                    # For SRT request mode, pass the value as u=<token> in streamid.
   #   front-door: "generate-a-different-long-random-token"
