@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
@@ -191,6 +193,32 @@ func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url
 func (d *DB) UpdateCameraProfileName(ctx context.Context, id, profileName string) error {
 	q := `UPDATE cameras SET profile_name=? WHERE id=?;`
 	_, err := d.execContext(ctx, q, profileName, id)
+	return err
+}
+
+// UpdateDefaultGB28181CameraName replaces the generated camera name
+// only when it still matches the original system default.
+func (d *DB) UpdateDefaultGB28181CameraName(
+	ctx context.Context,
+	id, channelID, newName string,
+) error {
+	if id == "" || channelID == "" || strings.TrimSpace(newName) == "" {
+		return nil
+	}
+
+	q := `UPDATE cameras
+          SET name = ?
+          WHERE id = ?
+            AND protocol = 'gb28181'
+            AND name = ?;`
+
+	_, err := d.execContext(
+		ctx,
+		q,
+		strings.TrimSpace(newName),
+		id,
+		fmt.Sprintf("GB28181 %s", channelID),
+	)
 	return err
 }
 

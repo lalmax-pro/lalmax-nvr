@@ -286,6 +286,31 @@ func TestRtpPubStartStop(t *testing.T) {
 	if stopResp.Data.SessionId != startResp.Data.SessionId {
 		t.Fatalf("stop_rtp_pub session id = %s, want %s", stopResp.Data.SessionId, startResp.Data.SessionId)
 	}
+	// A successful stop is a synchronous cleanup barrier; the same stream can
+	// immediately be created again, without a sleep or stale Publisher.
+	r = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/ctrl/start_rtp_pub", bytes.NewBufferString(`{"stream_name":"rtp_pub_test","port":0,"timeout_ms":0}`))
+	max.router.ServeHTTP(r, req)
+	var second base.ApiCtrlStartRtpPubResp
+	if err := json.NewDecoder(r.Body).Decode(&second); err != nil {
+		t.Fatal(err)
+	}
+	if second.ErrorCode != base.ErrorCodeSucc {
+		t.Fatalf("immediate restart failed: %d %s", second.ErrorCode, second.Desp)
+	}
+	if second.Data.SessionId == startResp.Data.SessionId {
+		t.Fatal("restart reused old RTP session ID")
+	}
+	r = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/ctrl/stop_rtp_pub?session_id="+second.Data.SessionId, nil)
+	max.router.ServeHTTP(r, req)
+	var stoppedAgain base.ApiCtrlStopRelayPullResp
+	if err := json.NewDecoder(r.Body).Decode(&stoppedAgain); err != nil {
+		t.Fatal(err)
+	}
+	if stoppedAgain.ErrorCode != base.ErrorCodeSucc {
+		t.Fatalf("second stop failed: %d %s", stoppedAgain.ErrorCode, stoppedAgain.Desp)
+	}
 }
 
 func TestStatGroupWithAppName(t *testing.T) {

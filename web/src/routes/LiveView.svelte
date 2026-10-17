@@ -2,12 +2,13 @@
   import { onMount, onDestroy } from 'svelte';
   import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream, getONVIFProfiles, ptzMove, buildPTZRelativeMove, streamMediaURL, cameraStreamID } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
-  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff, Info, Settings, Video, Copy } from 'lucide-svelte';
+  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff, Info, Settings, Video, Eye } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
   import ProtocolSwitcher from '../components/ProtocolSwitcher.svelte';
+  import PlaybackURLs from '$lib/components/PlaybackURLs.svelte';
   import type { StreamingProtocol } from '../components/ProtocolSwitcher.svelte';
   import SnapshotButton from '../components/SnapshotButton.svelte';
   import ImagingPanel from '$lib/components/ImagingPanel.svelte';
@@ -34,6 +35,7 @@
   let streamingProtocol = $state<StreamingProtocol>('hls');
   let switchingProtocol = $state(false);
   let streamPlayURLs = $state<Record<string, string>>({});
+  let showURLs = $state(false);
   let availableProtocols = $state<string[]>([]);
 
   // Lazy-loaded WasmPlayer component
@@ -343,21 +345,15 @@
             onchange={handleProtocolChange}
             onprotocolsloaded={handleProtocolsLoaded}
           />
-          {#if streamPlayURLs['rtsp']}
+          {#if streamPlayURLs['rtsp'] || streamPlayURLs['webrtc']}
             <button
               class="btn btn-ghost btn-sm flex items-center gap-1"
-              title={t('cameras.copyRtsp')}
-              onclick={async () => {
-                try {
-                  await navigator.clipboard.writeText(streamPlayURLs['rtsp']);
-                  showToast(t('cameras.rtspCopied'), 'success');
-                } catch {
-                  showToast(t('cameras.rtspCopyFailed'), 'error');
-                }
-              }}
+              title="显示 RTSP 和 WebRTC 地址"
+              aria-expanded={showURLs}
+              onclick={() => { showURLs = !showURLs; }}
             >
-              <Copy size={16} />
-              RTSP
+              <Eye size={16} />
+              URL
             </button>
           {/if}
           <button class="btn btn-sm {drawingZone ? 'btn-primary' : 'btn-ghost'}" onclick={() => { drawingZone = !drawingZone; zoneDraft = []; }}>
@@ -372,6 +368,11 @@
           </button>
         {/if}
       </div>
+      {#if showURLs && (streamPlayURLs['rtsp'] || streamPlayURLs['webrtc'])}
+        <div class="mt-2 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-3">
+          <PlaybackURLs idPrefix={camera.id} rtspUrl={streamPlayURLs['rtsp'] || ''} webrtcUrl={streamPlayURLs['webrtc'] || ''} />
+        </div>
+      {/if}
 
       {#if isHlsSupported(camera)}
         <!-- Main content: Player + Controls -->

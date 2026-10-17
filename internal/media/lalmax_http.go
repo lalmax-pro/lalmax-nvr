@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
@@ -23,9 +25,10 @@ import (
 const lalErrorCodeGroupNotFound = 1001
 
 type LalmaxHTTPConfig struct {
-	BaseURL    string
-	PublicURL  string
-	HTTPClient *http.Client
+	BaseURL           string
+	PublicURL         string
+	HTTPClient        *http.Client
+	InternalAuthToken string // NVR 内部控制接口认证
 	// Lal protocol ports (for lal-backed protocols like RTMP, RTSP, HTTP-FLV)
 	RTMPPort int
 	RTSPPort int
@@ -33,9 +36,10 @@ type LalmaxHTTPConfig struct {
 }
 
 type LalmaxHTTP struct {
-	baseURL   *url.URL
-	publicURL *url.URL
-	client    *http.Client
+	baseURL           *url.URL
+	publicURL         *url.URL
+	client            *http.Client
+	internalAuthToken string
 	// Lal protocol ports
 	rtmpPort int
 	rtspPort int
@@ -76,13 +80,20 @@ func NewLalmaxHTTP(cfg LalmaxHTTPConfig) (*LalmaxHTTP, error) {
 		httpPort = config.DefaultLalHTTPPort
 	}
 	return &LalmaxHTTP{
-		baseURL:   baseURL,
-		publicURL: publicURL,
-		client:    client,
-		rtmpPort:  rtmpPort,
-		rtspPort:  rtspPort,
-		httpPort:  httpPort,
+		baseURL:           baseURL,
+		publicURL:         publicURL,
+		client:            client,
+		internalAuthToken: cfg.InternalAuthToken,
+		rtmpPort:          rtmpPort,
+		rtspPort:          rtspPort,
+		httpPort:          httpPort,
 	}, nil
+}
+
+func (e *LalmaxHTTP) setInternalAuth(req *http.Request) {
+	if e.internalAuthToken != "" {
+		req.Header.Set("X-Lalmax-Internal-Token", e.internalAuthToken)
+	}
 }
 
 func (e *LalmaxHTTP) Start(ctx context.Context) error    { return e.Ready(ctx) }
@@ -203,6 +214,60 @@ func (e *LalmaxHTTP) KickSession(ctx context.Context, sessionID string) error {
 	return e.postJSON(ctx, "/api/ctrl/kick_session", nil, map[string]any{"session_id": sessionID, "stream_name": streamID}, &resp)
 }
 
+// getStreamDiagnosticLimiter rate-limits read-only media diagnostics per stream.
+// It does not affect the media query or playback state machine.
+var getStreamDiagnosticLimiter = struct {
+	sync.Mutex
+	last map[string]time.Time
+}{last: make(map[string]time.Time)}
+
+func logGetStreamDiagnostic(streamID, status string, group *groupPayload, info *StreamInfo, err error) {
+	now := time.Now()
+	getStreamDiagnosticLimiter.Lock()
+	if now.Sub(getStreamDiagnosticLimiter.last[streamID]) < 5*time.Second {
+		getStreamDiagnosticLimiter.Unlock()
+		return
+	}
+	getStreamDiagnosticLimiter.last[streamID] = now
+	getStreamDiagnosticLimiter.Unlock()
+
+	if group == nil || info == nil {
+		slog.Info("GB28181 media group diagnostic", "stream_id", streamID, "status", status, "error", err)
+		return
+	}
+	var latestUnixSec int64
+	var latestFPS float64
+	positiveSamples := 0
+	for _, sample := range group.FPS {
+		value := firstNonZero(sample.FPS, sample.Value, sample.Num, sample.V)
+		if value > 0 {
+			positiveSamples++
+		}
+		if sample.UnixSec >= latestUnixSec {
+			latestUnixSec = sample.UnixSec
+			latestFPS = value
+		}
+	}
+	publisherID := ""
+	publisherProtocol := ""
+	if info.Publisher != nil {
+		publisherID = info.Publisher.SessionID
+		publisherProtocol = info.Publisher.Protocol
+	}
+	slog.Info("GB28181 media group diagnostic",
+		"stream_id", streamID, "status", status,
+		"group_stream_name", group.StreamName,
+		"raw_pub_session_id", firstNonEmpty(group.Pub.SessionID, group.Pub.ID),
+		"raw_pull_session_id", firstNonEmpty(group.Pull.SessionID, group.Pull.ID),
+		"raw_video_codec", group.VideoCodec,
+		"fps_samples", len(group.FPS), "fps_positive_samples", positiveSamples,
+		"fps_latest_unix_sec", latestUnixSec, "fps_latest_value", latestFPS,
+		"parsed_active", info.Active, "parsed_publisher_id", publisherID,
+		"parsed_publisher_protocol", publisherProtocol,
+		"parsed_in_fps", info.InFPS,
+		"parsed_last_frame_time", info.LastFrameTime)
+}
+
 func (e *LalmaxHTTP) GetStream(ctx context.Context, streamID string) (info *StreamInfo, retErr error) {
 	ctx, span := observability.StartBusinessSpan(ctx, "media.stream.get",
 		attribute.String("nvr.stream.id", streamID),
@@ -216,11 +281,14 @@ func (e *LalmaxHTTP) GetStream(ctx context.Context, streamID string) (info *Stre
 	var resp lalResp[groupPayload]
 	if err := e.getJSON(ctx, "/api/stat/group", q, &resp); err != nil {
 		if isLalGroupNotFound(err) {
+			logGetStreamDiagnostic(streamID, "group_not_found", nil, nil, nil)
 			return nil, nil
 		}
+		logGetStreamDiagnostic(streamID, "query_error", nil, nil, err)
 		return nil, err
 	}
 	streamInfo := groupToStreamInfo(resp.Data)
+	logGetStreamDiagnostic(streamID, "ok", &resp.Data, &streamInfo, nil)
 	return &streamInfo, nil
 }
 
@@ -397,6 +465,9 @@ func (e *LalmaxHTTP) SubscribeEvents(ctx context.Context, filter EventFilter) (<
 	if err != nil {
 		return nil, err
 	}
+
+	e.setInternalAuth(req)
+
 	// Use a client with no timeout for SSE connections (long-lived)
 	sseClient := &http.Client{Timeout: 0}
 	resp, err := sseClient.Do(req)
@@ -445,6 +516,7 @@ func (e *LalmaxHTTP) doJSON(req *http.Request, out any) (retErr error) {
 	ctx, span := observability.StartHTTPClientSpan(req.Context(), req)
 	defer func() { observability.EndBusinessSpan(span, retErr) }()
 	req = req.WithContext(ctx)
+	e.setInternalAuth(req)
 	resp, err := e.client.Do(req)
 	if err != nil {
 		return err

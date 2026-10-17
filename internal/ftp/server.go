@@ -134,9 +134,10 @@ func (s *Server) AuthUser(cc ftpserverlib.ClientContext, user, pass string) (ftp
 	return &clientDriver{server: s}, nil
 }
 
-// GetTLSConfig returns nil for plain FTP (no TLS).
+// GetTLSConfig rejects TLS upgrades because this server only supports plain FTP.
+// ftpserverlib v0.30.0 checks the error but not a nil TLS config in AUTH.
 func (s *Server) GetTLSConfig() (*tls.Config, error) {
-	return nil, nil
+	return nil, fmt.Errorf("FTPS is not supported by this server")
 }
 
 // ---- clientDriver: afero.Fs + extensions ----

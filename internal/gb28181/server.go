@@ -237,6 +237,11 @@ func (s *Server) Play(in *PlayInput) (string, error) {
 	return s.gb.Play(in)
 }
 
+// EnsurePlay starts a session if absent, or reuses the existing one.
+func (s *Server) EnsurePlay(in *PlayInput) (string, error) {
+	return s.gb.EnsurePlay(in)
+}
+
 // StopPlay stops a GB28181 play session.
 func (s *Server) StopPlay(in *StopPlayInput) error {
 	return s.gb.StopPlay(in)

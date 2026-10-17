@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/q191201771/lalmax/jt1078"
+	"github.com/q191201771/lal/pkg/base"
 )
 
 type rejectingJT1078Gate struct{ calls atomic.Int32 }
@@ -45,7 +46,7 @@ func TestRestartPreservesJT1078Authorizer(t *testing.T) {
 	lal["rtsp"] = map[string]any{"enable": false}
 	lal["httpflv"] = map[string]any{"enable": false}
 	lal["httpts"] = map[string]any{"enable": true, "http_listen_addr": "127.0.0.1:0", "url_pattern": "/live/"}
-	lal["log"] = map[string]any{"is_to_file": false, "is_to_stdout": false, "level": 5}
+	lal["log"] = map[string]any{"filename": "", "is_to_file": false, "is_to_stdout": false, "level": 5}
 	raw, err = json.Marshal(conf)
 	if err != nil {
 		t.Fatal(err)
@@ -53,10 +54,19 @@ func TestRestartPreservesJT1078Authorizer(t *testing.T) {
 	if err = os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
+	// Guard against accidentally falling back to the vendored lal logger's
+	// default ./logs/lalserver.log in the temporary Windows working directory.
+	verifyNoFileLogger := func(stage string) {
+		t.Helper()
+		if got := base.Log.GetOption().Filename; got != "" {
+			t.Fatalf("%s: lal logger unexpectedly opened file %q", stage, got)
+		}
+	}
 	engine, err := NewEmbeddedLalmax(EmbeddedLalmaxConfig{ConfigPath: path})
 	if err != nil {
 		t.Fatal(err)
 	}
+	verifyNoFileLogger("NewEmbeddedLalmax")
 	gate := &rejectingJT1078Gate{}
 	engine.SetJT1078Authorizer(gate)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -79,6 +89,7 @@ func TestRestartPreservesJT1078Authorizer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		verifyNoFileLogger("Start/Restart")
 		deadline := time.Now().Add(2 * time.Second)
 		var conn net.Conn
 		for time.Now().Before(deadline) {

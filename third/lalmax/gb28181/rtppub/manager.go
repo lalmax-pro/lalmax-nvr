@@ -26,7 +26,8 @@ var (
 )
 
 type Manager struct {
-	mu sync.Mutex
+	mu          sync.Mutex
+	operationMu sync.Mutex // Start/Stop/timeout are serialized until media cleanup completes
 
 	lalServer logic.ILalServer
 	portMin   int
@@ -77,6 +78,8 @@ func NewManager(lalServer logic.ILalServer, mediaConfig config.GB28181MediaConfi
 }
 
 func (m *Manager) Start(req base.ApiCtrlStartRtpPubReq) (ret base.ApiCtrlStartRtpPubResp) {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
 	if req.StreamName == "" {
 		ret.ErrorCode = base.ErrorCodeParamMissing
 		ret.Desp = base.DespParamMissing
@@ -139,7 +142,7 @@ func (m *Manager) Start(req base.ApiCtrlStartRtpPubReq) (ret base.ApiCtrlStartRt
 	m.mu.Unlock()
 
 	if err = session.server.Start(listener); err != nil {
-		m.stopSession(session)
+		m.stopSessionLocked(session)
 		ret.ErrorCode = base.ErrorCodeListenUdpPortFail
 		ret.Desp = err.Error()
 		return
@@ -158,6 +161,8 @@ func (m *Manager) Start(req base.ApiCtrlStartRtpPubReq) (ret base.ApiCtrlStartRt
 }
 
 func (m *Manager) Stop(streamName, sessionID string) (*Session, error) {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
 	m.mu.Lock()
 	var session *Session
 	if sessionID != "" {
@@ -171,11 +176,13 @@ func (m *Manager) Stop(streamName, sessionID string) (*Session, error) {
 		return nil, errSessionNotFound
 	}
 
-	m.stopSession(session)
+	m.stopSessionLocked(session)
 	return session, nil
 }
 
 func (m *Manager) StopAll() {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
 	m.mu.Lock()
 	sessions := make([]*Session, 0, len(m.sessionsByID))
 	for _, session := range m.sessionsByID {
@@ -184,7 +191,7 @@ func (m *Manager) StopAll() {
 	m.mu.Unlock()
 
 	for _, session := range sessions {
-		m.stopSession(session)
+		m.stopSessionLocked(session)
 	}
 }
 
@@ -225,21 +232,37 @@ func (m *Manager) OnRtpPacket(streamName string, mediaKey string) {
 	}
 }
 
+// stopSession is used by asynchronous timeout handling.
 func (m *Manager) stopSession(session *Session) {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
+	m.stopSessionLocked(session)
+}
+
+// stopSessionLocked keeps the session indexed until all RTP connections and
+// their Customize Publishers have been released. operationMu is held here.
+func (m *Manager) stopSessionLocked(session *Session) {
 	m.mu.Lock()
-	if current := m.sessionsByID[session.ID]; current != session {
+	if m.sessionsByID[session.ID] != session {
 		m.mu.Unlock()
 		return
 	}
-	delete(m.sessionsByID, session.ID)
-	delete(m.sessionsByStream, session.StreamName)
-	delete(m.sessionsByKey, session.MediaKey)
-	session.closeOnce.Do(func() {
-		close(session.done)
-	})
+	session.closeOnce.Do(func() { close(session.done) })
 	m.mu.Unlock()
 
-	session.server.Dispose()
+	session.server.Dispose() // synchronous barrier; never hold m.mu during callbacks
+
+	m.mu.Lock()
+	if m.sessionsByID[session.ID] == session {
+		delete(m.sessionsByID, session.ID)
+	}
+	if m.sessionsByStream[session.StreamName] == session {
+		delete(m.sessionsByStream, session.StreamName)
+	}
+	if m.sessionsByKey[session.MediaKey] == session {
+		delete(m.sessionsByKey, session.MediaKey)
+	}
+	m.mu.Unlock()
 }
 
 func (m *Manager) watchTimeout(session *Session, timeout time.Duration) {

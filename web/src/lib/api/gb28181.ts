@@ -31,11 +31,13 @@ export interface GB28181PlayRequest {
   device_id: string;
   channel_id: string;
   stream_id?: string;
+  ensure?: boolean;
 }
 
 export interface GB28181PlayResponse {
   ssrc: string;
   stream_id: string;
+  state?: 'ready' | 'starting';
 }
 
 // Platform types

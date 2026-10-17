@@ -55,6 +55,20 @@
   let videoEl: HTMLVideoElement | undefined = $state();
   let pc: RTCPeerConnection | null = null;
   let sessionUrl: string | null = null;
+  let connectionEpoch = 0;
+  let activeWhepRequest: AbortController | null = null;
+
+  function releaseWhep(url: string) {
+    const auth = getAuthHeader();
+    void fetch(url, { method: 'DELETE', headers: auth ? { Authorization: auth } : {} }).catch(() => {});
+  }
+
+  function whepSessionLocation(response: Response, camera: string): string | null {
+    const location = response.headers.get('Location');
+    if (!location) return null;
+    // Relative Location values are resolved against the request URL, not the dashboard URL.
+    return new URL(location, response.url || new URL(`/api/cameras/${camera}/stream/webrtc`, window.location.href).href).href;
+  }
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempts = 0;
   const maxReconnectAttempts = 5;
@@ -216,6 +230,9 @@ let destroyed = false;
   }
 
   function destroyPeerConnection() {
+    connectionEpoch++;
+    activeWhepRequest?.abort();
+    activeWhepRequest = null;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -225,14 +242,9 @@ let destroyed = false;
       zombieInterval = null;
     }
 
-    // Send DELETE to WHEP session for cleanup
+    // Release the server-side WHEP subscriber before discarding the connection.
     if (sessionUrl) {
-      const url = sessionUrl;
-      const authHeader = getAuthHeader();
-      fetch(url, {
-        method: 'DELETE',
-        headers: authHeader ? { Authorization: authHeader } : {},
-      }).catch(() => {});
+      releaseWhep(sessionUrl);
       sessionUrl = null;
     }
 
@@ -303,6 +315,8 @@ let destroyed = false;
 
     streamState = 'loading';
     webrtcState = 'connecting';
+    const epoch = ++connectionEpoch;
+    const isCurrent = (candidate: RTCPeerConnection) => !destroyed && tabVisible && epoch === connectionEpoch && pc === candidate;
 
     try {
       const iceServers: RTCConfiguration = {
@@ -319,7 +333,7 @@ let destroyed = false;
 
       // Handle incoming tracks
       peerConnection.ontrack = (event) => {
-        if (event.streams && event.streams[0] && videoEl) {
+        if (isCurrent(peerConnection) && event.streams && event.streams[0] && videoEl) {
           videoEl.srcObject = event.streams[0];
           videoEl.play().catch(() => {});
         }
@@ -327,6 +341,7 @@ let destroyed = false;
 
       // Handle connection state changes
       peerConnection.onconnectionstatechange = () => {
+        if (!isCurrent(peerConnection)) return;
         const state = peerConnection.connectionState;
         switch (state) {
           case 'connected':
@@ -350,7 +365,7 @@ let destroyed = false;
       // Create offer
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
-      if (destroyed) return;
+      if (!isCurrent(peerConnection)) return;
 
       // Wait for ICE gathering to complete
       await new Promise<void>((resolve) => {
@@ -368,7 +383,7 @@ let destroyed = false;
           setTimeout(resolve, 5000);
         }
       });
-      if (destroyed) return;
+      if (!isCurrent(peerConnection)) return;
 
       // Send SDP offer to WHEP endpoint
       const authHeader = getAuthHeader();
@@ -378,7 +393,10 @@ let destroyed = false;
       if (authHeader) headers['Authorization'] = authHeader;
 
       const endpoint = whepUrl || `/api/cameras/${cameraId}/stream/webrtc`;
+      const request = new AbortController();
+      activeWhepRequest = request;
       const response = await fetch(endpoint, {
+        signal: request.signal,
         method: 'POST',
         headers,
         body: peerConnection.localDescription!.sdp,
@@ -388,14 +406,13 @@ let destroyed = false;
         const errorText = await response.text().catch(() => 'Unknown error');
         throw new Error(`WHEP server error: ${response.status} ${errorText}`);
       }
-      if (destroyed) return;
-
-      // Parse Location header for session URL (for DELETE on cleanup)
-      const location = response.headers.get('Location');
-      if (location) {
-        // Make absolute if relative
-        sessionUrl = location.startsWith('/') ? location : `/api/cameras/${cameraId}/stream/webrtc/${location}`;
+      const createdSession = whepSessionLocation(response, cameraId);
+      if (!isCurrent(peerConnection)) {
+        if (createdSession) releaseWhep(createdSession);
+        return;
       }
+      sessionUrl = createdSession;
+      if (activeWhepRequest === request) activeWhepRequest = null;
 
       // Parse SDP answer
       const answerSDP = await response.text();
@@ -405,8 +422,10 @@ let destroyed = false;
         sdp: answerSDP,
       });
 
+      if (!isCurrent(peerConnection)) return;
       await peerConnection.setRemoteDescription(answer);
     } catch (e) {
+      if (!isCurrent(peerConnection)) return;
       console.warn('WebRTC init failed:', e);
       webrtcState = 'failed';
       scheduleReconnect();
@@ -451,10 +470,7 @@ let destroyed = false;
 
     if (!visible) {
       // Tab hidden — close peer connection to release decode resources
-      if (pc && !destroyed) {
-        try { pc.close(); } catch { /* ignore */ }
-        pc = null;
-      }
+      if (!destroyed) destroyPeerConnection();
     } else if (becameVisible) {
       // Tab visible — resume: rebuild WebRTC connection
       if (!destroyed) {

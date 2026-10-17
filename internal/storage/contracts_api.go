@@ -63,6 +63,7 @@ type APICameraRepository interface {
 	UpdateCameraMetadata(ctx context.Context, id, description, location, brand, model, serialNumber string, retentionDays int) error
 	UpdateCameraProfileName(ctx context.Context, id, profileName string) error
 	UpsertCamera(ctx context.Context, id, name, protocol, encoding, url, username, password string, enabled bool, onvifEndpoint, profileToken, streamEncoding string, extras ...string) error
+	UpdateDefaultGB28181CameraName(ctx context.Context, id, channelID, newName string) error
 }
 
 // CameraRuntimeRepository persists extra camera configuration.

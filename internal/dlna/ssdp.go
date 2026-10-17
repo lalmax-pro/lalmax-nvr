@@ -26,11 +26,7 @@ func ssdpSearchResponse(date, location, st, usn string) string {
 func reuseAddrPort(_, _ string, c syscall.RawConn) error {
 	var sockErr error
 	err := c.Control(func(fd uintptr) {
-		sockErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-		if sockErr != nil {
-			return
-		}
-		_ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+		sockErr = setSSDPReuseOptions(fd)
 	})
 	if err != nil {
 		return err

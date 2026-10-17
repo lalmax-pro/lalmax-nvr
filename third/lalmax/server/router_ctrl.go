@@ -154,6 +154,7 @@ func (s *LalMaxServer) ctrlStopRtpPubHandler(c *gin.Context) {
 		return
 	}
 
+	// Stop waits for Publisher teardown before returning success.
 	Log.Infof("http api stop rtp pub. stream_name=%s, session_id=%s", streamName, sessionID)
 
 	session, err := s.rtpPubMgr.Stop(streamName, sessionID)

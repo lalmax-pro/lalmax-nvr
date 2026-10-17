@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emiago/sipgo"
@@ -15,14 +16,15 @@ import (
 
 // GB28181API is the core API for GB28181 signaling.
 type GB28181API struct {
-	cfg          *Config
-	store        *DeviceStore
-	streams      *streamsManager
-	svr          *Server
-	client       *sipgo.Client
-	mediaEngine  media.Engine
-	hub          *WSHub
-	digestNonces *coreauth.DigestNonceStore
+	cfg              *Config
+	store            *DeviceStore
+	streams          *streamsManager
+	svr              *Server
+	client           *sipgo.Client
+	mediaEngine      media.Engine
+	hub              *WSHub
+	digestNonces     *coreauth.DigestNonceStore
+	recoveryAttempts sync.Map // stream key -> last automatic restart attempt
 }
 
 // NewGB28181API creates a new GB28181API instance.
@@ -105,6 +107,7 @@ func (g *GB28181API) handlerRegister(req *sip.Request, tx sip.ServerTransaction)
 func (g *GB28181API) login(req *sip.Request, deviceID string) {
 	slog.Info("device online", "device_id", deviceID)
 	address := req.Source()
+	transport := strings.ToUpper(req.Transport())
 	wasOnline := false
 	if dev, ok := g.store.Load(deviceID); ok {
 		wasOnline = dev.IsOnline
@@ -114,6 +117,7 @@ func (g *GB28181API) login(req *sip.Request, deviceID string) {
 		d.LastRegisterAt = time.Now()
 		d.LastKeepaliveAt = time.Now()
 		d.Address = address
+		d.Transport = transport
 	})
 	// Persist to database (upsert ensures device exists even on first registration)
 	if dev, ok := g.store.Load(deviceID); ok {
@@ -243,7 +247,7 @@ func (g *GB28181API) handlerMessage(req *sip.Request, tx sip.ServerTransaction) 
 	case "RecordInfo":
 		g.handleRecordInfoResponse(deviceID, body)
 	case "Keepalive":
-		g.handleKeepalive(deviceID, source, "OK")
+		g.handleKeepaliveFromRequest(deviceID, source, "OK", req.Transport())
 	case "Alarm":
 		if g.svr != nil && g.svr.alarm != nil {
 			g.svr.alarm.HandleAlarm(deviceID, body)

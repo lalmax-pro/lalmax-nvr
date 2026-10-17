@@ -193,7 +193,9 @@ let videoEventAc: AbortController | null = null;
     const fallbackUrl = protocol === 'ws-flv'
       ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/live/${cameraId}.flv`
       : `/api/cameras/${cameraId}/stream.flv`;
-    const baseUrl = streamUrl || fallbackUrl;
+    const baseUrl = protocol === 'ws-flv'
+      ? (streamUrl || fallbackUrl)
+      : fallbackUrl;
     const isWebSocket = baseUrl.startsWith('ws://') || baseUrl.startsWith('wss://');
     if (!isWebSocket || !authHeader) return baseUrl;
 
@@ -326,7 +328,7 @@ let videoEventAc: AbortController | null = null;
         type: 'flv',
         isLive: true,
         url,
-        hasAudio: true,
+        hasAudio: false,
         hasVideo: true,
         cors: false,
       }, {

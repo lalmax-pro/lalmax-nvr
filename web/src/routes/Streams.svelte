@@ -4,6 +4,7 @@
   import type { StreamInfo } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
+  import { copyTextWithFallback } from '$lib/clipboard';
   import StreamCard from '$lib/components/StreamCard.svelte';
   import Pagination from '../components/Pagination.svelte';
   import {
@@ -210,8 +211,9 @@
 
   async function copyPublishURL(url: string) {
     try {
-      await navigator.clipboard.writeText(url);
-      showToast(t('streams.copied'), 'success');
+      if (await copyTextWithFallback(url)) {
+        showToast(t('streams.copied'), 'success');
+      }
     } catch {
       showToast(t('streams.copyFailed'), 'error');
     }

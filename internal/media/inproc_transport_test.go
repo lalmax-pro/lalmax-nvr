@@ -16,7 +16,7 @@ import (
 func TestIsInProcessPlayPath(t *testing.T) {
 	t.Parallel()
 	require.True(t, IsInProcessPlayPath("/live/hls/cam1/index.m3u8"))
-	require.True(t, IsInProcessPlayPath("/live/m4s/cam1.mp4"))
+	require.False(t, IsInProcessPlayPath("/live/m4s/cam1.mp4"))
 	require.True(t, IsInProcessPlayPath("/webrtc/whep"))
 	require.True(t, IsInProcessPlayPath("/WEBRTC/whep"))
 	require.False(t, IsInProcessPlayPath("/hls/cam1.m3u8"))
@@ -52,7 +52,7 @@ func TestInProcessPlayTransport_StreamsBeforeHandlerReturns(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.WriteHeader(http.StatusOK)
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
@@ -65,14 +65,14 @@ func TestInProcessPlayTransport_StreamsBeforeHandlerReturns(t *testing.T) {
 		_, _ = w.Write([]byte("-chunk-2"))
 	})
 	rt := NewInProcessPlayTransport(staticPlayProvider{h: h}, &fallbackTripper{})
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1:12090/live/m4s/cam.mp4", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1:12090/live/hls/cam/index.m3u8", nil)
 	require.NoError(t, err)
 
 	resp, err := rt.RoundTrip(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Equal(t, "video/mp4", resp.Header.Get("Content-Type"))
+	require.Equal(t, "application/vnd.apple.mpegurl", resp.Header.Get("Content-Type"))
 
 	select {
 	case <-started:
@@ -145,4 +145,33 @@ func TestServeInProcess_UsesTestServerHandler(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	require.Equal(t, "/live/hls/cam/index.m3u8", sawPath)
+}
+
+func TestInProcessPlayTransport_FMP4UsesFallback(t *testing.T) {
+	t.Parallel()
+
+	fb := &fallbackTripper{}
+	rt := NewInProcessPlayTransport(
+		staticPlayProvider{
+			h: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Error("fMP4 must not use in-process handler")
+				w.WriteHeader(http.StatusOK)
+			}),
+		},
+		fb,
+	)
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:12090/live/m4s/cam.mp4",
+		nil,
+	)
+	require.NoError(t, err)
+
+	resp, err := rt.RoundTrip(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.True(t, fb.called)
+	require.Equal(t, http.StatusTeapot, resp.StatusCode)
 }

@@ -89,6 +89,10 @@ type DatabaseTargetConfig struct {
 
 type MediaConfig struct {
 	Mode             string `yaml:"mode"`
+	// HTTPPlayAuthEnabled controls NVR account authentication for direct embedded
+	// lalmax HTTP playback routes (WHEP/HLS/fMP4). Default true.
+	// Publishing and control APIs use separate authentication policies.
+	HTTPPlayAuthEnabled *bool `yaml:"http_play_auth_enabled,omitempty"`
 	LalmaxHTTPAddr   string `yaml:"lalmax_http_addr"`
 	LalmaxPublicURL  string `yaml:"lalmax_public_url"`
 	LalmaxConfigPath string `yaml:"lalmax_config_path"`
@@ -825,8 +829,8 @@ func Validate(cfg *Config) error {
 	// Validate segment_duration
 	if dur, err := time.ParseDuration(cfg.Storage.SegmentDuration); err != nil {
 		return fmt.Errorf("storage.segment_duration invalid: %w", err)
-	} else if dur > 30*time.Second {
-		return fmt.Errorf("storage.segment_duration must be <= 30s on RPi 3B, got %s", cfg.Storage.SegmentDuration)
+	} else if dur < time.Second || dur > 30*time.Minute {
+		return fmt.Errorf("storage.segment_duration must be between 1s and 30m, got %s", cfg.Storage.SegmentDuration)
 	}
 	if cfg.Media.Mode != "embedded" && cfg.Media.Mode != "http" {
 		return fmt.Errorf("media.mode invalid: %s (must be embedded/http)", cfg.Media.Mode)
@@ -1131,6 +1135,10 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if strings.TrimSpace(cfg.Media.Mode) == "" {
 		cfg.Media.Mode = "embedded"
+	}
+	if cfg.Media.HTTPPlayAuthEnabled == nil {
+		enabled := true
+		cfg.Media.HTTPPlayAuthEnabled = &enabled
 	}
 	if strings.TrimSpace(cfg.Media.LalmaxHTTPAddr) == "" {
 		cfg.Media.LalmaxHTTPAddr = DefaultLalmaxHTTPAddr

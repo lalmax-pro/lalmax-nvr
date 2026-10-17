@@ -71,11 +71,33 @@ func (g *GB28181API) sendMessage(targetID string, dev *Device, body []byte) erro
 
 	req := sip.NewRequest(sip.MESSAGE, uri)
 	req.SetBody(body)
+
+	// Use the transport observed during the authenticated REGISTER.
+	// TCP devices should reuse the existing SIP TCP connection where possible.
+	transport := strings.ToUpper(dev.Transport)
+
+	slog.Info("[SIP] MESSAGE transport diagnostic",
+		"target", targetID,
+		"device_transport", dev.Transport,
+		"selected_transport", transport,
+		"device_address", dev.Address,
+	)
+
+	switch transport {
+	case "TCP":
+		req.SetTransport("TCP")
+	case "UDP":
+		req.SetTransport("UDP")
+	default:
+		// Preserve the original behavior when transport is unknown.
+	}
+
 	req.AppendHeader(sip.NewHeader("Content-Type", "Application/MANSCDP+xml"))
 
 	slog.Info("[SIP] MESSAGE sending",
 		"target", targetID,
 		"uri", uri.String(),
+		"transport", req.Transport(),
 		"body_len", len(body),
 	)
 

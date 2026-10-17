@@ -11,7 +11,10 @@ import (
 	"github.com/q191201771/naza/pkg/nazalog"
 )
 
-const defaultReadTimeout = 10 * time.Second
+const (
+	defaultReadTimeout   = 10 * time.Second
+	udpSourceIdleTimeout = 3 * time.Second
+)
 
 type IGbObserver interface {
 	CheckSsrc(ssrc uint32) (*MediaInfo, bool)
@@ -33,7 +36,11 @@ type GB28181MediaServer struct {
 	preferMediaKeyLookup bool
 	readTimeout          time.Duration
 
-	conns sync.Map //增加链接对象，目前只适用于多端口
+	conns       sync.Map   // keyed by *Conn and stream name
+	claimMu     sync.Mutex // serialize publisher handover for a media server
+	connWG      sync.WaitGroup
+	acceptDone  chan struct{}
+	disposeDone chan struct{}
 }
 
 func NewGB28181MediaServer(listenPort int, mediaKey string, observer IGbObserver, lal logic.ILalServer) *GB28181MediaServer {
@@ -43,6 +50,8 @@ func NewGB28181MediaServer(listenPort int, mediaKey string, observer IGbObserver
 		observer:    observer,
 		mediaKey:    mediaKey,
 		readTimeout: defaultReadTimeout,
+		acceptDone:  make(chan struct{}),
+		disposeDone: make(chan struct{}),
 	}
 }
 
@@ -63,6 +72,7 @@ func (s *GB28181MediaServer) Start(listener net.Listener) (err error) {
 	s.listener = listener
 	if listener != nil {
 		go func(listener net.Listener) {
+			defer close(s.acceptDone)
 			for {
 				if s.disposed.Load() {
 					return
@@ -92,33 +102,75 @@ func (s *GB28181MediaServer) Start(listener net.Listener) (err error) {
 				c.SetPreferMediaKeyLookup(s.preferMediaKeyLookup)
 				c.SetReadTimeout(s.readTimeout)
 				s.conns.Store(c, c)
+				s.connWG.Add(1)
 				go func() {
+					defer s.connWG.Done()
 					c.Serve()
 					s.conns.Delete(c)
-					s.conns.Delete(c.streamName)
+					if c.streamName != "" {
+						// A former connection must never delete its successor.
+						s.conns.CompareAndDelete(c.streamName, c)
+					}
 				}()
 			}
 		}(listener)
+	} else {
+		close(s.acceptDone)
 	}
 	return
 }
+
+// claimConn elects one source per stream. A competing UDP endpoint must not
+// evict a publisher that is still receiving packets. The caller keeps reading
+// and discarding contender packets, preventing a virtual UDP connection churn.
+// Once the owner has been idle for a bounded interval the contender may take
+// over; a TCP successor retains the original close-and-wait semantics.
+func (s *GB28181MediaServer) claimConn(c *Conn) bool {
+	s.claimMu.Lock()
+	defer s.claimMu.Unlock()
+	if s.disposed.Load() {
+		return false
+	}
+	if oldValue, ok := s.conns.Load(c.streamName); ok {
+		old := oldValue.(*Conn)
+		if old == c {
+			return true
+		}
+		if old.conn.RemoteAddr().Network() == "udp" && c.conn.RemoteAddr().Network() == "udp" {
+			last := old.lastPacket.Load()
+			if last != 0 && time.Since(time.Unix(0, last)) < udpSourceIdleTimeout {
+				return false
+			}
+		}
+		old.Close()
+		<-old.done // Publisher cleanup is complete before a new owner is installed.
+	}
+	c.lastPacket.Store(time.Now().UnixNano())
+	s.conns.Store(c.streamName, c)
+	return true
+}
+
 func (s *GB28181MediaServer) CloseConn(streamName string) {
 	if v, ok := s.conns.Load(streamName); ok {
 		conn := v.(*Conn)
 		conn.Close()
+		<-conn.done // Do not report receiver stopped before publisher cleanup.
 	}
 }
+
+// Dispose returns only after every accepted RTP connection has executed
+// its Serve deferred Publisher cleanup. This is the stop/start barrier.
 func (s *GB28181MediaServer) Dispose() {
 	s.disposeOnce.Do(func() {
 		s.disposed.Store(true)
-		s.conns.Range(func(_, value any) bool {
-			conn := value.(*Conn)
-			conn.Close()
-			return true
-		})
 		if s.listener != nil {
-			s.listener.Close()
-			s.listener = nil
+			_ = s.listener.Close()
 		}
+		// No further connWG.Add occurs after the accept goroutine exits.
+		<-s.acceptDone
+		s.conns.Range(func(_, value any) bool { value.(*Conn).Close(); return true })
+		s.connWG.Wait()
+		close(s.disposeDone)
 	})
+	<-s.disposeDone
 }

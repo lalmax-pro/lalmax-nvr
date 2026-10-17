@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Streams represents an active GB28181 media stream.
@@ -16,6 +17,9 @@ type Streams struct {
 	FromTag   string
 	ToTag     string
 	RemoteURI string
+	InviteCSeq uint32
+	Transport string
+	StartedAt time.Time
 }
 
 // streamsManager manages active streams.

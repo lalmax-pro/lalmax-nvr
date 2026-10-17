@@ -3,10 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -623,8 +627,15 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.mediaAuth.SetPlaybackTokens("media", cfg.Auth.PlaybackTokens)
 	a.banMgr = ban.NewManager(db, a.mediaAuth)
 
+	internalTokenBytes := make([]byte, 32)
+	if _, err := rand.Read(internalTokenBytes); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("generate internal media token: %w", err)
+	}
+	internalMediaToken := hex.EncodeToString(internalTokenBytes)
+
 	// Create media engine with ban manager's auth for proactive rejection
-	engine, err := newMediaEngine(cfg,
+	engine, err := newMediaEngine(cfg, internalMediaToken,
 		lalmaxserver.WithAuthentication(a.banMgr),
 		lalmaxserver.WithPublisherAuthorizer(a.banMgr.AuthorizePublish),
 		lalmaxserver.WithSubscriberAuthorizer(func(protocol, streamID, token string) error {
@@ -633,8 +644,10 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 			}
 			return a.mediaAuth.AuthorizePlayback(protocol, streamID, token)
 		}),
-		lalmaxserver.WithHTTPPlayAuth(a.multiUserMW),
-		lalmaxserver.WithHTTPControlAuth(a.multiUserMW),
+		lalmaxserver.WithHTTPPlayAuth(mediaHTTPPlaybackAuth(cfg.Media, a.multiUserMW)),
+		lalmaxserver.WithHTTPControlAuth(
+			newInternalMediaControlAuth(internalMediaToken, a.multiUserMW),
+		),
 	)
 	if err != nil {
 		db.Close()
@@ -1687,6 +1700,49 @@ func (a *App) Stop() error {
 	return nil
 }
 
+
+// mediaHTTPPlaybackAuth retains account authentication unless the operator
+// explicitly disables it for embedded lalmax's direct HTTP playback routes.
+// NVR API authentication, internal media controls, and publishing credentials
+// are configured separately and remain unchanged.
+func mediaHTTPPlaybackAuth(
+	cfg config.MediaConfig,
+	userAuth func(http.Handler) http.Handler,
+) func(http.Handler) http.Handler {
+	if cfg.HTTPPlayAuthEnabled != nil && !*cfg.HTTPPlayAuthEnabled {
+		return nil
+	}
+	return userAuth
+}
+
+func newInternalMediaControlAuth(
+	token string,
+	userAuth func(http.Handler) http.Handler,
+) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			supplied := r.Header.Get("X-Lalmax-Internal-Token")
+
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			remoteIP := net.ParseIP(host)
+
+			if err == nil &&
+				remoteIP != nil &&
+				remoteIP.IsLoopback() &&
+				supplied != "" &&
+				subtle.ConstantTimeCompare(
+					[]byte(supplied),
+					[]byte(token),
+				) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			userAuth(next).ServeHTTP(w, r)
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -1772,7 +1828,7 @@ func main() {
 	}
 }
 
-func newMediaEngine(cfg *config.Config, opts ...interface{}) (media.Engine, error) {
+func newMediaEngine(cfg *config.Config, internalToken string, opts ...interface{}) (media.Engine, error) {
 	if cfg.Media.Mode == "http" {
 		return media.NewLalmaxHTTP(media.LalmaxHTTPConfig{
 			BaseURL:   cfg.Media.LalmaxHTTPAddr,
@@ -1793,6 +1849,7 @@ func newMediaEngine(cfg *config.Config, opts ...interface{}) (media.Engine, erro
 		HTTPAddr:              cfg.Media.LalmaxHTTPAddr,
 		PublicURL:             cfg.Media.LalmaxPublicURL,
 		ConfigPath:            cfg.Media.LalmaxConfigPath,
+		InternalAuthToken:     internalToken,
 		RTMPPort:              cfg.RTMP.Port,
 		RTSPPort:              cfg.Media.RTSPPort,
 		HTTPPort:              cfg.Media.HTTPPort,

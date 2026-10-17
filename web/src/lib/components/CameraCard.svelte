@@ -4,9 +4,11 @@
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
   import type { PTZCapabilitiesDetailed } from '$lib/api/cameras';
-  import { Pencil, Play, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home, CalendarClock, CircleOff, KeyRound, Search, Copy, GitBranch } from 'lucide-svelte';
+  import { Pencil, Play, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home, CalendarClock, CircleOff, KeyRound, Search, GitBranch } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import CameraFlowTree from '$lib/components/CameraFlowTree.svelte';
+  import PlaybackURLs from '$lib/components/PlaybackURLs.svelte';
+  import { selectPlaybackURLs } from '$lib/playback-urls';
 
   interface Props {
     camera: Camera;
@@ -55,7 +57,8 @@
   let activating = $state(false);
   let rediscovering = $state(false);
   let showFlow = $state(false);
-  let copyingRtsp = $state(false);
+  let loadingURLs = $state(false);
+  let displayedURLs = $state<{ rtsp: string; webrtc: string } | null>(null);
 
   let ingestLive = $derived(
     camera.status === 'recording' || camera.status === 'paused' || isRecordingPaused
@@ -143,23 +146,28 @@
     }
   }
 
-  async function copyRtspUrl() {
-    copyingRtsp = true;
+  async function showPlaybackURLs() {
+    if (displayedURLs) {
+      displayedURLs = null;
+      return;
+    }
+    loadingURLs = true;
     try {
-      const res = await apiRequest<{ protocols: { Protocol: string; PlayURL?: string }[] }>(
-        `/cameras/${encodeURIComponent(camera.id)}/protocols`
+      const id = camera.id;
+      const res = await apiRequest<{ protocols: { Protocol: string; Available?: boolean; PlayURL?: string }[] }>(
+        `/cameras/${encodeURIComponent(id)}/protocols`
       );
-      const rtsp = res.protocols?.find((p) => p.Protocol === 'rtsp' && p.PlayURL);
-      if (!rtsp?.PlayURL) {
-        showToast(t('cameras.rtspUnavailable'), 'info');
+      if (camera.id !== id) return;
+      const urls = selectPlaybackURLs(res.protocols);
+      if (!urls.rtsp && !urls.webrtc) {
+        showToast('当前摄像机没有可用的播放地址', 'info');
         return;
       }
-      await navigator.clipboard.writeText(rtsp.PlayURL);
-      showToast(t('cameras.rtspCopied'), 'success');
+      displayedURLs = urls;
     } catch (e) {
-      showToast(e instanceof Error ? e.message : t('cameras.rtspCopyFailed'), 'error');
+      showToast(e instanceof Error ? e.message : '获取播放地址失败', 'error');
     } finally {
-      copyingRtsp = false;
+      loadingURLs = false;
     }
   }
 
@@ -466,12 +474,20 @@
 
         <button
           class="btn btn-ghost px-2 py-1 text-sm"
-          onclick={copyRtspUrl}
-          disabled={copyingRtsp}
-          title={t('cameras.copyRtsp')}
+          onclick={showPlaybackURLs}
+          disabled={loadingURLs}
+          title="显示 RTSP 和 WebRTC 地址"
+          aria-expanded={displayedURLs !== null}
         >
-          <Copy size={14} />
+          <Eye size={14} />
+          URL
         </button>
+        {#if displayedURLs}
+          <div class="absolute right-0 top-full z-50 mt-2 w-[min(80vw,40rem)] rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-3 shadow-xl">
+            <PlaybackURLs idPrefix={camera.id} rtspUrl={displayedURLs.rtsp} webrtcUrl={displayedURLs.webrtc} />
+            <button type="button" class="mt-2 text-xs underline" onclick={() => { displayedURLs = null; }}>关闭</button>
+          </div>
+        {/if}
         <button
           class="btn btn-ghost px-2 py-1 text-sm"
           onclick={() => { showFlow = !showFlow; }}

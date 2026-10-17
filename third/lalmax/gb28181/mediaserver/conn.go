@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/q191201771/lalmax/gb28181/mpegps"
@@ -55,7 +56,8 @@ type Conn struct {
 	preferMediaKeyLookup bool
 	readTimeout          time.Duration
 	one                  sync.Once
-	oneSaveConn          sync.Once
+	done                 chan struct{}
+	lastPacket           atomic.Int64
 }
 
 func NewConn(conn net.Conn, observer IGbObserver, lal logic.ILalServer) *Conn {
@@ -66,6 +68,7 @@ func NewConn(conn net.Conn, observer IGbObserver, lal logic.ILalServer) *Conn {
 		observer:  observer,
 		lalServer: lal,
 		buffer:    bytes.NewBuffer(nil),
+		done:      make(chan struct{}),
 	}
 
 	c.demuxer.OnFrame = c.OnFrame
@@ -89,15 +92,16 @@ func (c *Conn) Serve() (err error) {
 		nazalog.Info("conn close, err:", err)
 		c.Close()
 
-		if c.observer != nil && c.streamName != "" {
-			c.observer.NotifyClose(c.streamName)
-		}
 		if c.psDumpFile != nil {
 			c.psDumpFile.Close()
 		}
 		if c.lalSession != nil {
 			c.lalServer.DelCustomizePubSession(c.lalSession)
 		}
+		if c.observer != nil && c.streamName != "" {
+			c.observer.NotifyClose(c.streamName)
+		}
+		close(c.done)
 	}()
 
 	nazalog.Info("gb28181 conn, remoteaddr:", c.conn.RemoteAddr().String(), " localaddr:", c.conn.LocalAddr().String())
@@ -161,13 +165,13 @@ func (c *Conn) Serve() (err error) {
 					return fmt.Errorf("get mediaInfo:%s", c.key)
 				}
 			}
-			c.check = true
 			c.streamName = mediaInfo.StreamName
-			c.oneSaveConn.Do(func() {
-				if c.mediaServer != nil {
-					c.mediaServer.conns.Store(c.streamName, c)
-				}
-			})
+			if c.mediaServer != nil && !c.mediaServer.claimConn(c) {
+				// Keep consuming this UDP endpoint without publishing. Closing it
+				// would force the virtual UDP listener to Accept again per packet.
+				continue
+			}
+			c.check = true
 			if len(mediaInfo.DumpFileName) > 0 {
 				c.psDumpFile = base.NewDumpFile()
 				if err = c.psDumpFile.OpenToWrite(mediaInfo.DumpFileName); err != nil {
@@ -192,6 +196,7 @@ func (c *Conn) Serve() (err error) {
 
 			c.lalSession = session
 		}
+		c.lastPacket.Store(time.Now().UnixNano())
 		c.rtpPts = uint64(pkt.Header.Timestamp)
 		if c.observer != nil && c.streamName != "" {
 			c.observer.OnRtpPacket(c.streamName, c.key)
@@ -238,6 +243,9 @@ func (c *Conn) Demuxer(data []byte) error {
 }
 
 func (c *Conn) OnFrame(frame []byte, cid mpegps.PsStreamType, pts uint64, dts uint64) {
+	if c.lalSession == nil {
+		return
+	}
 	payloadType := getPayloadType(cid)
 	if payloadType == base.AvPacketPtUnknown {
 		return

@@ -20,10 +20,11 @@ type Device struct {
 	registerWithKeepaliveMutex sync.Mutex
 	playMutex                  sync.Mutex
 
-	IsOnline bool
-	Address  string
-	Password string
-	region   string
+	IsOnline  bool
+	Address   string
+	Transport string
+	Password  string
+	region    string
 
 	conn   sip.Connection
 	source string

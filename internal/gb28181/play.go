@@ -38,6 +38,8 @@ type InviteResult struct {
 	FromTag   string
 	ToTag     string
 	RemoteURI string
+	InviteCSeq uint32
+	Transport string
 }
 
 // PlaySpeedInput contains parameters for changing playback speed.
@@ -96,10 +98,20 @@ func (g *GB28181API) handlerBye(req *sip.Request, tx sip.ServerTransaction) {
 	slog.Info("[SIP] BYE response sent", "device_id", deviceID)
 }
 
-// Play sends a GB28181 INVITE so the device can push PS/RTP to the platform.
+// Play explicitly starts or restarts a GB28181 stream.
 func (g *GB28181API) Play(in *PlayInput) (string, error) {
+	return g.play(in, false)
+}
+
+// EnsurePlay reuses an existing session instead of restarting it.
+// Media readiness must be checked separately.
+func (g *GB28181API) EnsurePlay(in *PlayInput) (string, error) {
+	return g.play(in, true)
+}
+
+func (g *GB28181API) play(in *PlayInput, reuseExisting bool) (string, error) {
 	log := slog.With("device_id", in.DeviceID, "channel_id", in.ChannelID)
-	log.Info("starting play")
+	log.Info("starting play", "reuse_existing", reuseExisting)
 
 	ch, ok := g.store.GetChannel(in.DeviceID, in.ChannelID)
 	if !ok {
@@ -113,11 +125,58 @@ func (g *GB28181API) Play(in *PlayInput) (string, error) {
 		return "", ErrDeviceOffline
 	}
 
-	// Stop existing stream if any
-	key := "play:" + in.DeviceID + ":" + in.ChannelID
-	if existing, ok := g.streams.loadStream(key); ok {
-		log.Debug("stopping existing stream before re-play")
-		g.stopPlay(existing)
+	key := playStreamKey(in.DeviceID, in.ChannelID)
+	if in.InternalID == "" {
+		in.InternalID = StreamID(in.DeviceID, in.ChannelID)
+	}
+	existing, hasExisting := g.streams.loadStream(key)
+	if hasExisting && reuseExisting {
+		if g.mediaEngine == nil {
+			return "", fmt.Errorf("media engine unavailable")
+		}
+		info, err := g.mediaEngine.GetStream(context.Background(), in.InternalID)
+		if err != nil {
+			return "", fmt.Errorf("query media status: %w", err)
+		}
+		// Match the API readiness rule: FPS is a sampled metric and may be
+		// zero even while the publisher is delivering frames. Do not tear down
+		// a live SIP dialog just because one sampled counter is zero.
+		if info != nil && info.Active && info.Publisher != nil &&
+			(info.InFPS > 0 || (!info.LastFrameTime.IsZero() &&
+				time.Since(info.LastFrameTime) >= 0 && time.Since(info.LastFrameTime) <= 15*time.Second)) {
+			g.recoveryAttempts.Delete(key)
+			return existing.SSRC, nil
+		}
+		// Give a newly invited device time to publish before initiating
+		// another INVITE. One slow/missing media snapshot is not a fault.
+		if !existing.StartedAt.IsZero() && time.Since(existing.StartedAt) < 45*time.Second {
+			log.Debug("GB28181 publisher pending; keeping existing session", "session_id", existing.SessionID)
+			return existing.SSRC, nil
+		}
+		if last, ok := g.recoveryAttempts.Load(key); ok {
+			if at, ok := last.(time.Time); ok && time.Since(at) < 60*time.Second {
+				// Cooldown is a non-fatal state. Return the current session and
+				// allow the dashboard to continue polling instead of returning 500.
+				log.Debug("GB28181 recovery cooling down", "session_id", existing.SessionID)
+				return existing.SSRC, nil
+			}
+		}
+		log.Warn("GB28181 publisher unavailable beyond grace period; restarting", "session_id", existing.SessionID)
+	}
+	// Never silently downgrade SIP signaling to UDP when transport is unknown.
+	// RTP StreamMode is independent and remains unchanged.
+	transport := strings.ToUpper(strings.TrimSpace(ch.device.Transport))
+	if transport != "TCP" && transport != "UDP" {
+		return "", fmt.Errorf("GB28181 SIP transport unknown for %s; awaiting REGISTER or verified TCP route", in.DeviceID)
+	}
+	if hasExisting {
+		if reuseExisting {
+			g.recoveryAttempts.Store(key, time.Now())
+		}
+		if err := g.stopPlay(existing); err != nil {
+			return "", fmt.Errorf("stop previous RTP receiver: %w", err)
+		}
+		g.streams.deleteStream(key)
 	}
 
 	// Step 1: Open RTP server on lalmax
@@ -171,6 +230,9 @@ func (g *GB28181API) Play(in *PlayInput) (string, error) {
 		FromTag:   inviteResult.FromTag,
 		ToTag:     inviteResult.ToTag,
 		RemoteURI: inviteResult.RemoteURI,
+		InviteCSeq: inviteResult.InviteCSeq,
+		Transport: inviteResult.Transport,
+		StartedAt: time.Now(),
 	}
 	g.streams.storeStream(key, stream)
 
@@ -250,6 +312,8 @@ func (g *GB28181API) Playback(in *PlaybackInput) (string, error) {
 		FromTag:   inviteResult.FromTag,
 		ToTag:     inviteResult.ToTag,
 		RemoteURI: inviteResult.RemoteURI,
+		InviteCSeq: inviteResult.InviteCSeq,
+		Transport: inviteResult.Transport,
 	}
 	g.streams.storeStream(key, stream)
 
@@ -401,21 +465,49 @@ func (g *GB28181API) sendSIPInfo(stream *Streams, body string, contentType strin
 
 // StopPlay stops a GB28181 play session by sending BYE.
 func (g *GB28181API) StopPlay(in *StopPlayInput) error {
-	key := "play:" + in.DeviceID + ":" + in.ChannelID
-	stream, ok := g.streams.deleteStream(key)
-	if !ok {
-		return nil
-	}
-	return g.stopPlay(stream)
+	key := playStreamKey(in.DeviceID, in.ChannelID)
+	stream, ok := g.streams.loadStream(key)
+	if !ok { return nil }
+	ch, found := g.store.GetChannel(in.DeviceID, in.ChannelID)
+	if found { ch.device.playMutex.Lock(); defer ch.device.playMutex.Unlock() }
+	if err := g.stopPlay(stream); err != nil { return err }
+	g.streams.deleteStream(key)
+	return nil
 }
 
 func (g *GB28181API) stopPlay(stream *Streams) error {
+	// Terminate the remote SIP dialog before releasing its RTP receiver.
+	// On failure retain the session so recovery does not issue another INVITE.
+	if err := g.sendPlayBye(stream); err != nil { return err }
 	if stream.SessionID != "" && g.mediaEngine != nil {
-		_ = g.mediaEngine.StopRTPReceive(context.Background(), stream.SessionID)
+		if err := g.mediaEngine.StopRTPReceive(context.Background(), stream.SessionID); err != nil { return fmt.Errorf("stop RTP receiver: %w", err) }
 	}
-	// Note: For sipgo, we'd need to track the INVITE request/response to send BYE.
-	// For now, just stop the RTP session. A proper implementation would store
-	// the dialog state and send BYE through the client.
+	return nil
+}
+
+func (g *GB28181API) sendPlayBye(stream *Streams) error {
+	if stream.CallID == "" || stream.FromTag == "" || stream.ToTag == "" { return fmt.Errorf("missing confirmed SIP dialog for %s:%s", stream.DeviceID, stream.ChannelID) }
+	dev, ok := g.store.Load(stream.DeviceID)
+	if !ok { return fmt.Errorf("device unavailable for BYE: %s", stream.DeviceID) }
+	recipient := sip.Uri{Scheme: "sip", User: stream.ChannelID, Host: getHost(dev.Address), Port: getPort(dev.Address)}
+	if stream.RemoteURI != "" { var uri sip.Uri; if err := sip.ParseUri(stream.RemoteURI, &uri); err == nil { recipient = uri } }
+	req := sip.NewRequest(sip.BYE, recipient)
+	transport := stream.Transport
+	if transport == "" { transport = strings.ToUpper(dev.Transport) }
+	if transport == "TCP" || transport == "UDP" { req.SetTransport(transport) }
+	req.AppendHeader(&sip.FromHeader{Address: sip.Uri{Scheme: "sip", User: g.cfg.ID, Host: g.cfg.Host}, Params: sip.HeaderParams(sip.NewParams())})
+	req.From().Params.Add("tag", stream.FromTag)
+	req.AppendHeader(&sip.ToHeader{Address: sip.Uri{Scheme: "sip", User: stream.ChannelID, Host: getHost(dev.Address)}, Params: sip.HeaderParams(sip.NewParams())})
+	req.To().Params.Add("tag", stream.ToTag)
+	callID := sip.CallIDHeader(stream.CallID)
+	req.AppendHeader(&callID)
+	req.AppendHeader(&sip.CSeqHeader{SeqNo: stream.InviteCSeq + 1, MethodName: sip.BYE})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := g.client.Do(ctx, req)
+	if err != nil { return fmt.Errorf("SIP BYE %s: %w", stream.CallID, err) }
+	if !resp.IsSuccess() { return fmt.Errorf("SIP BYE rejected %s: %d %s", stream.CallID, resp.StatusCode, resp.Reason) }
+	slog.Info("[SIP] BYE acknowledged", "call_id", stream.CallID, "device_id", stream.DeviceID, "channel_id", stream.ChannelID)
 	return nil
 }
 
@@ -491,10 +583,25 @@ func (g *GB28181API) sipPlaybackInvite(ch *Channel, in *PlaybackInput, port int)
 }
 
 func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (*InviteResult, error) {
+	// Use the transport established during the device's REGISTER.
+	transport := strings.ToUpper(ch.device.Transport)
+	slog.Info("[SIP] INVITE transport diagnostic",
+		"channel_id", ch.ChannelID,
+		"device_id", ch.device.DeviceID,
+		"device_transport", ch.device.Transport,
+		"selected_transport", transport,
+		"device_address", ch.device.Address,
+		"request_transport", req.Transport(),
+	)
+	if transport == "TCP" || transport == "UDP" {
+		req.SetTransport(transport)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	slog.Info("[SIP] INVITE sending", "recipient", req.Recipient.String())
+	slog.Info("[SIP] INVITE sending", "recipient", req.Recipient.String(), "transport", req.Transport())
+
 	tx, err := g.client.TransactionRequest(ctx, req)
 	if err != nil {
 		slog.Error("[SIP] INVITE send failed", "error", err)
@@ -531,6 +638,7 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (*InviteResult, err
 				}
 
 				ack := sip.NewRequest(sip.ACK, ackRecipient)
+				ack.SetTransport(req.Transport())
 				ack.AppendHeader(sip.HeaderClone(req.From()))
 				ack.AppendHeader(sip.HeaderClone(res.To()))
 				ack.AppendHeader(sip.HeaderClone(req.CallID()))
@@ -578,12 +686,16 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (*InviteResult, err
 				}
 
 				slog.Info("[SIP] INVITE completed", "ssrc", ssrc)
+				inviteSeq := uint32(0)
+				if h := req.CSeq(); h != nil { inviteSeq = h.SeqNo }
 				return &InviteResult{
 					SSRC:      ssrc,
 					CallID:    callID,
 					FromTag:   fromTag,
 					ToTag:     toTag,
 					RemoteURI: remoteURI,
+					InviteCSeq: inviteSeq,
+					Transport: req.Transport(),
 				}, nil
 			}
 			slog.Warn("[SIP] INVITE rejected", "status", res.StatusCode, "reason", res.Reason)

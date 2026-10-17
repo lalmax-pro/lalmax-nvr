@@ -8,10 +8,11 @@ import (
 
 func TestConfigValidateAutoDetectsWildcardMediaIP(t *testing.T) {
 	cfg := &Config{
-		Enabled: true,
-		ID:      "34020000002000000001",
-		Port:    5060,
-		MediaIP: "0.0.0.0",
+		Enabled:  true,
+		ID:       "34020000002000000001",
+		Port:     5060,
+		MediaIP:  "0.0.0.0",
+		Password: "test-password-123",
 	}
 
 	err := cfg.Validate()

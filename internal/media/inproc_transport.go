@@ -12,9 +12,16 @@ import (
 // lalmax gin router (LL-HLS, HTTP-fMP4, WHEP) and can skip TCP loopback.
 func IsInProcessPlayPath(p string) bool {
 	p = strings.ToLower(p)
-	if strings.HasPrefix(p, "/live/hls/") || strings.HasPrefix(p, "/live/m4s/") {
+
+	// HTTP-fMP4 uses connection hijacking and must use a real HTTP transport.
+	if strings.HasPrefix(p, "/live/m4s/") {
+		return false
+	}
+
+	if strings.HasPrefix(p, "/live/hls/") {
 		return true
 	}
+
 	return strings.HasPrefix(p, "/webrtc/")
 }
 

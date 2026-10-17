@@ -16,7 +16,7 @@ server:
 # Binary: set via --data-dir flag or directly in YAML.
 storage:
   root_dir: "/var/lib/lalmax-nvr"   # Change to your preferred path (e.g. /mnt/external/nvr)
-  segment_duration: "30s"          # MP4 segment duration (max 30s on RPi)
+  segment_duration: "30s"          # MP4 segment target duration (1s-30m; rotates at keyframe)
   # Optional: start directly with PostgreSQL or MySQL. Leave both unset for SQLite.
   # database_driver: "postgres"     # postgres | mysql
   # database_dsn: "postgres://nvr:password@127.0.0.1:5432/lalmax_nvr?sslmode=disable"
@@ -25,6 +25,12 @@ storage:
 # lal/lalmax media engine configuration.
 media:
   mode: "embedded"                         # embedded | http
+  # Direct lalmax HTTP playback (WHEP/LL-HLS/fMP4) requires NVR login by default.
+  # To allow anonymous browser playback on a TRUSTED LAN only, explicitly set:
+  # http_play_auth_enabled: false
+  # WARNING: With a publicly reachable lalmax port, anyone can access live streams.
+  # NVR management, internal media controls and publish auth remain protected.
+  # Configured auth.playback_tokens may still require stream-specific tokens.
   lalmax_http_addr: "http://127.0.0.1:12090"
   lalmax_public_url: "http://127.0.0.1:12090"  # Use a public hostname; otherwise RTSP URLs become 127.0.0.1
   # lalmax_config_path is auto-generated at {root_dir}/config/lalmax.conf.json

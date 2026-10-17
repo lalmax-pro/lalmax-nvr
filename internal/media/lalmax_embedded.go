@@ -27,15 +27,16 @@ import (
 )
 
 type EmbeddedLalmaxConfig struct {
-	HTTPAddr    string
-	PublicURL   string
-	ConfigPath  string
-	RTMPPort    int
-	RTSPPort    int
-	HTTPPort    int
-	RTMPEnabled bool
-	SRTPort     int
-	SRTEnabled  bool
+	HTTPAddr          string
+	PublicURL         string
+	ConfigPath        string
+	InternalAuthToken string // 仅供 NVR 内部访问 lalmax 控制 API
+	RTMPPort          int
+	RTSPPort          int
+	HTTPPort          int
+	RTMPEnabled       bool
+	SRTPort           int
+	SRTEnabled        bool
 	// lal (TS HLS) settings
 	HLSEnabled            bool
 	LalFragmentDurationMs int
@@ -143,11 +144,12 @@ func NewEmbeddedLalmax(cfg EmbeddedLalmaxConfig, svrOpts ...lalmaxserver.LalMaxS
 	}
 	applyEmbeddedPortDefaults(&cfg)
 	httpEngine, err := NewLalmaxHTTP(LalmaxHTTPConfig{
-		BaseURL:   cfg.HTTPAddr,
-		PublicURL: firstNonEmpty(cfg.PublicURL, cfg.HTTPAddr),
-		RTMPPort:  cfg.RTMPPort,
-		RTSPPort:  cfg.RTSPPort,
-		HTTPPort:  cfg.HTTPPort,
+		BaseURL:           cfg.HTTPAddr,
+		PublicURL:         firstNonEmpty(cfg.PublicURL, cfg.HTTPAddr),
+		InternalAuthToken: cfg.InternalAuthToken,
+		RTMPPort:          cfg.RTMPPort,
+		RTSPPort:          cfg.RTSPPort,
+		HTTPPort:          cfg.HTTPPort,
 	})
 	if err != nil {
 		return nil, err
