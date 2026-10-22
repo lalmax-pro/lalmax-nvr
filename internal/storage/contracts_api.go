@@ -240,6 +240,8 @@ type HealthEventRepository interface {
 
 // APIRepository composes the domain-specific persistence contracts used by API handlers.
 type APIRepository interface {
+	GetHomeAssistantSettings(context.Context) (HomeAssistantSettings, error)
+	SaveHomeAssistantSettings(context.Context, HomeAssistantSettings) error
 	APICoreRepository
 	AIHistoryRepository
 	GBAlarmRepository

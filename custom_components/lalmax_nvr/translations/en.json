@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "lalmax-nvr",
+        "description": "Enter your NVR HTTP account in HA. If RTSP authentication is enabled, enter the RTSP username and password separately.",
+        "data": {
+          "url": "NVR URL",
+          "username": "NVR HTTP username",
+          "password": "NVR HTTP password",
+          "rtsp_username": "RTSP username (optional)",
+          "rtsp_password": "RTSP password (optional)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "lalmax-nvr",
+        "description": "Enter your NVR HTTP account in HA. If RTSP authentication is enabled, enter the RTSP username and password separately.",
+        "data": {
+          "url": "NVR URL",
+          "username": "NVR HTTP username",
+          "password": "NVR HTTP password",
+          "rtsp_username": "RTSP username (optional)",
+          "rtsp_password": "RTSP password (optional)"
+        }
+      },
+      "reconfigure": {
+        "title": "lalmax-nvr",
+        "description": "Enter your NVR HTTP account in HA. If RTSP authentication is enabled, enter the RTSP username and password separately.",
+        "data": {
+          "url": "NVR URL",
+          "username": "NVR HTTP username",
+          "password": "NVR HTTP password",
+          "rtsp_username": "RTSP username (optional)",
+          "rtsp_password": "RTSP password (optional)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to NVR",
+      "invalid_auth": "Invalid NVR credentials",
+      "invalid_url": "Enter a valid HTTP(S) URL"
+    },
+    "abort": {
+      "already_configured": "NVR is already configured",
+      "unique_id_mismatch": "This is a different NVR instance",
+      "reauth_successful": "Credentials updated",
+      "reconfigure_successful": "Configuration updated"
+    }
+  }
+}

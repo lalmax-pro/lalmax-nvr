@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "lalmax-nvr",
+        "description": "在 HA 中填写 NVR HTTP 账号。如开启 RTSP 鉴权，还需单独填写 RTSP 用户名与密码。",
+        "data": {
+          "url": "NVR 地址",
+          "username": "NVR HTTP 用户名",
+          "password": "NVR HTTP 密码",
+          "rtsp_username": "RTSP 用户名（可选）",
+          "rtsp_password": "RTSP 密码（可选）"
+        }
+      },
+      "reauth_confirm": {
+        "title": "lalmax-nvr",
+        "description": "在 HA 中填写 NVR HTTP 账号。如开启 RTSP 鉴权，还需单独填写 RTSP 用户名与密码。",
+        "data": {
+          "url": "NVR 地址",
+          "username": "NVR HTTP 用户名",
+          "password": "NVR HTTP 密码",
+          "rtsp_username": "RTSP 用户名（可选）",
+          "rtsp_password": "RTSP 密码（可选）"
+        }
+      },
+      "reconfigure": {
+        "title": "lalmax-nvr",
+        "description": "在 HA 中填写 NVR HTTP 账号。如开启 RTSP 鉴权，还需单独填写 RTSP 用户名与密码。",
+        "data": {
+          "url": "NVR 地址",
+          "username": "NVR HTTP 用户名",
+          "password": "NVR HTTP 密码",
+          "rtsp_username": "RTSP 用户名（可选）",
+          "rtsp_password": "RTSP 密码（可选）"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接 NVR",
+      "invalid_auth": "NVR 凭据无效",
+      "invalid_url": "请输入有效的 HTTP(S) 地址"
+    },
+    "abort": {
+      "already_configured": "已添加此 NVR",
+      "unique_id_mismatch": "此地址属于另一个 NVR 实例",
+      "reauth_successful": "凭据已更新",
+      "reconfigure_successful": "配置已更新"
+    }
+  }
+}

@@ -1,0 +1,59 @@
+# Home Assistant
+
+lalmax-nvr 可以把选中的流发布为 Home Assistant 摄像头，支持实时视频、缩略图和在线状态。HA 从 NVR 的 RTSP 服务取流，复用 NVR 已有接入，不会重新连接原始摄像头，也不会因发布而开始录像。
+
+## 安装与配置
+
+1. 将本仓库 `custom_components/lalmax_nvr` 完整复制到 HA 配置目录的 `custom_components/lalmax_nvr`。该目录中应直接包含 `manifest.json`、`__init__.py` 等文件。重启 HA。当前验证版本为 Home Assistant **2026.10.2**。
+2. 在 NVR 的 **设置 → Home Assistant** 中启用发布，选择流并保存。可以搜索后批量选择，也可以在流管理卡片上逐路选择。未登记为摄像头的推流也可以发布。
+3. 必要时设置 RTSP 服务地址，例如 `rtsp://192.168.1.20:15544`。不要包含用户名、密码或 `/live/流名`。留空使用媒体引擎对外地址；默认的回环地址由 HA 集成替换为 NVR HTTP 地址的主机名。如果媒体引擎与 NVR 不在同一主机，请显式配置 HA 能访问的媒体引擎地址。
+4. HA 中进入 **设置 → 设备与服务 → 添加集成 → lalmax-nvr**，填写 NVR HTTP 地址（例如 `http://192.168.1.20:9090`）和 NVR 账号。建议给 HA 单独创建普通用户，只允许读取。
+5. 如果开启了 `media.rtsp_auth_enable`，单独填写 RTSP 用户名和密码。这不是 NVR HTTP 账号，不能相互替代。RTSP 使用 TCP，兼容 Basic / Digest 服务端鉴权。
+6. 发布流会生成 `camera` 实体。可将实体加入 HA 仪表盘，例如：
+
+```yaml
+type: picture-entity
+entity: camera.front_door
+camera_view: live
+```
+
+此集成需要手动安装，尚未上架 HACS 或纳入 HA 内置集成。内置 HomeKit Device 在本次核对版本中只有摄像头快照能力，不作为此功能的实时视频入口。
+
+## 同步与撤销
+
+目录每 30 秒同步一次，单次返回全部已发布流，不受普通流列表每页 100 路限制。新增发布会自动建立实体；断流保留实体并标记不可用，恢复后继续使用原实体。实例 UUID 与发布选择保存在数据库中，改名、NVR / HA 重启及集成重载不会改变身份。备份数据库会同时备份这些配置；同时运行复制出的两个 NVR 时需要使用不同实例身份，不能把同一数据库副本当成两个独立实例接入同一 HA。
+
+取消发布或关闭总开关后，集成在下一次同步时将实体标记不可用，并停止对应 HA 视频工作器。实体注册记录保留，可在 HA 中手动清理。重新发布同一流会恢复原实体。源流删除后，保留的发布条目会离线，需在发布选择中取消；该行为允许临时推流断开后使用相同 ID 恢复。
+
+撤销集成入口不会使其他客户端持有的 RTSP 凭据失效；普通用户也仍受现有 NVR 账号权限约束。需要严格的流级隔离时，应同时配置媒体访问策略。
+
+## 鉴权与播放 token
+
+HTTP API 始终使用 NVR Basic 账号鉴权，写发布配置要求超级管理员。目录不返回上游地址、摄像头密码或 RTSP 账号密码。
+
+如果设置了 `auth.playback_tokens`，每路发布流必须有对应 token；集成目录的 RTSP URL 会附带该流的播放 token，因此目录本身应按媒体凭据保护，不应分享或写入公开日志。没有对应 token 的条目标记为 `rtsp_unavailable`，不影响其他流同步。发布不会关闭或绕过已有鉴权。
+
+## 快照与编码
+
+优先验证 H.264 视频和 AAC 音频。H.265 取决于 HA 和浏览器解码能力，当前不自动转码；如设备有 H.264 子码流，建议发布子码流。
+
+NVR 按流抽帧快照使用 PATH 中的 FFmpeg，并有 10 秒缓存。NVR 未安装 FFmpeg 时，集成会改由 HA 的 Stream 功能从 RTSP 生成静态图。仅有流管理绑定关系的摄像头快照不会被误用为其他流的缩略图。
+
+## 排障与接口
+
+- **无法连接**：检查 HA 到 NVR HTTP 端口是否可达，以及 NVR 用户是否启用。反向代理必须转发 `/api/integrations/home-assistant`。
+- **配置成功但不可用**：确认已启用发布、选中该流、流在线，且播放 token 已配置。IPTV 等只有进入 lalmax 引擎后才能复用 RTSP。
+- **缩略图正常但视频失败**：分别检查 HA 到 RTSP 端口的连通性、RTSP 账号、流 token 和编码；HTTP 登录成功不代表 RTSP 鉴权成功。
+- **快照失败**：检查 NVR FFmpeg 及媒体引擎地址是否可达；快照端点返回 503 表示依赖缺失或当前取帧失败。NVR 无 FFmpeg 时 HA 应使用 Stream 静态图。
+- **地址或密码变化**：在 HA 集成菜单选择重新配置；HTTP 凭据失效会触发重新认证。更换成另一个 NVR 实例会被拒绝，避免把旧实体错误绑定到新系统。
+
+接口均需 NVR HTTP 鉴权：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET / PUT | `/api/settings/home-assistant` | 发布设置；PUT 为完整替换，要求超级管理员 |
+| PUT | `/api/integrations/home-assistant/streams/{stream_id}` | 单路选择，JSON 为 `{"enabled":true}` 或 `false`，要求超级管理员 |
+| GET | `/api/integrations/home-assistant` | 已发布流目录、实例 UUID、快照能力 |
+| GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | 已发布流 JPEG 快照 |
+
+AI 事件、录像回放、云台和 HACS 分发不包含在当前版本中。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。

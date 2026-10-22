@@ -5,6 +5,19 @@
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { copyTextWithFallback } from '$lib/clipboard';
+  import { getHomeAssistantSettings, publishHomeAssistantStream } from '$lib/api/home-assistant';
+  import type { HomeAssistantSettings } from '$lib/api/home-assistant';
+  let haSettings = $state<HomeAssistantSettings | null>(null);
+  let haBusy = $state(false);
+  async function toggleHA(stream: StreamInfo) {
+    if (haBusy || !haSettings) return;
+    haBusy = true;
+    try {
+      haSettings = await publishHomeAssistantStream(stream.stream_id, !haSettings.streams.some(s => s.stream_id === stream.stream_id));
+      showToast(t('ha.saved'), 'success');
+    } catch (e) { showToast(e instanceof Error ? e.message : t('ha.saveFailed'), 'error'); }
+    finally { haBusy = false; }
+  }
   import StreamCard from '$lib/components/StreamCard.svelte';
   import Pagination from '../components/Pagination.svelte';
   import {
@@ -220,6 +233,7 @@
   }
 
   onMount(() => {
+    void getHomeAssistantSettings().then(cfg => haSettings = cfg).catch(() => {});
     if (initialCreateMode) {
       openCreateDialog();
       createMode = initialCreateMode;
@@ -262,6 +276,9 @@
         onsaveName={handleSaveName}
         ondelete={managed ? undefined : handleDelete}
         deleting={deletingID === stream.stream_id}
+        onpublishHA={haSettings ? toggleHA : undefined}
+        publishedHA={haSettings?.streams.some(s => s.stream_id === stream.stream_id) ?? false}
+        publishingHA={haBusy}
       />
     {/each}
   {/if}

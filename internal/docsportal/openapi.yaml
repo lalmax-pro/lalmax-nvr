@@ -1883,6 +1883,86 @@ paths:
         '403': {description: 无操作权限}
         '409': {description: 呼入已处理}
 
+
+  /api/settings/home-assistant:
+    get:
+      tags: [Settings]
+      summary: Read Home Assistant publication settings
+      responses:
+        '200':
+          description: Persisted instance UUID, enabled flag, rtsp_base_url and selected streams.
+    put:
+      tags: [Settings]
+      summary: Replace Home Assistant publication settings (super administrator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: {type: boolean}
+                rtsp_base_url: {type: string}
+                streams:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      stream_id: {type: string}
+                      name: {type: string}
+                      app_name: {type: string}
+      responses:
+        '200': {description: Saved settings. Instance identity is immutable.}
+        '400': {description: Invalid publication settings.}
+        '403': {description: Super administrator permission required.}
+  /api/integrations/home-assistant:
+    get:
+      tags: [Settings]
+      summary: Complete published stream catalog for Home Assistant
+      description: Includes instance_id, enabled, snapshot_available and all selected streams. RTSP URLs may contain per-stream playback tokens; treat this response as private media credentials.
+      responses:
+        '200': {description: Published catalog, including offline streams. No pagination.}
+        '503': {description: Media engine unavailable.}
+  /api/integrations/home-assistant/streams/{stream_id}:
+    parameters:
+      - in: path
+        name: stream_id
+        required: true
+        schema: {type: string}
+    put:
+      tags: [Settings]
+      summary: Select or unselect a stream for Home Assistant (super administrator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: {type: boolean}
+      responses:
+        '200': {description: Updated publication settings.}
+        '403': {description: Super administrator permission required.}
+        '404': {description: Stream not found.}
+  /api/integrations/home-assistant/streams/{stream_id}/snapshot:
+    parameters:
+      - in: path
+        name: stream_id
+        required: true
+        schema: {type: string}
+    get:
+      tags: [Settings]
+      summary: JPEG snapshot of a published stream
+      responses:
+        '200':
+          description: Stream JPEG, cached for 10 seconds.
+          content:
+            image/jpeg:
+              schema: {type: string, format: binary}
+        '404': {description: Publication disabled or stream not selected.}
+        '503': {description: FFmpeg missing or snapshot temporarily unavailable.}
+
 components:
   securitySchemes:
     basicAuth:

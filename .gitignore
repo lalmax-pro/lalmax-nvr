@@ -27,6 +27,9 @@ lalmax-nvr.yaml
 
 # Node
 node_modules/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
 
 # Frontend
 web/node_modules/

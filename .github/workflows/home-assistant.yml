@@ -1,0 +1,20 @@
+name: Home Assistant integration
+on:
+  pull_request:
+    paths: ['custom_components/**', 'tests/home_assistant/**', '.github/workflows/home-assistant.yml']
+  push:
+    branches: [main]
+    paths: ['custom_components/**', 'tests/home_assistant/**', '.github/workflows/home-assistant.yml']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: pip install -r tests/home_assistant/requirements.txt
+      - run: ruff check custom_components/lalmax_nvr tests/home_assistant
+      - run: python -m pytest -q tests/home_assistant

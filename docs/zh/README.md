@@ -42,3 +42,5 @@
 | [MQTT](mqtt-integration.md) | 事件触发录像 |
 | [WebDAV](webdav-integration.md) / [FTP](ftp-integration.md) | 浏览存储文件；FTP 指南说明当前认证限制 |
 | [AI 检测](ai-setup-guide.md) | 检测服务的部署与配置 |
+
+- [Home Assistant：流发布、实时预览、缩略图与在线状态](home-assistant.md)

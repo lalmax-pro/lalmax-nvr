@@ -146,6 +146,7 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
+	homeAssistantMu    sync.Mutex
 	voipSettingsMu     sync.Mutex
 	voipRestarter      VoIPRestarter
 	db                 storage.APIRepository
@@ -488,6 +489,11 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Put("/api/recording-plans/{id}", h.handleUpdateRecordingPlan)
 		r.With(middleware.RequireOperatePermission()).Delete("/api/recording-plans/{id}", h.handleDeleteRecordingPlan)
 		r.Get("/api/streams", h.handleListStreams)
+		r.Get("/api/settings/home-assistant", h.handleGetHomeAssistantSettings)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings/home-assistant", h.handleUpdateHomeAssistantSettings)
+		r.Get("/api/integrations/home-assistant", h.handleHomeAssistantCatalog)
+		r.With(middleware.RequireOperatePermission()).Put("/api/integrations/home-assistant/streams/{stream_id}", h.handleHomeAssistantPublication)
+		r.Get("/api/integrations/home-assistant/streams/{stream_id}/snapshot", h.handleHomeAssistantSnapshot)
 		r.With(middleware.RequireOperatePermission()).Post("/api/streams", h.handleCreateStream)
 		r.Get("/api/streams/{stream_id}", h.handleGetStream)
 		r.With(middleware.RequireOperatePermission()).Put("/api/streams/{stream_id}", h.handleUpdateStream)

@@ -42,3 +42,5 @@ Find guides by task. For configuration examples, see [`config/config.example.yam
 | [MQTT](mqtt-integration.md) | Event-triggered recording |
 | [WebDAV](webdav-integration.md) / [FTP](ftp-integration.md) | Browse stored files; the FTP guide covers the current auth limitation |
 | [AI detection](ai-setup-guide.md) | Deploy and configure detection services |
+
+- [Home Assistant: stream publication, live video, snapshots and availability](home-assistant.md)

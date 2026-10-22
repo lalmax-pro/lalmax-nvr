@@ -105,6 +105,8 @@ G.711 covers both A-law (PCMA) and µ-law (PCMU). Audio codecs not listed for a 
 - **Single Binary**: Zero dependencies, embedded SPA, `CGO_ENABLED=0`
 - **Xiaomi Support**: CS2 P2P protocol, cloud auth (community-driven)
 
+Home Assistant: publish selected streams as camera entities with live video, snapshots and availability. See the [integration guide](docs/en/home-assistant.md).
+
 ## Quick Start
 
 ### Option 1: Docker
