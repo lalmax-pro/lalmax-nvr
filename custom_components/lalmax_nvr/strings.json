@@ -70,6 +70,59 @@
       "vehicle": {
         "name": "Vehicle"
       }
+    },
+    "button": {
+      "ptz_left": {
+        "name": "Pan left"
+      },
+      "ptz_right": {
+        "name": "Pan right"
+      },
+      "ptz_up": {
+        "name": "Tilt up"
+      },
+      "ptz_down": {
+        "name": "Tilt down"
+      },
+      "ptz_zoom_in": {
+        "name": "Zoom in"
+      },
+      "ptz_zoom_out": {
+        "name": "Zoom out"
+      },
+      "ptz_stop": {
+        "name": "Stop PTZ"
+      }
+    }
+  },
+  "services": {
+    "ptz": {
+      "name": "PTZ control",
+      "description": "Control the bound camera. Continuous movement stops automatically.",
+      "fields": {
+        "mode": {
+          "name": "Mode"
+        },
+        "pan": {
+          "name": "Pan"
+        },
+        "tilt": {
+          "name": "Tilt"
+        },
+        "zoom": {
+          "name": "Zoom"
+        },
+        "duration": {
+          "name": "Duration"
+        },
+        "preset_token": {
+          "name": "Preset token"
+        }
+      }
+    },
+    "ptz_presets": {
+      "name": "Read PTZ presets",
+      "description": "Return the bound camera preset list."
     }
   }
 }

@@ -1,21 +1,46 @@
 """Live cameras backed by NVR RTSP redistribution."""
 
+import probatio as vol
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.const import CONF_URL
-from homeassistant.core import callback
+from homeassistant.core import SupportsResponse, callback
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from yarl import URL
 
 from .const import CONF_RTSP_PASSWORD, CONF_RTSP_USERNAME, DOMAIN
+from .control import async_ptz
 
 PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     """Add newly published streams without reloading the integration."""
+    platform = entity_platform.async_get_current_platform()
+    axis = vol.All(vol.Coerce(float), vol.Range(min=-1, max=1))
+    platform.async_register_entity_service(
+        "ptz",
+        {
+            vol.Optional("mode", default="continuous"): vol.In(
+                ["continuous", "absolute", "relative", "stop", "goto_preset"]
+            ),
+            vol.Optional("pan", default=0): axis,
+            vol.Optional("tilt", default=0): axis,
+            vol.Optional("zoom", default=0): axis,
+            vol.Optional("duration", default=0.5): vol.All(
+                vol.Coerce(float), vol.Range(min=0.1, max=5)
+            ),
+            vol.Optional("preset_token", default=""): cv.string,
+        },
+        "async_ptz",
+    )
+    platform.async_register_entity_service(
+        "ptz_presets", {}, "async_ptz_presets", supports_response=SupportsResponse.ONLY
+    )
     coordinator = entry.runtime_data
     known = set()
 
@@ -78,6 +103,16 @@ class NVRCamera(CoordinatorEntity, Camera):
     @property
     def use_stream_for_stills(self) -> bool:
         return not self.coordinator.data.get("snapshot_available", False)
+
+    @property
+    def extra_state_attributes(self):
+        return {"ptz_supported": self.stream_data.get("ptz_supported", False)}
+
+    async def async_ptz(self, **command):
+        await async_ptz(self.coordinator, self.stream_id, command)
+
+    async def async_ptz_presets(self):
+        return await async_ptz(self.coordinator, self.stream_id)
 
     async def stream_source(self) -> str | None:
         if not self.available:

@@ -493,6 +493,8 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/home-assistant", h.handleUpdateHomeAssistantSettings)
 		r.Get("/api/integrations/home-assistant", h.handleHomeAssistantCatalog)
 		r.Get("/api/integrations/home-assistant/events", h.handleHomeAssistantEvents)
+		r.With(middleware.RequireOperatePermission()).Post("/api/integrations/home-assistant/streams/{stream_id}/ptz", h.handleHomeAssistantPTZ)
+		r.Get("/api/integrations/home-assistant/streams/{stream_id}/ptz/presets", h.handleHomeAssistantPTZPresets)
 		r.Get("/api/integrations/home-assistant/streams/{stream_id}/recordings", h.handleHomeAssistantRecordings)
 		r.Get("/api/integrations/home-assistant/streams/{stream_id}/recordings/{recording_id}", h.handleHomeAssistantRecording)
 		r.Get("/api/integrations/home-assistant/streams/{stream_id}/recordings/{recording_id}/file", h.handleHomeAssistantRecordingFile)

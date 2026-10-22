@@ -18,6 +18,10 @@ class InvalidAuth(Exception):
     """The NVR rejected the HTTP credentials."""
 
 
+class PermissionDenied(Exception):
+    """The account can read the NVR but cannot control devices."""
+
+
 def normalize_url(raw: str) -> str:
     """Require an explicit HTTP(S) origin, optionally with a proxy path."""
     url = URL(raw.strip())
@@ -142,6 +146,28 @@ class NVRClient:
                 return result
         except (ClientError, TimeoutError, ValueError) as err:
             raise CannotConnect("Unable to read NVR recordings") from err
+
+    async def ptz(self, stream_id: str, command=None):
+        """Control only the camera currently bound to a published stream."""
+        endpoint = f"{self.url}/{CATALOG_PATH}/streams/{quote(stream_id, safe='')}/ptz"
+        try:
+            async with self.session.request(
+                "POST" if command is not None else "GET",
+                endpoint if command is not None else endpoint + "/presets",
+                json=command,
+                auth=self.auth,
+                allow_redirects=False,
+                timeout=ClientTimeout(total=45),
+            ) as response:
+                if response.status == 401:
+                    raise InvalidAuth
+                if response.status == 403:
+                    raise PermissionDenied
+                if response.status != 200:
+                    raise CannotConnect("PTZ command, binding or device is unavailable")
+                return await response.json()
+        except (ClientError, TimeoutError, ValueError) as err:
+            raise CannotConnect("PTZ request failed") from err
 
     async def events(self):
         """Read the publication-scoped live feed; None marks a connection."""

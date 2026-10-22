@@ -1,7 +1,7 @@
 {
   "domain": "lalmax_nvr",
   "name": "lalmax-nvr",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "config_flow": true,
   "documentation": "https://github.com/lalmax-pro/lalmax-nvr/blob/main/docs/en/home-assistant.md",
   "issue_tracker": "https://github.com/lalmax-pro/lalmax-nvr/issues",

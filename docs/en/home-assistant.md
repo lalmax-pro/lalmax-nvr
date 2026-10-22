@@ -44,7 +44,7 @@ Use the HA integration's **Reconfigure** menu to change address or credentials. 
 | GET | `/api/integrations/home-assistant` | Complete published catalog, instance ID and snapshot capability |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | Published stream JPEG |
 
-PTZ and HACS distribution are being implemented in subsequent stages. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
+Low-latency playback, codec compatibility and HACS distribution are being implemented in subsequent stages. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
 
 
 ## Detection events and automations
@@ -81,3 +81,12 @@ Open **Media → lalmax-nvr recordings → NVR instance → published stream** i
 HA proxies playback using a temporary signed HA URL; NVR account credentials and filesystem paths are never placed in the playback URL. The proxy streams chunks and forwards byte ranges and HEAD requests for seeking. Each new read rechecks publication and recorded-stream ownership at the NVR, so unpublishing immediately blocks new reads through a previously signed URL. A transfer already in progress may finish. Deleting/archiving clips makes them unavailable. Old records without a stream ID are recognized only when their camera ID equals the published stream ID.
 
 H.264/AAC MP4 is tested. H.265 MP4 still depends on the playback device; MJPEG directories and raw recordings are not exposed as video clips. This feature browses existing recordings and does not request transcoding. Play a media-source identifier in HA automations using the media browser's selected clip.
+
+
+## PTZ controls
+
+A published stream bound to an ONVIF or GB28181 camera exposes seven native HA buttons (left/right/up/down, zoom in/out, stop). The NVR HTTP account must be a super administrator for movement; a read-only account can still use video, events and recordings. Use HA Reconfigure to change the account when control is needed. Lack of control permission produces an action error, not a reauthentication flow.
+
+The `lalmax_nvr.ptz` action targets a camera entity, with `mode` (`continuous`, `relative`, `absolute`, `stop`, `goto_preset`), normalized `pan`, `tilt`, `zoom`, optional `preset_token`, and `duration` (0.1–5 seconds, default 0.5). Absolute zoom is 0–1. `lalmax_nvr.ptz_presets` returns the ONVIF preset list and requires an action response. GB28181 supports single-axis continuous pulses and stop; relative/absolute/preset actions are rejected.
+
+NVR performs the automatic stop for continuous movement, including caller disconnection and publication revocation during the pulse. A failed move or stop returns an error; network/device failures can prevent physical stopping. New commands check current publication and camera binding. The integration advertises protocol support, not a guarantee that every ONVIF camera implements PTZ. Real HA testing uses loopback ONVIF SOAP and authenticated GB28181 SIP protocol simulators; physical hardware has not been tested.

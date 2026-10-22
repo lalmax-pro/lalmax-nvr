@@ -60,3 +60,14 @@
 联调发现并修正：HA 2026.10.2 使用 `register_view` 注册视图；独立流录像任务原默认关闭音频，现默认保留音频并继续尊重摄像头的显式选择。新增 AAC 文件测试暴露了音轨 ID 发布的并发竞争，现将音轨与 muxer 一并在锁内发布，H.264/H.265 同步修正。音频默认与帧源 AAC 回归测试连续 20 轮 race 检查通过。
 
 自动化：19 项 Python 测试；相关 API、recorder、storage 的 race 回归；ruff、go vet、OpenAPI 解析均通过。`tests/home_assistant/live_recordings.py --runtime <隔离运行目录>` 保存录像到 HA 的真实联调流程，需要 PyAV、有效测试 token 和准备好的合成推流，会操作测试录像计划和发布状态。
+
+
+## 阶段四：云台
+
+真实 HA 2026.10.2 配合本地 ONVIF SOAP 模拟设备，验证连续移动与自动停止、相对和绝对位置、停止、读取预置位与跳转。验证七个原生 HA 按钮均发送实际 SOAP 命令，使用摄像头配置的 profile token。普通 NVR 账号被拒绝控制，不误触发 HA 重新认证；改用具备操作权限的账号后成功。移动过程中取消发布或主动断开请求，已授权动作的清理停止仍发出，新动作被拒绝。
+
+另启用隔离 NVR 的回环 GB28181 服务，由 SIP 模拟设备通过真实 Digest 挑战完成注册。HA 经 NVR 发出的左右、上下、变焦六方向及自动停止均实际到达 UDP SIP 设备；校验通道 ID、8 字节命令、方向位及校验码。GB28181 的多轴、绝对位置等不支持操作明确返回错误。
+
+上述为协议模拟设备联调，不代表实体云台已验证。网络故障时停止也可能失败，接口会返回失败，不能承诺硬件一定停止。`tests/home_assistant/onvif_fixture.py`、`gb28181_fixture.py` 为模拟端；`live_ptz.py` 和 `live_gb_ptz.py` 保存隔离环境流程。HA 原生按钮及控制动作已提供中英文名称。20 项 Python 测试、Home Assistant API 专项 Go race、ruff、go vet、OpenAPI 解析通过。
+
+补充：PR #49 在获准不等待主构建而合并后，完整 CI 随后全部通过，包含全量 Go race、前端及六个平台构建。

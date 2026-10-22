@@ -1,0 +1,35 @@
+ptz:
+  target:
+    entity:
+      integration: lalmax_nvr
+      domain: camera
+  fields:
+    mode:
+      default: continuous
+      selector:
+        select:
+          options: [continuous, absolute, relative, stop, goto_preset]
+    pan:
+      default: 0
+      selector:
+        number: {min: -1, max: 1, step: 0.1}
+    tilt:
+      default: 0
+      selector:
+        number: {min: -1, max: 1, step: 0.1}
+    zoom:
+      default: 0
+      selector:
+        number: {min: -1, max: 1, step: 0.1}
+    duration:
+      default: 0.5
+      selector:
+        number: {min: 0.1, max: 5, step: 0.1, unit_of_measurement: s}
+    preset_token:
+      selector:
+        text:
+ptz_presets:
+  target:
+    entity:
+      integration: lalmax_nvr
+      domain: camera

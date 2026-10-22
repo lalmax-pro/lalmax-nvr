@@ -9,18 +9,22 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 
 
-def async_setup_push_entities(hass, entry, async_add_entities, platform, factory):
+def async_setup_push_entities(
+    hass, entry, async_add_entities, platform, factory, feature=None
+):
     """Discover entities as publications are added or removed from the registry."""
     coordinator = entry.runtime_data
     known = set()
 
     @callback
     def discover():
-        if not coordinator.data.get("events_available"):
+        if feature is None and not coordinator.data.get("events_available"):
             return
         registry = er.async_get(hass)
         entities = []
         for sid in coordinator.data["streams"]:
+            if feature and not coordinator.data["streams"][sid].get(feature):
+                continue
             for entity in factory(coordinator, entry, sid):
                 uid = entity.unique_id
                 if uid not in known or not registry.async_get_entity_id(
@@ -35,8 +39,8 @@ def async_setup_push_entities(hass, entry, async_add_entities, platform, factory
     discover()
 
 
-class NVRPushEntity(CoordinatorEntity):
-    """Use the camera's device, with availability tied to the event connection."""
+class NVRStreamEntity(CoordinatorEntity):
+    """Attach controls and events to the published camera's device."""
 
     _attr_has_entity_name = True
 
@@ -48,11 +52,7 @@ class NVRPushEntity(CoordinatorEntity):
 
     @property
     def available(self):
-        return (
-            super().available
-            and self.coordinator.events_connected
-            and self.stream_id in self.coordinator.data["streams"]
-        )
+        return super().available and self.stream_id in self.coordinator.data["streams"]
 
     @property
     def device_info(self):
@@ -64,6 +64,14 @@ class NVRPushEntity(CoordinatorEntity):
             model="Published stream",
             configuration_url=self.entry.data[CONF_URL],
         )
+
+
+class NVRPushEntity(NVRStreamEntity):
+    """Availability of event entities also depends on the live event connection."""
+
+    @property
+    def available(self):
+        return super().available and self.coordinator.events_connected
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()

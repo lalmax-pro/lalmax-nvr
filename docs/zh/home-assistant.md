@@ -56,7 +56,7 @@ NVR 按流抽帧快照使用 PATH 中的 FFmpeg，并有 10 秒缓存。NVR 未�
 | GET | `/api/integrations/home-assistant` | 已发布流目录、实例 UUID、快照能力 |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | 已发布流 JPEG 快照 |
 
-云台和 HACS 分发将继续按阶段实现。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
+低延迟播放、编码兼容与 HACS 分发将继续按阶段实现。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
 
 
 ## 检测事件与自动化
@@ -93,3 +93,12 @@ HA 中进入 **媒体 → lalmax-nvr recordings → NVR 实例 → 发布流**�
 HA 使用临时签名地址代理播放，地址不包含 NVR 账号密码和文件路径。代理分块传输，支持 Range 和 HEAD，便于拖动进度。每次读取都在 NVR 重新检查发布状态和实际录制流归属；取消发布后，旧签名地址的新读取立即被拒绝，已经传输中的请求可能继续完成。删除或归档录像后不可播放。旧数据缺少流 ID 时，仅在摄像头 ID 等于发布流 ID 时兼容匹配。
 
 已验证 H.264/AAC MP4。H.265 MP4 依赖播放终端支持；MJPEG 目录和裸流录像不作为视频片段提供。此功能只浏览已有录像，不自动转码。自动化可以使用媒体浏览器选择出的 media-source 片段标识播放录像。
+
+
+## 云台控制
+
+发布流绑定到 ONVIF 或 GB28181 摄像头后，会生成左、右、上、下、放大、缩小和停止七个 HA 原生按钮。移动要求 NVR HTTP 账号具备超级管理员权限；普通账号仍可读取视频、事件和录像。需要控制时在 HA 中重新配置账号。控制权限不足会返回动作错误，不会误触发重新认证。
+
+动作 `lalmax_nvr.ptz` 以摄像头实体为目标，支持 `mode`（`continuous`、`relative`、`absolute`、`stop`、`goto_preset`）、归一化的 `pan` / `tilt` / `zoom`、可选 `preset_token`，以及 0.1–5 秒的 `duration`（默认 0.5 秒）。绝对位置的 zoom 范围为 0–1。`lalmax_nvr.ptz_presets` 通过动作响应返回 ONVIF 预置位。GB28181 只接受单轴连续移动及停止，不接受相对、绝对或预置位动作。
+
+连续移动的自动停止由 NVR 执行；请求断开或移动中取消发布时，仍会对已确定的设备尝试停止。移动或停止失败会返回错误，网络或设备故障可能阻止物理停止。新命令都会重新检查发布状态和当前绑定。协议支持不代表每台 ONVIF 摄像头都有云台能力。本次使用真实 HA 对接本地 ONVIF SOAP 和具备 Digest 注册鉴权的 GB28181 SIP 模拟设备，尚未验证实体云台硬件。

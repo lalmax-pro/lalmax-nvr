@@ -15,13 +15,15 @@ import (
 )
 
 type homeAssistantStream struct {
-	StreamID          string `json:"stream_id"`
-	Name              string `json:"name"`
-	Active            bool   `json:"active"`
-	VideoCodec        string `json:"video_codec"`
-	AudioCodec        string `json:"audio_codec"`
-	RTSPURL           string `json:"rtsp_url"`
-	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	PTZSupported        bool   `json:"ptz_supported"`
+	PTZPresetsSupported bool   `json:"ptz_presets_supported"`
+	StreamID            string `json:"stream_id"`
+	Name                string `json:"name"`
+	Active              bool   `json:"active"`
+	VideoCodec          string `json:"video_codec"`
+	AudioCodec          string `json:"audio_codec"`
+	RTSPURL             string `json:"rtsp_url"`
+	UnavailableReason   string `json:"unavailable_reason,omitempty"`
 }
 
 type homeAssistantCatalog struct {
@@ -256,6 +258,7 @@ func (h *Handler) handleHomeAssistantCatalog(w http.ResponseWriter, r *http.Requ
 		byID[s.StreamID] = s
 	}
 	names := make(map[string]string)
+	protocols := make(map[string]string)
 	cameras, err := h.db.ListCameras(r.Context())
 	if err != nil {
 		writeError(w, 500, "failed to load camera names")
@@ -263,6 +266,7 @@ func (h *Handler) handleHomeAssistantCatalog(w http.ResponseWriter, r *http.Requ
 	}
 	for _, cam := range cameras {
 		names[cam.ID] = cam.Name
+		protocols[cam.ID] = cam.Protocol
 	}
 	bindings, err := h.db.ListStreamBindings(r.Context())
 	if err != nil {
@@ -271,6 +275,7 @@ func (h *Handler) handleHomeAssistantCatalog(w http.ResponseWriter, r *http.Requ
 	}
 	for _, b := range bindings {
 		names[b.StreamID] = names[b.CameraID]
+		protocols[b.StreamID] = protocols[b.CameraID]
 	}
 	created, err := h.db.ListCreatedStreams(r.Context())
 	if err != nil {
@@ -302,7 +307,7 @@ func (h *Handler) handleHomeAssistantCatalog(w http.ResponseWriter, r *http.Requ
 		if name == "" {
 			name = p.StreamID
 		}
-		result.Streams = append(result.Streams, homeAssistantStream{StreamID: p.StreamID, Name: name, Active: s.Active, VideoCodec: s.VideoCodec, AudioCodec: s.AudioCodec, RTSPURL: playURL, UnavailableReason: reason})
+		result.Streams = append(result.Streams, homeAssistantStream{PTZSupported: protocols[p.StreamID] == "onvif" || protocols[p.StreamID] == "gb28181", PTZPresetsSupported: protocols[p.StreamID] == "onvif", StreamID: p.StreamID, Name: name, Active: s.Active, VideoCodec: s.VideoCodec, AudioCodec: s.AudioCodec, RTSPURL: playURL, UnavailableReason: reason})
 	}
 	// One bounded response, with stable ordering, avoids drifting pages as streams go offline.
 	slices.SortFunc(result.Streams, func(a, b homeAssistantStream) int { return strings.Compare(a.StreamID, b.StreamID) })

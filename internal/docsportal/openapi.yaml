@@ -1975,6 +1975,43 @@ paths:
       responses:
         '200': {description: Same headers as GET, without body.}
         '404': {description: Recording unavailable or no longer published.}
+  /api/integrations/home-assistant/streams/{stream_id}/ptz:
+    post:
+      tags: [Settings]
+      summary: Control the camera bound to a published stream (super administrator)
+      description: ONVIF continuous/relative/absolute/stop/goto_preset. GB28181 single-axis continuous/stop. Continuous pulses automatically attempt Stop even on disconnect or revocation. Axes are -1..1; absolute zoom is 0..1.
+      parameters:
+        - {name: stream_id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: {type: string, enum: [continuous, relative, absolute, stop, goto_preset]}
+                pan: {type: number, minimum: -1, maximum: 1}
+                tilt: {type: number, minimum: -1, maximum: 1}
+                zoom: {type: number, minimum: -1, maximum: 1}
+                duration: {type: number, minimum: 0.1, maximum: 5, default: 0.5}
+                preset_token: {type: string, maxLength: 128}
+      responses:
+        '200': {description: Command and automatic stop completed.}
+        '400': {description: Invalid command or unsupported camera.}
+        '403': {description: Control permission required.}
+        '404': {description: Publication withdrawn.}
+        '502': {description: Device command or stop failed.}
+  /api/integrations/home-assistant/streams/{stream_id}/ptz/presets:
+    get:
+      tags: [Settings]
+      summary: Read presets from the published stream bound camera
+      parameters:
+        - {name: stream_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200': {description: ONVIF preset list; empty for GB28181.}
+        '404': {description: Publication withdrawn.}
+        '502': {description: Device or presets unavailable.}
   /api/integrations/home-assistant/streams/{stream_id}:
     parameters:
       - in: path
