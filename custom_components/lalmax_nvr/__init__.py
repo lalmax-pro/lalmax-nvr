@@ -9,7 +9,7 @@ from .const import DOMAIN
 from .coordinator import NVRCoordinator
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
-PLATFORMS = [Platform.CAMERA]
+PLATFORMS = [Platform.CAMERA, Platform.EVENT, Platform.BINARY_SENSOR]
 
 
 async def async_setup_entry(hass, entry) -> bool:
@@ -24,6 +24,7 @@ async def async_setup_entry(hass, entry) -> bool:
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    coordinator.async_start_events()
     return True
 
 

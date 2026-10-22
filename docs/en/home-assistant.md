@@ -44,4 +44,31 @@ Use the HA integration's **Reconfigure** menu to change address or credentials. 
 | GET | `/api/integrations/home-assistant` | Complete published catalog, instance ID and snapshot capability |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | Published stream JPEG |
 
-AI events, playback, PTZ and HACS distribution are future work. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
+Playback, PTZ and HACS distribution are being implemented in subsequent stages. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
+
+
+## Detection events and automations
+
+Each published stream has an Activity event entity and Motion, Person and Vehicle binary sensors. Events arrive over an authenticated SSE connection. The NVR checks the current publication list for every event, including camera-to-stream bindings. Only normalized event types and detection labels are forwarded; arbitrary metadata, messages and filesystem paths are excluded.
+
+The AI webhook/browser detector supplies `ai_detection` labels. `motion` labels and MQTT trigger action `motion` drive the Motion sensor; people and vehicles drive their respective sensors. The integration consumes existing detections; it does not perform inference. Configure the detector or MQTT ingress in the NVR first. Detection sensors reset 60 seconds after the last matching detection and clear on disconnection or unpublication. A sensor indicates a recent detection, not continuous occupancy.
+
+Use HA event-entity triggers or the `lalmax_nvr_event` bus event. For example:
+
+```yaml
+triggers:
+  - trigger: event
+    event_type: lalmax_nvr_event
+    event_data:
+      stream_id: front-door
+      type: ai_detection
+conditions:
+  - condition: template
+    value_template: "{{ 'person' in trigger.event.data.labels }}"
+actions:
+  - action: light.turn_on
+    target:
+      entity_id: light.entrance
+```
+
+Events include `instance_id`, `config_entry_id`, `stream_id`, `id`, `type`, `source`, `started_at` and `labels`. Filter by instance or config entry when multiple NVRs use the same stream ID. Types are `ai_detection`, `motion`, `mqtt_trigger`, `recorder_reconnected` and `health`. The connection reconnects with bounded backoff; event entities become unavailable during interruptions. This is a live feed with duplicate suppression, not durable delivery: events during disconnections are not replayed. Historical events remain in the NVR event timeline. Reverse proxies must forward `/api/integrations/home-assistant/events` without response buffering and permit long-lived connections.

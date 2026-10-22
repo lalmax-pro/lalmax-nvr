@@ -46,5 +46,30 @@
       "reauth_successful": "Credentials updated",
       "reconfigure_successful": "Configuration updated"
     }
+  },
+  "entity": {
+    "event": {
+      "activity": {
+        "name": "Activity",
+        "event_types": {
+          "ai_detection": "AI detection",
+          "motion": "Motion",
+          "mqtt_trigger": "MQTT trigger",
+          "recorder_reconnected": "Recorder reconnected",
+          "health": "Health event"
+        }
+      }
+    },
+    "binary_sensor": {
+      "motion": {
+        "name": "Motion"
+      },
+      "person": {
+        "name": "Person"
+      },
+      "vehicle": {
+        "name": "Vehicle"
+      }
+    }
   }
 }

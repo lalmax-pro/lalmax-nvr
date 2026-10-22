@@ -492,6 +492,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/settings/home-assistant", h.handleGetHomeAssistantSettings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/home-assistant", h.handleUpdateHomeAssistantSettings)
 		r.Get("/api/integrations/home-assistant", h.handleHomeAssistantCatalog)
+		r.Get("/api/integrations/home-assistant/events", h.handleHomeAssistantEvents)
 		r.With(middleware.RequireOperatePermission()).Put("/api/integrations/home-assistant/streams/{stream_id}", h.handleHomeAssistantPublication)
 		r.Get("/api/integrations/home-assistant/streams/{stream_id}/snapshot", h.handleHomeAssistantSnapshot)
 		r.With(middleware.RequireOperatePermission()).Post("/api/streams", h.handleCreateStream)

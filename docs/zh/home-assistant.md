@@ -56,4 +56,31 @@ NVR 按流抽帧快照使用 PATH 中的 FFmpeg，并有 10 秒缓存。NVR 未�
 | GET | `/api/integrations/home-assistant` | 已发布流目录、实例 UUID、快照能力 |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | 已发布流 JPEG 快照 |
 
-AI 事件、录像回放、云台和 HACS 分发不包含在当前版本中。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
+录像回放、云台和 HACS 分发将继续按阶段实现。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
+
+
+## 检测事件与自动化
+
+每路发布流会增加一个原生“事件”实体，以及移动、人员、车辆检测二进制传感器。事件通过鉴权 SSE 实时推送；NVR 对每条事件重新检查发布清单和摄像头绑定，仅输出规范化类型与检测标签，不输出任意元数据、消息或文件路径。
+
+AI webhook / 浏览器检测产生 `ai_detection`；`motion` 标签或 MQTT 的 `motion` 触发动作驱动移动传感器，人员及车辆标签驱动对应传感器。集成消费 NVR 已有检测结果，不负责推理，请先配置检测器或 MQTT 输入。传感器在最后一次匹配检测后 60 秒复位；断开事件连接或取消发布时清空。它表示最近检测到目标，不代表持续占用。
+
+可用 HA 原生事件实体触发器，也可监听 `lalmax_nvr_event`：
+
+```yaml
+triggers:
+  - trigger: event
+    event_type: lalmax_nvr_event
+    event_data:
+      stream_id: front-door
+      type: ai_detection
+conditions:
+  - condition: template
+    value_template: "{{ 'person' in trigger.event.data.labels }}"
+actions:
+  - action: light.turn_on
+    target:
+      entity_id: light.entrance
+```
+
+字段包括 `instance_id`、`config_entry_id`、`stream_id`、`id`、`type`、`source`、`started_at`、`labels`。多台 NVR 存在同名流时应同时按实例或配置项筛选。支持类型：`ai_detection`、`motion`、`mqtt_trigger`、`recorder_reconnected`、`health`。连接中断时事件实体不可用，并自动退避重连；这是去重的实时通知，中断期间的历史事件不补发，可在 NVR 事件时间线查看历史。反向代理需对 `/api/integrations/home-assistant/events` 关闭缓冲并允许长连接。

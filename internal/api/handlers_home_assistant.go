@@ -27,6 +27,7 @@ type homeAssistantStream struct {
 type homeAssistantCatalog struct {
 	InstanceID        string                `json:"instance_id"`
 	Enabled           bool                  `json:"enabled"`
+	EventsAvailable   bool                  `json:"events_available"`
 	SnapshotAvailable bool                  `json:"snapshot_available"`
 	Streams           []homeAssistantStream `json:"streams"`
 }
@@ -236,7 +237,7 @@ func (h *Handler) handleHomeAssistantCatalog(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	_, snapshotErr := h.resolveSnapshotFFmpegPath()
-	result := homeAssistantCatalog{InstanceID: cfg.InstanceID, Enabled: cfg.Enabled, SnapshotAvailable: snapshotErr == nil, Streams: []homeAssistantStream{}}
+	result := homeAssistantCatalog{InstanceID: cfg.InstanceID, Enabled: cfg.Enabled, SnapshotAvailable: snapshotErr == nil, EventsAvailable: h.eventHub != nil, Streams: []homeAssistantStream{}}
 	if !cfg.Enabled || len(cfg.Streams) == 0 {
 		writeJSON(w, 200, result)
 		return

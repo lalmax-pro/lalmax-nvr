@@ -1,6 +1,7 @@
 """Authenticated, read-only client for the NVR's publication catalog."""
 
 import ipaddress
+import json
 from urllib.parse import quote
 
 from aiohttp import BasicAuth, ClientError, ClientSession, ClientTimeout
@@ -111,3 +112,38 @@ class NVRClient:
                 return await response.read()
         except (TimeoutError, ClientError):
             return None
+
+    async def events(self):
+        """Read the publication-scoped live feed; None marks a connection."""
+        try:
+            async with self.session.get(
+                f"{self.url}/{CATALOG_PATH}/events",
+                auth=self.auth,
+                allow_redirects=False,
+                timeout=ClientTimeout(total=None, sock_connect=15, sock_read=45),
+            ) as response:
+                if response.status in (401, 403):
+                    raise InvalidAuth
+                if response.status != 200 or not response.headers.get(
+                    "Content-Type", ""
+                ).startswith("text/event-stream"):
+                    raise CannotConnect("NVR event feed unavailable")
+                yield None
+                data = []
+                async for raw in response.content:
+                    line = raw.decode("utf-8").rstrip("\r\n")
+                    if not line:
+                        if data:
+                            try:
+                                event = json.loads("\n".join(data))
+                            except (ValueError, TypeError):
+                                event = None
+                            if isinstance(event, dict):
+                                yield event
+                        data = []
+                    elif line.startswith("data:"):
+                        data.append(line[5:].lstrip(" "))
+                        if sum(map(len, data)) > 65536:
+                            raise CannotConnect("NVR event exceeds maximum size")
+        except (ClientError, TimeoutError, ValueError) as err:
+            raise CannotConnect("NVR event connection interrupted") from err
