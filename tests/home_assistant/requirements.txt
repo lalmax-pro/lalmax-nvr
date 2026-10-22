@@ -3,3 +3,8 @@ pytest==9.1.1
 pytest-aiohttp==1.1.1
 pytest-asyncio==1.4.0
 ruff==0.17.1
+
+# Camera/WebRTC imports load HA Stream; match its 2026.10.2 dependencies.
+PyTurboJPEG==1.8.3
+av==19.0.0
+numpy==2.3.2
