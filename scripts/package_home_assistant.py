@@ -21,7 +21,10 @@ def package(output: Path, export: Path | None = None) -> None:
         path
         for path in sorted(SOURCE.rglob("*"))
         if path.is_file()
-        and path.suffix in {".py", ".json", ".yaml", ".yml", ".md"}
+        and (
+            path.suffix in {".py", ".json", ".yaml", ".yml", ".md"}
+            or path.name == "LICENSE"
+        )
         and "__pycache__" not in path.parts
     ]
     if any(path.is_symlink() for path in files):
@@ -36,10 +39,6 @@ def package(output: Path, export: Path | None = None) -> None:
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
             archive.writestr(info, path.read_bytes())
-        info = zipfile.ZipInfo("LICENSE", (2020, 1, 1, 0, 0, 0))
-        info.compress_type = zipfile.ZIP_DEFLATED
-        info.external_attr = 0o100644 << 16
-        archive.writestr(info, (ROOT / "LICENSE").read_bytes())
     if export is not None:
         export.mkdir(parents=True, exist_ok=False)
         for path in files:
