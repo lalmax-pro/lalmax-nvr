@@ -903,15 +903,17 @@ func (r *H265Recorder) writeFrames(done chan struct{}) {
 			}
 			r.trackID = trackID
 			// Add audio track if audio config is available.
+			audioTrackID := 0
 			if len(r.audioMuxerConfig) > 0 && r.audioCodec != "" {
 				aID, err := m.AddAudioTrack(r.audioCodec, r.audioMuxerConfig)
 				if err != nil {
 					h265Logger.Error("failed to add audio track", "camera_id", r.cfg.CameraID, "codec", r.audioCodec, "error", err)
 				} else {
-					r.audioTrackID = aID
+					audioTrackID = aID
 				}
 			}
 			r.mu.Lock()
+			r.audioTrackID = audioTrackID
 			r.muxer = m
 			r.segStart = time.Now()
 			r.mu.Unlock()

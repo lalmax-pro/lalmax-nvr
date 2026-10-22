@@ -56,7 +56,7 @@ NVR 按流抽帧快照使用 PATH 中的 FFmpeg，并有 10 秒缓存。NVR 未�
 | GET | `/api/integrations/home-assistant` | 已发布流目录、实例 UUID、快照能力 |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | 已发布流 JPEG 快照 |
 
-录像回放、云台和 HACS 分发将继续按阶段实现。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
+云台和 HACS 分发将继续按阶段实现。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
 
 
 ## 检测事件与自动化
@@ -84,3 +84,12 @@ actions:
 ```
 
 字段包括 `instance_id`、`config_entry_id`、`stream_id`、`id`、`type`、`source`、`started_at`、`labels`。多台 NVR 存在同名流时应同时按实例或配置项筛选。支持类型：`ai_detection`、`motion`、`mqtt_trigger`、`recorder_reconnected`、`health`。连接中断时事件实体不可用，并自动退避重连；这是去重的实时通知，中断期间的历史事件不补发，可在 NVR 事件时间线查看历史。反向代理需对 `/api/integrations/home-assistant/events` 关闭缓冲并允许长连接。
+
+
+## 媒体浏览器中的录像
+
+HA 中进入 **媒体 → lalmax-nvr recordings → NVR 实例 → 发布流**。录像按时间从新到旧排列，每页 100 条。仅提供已完成的 MP4；需要先在 NVR 配置启用的录像计划。单纯发布流不会开始录像，离线流仍可查看已有录像。
+
+HA 使用临时签名地址代理播放，地址不包含 NVR 账号密码和文件路径。代理分块传输，支持 Range 和 HEAD，便于拖动进度。每次读取都在 NVR 重新检查发布状态和实际录制流归属；取消发布后，旧签名地址的新读取立即被拒绝，已经传输中的请求可能继续完成。删除或归档录像后不可播放。旧数据缺少流 ID 时，仅在摄像头 ID 等于发布流 ID 时兼容匹配。
+
+已验证 H.264/AAC MP4。H.265 MP4 依赖播放终端支持；MJPEG 目录和裸流录像不作为视频片段提供。此功能只浏览已有录像，不自动转码。自动化可以使用媒体浏览器选择出的 media-source 片段标识播放录像。

@@ -113,6 +113,36 @@ class NVRClient:
         except (TimeoutError, ClientError):
             return None
 
+    def recording_url(self, stream_id: str, recording_id: str = "") -> str:
+        """Build only our scoped NVR recording endpoints."""
+        base = (
+            f"{self.url}/{CATALOG_PATH}/streams/{quote(stream_id, safe='')}/recordings"
+        )
+        return f"{base}/{quote(recording_id, safe='')}" if recording_id else base
+
+    async def recording_json(self, stream_id: str, recording_id: str = "", offset=0):
+        """Recheck publication and recording ownership on the NVR for each read."""
+        try:
+            async with self.session.get(
+                self.recording_url(stream_id, recording_id),
+                params={"offset": offset, "limit": 100} if not recording_id else None,
+                auth=self.auth,
+                allow_redirects=False,
+                timeout=ClientTimeout(total=15),
+            ) as response:
+                if response.status in (401, 403):
+                    raise InvalidAuth
+                if response.status != 200:
+                    raise CannotConnect(
+                        "Recording is unavailable or no longer published"
+                    )
+                result = await response.json()
+                if not isinstance(result, dict):
+                    raise CannotConnect("Invalid recording response")
+                return result
+        except (ClientError, TimeoutError, ValueError) as err:
+            raise CannotConnect("Unable to read NVR recordings") from err
+
     async def events(self):
         """Read the publication-scoped live feed; None marks a connection."""
         try:

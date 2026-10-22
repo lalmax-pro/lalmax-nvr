@@ -12,6 +12,14 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.CAMERA, Platform.EVENT, Platform.BINARY_SENSOR]
 
 
+async def async_setup(hass, config):
+    """Register a single authenticated recording view for all NVR instances."""
+    from .media_source import NVRRecordingView
+
+    hass.http.register_view(NVRRecordingView())
+    return True
+
+
 async def async_setup_entry(hass, entry) -> bool:
     """Validate availability before forwarding the camera platform."""
     client = NVRClient(

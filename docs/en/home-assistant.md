@@ -44,7 +44,7 @@ Use the HA integration's **Reconfigure** menu to change address or credentials. 
 | GET | `/api/integrations/home-assistant` | Complete published catalog, instance ID and snapshot capability |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | Published stream JPEG |
 
-Playback, PTZ and HACS distribution are being implemented in subsequent stages. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
+PTZ and HACS distribution are being implemented in subsequent stages. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
 
 
 ## Detection events and automations
@@ -72,3 +72,12 @@ actions:
 ```
 
 Events include `instance_id`, `config_entry_id`, `stream_id`, `id`, `type`, `source`, `started_at` and `labels`. Filter by instance or config entry when multiple NVRs use the same stream ID. Types are `ai_detection`, `motion`, `mqtt_trigger`, `recorder_reconnected` and `health`. The connection reconnects with bounded backoff; event entities become unavailable during interruptions. This is a live feed with duplicate suppression, not durable delivery: events during disconnections are not replayed. Historical events remain in the NVR event timeline. Reverse proxies must forward `/api/integrations/home-assistant/events` without response buffering and permit long-lived connections.
+
+
+## Recordings in the media browser
+
+Open **Media → lalmax-nvr recordings → NVR instance → published stream** in Home Assistant. Recordings are listed newest first, 100 per page. Only completed MP4 clips are offered; the NVR needs an enabled recording plan to create them. Publishing a stream alone never starts recording. Offline streams can still have playable historical clips.
+
+HA proxies playback using a temporary signed HA URL; NVR account credentials and filesystem paths are never placed in the playback URL. The proxy streams chunks and forwards byte ranges and HEAD requests for seeking. Each new read rechecks publication and recorded-stream ownership at the NVR, so unpublishing immediately blocks new reads through a previously signed URL. A transfer already in progress may finish. Deleting/archiving clips makes them unavailable. Old records without a stream ID are recognized only when their camera ID equals the published stream ID.
+
+H.264/AAC MP4 is tested. H.265 MP4 still depends on the playback device; MJPEG directories and raw recordings are not exposed as video clips. This feature browses existing recordings and does not request transcoding. Play a media-source identifier in HA automations using the media browser's selected clip.

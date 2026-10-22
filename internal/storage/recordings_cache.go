@@ -109,6 +109,8 @@ func cloneRecordings(in []model.Recording) []model.Recording {
 func recordingFilterKey(filter model.RecordingFilter, includePage bool) string {
 	var b strings.Builder
 	b.Grow(128)
+	b.WriteString(strconv.Quote(filter.StreamID))
+	b.WriteByte('|')
 	b.WriteString(filter.CameraID)
 	b.WriteByte('|')
 	b.WriteString(string(filter.Format))

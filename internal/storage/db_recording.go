@@ -170,6 +170,10 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 func (d *DB) listRecordingsUncached(ctx context.Context, filter model.RecordingFilter) ([]model.Recording, error) {
 	where := []string{}
 	args := []any{}
+	if filter.StreamID != "" {
+		where = append(where, "(stream_id=? OR (COALESCE(stream_id, '')='' AND camera_id=?))")
+		args = append(args, filter.StreamID, filter.StreamID)
+	}
 	if filter.CameraID != "" {
 		where = append(where, "camera_id=?")
 		args = append(args, filter.CameraID)
@@ -257,6 +261,10 @@ func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.Recordi
 func (d *DB) countRecordingsUncached(ctx context.Context, filter model.RecordingFilter) (int, error) {
 	where := []string{}
 	args := []any{}
+	if filter.StreamID != "" {
+		where = append(where, "(stream_id=? OR (COALESCE(stream_id, '')='' AND camera_id=?))")
+		args = append(args, filter.StreamID, filter.StreamID)
+	}
 	if filter.CameraID != "" {
 		where = append(where, "camera_id=?")
 		args = append(args, filter.CameraID)

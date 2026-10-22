@@ -879,6 +879,35 @@ func TestH264Recorder_RecordsFromFrameSource(t *testing.T) {
 	require.True(t, fileIsMP4(t, files[0]))
 }
 
+func TestH264Recorder_FrameSourcePreservesAACTrack(t *testing.T) {
+	mgr := newTestManager(t)
+	ch := make(chan media.MediaFrame, 64)
+	rec := NewH264Recorder(H264Config{
+		CameraID: "audio-frames", SegmentDur: time.Minute, AudioEnabled: true,
+		FrameSource: func(context.Context) (media.FrameSubscription, error) { return &fakeFrameSub{ch: ch}, nil },
+	}, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, rec.Start(ctx))
+	ch <- media.MediaFrame{Kind: media.FrameAudio, Codec: "aac", IsSeqHeader: true, Data: []byte{0x12, 0x10}}
+	ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", Data: annexB(testSPS)}
+	ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", Data: annexB(testPPS)}
+	ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", IsKey: true, Data: annexB(testIDR)}
+	for range 20 {
+		ch <- media.MediaFrame{Kind: media.FrameAudio, Codec: "aac", Data: []byte{0x21, 0x10, 0x05, 0, 0, 0, 0, 0}}
+		ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", Data: annexB(testP)}
+		time.Sleep(5 * time.Millisecond)
+	}
+	require.NoError(t, rec.Stop())
+	files, err := mgr.ListFiles("audio-frames")
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	data, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	require.Contains(t, string(data), "mp4a", "recorded MP4 must contain an AAC sample entry")
+	require.Contains(t, string(data), "soun", "recorded MP4 must expose an audio track")
+}
+
 func TestH264Recorder_FrameSourceUnsupportedFallsBackToRTSP(t *testing.T) {
 	srv := newTestRTSPServer(t)
 	defer srv.close()

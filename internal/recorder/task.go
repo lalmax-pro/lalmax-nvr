@@ -330,7 +330,7 @@ func (m *TaskManager) OnStreamUp(ctx context.Context, streamID string) {
 }
 
 func (m *TaskManager) newRecorder(ctx context.Context, streamID string) (model.Recorder, error) {
-	owner := StreamOwner{CameraID: streamID, Name: streamID}
+	owner := StreamOwner{CameraID: streamID, Name: streamID, AudioEnabled: true}
 	m.mu.Lock()
 	ownerFn := m.ownerOf
 	m.mu.Unlock()

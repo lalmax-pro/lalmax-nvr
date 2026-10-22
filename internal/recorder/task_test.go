@@ -122,3 +122,15 @@ func TestTaskManager_RejectsUnknownCodec(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not recordable")
 }
+
+func TestTaskManager_PlanOnlyAudioDefaultAndOwnerOverride(t *testing.T) {
+	engine := &stubTaskEngine{info: &media.StreamInfo{StreamID: "push", VideoCodec: "h264", AudioCodec: "aac", Active: true}}
+	mgr := NewTaskManager(engine, nil, nil, nil, nil, time.Second)
+	rec, err := mgr.newRecorder(context.Background(), "push")
+	require.NoError(t, err)
+	require.True(t, rec.(*H264Recorder).AudioEnabled(), "plan-only streams must preserve source audio")
+	mgr.SetOwnerFunc(func(string) StreamOwner { return StreamOwner{CameraID: "camera", AudioEnabled: false} })
+	rec, err = mgr.newRecorder(context.Background(), "push")
+	require.NoError(t, err)
+	require.False(t, rec.(*H264Recorder).AudioEnabled(), "an explicit camera audio choice must be preserved")
+}

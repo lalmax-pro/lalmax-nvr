@@ -1936,6 +1936,45 @@ paths:
               schema: { type: string }
         "503":
           description: Event hub unavailable
+  /api/integrations/home-assistant/streams/{stream_id}/recordings:
+    get:
+      tags: [Settings]
+      summary: Published stream recordings for Home Assistant
+      parameters:
+        - {name: stream_id, in: path, required: true, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 100}}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, maximum: 1000000, default: 0}}
+      responses:
+        '200': {description: Sanitized completed MP4 clip metadata, total, limit and offset. No filesystem paths.}
+        '404': {description: Stream is not published.}
+  /api/integrations/home-assistant/streams/{stream_id}/recordings/{recording_id}:
+    get:
+      tags: [Settings]
+      summary: Published recording metadata
+      parameters:
+        - {name: stream_id, in: path, required: true, schema: {type: string}}
+        - {name: recording_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Clip id, timestamps, duration, format and size.}
+        '404': {description: Recording absent, archived, unsupported or outside the publication.}
+  /api/integrations/home-assistant/streams/{stream_id}/recordings/{recording_id}/file:
+    parameters:
+      - {name: stream_id, in: path, required: true, schema: {type: string}}
+      - {name: recording_id, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [Settings]
+      summary: Seekable published recording MP4
+      responses:
+        '200': {description: MP4 bytes.}
+        '206': {description: Requested byte range.}
+        '404': {description: File unavailable or no longer published.}
+        '416': {description: Invalid byte range.}
+    head:
+      tags: [Settings]
+      summary: Published recording size and range capability
+      responses:
+        '200': {description: Same headers as GET, without body.}
+        '404': {description: Recording unavailable or no longer published.}
   /api/integrations/home-assistant/streams/{stream_id}:
     parameters:
       - in: path
