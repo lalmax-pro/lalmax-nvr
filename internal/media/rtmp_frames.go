@@ -3,6 +3,7 @@ package media
 import (
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/model/nalutil"
 	"github.com/q191201771/lal/pkg/avc"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/hevc"
@@ -150,8 +151,7 @@ func isVideoKeyframeNALU(nal []byte, isH265 bool) bool {
 		return false
 	}
 	if isH265 {
-		t := (nal[0] >> 1) & 0x3F
-		return t == 19 || t == 20
+		return nalutil.IsH265RandomAccessNALU(nal)
 	}
 	return nal[0]&0x1F == 5
 }

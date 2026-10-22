@@ -78,3 +78,12 @@
 隔离 HA 开启低延迟选项后，使用 HA 原生 `camera/webrtc/offer` WebSocket 接口协商，Pion 接收端实际收到 H.264 RTP 视频包并建立连接。特意去掉初始 offer 的全部候选地址，仍能通过完整 answer 建立 LAN 连接；不依赖浏览器预先完成 ICE 收集。同一摄像头继续提供 `camera/stream` HLS。当前 AAC 源在 WebRTC 中为视频，声音继续使用 HLS。
 
 实际验证播放器退订、撤回发布和 HA 集成重载均关闭媒体端会话，接收端停止收包并进入 closed 状态。撤回后新协商被拒绝，原令牌仍可用于清理；Go race 验证令牌篡改、串流、过期及跨来源 Location 拒绝，正确使用真实 app 与播放 token。Python 验证分块 SDP 完整读取、体积限制、禁止重定向及 pending 协商关闭清理。测试接收端位于 `tests/home_assistant/webrtc_peer`，仅监听回环地址，不接收账号凭据。未验证 TURN/公网穿透。
+
+
+## 阶段六：H.265 兼容
+
+用本机已有 FFmpeg 生成 Enhanced RTMP 的 H.265/AAC 合成源，实际进入 NVR，再由 HA 通过鉴权 RTSP 读取。HA 快照为有效 JPEG；HLS master 宣告 `hvc1` 和 AAC，取回 init 与真实分片后可解码 HEVC 视频和 AAC 音频。HEVC 流不宣告当前 H.264 WebRTC 能力。未启动自动转码，也不要求用户安装 FFmpeg；测试源生成使用测试机既有工具。
+
+中途启动录像时发现 CRA 源无片段：原 H.265 录像器只等待 IDR，错过初始 IDR 后无限等待。已增加 BLA/IDR/CRA 随机访问点处理，开始新片段时丢弃可能引用片段外帧的 leading RASL，直到 trailing pictures。实际再录制，HA 原生媒体解析出的 MP4 可解码 HEVC 与 AAC，并完成 10 秒 seek。回归包含 CRA 开始与旋转、首段 RASL 排除和 Enhanced RTMP IRAP 标记，相关 recorder/media/nalutil race 检查通过。
+
+这验证媒体服务与 HA 链路保留原始编码，浏览器仍需具备 HEVC 解码能力。`tests/home_assistant/live_codecs.py --runtime <隔离目录>` 保存验证，需已准备 HEVC/AAC 流与测试录像计划，结束后恢复原计划状态。

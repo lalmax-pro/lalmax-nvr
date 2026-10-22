@@ -822,13 +822,14 @@ func (r *H265Recorder) writeFrames(done chan struct{}) {
 	}()
 
 	defer close(done)
+	dropLeadingRASL := false
 	for data := range r.frameCh {
 		// If paused, consume frames but don't write to disk
 		if r.paused.Load() {
 			if len(data) >= 6 {
 				naluType := (data[4] >> 1) & 0x3F
-				if naluType == 19 || naluType == 20 || naluType <= 31 {
-					r.preroll.Push(data, naluType == 19 || naluType == 20)
+				if naluType <= 31 {
+					r.preroll.Push(data, nalutil.IsH265RandomAccessNALU(data[4:]))
 				}
 			}
 			continue
@@ -865,29 +866,36 @@ func (r *H265Recorder) writeFrames(done chan struct{}) {
 		if naluType >= 32 {
 			continue
 		}
-		isIDR := naluType == 19 || naluType == 20
-		if !isIDR {
+		// RASL pictures following a segment's first IRAP may reference pictures
+		// outside this file. Drop them until trailing pictures are reached.
+		if dropLeadingRASL && (naluType == 8 || naluType == 9) {
+			continue
+		}
+		if naluType <= 5 {
+			dropLeadingRASL = false
+		}
+		isRandomAccess := nalutil.IsH265RandomAccessNALU(nalu)
+		if !isRandomAccess {
 			r.cfg.Adaptive.ObservePFrame(len(nalu))
 		}
-		if !r.cfg.Adaptive.ShouldWrite(isIDR, time.Now()) {
+		if !r.cfg.Adaptive.ShouldWrite(isRandomAccess, time.Now()) {
 			continue
 		}
 		if r.vps == nil || r.sps == nil || r.pps == nil {
 			continue
 		}
-		// Rotate at IDR boundary once segment duration is reached.
-		if r.pendingRotate && r.muxer != nil && (naluType == 19 || naluType == 20) {
+		// Rotate at a random access boundary once segment duration is reached.
+		if r.pendingRotate && r.muxer != nil && isRandomAccess {
 			r.closeCurrentSegment()
 		}
 
-		// Wait for an IDR frame before starting a new segment.
-		// Without this, segments may start with P-frames that have no reference,
-		// causing black/gray output until the first IDR appears.
-		// HEVC IDR types: 19 (IDR_W_RADL), 20 (IDR_N_LP).
-		if r.muxer == nil && naluType != 19 && naluType != 20 {
+		// Wait for BLA/IDR/CRA, never start on a dependent slice. Sources using
+		// open GOPs may only emit CRA after their initial IDR.
+		if r.muxer == nil && !isRandomAccess {
 			continue
 		}
 		if r.muxer == nil {
+			dropLeadingRASL = true
 			tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatH265))
 			if err != nil {
 				h265Logger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)

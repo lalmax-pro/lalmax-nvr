@@ -35,7 +35,7 @@ HTTP API 始终使用 NVR Basic 账号鉴权，写发布配置要求超级管理
 
 ## 快照与编码
 
-优先验证 H.264 视频和 AAC 音频。H.265 取决于 HA 和浏览器解码能力，当前不自动转码；如设备有 H.264 子码流，建议发布子码流。
+优先验证 H.264 视频和 AAC 音频。已实际验证 H.265/HEVC + AAC 从 RTSP 经 HA 生成快照、HLS 和读取 MP4 录像，保留原始编码。HLS 声明 `hvc1`；终端仍需原生 HEVC 解码支持，不能保证所有浏览器播放。如需更广的终端兼容性，可发布设备的 H.264 子码流。当前不自动转码。
 
 NVR 按流抽帧快照使用 PATH 中的 FFmpeg，并有 10 秒缓存。NVR 未安装 FFmpeg 时，集成会改由 HA 的 Stream 功能从 RTSP 生成静态图。仅有流管理绑定关系的摄像头快照不会被误用为其他流的缩略图。
 
@@ -56,7 +56,7 @@ NVR 按流抽帧快照使用 PATH 中的 FFmpeg，并有 10 秒缓存。NVR 未�
 | GET | `/api/integrations/home-assistant` | 已发布流目录、实例 UUID、快照能力 |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | 已发布流 JPEG 快照 |
 
-编码兼容与 HACS 分发将继续按阶段实现。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
+HACS 分发将继续按阶段实现。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
 
 
 ## 检测事件与自动化

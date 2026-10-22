@@ -44,7 +44,7 @@ Use the HA integration's **Reconfigure** menu to change address or credentials. 
 | GET | `/api/integrations/home-assistant` | Complete published catalog, instance ID and snapshot capability |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | Published stream JPEG |
 
-Codec compatibility and HACS distribution are being implemented in subsequent stages. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
+HACS distribution is being implemented in a subsequent stage. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
 
 
 ## Detection events and automations
