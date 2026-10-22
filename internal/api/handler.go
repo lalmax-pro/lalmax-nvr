@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -146,24 +147,25 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
-	homeAssistantMu    sync.Mutex
-	voipSettingsMu     sync.Mutex
-	voipRestarter      VoIPRestarter
-	db                 storage.APIRepository
-	store              *storage.Manager
-	authMW             func(http.Handler) http.Handler
-	multiUserMW        func(http.Handler) http.Handler
-	config             *config.Config
-	configWatcher      *config.Watcher
-	restartFunc        func()
-	restartOnce        sync.Once
-	camMgr             *camera.CameraManager
-	recPlanner         *recorder.RecordingPlanner
-	reconcileRecording func(context.Context)
-	mediaEngine        media.Engine
-	mediaProxy         *http.Client
-	wsMgr              media.WS
-	groupStreamSource  interface {
+	homeAssistantMu      sync.Mutex
+	homeAssistantWHEPKey []byte
+	voipSettingsMu       sync.Mutex
+	voipRestarter        VoIPRestarter
+	db                   storage.APIRepository
+	store                *storage.Manager
+	authMW               func(http.Handler) http.Handler
+	multiUserMW          func(http.Handler) http.Handler
+	config               *config.Config
+	configWatcher        *config.Watcher
+	restartFunc          func()
+	restartOnce          sync.Once
+	camMgr               *camera.CameraManager
+	recPlanner           *recorder.RecordingPlanner
+	reconcileRecording   func(context.Context)
+	mediaEngine          media.Engine
+	mediaProxy           *http.Client
+	wsMgr                media.WS
+	groupStreamSource    interface {
 		StreamInfo(string) (model.Format, []byte, []byte, []byte, *model.StreamHub, bool)
 	}
 	configPath        string
@@ -277,8 +279,9 @@ func NewHandler(db storage.APIRepository, store *storage.Manager, authMW func(ht
 		onvifNewClient: func(endpoint, username, password string) onvifDeviceClient {
 			return onvif.NewClient(endpoint, username, password)
 		},
-		eventHub: event.NewLiveHub(),
-		logRing:  middleware.DefaultLogRing(),
+		homeAssistantWHEPKey: []byte(rand.Text()),
+		eventHub:             event.NewLiveHub(),
+		logRing:              middleware.DefaultLogRing(),
 	}
 	if db != nil {
 		hub := h.eventHub
@@ -493,6 +496,8 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/home-assistant", h.handleUpdateHomeAssistantSettings)
 		r.Get("/api/integrations/home-assistant", h.handleHomeAssistantCatalog)
 		r.Get("/api/integrations/home-assistant/events", h.handleHomeAssistantEvents)
+		r.Post("/api/integrations/home-assistant/streams/{stream_id}/webrtc", h.handleHomeAssistantWHEP)
+		r.Delete("/api/integrations/home-assistant/streams/{stream_id}/webrtc/{session}", h.handleHomeAssistantCloseWHEP)
 		r.With(middleware.RequireOperatePermission()).Post("/api/integrations/home-assistant/streams/{stream_id}/ptz", h.handleHomeAssistantPTZ)
 		r.Get("/api/integrations/home-assistant/streams/{stream_id}/ptz/presets", h.handleHomeAssistantPTZPresets)
 		r.Get("/api/integrations/home-assistant/streams/{stream_id}/recordings", h.handleHomeAssistantRecordings)

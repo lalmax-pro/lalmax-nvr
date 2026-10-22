@@ -9,7 +9,8 @@
           "username": "NVR HTTP 用户名",
           "password": "NVR HTTP 密码",
           "rtsp_username": "RTSP 用户名（可选）",
-          "rtsp_password": "RTSP 密码（可选）"
+          "rtsp_password": "RTSP 密码（可选）",
+          "low_latency": "启用低延迟 WebRTC（H.264，AAC 音频不可用）"
         }
       },
       "reauth_confirm": {
@@ -20,7 +21,8 @@
           "username": "NVR HTTP 用户名",
           "password": "NVR HTTP 密码",
           "rtsp_username": "RTSP 用户名（可选）",
-          "rtsp_password": "RTSP 密码（可选）"
+          "rtsp_password": "RTSP 密码（可选）",
+          "low_latency": "启用低延迟 WebRTC（H.264，AAC 音频不可用）"
         }
       },
       "reconfigure": {
@@ -31,7 +33,8 @@
           "username": "NVR HTTP 用户名",
           "password": "NVR HTTP 密码",
           "rtsp_username": "RTSP 用户名（可选）",
-          "rtsp_password": "RTSP 密码（可选）"
+          "rtsp_password": "RTSP 密码（可选）",
+          "low_latency": "启用低延迟 WebRTC（H.264，AAC 音频不可用）"
         }
       }
     },

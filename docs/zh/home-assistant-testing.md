@@ -71,3 +71,10 @@
 上述为协议模拟设备联调，不代表实体云台已验证。网络故障时停止也可能失败，接口会返回失败，不能承诺硬件一定停止。`tests/home_assistant/onvif_fixture.py`、`gb28181_fixture.py` 为模拟端；`live_ptz.py` 和 `live_gb_ptz.py` 保存隔离环境流程。HA 原生按钮及控制动作已提供中英文名称。20 项 Python 测试、Home Assistant API 专项 Go race、ruff、go vet、OpenAPI 解析通过。
 
 补充：PR #49 在获准不等待主构建而合并后，完整 CI 随后全部通过，包含全量 Go race、前端及六个平台构建。
+
+
+## 阶段五：可选 WebRTC 低延迟
+
+隔离 HA 开启低延迟选项后，使用 HA 原生 `camera/webrtc/offer` WebSocket 接口协商，Pion 接收端实际收到 H.264 RTP 视频包并建立连接。特意去掉初始 offer 的全部候选地址，仍能通过完整 answer 建立 LAN 连接；不依赖浏览器预先完成 ICE 收集。同一摄像头继续提供 `camera/stream` HLS。当前 AAC 源在 WebRTC 中为视频，声音继续使用 HLS。
+
+实际验证播放器退订、撤回发布和 HA 集成重载均关闭媒体端会话，接收端停止收包并进入 closed 状态。撤回后新协商被拒绝，原令牌仍可用于清理；Go race 验证令牌篡改、串流、过期及跨来源 Location 拒绝，正确使用真实 app 与播放 token。Python 验证分块 SDP 完整读取、体积限制、禁止重定向及 pending 协商关闭清理。测试接收端位于 `tests/home_assistant/webrtc_peer`，仅监听回环地址，不接收账号凭据。未验证 TURN/公网穿透。

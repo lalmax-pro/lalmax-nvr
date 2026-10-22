@@ -1,5 +1,6 @@
 """Home Assistant integration for published lalmax-nvr streams."""
 
+from homeassistant.components.camera import async_register_webrtc_provider
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, Platform
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -7,6 +8,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import NVRClient
 from .const import DOMAIN
 from .coordinator import NVRCoordinator
+from .webrtc import NVRWebRTCProvider
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.CAMERA, Platform.EVENT, Platform.BINARY_SENSOR, Platform.BUTTON]
@@ -30,8 +32,10 @@ async def async_setup_entry(hass, entry) -> bool:
     )
     coordinator = NVRCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
+    coordinator.webrtc = NVRWebRTCProvider(coordinator)
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(async_register_webrtc_provider(hass, coordinator.webrtc))
     coordinator.async_start_events()
     return True
 

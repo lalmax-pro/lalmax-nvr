@@ -11,7 +11,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .api import CannotConnect, InvalidAuth, NVRClient, normalize_url
-from .const import CONF_RTSP_PASSWORD, CONF_RTSP_USERNAME, DOMAIN
+from .const import CONF_LOW_LATENCY, CONF_RTSP_PASSWORD, CONF_RTSP_USERNAME, DOMAIN
 
 
 class NVRConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -65,6 +65,9 @@ class NVRConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(title="lalmax-nvr", data=values)
         schema = {
+            vol.Optional(
+                CONF_LOW_LATENCY, default=defaults.get(CONF_LOW_LATENCY, False)
+            ): bool,
             vol.Required(CONF_URL, default=defaults.get(CONF_URL, "http://")): str,
             vol.Required(CONF_USERNAME, default=defaults.get(CONF_USERNAME, "")): str,
             vol.Required(CONF_PASSWORD): TextSelector(

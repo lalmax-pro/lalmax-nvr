@@ -44,7 +44,7 @@ Use the HA integration's **Reconfigure** menu to change address or credentials. 
 | GET | `/api/integrations/home-assistant` | Complete published catalog, instance ID and snapshot capability |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | Published stream JPEG |
 
-Low-latency playback, codec compatibility and HACS distribution are being implemented in subsequent stages. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
+Codec compatibility and HACS distribution are being implemented in subsequent stages. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
 
 
 ## Detection events and automations
@@ -90,3 +90,12 @@ A published stream bound to an ONVIF or GB28181 camera exposes seven native HA b
 The `lalmax_nvr.ptz` action targets a camera entity, with `mode` (`continuous`, `relative`, `absolute`, `stop`, `goto_preset`), normalized `pan`, `tilt`, `zoom`, optional `preset_token`, and `duration` (0.1–5 seconds, default 0.5). Absolute zoom is 0–1. `lalmax_nvr.ptz_presets` returns the ONVIF preset list and requires an action response. GB28181 supports single-axis continuous pulses and stop; relative/absolute/preset actions are rejected.
 
 NVR performs the automatic stop for continuous movement, including caller disconnection and publication revocation during the pulse. A failed move or stop returns an error; network/device failures can prevent physical stopping. New commands check current publication and camera binding. The integration advertises protocol support, not a guarantee that every ONVIF camera implements PTZ. Real HA testing uses loopback ONVIF SOAP and authenticated GB28181 SIP protocol simulators; physical hardware has not been tested.
+
+
+## Optional low-latency WebRTC
+
+Enable the low-latency option in HA Reconfigure. Online published H.264 streams then offer both WebRTC and HLS to HA's player. The option defaults to off. Current WebRTC playback does not carry AAC audio; use HLS for audio. No transcoding is started.
+
+HA negotiates WHEP through authenticated NVR endpoints. Media travels directly between the viewer and engine over ICE, so the viewer must reach the engine's advertised UDP addresses and ports. LAN connectivity, including an initial candidate-free offer, is tested; TURN relaying and public NAT traversal are not provided.
+
+Closing a viewer, unloading the integration or withdrawing a publication cleans up its sessions. A signed cleanup token remains usable after withdrawal only to delete the original session. Tokens are scoped to the stream, instance and configured engine origin, expire in 24 hours and become invalid after an NVR restart. Abnormal termination also relies on engine timeout cleanup.

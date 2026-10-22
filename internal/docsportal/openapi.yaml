@@ -1975,6 +1975,44 @@ paths:
       responses:
         '200': {description: Same headers as GET, without body.}
         '404': {description: Recording unavailable or no longer published.}
+  /api/integrations/home-assistant/streams/{stream_id}/webrtc:
+    post:
+      tags: [Settings]
+      summary: Negotiate published H.264 WebRTC playback
+      description: Authenticated SDP offer to the configured media engine. Returns a complete ICE answer and signed cleanup Location. Requires active H.264 publication and enabled WebRTC; no transcoding. AAC audio is not supported by the WebRTC path.
+      parameters:
+        - {name: stream_id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema: {type: string, maxLength: 1048576}
+      responses:
+        '201':
+          description: SDP answer and opaque signed session token.
+          headers:
+            Location:
+              schema: {type: string}
+              description: Authenticated session cleanup endpoint.
+          content:
+            application/sdp:
+              schema: {type: string}
+        '400': {description: Invalid offer or incompatible codec.}
+        '404': {description: Publication withdrawn.}
+        '502': {description: Negotiation failed.}
+        '503': {description: Stream offline or WebRTC unavailable.}
+  /api/integrations/home-assistant/streams/{stream_id}/webrtc/{session}:
+    delete:
+      tags: [Settings]
+      summary: Close a signed Home Assistant WebRTC session
+      description: Cleanup remains available after unpublication. Token is scoped to stream, NVR instance and configured media-engine origin, and expires after 24 hours. Invalid after an NVR restart. Does not accept arbitrary upstream URLs.
+      parameters:
+        - {name: stream_id, in: path, required: true, schema: {type: string}}
+        - {name: session, in: path, required: true, schema: {type: string, maxLength: 8192}}
+      responses:
+        '204': {description: Session closed or already absent.}
+        '400': {description: Invalid, expired or mismatched session.}
+        '502': {description: Media engine cleanup failed.}
   /api/integrations/home-assistant/streams/{stream_id}/ptz:
     post:
       tags: [Settings]

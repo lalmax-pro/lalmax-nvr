@@ -12,7 +12,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from yarl import URL
 
-from .const import CONF_RTSP_PASSWORD, CONF_RTSP_USERNAME, DOMAIN
+from .const import CONF_LOW_LATENCY, CONF_RTSP_PASSWORD, CONF_RTSP_USERNAME, DOMAIN
 from .control import async_ptz
 
 PARALLEL_UPDATES = 0
@@ -79,6 +79,7 @@ class NVRCamera(CoordinatorEntity, Camera):
         self.entry = entry
         self.stream_id = stream_id
         self._last_source = self.stream_data.get("rtsp_url")
+        self._last_webrtc_state = None
         self._attr_unique_id = f"{entry.unique_id}:{stream_id}"
         self.stream_options["rtsp_transport"] = "tcp"
 
@@ -106,7 +107,12 @@ class NVRCamera(CoordinatorEntity, Camera):
 
     @property
     def extra_state_attributes(self):
-        return {"ptz_supported": self.stream_data.get("ptz_supported", False)}
+        return {
+            "ptz_supported": self.stream_data.get("ptz_supported", False),
+            "video_codec": self.stream_data.get("video_codec"),
+            "audio_codec": self.stream_data.get("audio_codec"),
+            "low_latency": self.entry.data.get(CONF_LOW_LATENCY, False),
+        }
 
     async def async_ptz(self, **command):
         await async_ptz(self.coordinator, self.stream_id, command)
@@ -146,6 +152,14 @@ class NVRCamera(CoordinatorEntity, Camera):
                 old_stream, self.stream = self.stream, None
                 self.hass.async_create_task(self._stop_revoked_stream(old_stream))
         self._last_source = self.stream_data.get("rtsp_url")
+        webrtc_state = (
+            self._last_source,
+            self.available,
+            self.stream_data.get("webrtc_supported"),
+        )
+        if webrtc_state != self._last_webrtc_state:
+            self._last_webrtc_state = webrtc_state
+            self.hass.async_create_task(self.async_refresh_providers())
         super()._handle_coordinator_update()
 
     async def _stop_revoked_stream(self, stream) -> None:

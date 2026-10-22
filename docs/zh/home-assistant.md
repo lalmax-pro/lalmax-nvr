@@ -56,7 +56,7 @@ NVR 按流抽帧快照使用 PATH 中的 FFmpeg，并有 10 秒缓存。NVR 未�
 | GET | `/api/integrations/home-assistant` | 已发布流目录、实例 UUID、快照能力 |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | 已发布流 JPEG 快照 |
 
-低延迟播放、编码兼容与 HACS 分发将继续按阶段实现。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
+编码兼容与 HACS 分发将继续按阶段实现。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
 
 
 ## 检测事件与自动化
@@ -102,3 +102,12 @@ HA 使用临时签名地址代理播放，地址不包含 NVR 账号密码和文
 动作 `lalmax_nvr.ptz` 以摄像头实体为目标，支持 `mode`（`continuous`、`relative`、`absolute`、`stop`、`goto_preset`）、归一化的 `pan` / `tilt` / `zoom`、可选 `preset_token`，以及 0.1–5 秒的 `duration`（默认 0.5 秒）。绝对位置的 zoom 范围为 0–1。`lalmax_nvr.ptz_presets` 通过动作响应返回 ONVIF 预置位。GB28181 只接受单轴连续移动及停止，不接受相对、绝对或预置位动作。
 
 连续移动的自动停止由 NVR 执行；请求断开或移动中取消发布时，仍会对已确定的设备尝试停止。移动或停止失败会返回错误，网络或设备故障可能阻止物理停止。新命令都会重新检查发布状态和当前绑定。协议支持不代表每台 ONVIF 摄像头都有云台能力。本次使用真实 HA 对接本地 ONVIF SOAP 和具备 Digest 注册鉴权的 GB28181 SIP 模拟设备，尚未验证实体云台硬件。
+
+
+## 可选 WebRTC 低延迟播放
+
+在 HA 集成的“重新配置”中启用低延迟选项。在线 H.264 发布流会同时提供 WebRTC 和 HLS，由 HA 播放器选择路径。默认关闭，可随时重新配置关闭。AAC 音频不能通过当前 WebRTC 路径播放，需要声音时使用 HLS；不会启动转码。
+
+HA 通过 NVR 鉴权接口完成 WHEP 协商，不直接访问媒体引擎的 HTTP 地址。媒体通过 ICE 在终端与引擎之间传输，请确保终端可访问引擎公布的 UDP 地址与端口；只验证了局域网直连，未提供 TURN 中继或公网 NAT 穿透保证。引擎返回完整 ICE answer，LAN 已验证初始 offer 无 candidate 时也能连接。
+
+关闭播放器、卸载集成或撤回发布会清理会话。撤回发布后，已经签发的清理令牌只能删除原会话，不能再创建播放。令牌绑定流、实例及引擎来源，24 小时过期，NVR 重启后失效；异常退出时还依赖引擎的超时清理。

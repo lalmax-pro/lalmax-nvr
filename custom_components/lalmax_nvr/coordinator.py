@@ -88,6 +88,8 @@ class NVRCoordinator(DataUpdateCoordinator):
             delay = min(delay * 2, 30)
 
     async def async_shutdown(self):
+        if provider := getattr(self, "webrtc", None):
+            await provider.async_shutdown()
         if self._event_task:
             self._event_task.cancel()
             await asyncio.gather(self._event_task, return_exceptions=True)

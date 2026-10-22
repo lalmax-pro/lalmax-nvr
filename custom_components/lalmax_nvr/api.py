@@ -169,6 +169,67 @@ class NVRClient:
         except (ClientError, TimeoutError, ValueError) as err:
             raise CannotConnect("PTZ request failed") from err
 
+    async def create_webrtc(self, stream_id, offer):
+        """Negotiate only through NVR; never send account secrets to peer URLs."""
+        endpoint = (
+            f"{self.url}/{CATALOG_PATH}/streams/{quote(stream_id, safe='')}/webrtc"
+        )
+        try:
+            async with self.session.post(
+                endpoint,
+                data=offer,
+                headers={"Content-Type": "application/sdp"},
+                auth=self.auth,
+                allow_redirects=False,
+                timeout=ClientTimeout(total=25),
+            ) as response:
+                if response.status == 401:
+                    raise InvalidAuth
+                if response.status != 201:
+                    raise CannotConnect("NVR rejected the WebRTC offer")
+                # Only use the signed opaque token, never request Location itself.
+                token = URL(response.headers.get("Location", "")).path.rsplit("/", 1)[
+                    -1
+                ]
+                if (
+                    not token
+                    or len(token) > 8192
+                    or any(
+                        ch
+                        not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-."
+                        for ch in token
+                    )
+                ):
+                    raise CannotConnect("Invalid NVR session token")
+                try:
+                    answer = bytearray()
+                    async for chunk in response.content.iter_chunked(16384):
+                        answer.extend(chunk)
+                        if len(answer) > 262144:
+                            raise CannotConnect("Invalid SDP answer")
+                    if not answer.startswith(b"v=0"):
+                        raise CannotConnect("Invalid SDP answer")
+                    return answer.decode("utf-8"), token
+                except BaseException:
+                    await self.close_webrtc(stream_id, token)
+                    raise
+        except (ClientError, TimeoutError, ValueError) as err:
+            raise CannotConnect("Unable to negotiate WebRTC") from err
+
+    async def close_webrtc(self, stream_id, token):
+        """Cleanup is idempotent, including after publication withdrawal."""
+        endpoint = f"{self.url}/{CATALOG_PATH}/streams/{quote(stream_id, safe='')}/webrtc/{quote(token, safe='')}"
+        try:
+            async with self.session.delete(
+                endpoint,
+                auth=self.auth,
+                allow_redirects=False,
+                timeout=ClientTimeout(total=15),
+            ) as response:
+                return response.status in (200, 204, 400, 404)
+        except (ClientError, TimeoutError):
+            return False
+
     async def events(self):
         """Read the publication-scoped live feed; None marks a connection."""
         try:
