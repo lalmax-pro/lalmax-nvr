@@ -4,7 +4,7 @@ Publish selected lalmax-nvr streams as Home Assistant camera entities, with live
 
 ## Installation
 
-1. Copy the complete repository directory `custom_components/lalmax_nvr` into the same path under your HA configuration directory. Restart HA. The tested version is **Home Assistant 2026.10.2**. This is a manually installed custom integration, not a built-in or HACS integration.
+1. Copy the complete repository directory `custom_components/lalmax_nvr` into the same path under your HA configuration directory. Restart HA. The tested version is **Home Assistant 2026.10.2**. Use HA **2026.10.2 or newer**. Alternatively, extract the `lalmax_nvr.zip` CI/release asset directly into `custom_components/lalmax_nvr` (the ZIP contains `manifest.json` at its root). This is a custom integration, not built into HA.
 2. Open **NVR Settings → Home Assistant**, enable publication, select streams and save. Search and bulk selection are supported. Stream cards also have individual publication buttons. Unregistered push streams can be published without creating camera devices.
 3. Optionally enter an RTSP server origin such as `rtsp://192.168.1.20:15544`, without credentials or a stream path. Otherwise the media engine URL is used. The HA client replaces advertised loopback hosts with the NVR HTTP hostname. With a separate media engine, explicitly configure its reachable address.
 4. In HA, use **Settings → Devices & services → Add integration → lalmax-nvr**. Enter the NVR HTTP URL, username and password. A dedicated ordinary NVR user is sufficient for reads.
@@ -29,7 +29,7 @@ Unpublishing does not invalidate RTSP credentials held by other clients or grant
 
 ## Snapshots and compatibility
 
-H.264 video and AAC audio are the primary targets. H.265 depends on HA and browser support; automatic transcoding is not included. Prefer an H.264 substream when available.
+H.264 video and AAC audio are the primary targets. HEVC/AAC is tested through RTSP, HA snapshots, HA HLS (advertising `hvc1`) and recorded MP4, preserving the source codecs. Playback devices still need HEVC decoding; support is not guaranteed in every browser. Publish an H.264 substream for broader compatibility. No automatic transcoding is provided.
 
 NVR snapshots require FFmpeg on PATH and cache frames for 10 seconds. Without NVR FFmpeg, HA uses its Stream integration to generate still images. Stream snapshots never substitute an unrelated camera's image just because it has a management binding.
 
@@ -44,7 +44,7 @@ Use the HA integration's **Reconfigure** menu to change address or credentials. 
 | GET | `/api/integrations/home-assistant` | Complete published catalog, instance ID and snapshot capability |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | Published stream JPEG |
 
-HACS distribution is being implemented in a subsequent stage. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
+HACS packaging and installation notes are below. Track implementation and validation in [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46).
 
 
 ## Detection events and automations
@@ -99,3 +99,20 @@ Enable the low-latency option in HA Reconfigure. Online published H.264 streams 
 HA negotiates WHEP through authenticated NVR endpoints. Media travels directly between the viewer and engine over ICE, so the viewer must reach the engine's advertised UDP addresses and ports. LAN connectivity, including an initial candidate-free offer, is tested; TURN relaying and public NAT traversal are not provided.
 
 Closing a viewer, unloading the integration or withdrawing a publication cleans up its sessions. A signed cleanup token remains usable after withdrawal only to delete the original session. Tokens are scoped to the stream, instance and configured engine origin, expire in 24 hours and become invalid after an NVR restart. Abnormal termination also relies on engine timeout cleanup.
+
+
+## HACS packaging and distribution
+
+This repository follows the HACS single-integration layout and includes `hacs.json`, with HA 2026.10.2 as the tested minimum. The integration has its own version in `manifest.json`; it is independent of the NVR binary version. HACS official catalog inclusion and Home Assistant Brands review are external steps and have not been completed.
+
+The Home Assistant CI workflow builds `lalmax_nvr.zip` as an artifact after tests. Future NVR tag releases also attach this ZIP. To package locally:
+
+```sh
+python scripts/package_home_assistant.py --output /tmp/lalmax_nvr.zip
+```
+
+For a separate HA-only repository, add `--export-dir /tmp/lalmax-nvr-home-assistant` (a new directory). The export contains only the integration, HACS metadata, installation guides and license. It does not publish or create repositories. This avoids mixing NVR binary release versions with HA integration updates.
+
+HACS 2.0.5's real validation and download logic was tested against the public main branch. Existing NVR releases published before the integration do not contain `custom_components/lalmax_nvr`, and HACS defaults to the latest release. Therefore those old releases cannot be used to install this integration. Use the manual ZIP until a release containing the integration, or an independent distribution repository, is available. Do not treat a successful branch download as a validated HACS first-install UI flow.
+
+References: [HACS integration structure](https://www.hacs.dev/docs/publish/integration/), [repository manifest](https://www.hacs.dev/docs/publish/start/#hacsjson).

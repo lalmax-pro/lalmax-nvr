@@ -2114,7 +2114,7 @@
   "ha.selectVisible": "发布搜索结果",
   "ha.clearVisible": "取消发布搜索结果",
   "ha.empty": "没有匹配的流，请先接入或创建流。",
-  "ha.install": "将仓库的 custom_components/lalmax_nvr 复制到 HA 配置目录，重启 HA 后，在“设备与服务”中添加 lalmax-nvr 集成。",
+  "ha.install": "将 lalmax_nvr.zip 解压到 HA 的 custom_components/lalmax_nvr，或完整复制同名集成目录，重启后在“设备与服务”添加 lalmax-nvr。安装包与 HACS 分发状态见下方说明。",
   "ha.credentials": "在 HA 中填写 NVR HTTP 账号。如开启 RTSP 鉴权，还需单独填写 RTSP 用户名与密码。",
   "ha.scope": "目录每 30 秒同步一次。取消发布会撤销集成入口，已有 RTSP 凭据仍按媒体服务器策略生效。发布不会自动开始录像。",
   "ha.guide": "安装与排障指南",

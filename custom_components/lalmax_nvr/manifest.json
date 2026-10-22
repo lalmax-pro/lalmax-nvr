@@ -1,7 +1,7 @@
 {
   "domain": "lalmax_nvr",
   "name": "lalmax-nvr",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "config_flow": true,
   "documentation": "https://github.com/lalmax-pro/lalmax-nvr/blob/main/docs/en/home-assistant.md",
   "issue_tracker": "https://github.com/lalmax-pro/lalmax-nvr/issues",
@@ -9,7 +9,9 @@
     "media_source",
     "stream"
   ],
-  "codeowners": [],
+  "codeowners": [
+    "@zkevindev"
+  ],
   "iot_class": "local_polling",
   "requirements": []
 }

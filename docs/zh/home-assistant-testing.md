@@ -87,3 +87,10 @@
 中途启动录像时发现 CRA 源无片段：原 H.265 录像器只等待 IDR，错过初始 IDR 后无限等待。已增加 BLA/IDR/CRA 随机访问点处理，开始新片段时丢弃可能引用片段外帧的 leading RASL，直到 trailing pictures。实际再录制，HA 原生媒体解析出的 MP4 可解码 HEVC 与 AAC，并完成 10 秒 seek。回归包含 CRA 开始与旋转、首段 RASL 排除和 Enhanced RTMP IRAP 标记，相关 recorder/media/nalutil race 检查通过。
 
 这验证媒体服务与 HA 链路保留原始编码，浏览器仍需具备 HEVC 解码能力。`tests/home_assistant/live_codecs.py --runtime <隔离目录>` 保存验证，需已准备 HEVC/AAC 流与测试录像计划，结束后恢复原计划状态。
+
+
+## 阶段七：安装包与 HACS 分发评估
+
+从官方 Release 获取 HACS 2.0.5，在隔离 Python/HA 环境运行其真实集成仓库校验与 GitHub 下载路径，取得主仓库 main 的完整集成。显式选择 main 才能避开不包含集成的旧 NVR Release；默认最新 Release 的首次安装尚不可用，不能记为 HACS UI 首次安装通过。独立 HA 分发仓库可以隔离两者版本，仓库选择待确认；官方目录和 Brands 审核仍是外部事项。
+
+打包脚本只收集集成公开源码、翻译和 MIT 许可证，排除缓存与测试状态，ZIP 根目录直接为 `manifest.json`。实际生成 0.6.0 ZIP，清除隔离 HA 的旧集成目录，从 ZIP 安装后重启，原摄像头恢复，配置与实体身份保留。HA 专项 CI 在测试后生成同一 ZIP，后续 NVR tag Release 会附带此包。支持导出 HA-only 源码目录，但脚本不创建或发布仓库。

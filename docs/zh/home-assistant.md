@@ -4,7 +4,7 @@ lalmax-nvr 可以把选中的流发布为 Home Assistant 摄像头，支持实�
 
 ## 安装与配置
 
-1. 将本仓库 `custom_components/lalmax_nvr` 完整复制到 HA 配置目录的 `custom_components/lalmax_nvr`。该目录中应直接包含 `manifest.json`、`__init__.py` 等文件。重启 HA。当前验证版本为 Home Assistant **2026.10.2**。
+1. 将本仓库 `custom_components/lalmax_nvr` 完整复制到 HA 配置目录的 `custom_components/lalmax_nvr`。该目录中应直接包含 `manifest.json`、`__init__.py` 等文件。重启 HA。要求 Home Assistant **2026.10.2 或更新版本**。也可将 CI / Release 的 `lalmax_nvr.zip` 直接解压到该目录，ZIP 根部就是 `manifest.json`。
 2. 在 NVR 的 **设置 → Home Assistant** 中启用发布，选择流并保存。可以搜索后批量选择，也可以在流管理卡片上逐路选择。未登记为摄像头的推流也可以发布。
 3. 必要时设置 RTSP 服务地址，例如 `rtsp://192.168.1.20:15544`。不要包含用户名、密码或 `/live/流名`。留空使用媒体引擎对外地址；默认的回环地址由 HA 集成替换为 NVR HTTP 地址的主机名。如果媒体引擎与 NVR 不在同一主机，请显式配置 HA 能访问的媒体引擎地址。
 4. HA 中进入 **设置 → 设备与服务 → 添加集成 → lalmax-nvr**，填写 NVR HTTP 地址（例如 `http://192.168.1.20:9090`）和 NVR 账号。建议给 HA 单独创建普通用户，只允许读取。
@@ -17,7 +17,7 @@ entity: camera.front_door
 camera_view: live
 ```
 
-此集成需要手动安装，尚未上架 HACS 或纳入 HA 内置集成。内置 HomeKit Device 在本次核对版本中只有摄像头快照能力，不作为此功能的实时视频入口。
+这是 HA 自定义集成；安装包与 HACS 分发说明见下文，尚未纳入官方目录。
 
 ## 同步与撤销
 
@@ -56,7 +56,7 @@ NVR 按流抽帧快照使用 PATH 中的 FFmpeg，并有 10 秒缓存。NVR 未�
 | GET | `/api/integrations/home-assistant` | 已发布流目录、实例 UUID、快照能力 |
 | GET | `/api/integrations/home-assistant/streams/{stream_id}/snapshot` | 已发布流 JPEG 快照 |
 
-HACS 分发将继续按阶段实现。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
+HACS 安装包与分发说明见下文。实现与联调进度见 [Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。
 
 
 ## 检测事件与自动化
@@ -111,3 +111,20 @@ HA 使用临时签名地址代理播放，地址不包含 NVR 账号密码和文
 HA 通过 NVR 鉴权接口完成 WHEP 协商，不直接访问媒体引擎的 HTTP 地址。媒体通过 ICE 在终端与引擎之间传输，请确保终端可访问引擎公布的 UDP 地址与端口；只验证了局域网直连，未提供 TURN 中继或公网 NAT 穿透保证。引擎返回完整 ICE answer，LAN 已验证初始 offer 无 candidate 时也能连接。
 
 关闭播放器、卸载集成或撤回发布会清理会话。撤回发布后，已经签发的清理令牌只能删除原会话，不能再创建播放。令牌绑定流、实例及引擎来源，24 小时过期，NVR 重启后失效；异常退出时还依赖引擎的超时清理。
+
+
+## HACS 安装包与分发
+
+仓库符合 HACS 单集成目录结构，提供 `hacs.json`，声明已验证的最低 HA 2026.10.2。集成版本在 `manifest.json` 中独立维护，不与 NVR 二进制版本号绑定。HACS 官方目录收录及 Home Assistant Brands 需要外部审核，尚未完成。
+
+HA 专项 CI 在检查通过后生成 `lalmax_nvr.zip` 构建产物；后续 NVR tag 发版也会附带此包。手动打包：
+
+```sh
+python scripts/package_home_assistant.py --output /tmp/lalmax_nvr.zip
+```
+
+如采用独立 HA 分发仓库，可增加 `--export-dir /tmp/lalmax-nvr-home-assistant`（新目录），导出集成、HACS 元数据、安装说明与许可证，不包含测试状态或 NVR 二进制，不会自动创建或发布仓库。这样可以避免 NVR 版本号干扰 HA 更新。
+
+已用 HACS 2.0.5 的真实校验及下载逻辑验证公开 main 分支。集成之前发布的旧 NVR Release 不包含 `custom_components/lalmax_nvr`，而 HACS 默认优先使用最新 Release，因此不能从那些旧版本安装。包含集成的新 Release 或独立分发仓库准备好前，可使用手动 ZIP；分支下载成功不等于 HACS 界面首次安装已通过。
+
+参考：[HACS 集成结构](https://www.hacs.dev/docs/publish/integration/)、[仓库元数据](https://www.hacs.dev/docs/publish/start/#hacsjson)。

@@ -2114,7 +2114,7 @@
   "ha.selectVisible": "Publish matching streams",
   "ha.clearVisible": "Unpublish matching streams",
   "ha.empty": "No matching streams. Ingest or create a stream first.",
-  "ha.install": "Copy custom_components/lalmax_nvr into your HA configuration directory, restart HA, then add the lalmax-nvr integration under Devices & services.",
+  "ha.install": "Extract lalmax_nvr.zip into HA custom_components/lalmax_nvr, or copy the complete integration directory. Restart HA and add lalmax-nvr under Devices & services. See the guide for packages and HACS distribution status.",
   "ha.credentials": "Enter your NVR HTTP account in HA. If RTSP authentication is enabled, enter the RTSP username and password separately.",
   "ha.scope": "Catalog updates every 30 seconds. Unpublishing withdraws the integration entry; existing RTSP credentials remain subject to the media server policy. Publishing does not start recording.",
   "ha.guide": "Installation and troubleshooting",

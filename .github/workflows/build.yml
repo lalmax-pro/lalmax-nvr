@@ -197,12 +197,20 @@ jobs:
         with:
           path: artifacts
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Package Home Assistant integration
+        run: python scripts/package_home_assistant.py
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           append_body: true
           files: |
+            dist/lalmax_nvr.zip
             artifacts/lalmax-nvr-linux-amd64/lalmax-nvr-linux-amd64.tar.gz
             artifacts/lalmax-nvr-linux-arm64/lalmax-nvr-linux-arm64.tar.gz
             artifacts/lalmax-nvr-linux-armv7/lalmax-nvr-linux-armv7.tar.gz

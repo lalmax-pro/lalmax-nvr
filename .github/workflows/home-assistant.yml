@@ -1,10 +1,10 @@
 name: Home Assistant integration
 on:
   pull_request:
-    paths: ['custom_components/**', 'tests/home_assistant/**', '.github/workflows/home-assistant.yml']
+    paths: ['custom_components/**', 'tests/home_assistant/**', 'scripts/package_home_assistant.py', 'hacs.json', '.github/workflows/home-assistant.yml']
   push:
     branches: [main]
-    paths: ['custom_components/**', 'tests/home_assistant/**', '.github/workflows/home-assistant.yml']
+    paths: ['custom_components/**', 'tests/home_assistant/**', 'scripts/package_home_assistant.py', 'hacs.json', '.github/workflows/home-assistant.yml']
 permissions:
   contents: read
 jobs:
@@ -18,3 +18,9 @@ jobs:
       - run: pip install -r tests/home_assistant/requirements.txt
       - run: ruff check custom_components/lalmax_nvr tests/home_assistant
       - run: python -m pytest -q tests/home_assistant
+      - run: python scripts/package_home_assistant.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lalmax-nvr-home-assistant
+          path: dist/lalmax_nvr.zip
+          if-no-files-found: error
