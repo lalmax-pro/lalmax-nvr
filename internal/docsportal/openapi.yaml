@@ -1919,13 +1919,13 @@ paths:
     get:
       tags: [Settings]
       summary: Complete published stream catalog for Home Assistant
-      description: Includes instance_id, enabled, snapshot_available and all selected streams. RTSP URLs may contain per-stream playback tokens; treat this response as private media credentials.
+      description: Includes instance_id, enabled, snapshot_available, events_available and all selected streams. RTSP URLs may contain per-stream playback tokens; treat this response as private media credentials.
       responses:
         '200': {description: Published catalog, including offline streams. No pagination.}
         '503': {description: Media engine unavailable.}
   /api/integrations/home-assistant/events:
     get:
-      tags: [Home Assistant]
+      tags: [Settings]
       summary: 已发布流实时事件 / Published stream live events
       description: Authenticated SSE. Each event is filtered using current publications and stream-camera bindings. Data contains id, instance_id, stream_id, type, source, started_at and labels only. No historical replay; heartbeat every 15 seconds.
       responses:

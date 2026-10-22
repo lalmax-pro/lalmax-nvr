@@ -28,8 +28,8 @@ tags:
       Authentication. Validates username/password with HTTP Basic Auth.
   - name: Health
     description: |
-      `/api/health` 和 `/api/readyz` 是公开探针；详细健康信息需要登录。
-      `/api/health` and `/api/readyz` are public probes; detailed health data requires authentication.
+      健康与就绪探测，无需登录。
+      Liveness and readiness probes. No authentication.
   - name: Cameras
     description: |
       摄像头增删改查、启停录像、云台与地图坐标。
@@ -76,10 +76,6 @@ tags:
       Independent IPTV module: import and probe M3U, play in the browser through the same-origin HLS proxy, or publish to NVR with one HLS pull shared by publication and recording plans.
   - name: VoIP
     description: SIP 注册终端、入站通话状态及控制。
-  - name: Emby
-    description: |
-      浏览 Emby 媒体库并将电影或剧集发布为 NVR 流；默认片尾下线，可配置循环。
-      Browse the Emby library and publish movies or episodes as NVR streams; stop at the end or loop.
 paths:
   /api/iptv/imports:
     post:
@@ -176,132 +172,39 @@ paths:
           description: Invalid channel state or unsupported codec
         "503":
           description: IPTV publishing requires embedded media mode
-  /api/emby/config:
-    get:
-      tags: [Emby]
-      summary: 获取 Emby 连接状态 · Get Emby connection status
-      responses:
-        "200": { description: Connection state; access token is never returned }
-    put:
-      tags: [Emby]
-      summary: 配置 Emby 连接 · Configure Emby connection
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [base_url, user_id]
-              properties:
-                name: { type: string }
-                base_url: { type: string, format: uri }
-                user_id: { type: string }
-                token: { type: string, description: Leave blank to keep a saved token. }
-      responses:
-        "200": { description: Connection verified and saved }
-        "502": { description: Emby connection or authentication failed }
-  /api/emby/library:
-    get:
-      tags: [Emby]
-      summary: 搜索 Emby 媒体库 · Search Emby library
-      parameters:
-        - { name: q, in: query, schema: { type: string } }
-        - { name: limit, in: query, schema: { type: integer, maximum: 100 } }
-        - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
-      responses:
-        "200": { description: Movies and episodes }
-        "409": { description: Emby is not configured }
-  /api/emby/items:
-    get:
-      tags: [Emby]
-      summary: 列出已纳管媒体项 · List managed items
-      responses:
-        "200": { description: Managed Emby items }
-    post:
-      tags: [Emby]
-      summary: 纳管 Emby 媒体项 · Add an Emby item
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [emby_item_id]
-              properties:
-                emby_item_id: { type: string }
-      responses:
-        "201": { description: NVR stream record created }
-        "404": { description: Movie or episode not found }
-  /api/emby/items/{id}:
-    put:
-      tags: [Emby]
-      summary: 更新 Emby 发布状态 · Update Emby publication
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                publish_enabled: { type: boolean }
-                loop: { type: boolean }
-      responses:
-        "200": { description: Updated item; normal end-of-file takes the stream offline unless loop is enabled }
-        "404": { description: Managed item not found }
-    delete:
-      tags: [Emby]
-      summary: 停止并移除 Emby 媒体项 · Stop and remove an Emby item
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-      responses:
-        "200": { description: Removed from NVR }
-        "404": { description: Managed item not found }
   /api/health:
     get:
       tags: [Health]
       security: []
-      summary: 存活探针 · Liveness probe
+      summary: 健康检查 · Health check
       description: |
-        公开的最小状态接口，仅用于判断进程是否存活以及是否需要首次设置，不暴露组件或摄像头详情。
-        Public minimal status for liveness and first-run setup detection; it does not expose subsystem or camera details.
-      operationId: getHealthProbe
+        进程健康总览：数据库、磁盘、协程数、摄像头聚合状态。即使 `status` 为 `degraded` / `unhealthy` 仍返回 HTTP 200。
+        Overall process health (database, disk, goroutines, camera rollup). HTTP 200 even when status is `degraded` or `unhealthy`.
+      operationId: getHealth
       responses:
         "200":
-          description: 进程存活 / Process is alive
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HealthProbe"
-              example: { status: ok, setup_required: false }
-  /api/health/details:
-    get:
-      tags: [Health]
-      summary: 详细健康信息 · Detailed health
-      description: 需要登录。返回组件检查和摄像头健康详情。 / Authenticated endpoint with subsystem and camera health details.
-      operationId: getHealthDetails
-      responses:
-        "200":
-          description: 详细健康信息 / Detailed health
+          description: 系统健康 / System health
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
-  /api/health/cameras:
-    get:
-      tags: [Health]
-      summary: 摄像头健康状态 · Camera health
-      description: 需要登录。 / Authenticated endpoint.
-      operationId: getCameraHealthMap
-      responses:
-        "200":
-          description: 摄像头健康映射 / Camera health map
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
+              example:
+                status: ok
+                checks:
+                  database: { status: ok }
+                  storage: { status: ok, message: "12% used (12884901888 / 107374182400 bytes)" }
+                  goroutines: { status: ok, message: "42 goroutines" }
+                uptime: 2h34m15s
+                start_time: "2026-09-11T08:00:00Z"
+                setup_required: false
+                cameras:
+                  total: 2
+                  recording: 1
+                  reconnecting: 0
+                  error: 0
+                  offline: 1
+                  details:
+                    - { id: front-door, name: Front Door, status: recording }
   /api/readyz:
     get:
       tags: [Health]
@@ -1883,99 +1786,6 @@ paths:
         '403': {description: 无操作权限}
         '409': {description: 呼入已处理}
 
-
-  /api/settings/home-assistant:
-    get:
-      tags: [Settings]
-      summary: Read Home Assistant publication settings
-      responses:
-        '200':
-          description: Persisted instance UUID, enabled flag, rtsp_base_url and selected streams.
-    put:
-      tags: [Settings]
-      summary: Replace Home Assistant publication settings (super administrator)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                enabled: {type: boolean}
-                rtsp_base_url: {type: string}
-                streams:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      stream_id: {type: string}
-                      name: {type: string}
-                      app_name: {type: string}
-      responses:
-        '200': {description: Saved settings. Instance identity is immutable.}
-        '400': {description: Invalid publication settings.}
-        '403': {description: Super administrator permission required.}
-  /api/integrations/home-assistant:
-    get:
-      tags: [Settings]
-      summary: Complete published stream catalog for Home Assistant
-      description: Includes instance_id, enabled, snapshot_available and all selected streams. RTSP URLs may contain per-stream playback tokens; treat this response as private media credentials.
-      responses:
-        '200': {description: Published catalog, including offline streams. No pagination.}
-        '503': {description: Media engine unavailable.}
-  /api/integrations/home-assistant/events:
-    get:
-      tags: [Home Assistant]
-      summary: 已发布流实时事件 / Published stream live events
-      description: Authenticated SSE. Each event is filtered using current publications and stream-camera bindings. Data contains id, instance_id, stream_id, type, source, started_at and labels only. No historical replay; heartbeat every 15 seconds.
-      responses:
-        "200":
-          description: SSE nvr events
-          content:
-            text/event-stream:
-              schema: { type: string }
-        "503":
-          description: Event hub unavailable
-  /api/integrations/home-assistant/streams/{stream_id}:
-    parameters:
-      - in: path
-        name: stream_id
-        required: true
-        schema: {type: string}
-    put:
-      tags: [Settings]
-      summary: Select or unselect a stream for Home Assistant (super administrator)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [enabled]
-              properties:
-                enabled: {type: boolean}
-      responses:
-        '200': {description: Updated publication settings.}
-        '403': {description: Super administrator permission required.}
-        '404': {description: Stream not found.}
-  /api/integrations/home-assistant/streams/{stream_id}/snapshot:
-    parameters:
-      - in: path
-        name: stream_id
-        required: true
-        schema: {type: string}
-    get:
-      tags: [Settings]
-      summary: JPEG snapshot of a published stream
-      responses:
-        '200':
-          description: Stream JPEG, cached for 10 seconds.
-          content:
-            image/jpeg:
-              schema: {type: string, format: binary}
-        '404': {description: Publication disabled or stream not selected.}
-        '503': {description: FFmpeg missing or snapshot temporarily unavailable.}
-
 components:
   securitySchemes:
     basicAuth:
@@ -2077,22 +1887,11 @@ components:
         message:
           type: string
           description: 补充说明，如磁盘占用百分比 / Extra detail such as disk usage
-    HealthProbe:
-      title: 存活探针 · Liveness probe
-      type: object
-      required: [status, setup_required]
-      properties:
-        status:
-          type: string
-          enum: [ok]
-        setup_required:
-          type: boolean
-          description: 是否仍需首次设置 / Whether first-run setup is required
     Health:
       title: 系统健康 · Health
       description: |
-        `/api/health/details` 响应。`status` 为总评；`checks` 为分项。
-        `/api/health/details` response. `status` is the rollup; `checks` are per-subsystem.
+        `/api/health` 响应。`status` 为总评；`checks` 为分项。
+        `/api/health` response. `status` is the rollup; `checks` are per-subsystem.
       type: object
       required: [status, checks, uptime]
       properties:
