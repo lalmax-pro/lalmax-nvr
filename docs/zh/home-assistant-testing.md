@@ -125,3 +125,19 @@ python tests/home_assistant/live_webrtc.py --runtime <隔离目录> --codec h264
 这些脚本共享同一测试接收端，并会改变发布和集成状态，必须依次执行。能力断言使用 HA 的 `camera/capabilities` WebSocket 接口，不能从 camera state attributes 推断 `frontend_stream_types`。
 
 另建没有 GitHub 凭据的隔离 HA，运行官方 HACS 2.0.5 配置流程，由该实例生成设备代码，在 GitHub 完成交互式设备授权。授权页面明确只申请公开资料，不申请私有仓库权限。HACS 成功创建配置项并进入 `running`，`disabled_reason` 为空，实际加载 5009 个仓库条目。此前正式版首次安装和 RC → V1.0.2 升级测试保持有效；此次补齐了先前未覆盖的真实设备授权流程。HACS 官方目录/Brands 外部审核仍未完成。
+
+## 2026-10-23 补充：真实 ONVIF 设备，经 NVR 接入 HA
+
+从本地已有配置只读获取一台真实海康 ONVIF 摄像机的接入信息，在隔离 NVR 中建立测试设备并发布其真实视频；未修改原本地数据库、摄像机编码或 GB28181 注册配置，录像计划保持关闭。HA 始终只保存 NVR 的 API / RTSP 访问凭据，不直接连接原始摄像机。设备账号只在 NVR 使用，真实画面未保存或提交到仓库。
+
+实测真实设备 → NVR → HA 的 JPEG 解码为 1920×1080，HLS 实际解码 H.264 与 AAC；HA WebRTC 协商后接收端实际收到并解码三帧 1920×1080 H.264 视频，关闭会话通过。HA 真机预览实际使用 `ha-web-rtc-player`，尺寸 1920×1080、播放时间持续增长；首次切换出现过短暂协商错误，随后自动恢复播放。复用原接收端，可用以下参数验证已发布的其他测试设备：
+
+```sh
+python tests/home_assistant/live_webrtc.py --runtime <隔离目录> \
+  --stream-id <NVR发布流ID> --entity <HA摄像头实体ID> \
+  --codec h264 --width 1920 --height 1080 --mode close
+```
+
+云台方面，经 HA 调用的读取预置位、0.1 秒连续变焦与自动停止、原生停止按钮，均得到 NVR 和真实设备成功响应。设备报告的坐标始终为零，不能据此确认镜头发生物理位移。进一步读取真实 ONVIF 配置：只声明连续速度空间，未声明绝对位置空间；`AbsoluteMove` 被设备返回 401（SOAP 客户端最终报告 `password text auth failed (401)`），相同凭据的其他已测命令成功。绝对位置不标记通过，也不把失败误记为 HA 的 NVR 登录失效。已补发停止，设备报告 `moving=false`。该设备不能代替具备完整云台能力的真机验收。
+
+真实 GB28181 注册及控制尚未验证；本次没有修改摄像机已有 GB 配置，现有 GB 验证仍是实际 SIP/Digest 协议模拟端。真实公网环境暂不可用，按维护者决定暂缓；本地强制 TURN/UDP 中继的结果保持有效。

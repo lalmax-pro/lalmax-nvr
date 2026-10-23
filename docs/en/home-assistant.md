@@ -89,10 +89,12 @@ A published stream bound to an ONVIF or GB28181 camera exposes seven native HA b
 
 The `lalmax_nvr.ptz` action targets a camera entity, with `mode` (`continuous`, `relative`, `absolute`, `stop`, `goto_preset`), normalized `pan`, `tilt`, `zoom`, optional `preset_token`, and `duration` (0.1–5 seconds, default 0.5). Absolute zoom is 0–1. `lalmax_nvr.ptz_presets` returns the ONVIF preset list and requires an action response. GB28181 supports single-axis continuous pulses and stop; relative/absolute/preset actions are rejected.
 
-NVR performs the automatic stop for continuous movement, including caller disconnection and publication revocation during the pulse. A failed move or stop returns an error; network/device failures can prevent physical stopping. New commands check current publication and camera binding. The integration advertises protocol support, not a guarantee that every ONVIF camera implements PTZ. Real HA testing uses loopback ONVIF SOAP and authenticated GB28181 SIP protocol simulators; physical hardware has not been tested.
+NVR performs the automatic stop for continuous movement, including caller disconnection and publication revocation during the pulse. A failed move or stop returns an error; network/device failures can prevent physical stopping. New commands check current publication and camera binding. The integration advertises protocol support, not a guarantee that every ONVIF camera implements PTZ. Real HA testing uses loopback ONVIF SOAP and authenticated GB28181 SIP protocol simulators. A physical ONVIF camera also acknowledged preset reads, a short continuous zoom pulse and stop commands. It rejected absolute movement, and physical displacement was not confirmed; full hardware PTZ validation remains open.
 
 
 ## Optional low-latency WebRTC
+
+HEVC WebRTC support was added after V1.0.2 and requires an NVR build containing this change.
 
 Enable the low-latency option in HA Reconfigure. Online published H.264 and H.265/HEVC streams then offer both WebRTC and HLS to HA's player. The option defaults to off. HEVC WebRTC requires browser negotiation and decoding support. Offers without the source codec are rejected; disable low latency to use HLS, or publish an H.264 substream. Current WebRTC playback does not carry AAC audio; use HLS for audio. No transcoding is started.
 
@@ -113,7 +115,7 @@ Closing a viewer, unloading the integration or withdrawing a publication cleans 
 
 ## Final demonstration
 
-Captured after the complete integration and release tests, using NVR V1.0.2 and HA integration 0.6.1 on isolated HA 2026.10.2. Video is synthetic test input; PTZ uses ONVIF/GB28181 protocol fixtures. These are actual application screenshots.
+The initial demonstration used NVR V1.0.2 and HA integration 0.6.1 on isolated HA 2026.10.2; the live preview image now uses an NVR source build with HEVC WebRTC support. Video is synthetic test input; PTZ uses ONVIF/GB28181 protocol fixtures. These are actual application screenshots.
 
 ![HA H.264 and HEVC live preview](../images/home-assistant/live.png)
 

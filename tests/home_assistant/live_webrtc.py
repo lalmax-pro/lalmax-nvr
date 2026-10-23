@@ -20,9 +20,19 @@ parser.add_argument("--runtime", type=pathlib.Path, required=True)
 parser.add_argument("--mode", choices=["close", "revoke", "reload"], default="close")
 parser.add_argument("--codec", choices=["h264", "h265"], default="h264")
 parser.add_argument("--relay", action="store_true", help="require HA-configured TURN")
+parser.add_argument("--stream-id", help="override the synthetic NVR stream")
+parser.add_argument("--entity", help="HA camera entity for the overridden stream")
+parser.add_argument("--width", type=int, default=640)
+parser.add_argument("--height", type=int, default=360)
 args = parser.parse_args()
-sid = "ha-test-main" if args.codec == "h264" else "ha-test-second"
-entity = "camera.ha_test_main" if args.codec == "h264" else "camera.ha_test_second"
+if bool(args.stream_id) != bool(args.entity):
+    parser.error("--stream-id and --entity must be supplied together")
+if args.width <= 0 or args.height <= 0:
+    parser.error("expected video dimensions must be positive")
+sid = args.stream_id or ("ha-test-main" if args.codec == "h264" else "ha-test-second")
+entity = args.entity or (
+    "camera.ha_test_main" if args.codec == "h264" else "camera.ha_test_second"
+)
 root = args.runtime.resolve()
 H = "http://127.0.0.1:18123"
 N = "http://127.0.0.1:19090"
@@ -152,7 +162,7 @@ async def main():
         ) as container:
             decoded = 0
             for frame in container.decode(video=0):
-                assert (frame.width, frame.height) == (640, 360)
+                assert (frame.width, frame.height) == (args.width, args.height)
                 decoded += 1
                 if decoded >= 3:
                     break
