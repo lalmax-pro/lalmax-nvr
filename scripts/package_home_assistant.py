@@ -47,7 +47,7 @@ def package(output: Path, export: Path | None = None) -> None:
             )
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, target)
-        for name in ("LICENSE", "hacs.json"):
+        for name in ("LICENSE", "hacs.json", "info.md"):
             shutil.copyfile(ROOT / name, export / name)
         shutil.copyfile(ROOT / "docs/en/home-assistant.md", export / "README.md")
         shutil.copyfile(ROOT / "docs/zh/home-assistant.md", export / "README.zh.md")

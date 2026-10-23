@@ -2,10 +2,10 @@ name: Home Assistant integration
 on:
   workflow_call:
   pull_request:
-    paths: ['custom_components/**', 'tests/home_assistant/**', 'scripts/package_home_assistant.py', 'hacs.json', '.github/workflows/home-assistant.yml']
+    paths: ['custom_components/**', 'tests/home_assistant/**', 'scripts/package_home_assistant.py', 'hacs.json', 'info.md', '.github/workflows/home-assistant.yml']
   push:
     branches: [main]
-    paths: ['custom_components/**', 'tests/home_assistant/**', 'scripts/package_home_assistant.py', 'hacs.json', '.github/workflows/home-assistant.yml']
+    paths: ['custom_components/**', 'tests/home_assistant/**', 'scripts/package_home_assistant.py', 'hacs.json', 'info.md', '.github/workflows/home-assistant.yml']
 permissions:
   contents: read
 jobs:
