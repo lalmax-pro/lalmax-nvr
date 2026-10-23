@@ -7,7 +7,7 @@ git tag -a V1.0.1 <已验证的提交> -m "Release V1.0.1"
 git push origin refs/tags/V1.0.1
 ```
 
-也可以在 GitHub Releases 页面选择该提交、填写新 tag 并发布。不要同时用两种入口重复发起同一版本；同一 tag 的工作流会串行运行，不会在上传产物中途互相取消。由工作流自身 `GITHUB_TOKEN` 创建的 Release 不会再次触发构建。
+也可以在 GitHub Releases 页面选择该提交、填写新 tag 并发布。不要同时用两种入口重复发起同一版本；同一 tag 的工作流会串行运行，不会在上传产物中途互相取消。Release 页面创建新 tag 可能同时产生 push 与 published 事件；后一个任务会检查同一 tag/提交的成功构建及 7 个完整附件，已发布成功时跳过重复构建。由工作流自身 `GITHUB_TOKEN` 创建的 Release 不会再次触发构建。
 
 ## 发布内容与验收
 

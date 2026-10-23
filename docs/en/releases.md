@@ -7,7 +7,7 @@ git tag -a V1.0.1 <verified-commit> -m "Release V1.0.1"
 git push origin refs/tags/V1.0.1
 ```
 
-Alternatively, publish a GitHub Release with a new tag targeting the verified commit. Use one entry point per version. Runs for a tag are serialized and never cancel each other during publication. Releases created by the workflow's own `GITHUB_TOKEN` do not recursively trigger builds.
+Alternatively, publish a GitHub Release with a new tag targeting the verified commit. Use one entry point per version. Runs for a tag are serialized and never cancel each other during publication. Creating a new tag from Releases can emit both push and published events. A later published run skips duplicate builds only after verifying a successful push build for the same tag/commit and all seven complete assets. Releases created by the workflow's own `GITHUB_TOKEN` do not recursively trigger builds.
 
 After Go checks, frontend and six-platform binary builds, the Release uploads Linux amd64/arm64/armv7, Windows amd64 and macOS amd64/arm64 packages. A reusable HA test workflow gates publication and supplies the exact tested `lalmax_nvr.zip` artifact. Missing expected assets fail publication.
 

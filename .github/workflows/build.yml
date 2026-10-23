@@ -27,11 +27,53 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  plan:
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - name: Skip a published event already built by its tag push
+        id: plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let build = true;
+            if (context.eventName === 'release') {
+              const { owner, repo } = context.repo;
+              const tag = context.ref.replace('refs/tags/', '');
+              const { data: runs } = await github.rest.actions.listWorkflowRuns({
+                owner, repo, workflow_id: 'build.yml', event: 'push',
+                head_sha: context.sha, status: 'completed', per_page: 100
+              });
+              const built = runs.workflow_runs.some(run =>
+                run.head_branch === tag && run.head_sha === context.sha && run.conclusion === 'success');
+              const { data: release } = await github.rest.repos.getRelease({
+                owner, repo, release_id: context.payload.release.id
+              });
+              const expected = [
+                'lalmax_nvr.zip',
+                'lalmax-nvr-linux-amd64.tar.gz', 'lalmax-nvr-linux-arm64.tar.gz',
+                'lalmax-nvr-linux-armv7.tar.gz', 'lalmax-nvr-windows-amd64.zip',
+                'lalmax-nvr-darwin-amd64.tar.gz', 'lalmax-nvr-darwin-arm64.tar.gz'
+              ];
+              const complete = expected.every(name => release.assets.some(asset =>
+                asset.name === name && asset.size > 0 && asset.state === 'uploaded'));
+              build = !(built && complete);
+              if (!build) core.info('This tag push already passed and published every expected asset.');
+            }
+            core.setOutput('build', String(build));
+
   home-assistant:
-    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V')
+    needs: plan
+    if: needs.plan.outputs.build == 'true' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V'))
     uses: ./.github/workflows/home-assistant.yml
 
   test:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
