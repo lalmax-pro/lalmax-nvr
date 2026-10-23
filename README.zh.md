@@ -18,7 +18,11 @@
 
 ## Home Assistant / HACS
 
+**支持对接 Home Assistant。** 可将 NVR 中选定的流发布为 HA 摄像头实体，提供实时视频、缩略图和在线状态，并支持检测事件与自动化、录像浏览与回放、云台控制及可选 WebRTC。HA 只连接 NVR，摄像机账号保留在 NVR 中。
+
 在 HACS 中将 `https://github.com/lalmax-pro/lalmax-nvr` 添加为 **Integration** 类型的自定义仓库，下载最新稳定版并重启 Home Assistant（2026.10.2 或更新版本）。HACS 只安装 HA 集成，NVR 需单独运行。在 NVR 的“设置 → Home Assistant”选择发布流，再在 HA“设置 → 设备与服务”中添加 **lalmax-nvr**。HTTP 与 RTSP 账号分别配置。[安装、播放、事件与云台指南](docs/zh/home-assistant.md)。
+
+H.264/H.265 播放取决于终端编码支持；H.265 WebRTC 需要 V1.0.2 之后包含该增强的 NVR 版本。AAC 音频使用 HLS，云台取决于设备支持的命令，当前不自动转码。
 
 ## 截图
 
@@ -104,7 +108,7 @@ G.711 包括 A-law（PCMA）和 µ-law（PCMU）。表中未列出的音频不�
 - **媒体接入**：统一配置摄像头、直播地址、IPTV、Emby 和编码器推流，并查看来源概况；Jellyfin、Plex 和本地文件暂未支持（[总览](docs/zh/media-sources.md) · [IPTV 指南](docs/zh/iptv.md) · [Emby 指南](docs/zh/emby.md)）
 - **DLNA**：可选的 UPnP MediaServer — 在局域网中发现 NVR，并在电视或其他 DLNA 播放器上浏览实时流和录像；在 `lalmax-nvr.yaml` 中配置 `dlna.enabled` 和独立 HTTP 端口（默认 `8200`）
 - **Web 界面**：深色/浅色主题、响应式、中英文切换、Chart.js 图表
-- **Home Assistant**：选择发布已有流，自动同步摄像头实体、实时视频、缩略图和在线状态（[接入指南](docs/zh/home-assistant.md)）。
+- **Home Assistant**：选择发布已有流，提供摄像头实体、检测事件与自动化、录像回放、云台及可选 WebRTC，支持通过 HACS 安装 HA 集成（[接入指南](docs/zh/home-assistant.md)）
 - **智能家居与文件访问**：MQTT 触发录像、WebDAV 浏览存储文件；FTP 当前存在[哈希密码认证限制](docs/zh/ftp-integration.md)
 - **健康监控**：多层摄像头健康检测、自动修复、质量评分
 - **单文件部署**：零依赖、内嵌前端、`CGO_ENABLED=0`
@@ -181,6 +185,7 @@ media:
 | [JT1078 / JT808](docs/zh/configuration.md#jt1078-推流配置) | `:1078` 媒体收流，以及可选的 `:808` 信令 |
 | [ONVIF](docs/zh/onvif-guide.md) | 发现、云台 |
 | [摄像头指南](docs/zh/camera-guide.md) | RTSP / HTTP 接入 |
+| [Home Assistant / HACS](docs/zh/home-assistant.md) | 安装、流发布、事件、录像、云台与 WebRTC |
 | [部署指南](docs/zh/deployment.md) | 反向代理、交叉编译 |
 | [MQTT](docs/zh/mqtt-integration.md) · [WebDAV](docs/zh/webdav-integration.md) · [FTP](docs/zh/ftp-integration.md) | 集成 |
 | [故障排除](docs/zh/troubleshooting.md) | 常见问题 |

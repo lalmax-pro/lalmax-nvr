@@ -18,7 +18,11 @@ This project was inspired by MiBeeNVR, and has since been developed into a dedic
 
 ## Home Assistant / HACS
 
+**Home Assistant integration is supported.** Publish selected NVR streams as HA camera entities with live video, snapshots and availability, plus detection events and automations, recording browsing/playback, PTZ controls and optional WebRTC. HA connects to the NVR; camera credentials stay in the NVR.
+
 In HACS, add `https://github.com/lalmax-pro/lalmax-nvr` as an **Integration** custom repository, download the latest stable release, then restart Home Assistant (2026.10.2 or newer). HACS installs the HA integration only; run the NVR separately. In the NVR, select streams under **Settings → Home Assistant**, then add **lalmax-nvr** under HA **Settings → Devices & services**. HTTP and RTSP credentials are configured separately. [Setup, playback, events and PTZ guide](docs/en/home-assistant.md) · [中文](docs/zh/home-assistant.md).
+
+H.264/H.265 playback depends on client codec support; HEVC WebRTC requires an NVR build after V1.0.2. Use HLS for AAC audio. PTZ depends on the device's supported commands; no automatic transcoding is performed.
 
 ## Screenshots
 
@@ -104,12 +108,11 @@ G.711 covers both A-law (PCMA) and µ-law (PCMU). Audio codecs not listed for a 
 - **Media Inputs**: Configure cameras, live URLs, IPTV, Emby, and encoder push from one place, with a source overview. Jellyfin, Plex, and local files are not supported yet ([overview](docs/en/media-sources.md) · [IPTV guide](docs/en/iptv.md) · [Emby guide](docs/en/emby.md))
 - **DLNA**: Optional UPnP MediaServer — discover the NVR on the LAN and browse live streams and recordings on TVs or other DLNA players; configure `dlna.enabled` and the dedicated HTTP port (default `8200`) in `lalmax-nvr.yaml`
 - **Web UI**: Dark/light theme, responsive, i18n (EN/ZH), Chart.js dashboards
+- **Home Assistant**: Camera entities for selected streams, detection events and automations, recording playback, PTZ and optional WebRTC; install the HA integration through HACS ([guide](docs/en/home-assistant.md))
 - **Smart home and file access**: MQTT recording triggers and WebDAV storage browsing; FTP currently has a [hash-password authentication limitation](docs/en/ftp-integration.md)
 - **Health Monitoring**: Multi-layer camera health detection, auto-remediation, connection quality metrics (uptime, MTBF)
 - **Single Binary**: Zero dependencies, embedded SPA, `CGO_ENABLED=0`
 - **Xiaomi Support**: CS2 P2P protocol, cloud auth (community-driven)
-
-Home Assistant: publish selected streams as camera entities with live video, snapshots and availability. See the [integration guide](docs/en/home-assistant.md).
 
 ## Quick Start
 
@@ -182,6 +185,7 @@ Full catalog: **[docs/en/README.md](docs/en/README.md)**.
 | [JT1078 / JT808](docs/en/configuration.md#jt1078-ingest-configuration) | `:1078` media ingest and optional `:808` signaling |
 | [ONVIF](docs/en/onvif-guide.md) | Discovery, PTZ |
 | [Camera Guide](docs/en/camera-guide.md) | RTSP / HTTP setup |
+| [Home Assistant / HACS](docs/en/home-assistant.md) | Installation, stream publication, events, recordings, PTZ and WebRTC |
 | [Deployment](docs/en/deployment.md) | Reverse proxy, cross-compile |
 | [MQTT](docs/en/mqtt-integration.md) · [WebDAV](docs/en/webdav-integration.md) · [FTP](docs/en/ftp-integration.md) | Integrations |
 | [Troubleshooting](docs/en/troubleshooting.md) | Common issues |
