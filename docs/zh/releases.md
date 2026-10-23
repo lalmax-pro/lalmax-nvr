@@ -17,6 +17,8 @@ git push origin refs/tags/V1.0.1
 
 发布完成应核对 Actions 结果、7 个 Release 附件及二进制 `--version`，再用真实附件验证运行。HACS 使用本仓库 Release，首次安装和升级应从包含 HA 集成的 Release 验收，并确认配置、实体唯一标识和媒体功能保留。HACS 测试认证可预先配置，但不能把独立下载脚本成功记作界面安装成功。
 
+Docker 推送后，`Released container smoke` 会在 amd64、arm64、ARMv7 上实际运行已发布二进制及内置 FFmpeg（按需使用 QEMU）。也可手动指定已有 tag 运行。此检查使用仓库的包访问令牌，不代表匿名拉取成功。GHCR 新包默认私有，公开下载需组织管理员明确设置包可见性；改为公开后不能再改回私有。匿名拉取应另行验证。
+
 ## 重试
 
 构建失败时优先修正问题并发布新 tag，保留已公开版本的身份。依赖或网络等暂时失败可以重跑失败任务。对已存在、且包含此工作流的 tag，也可从 Actions 手动运行 `Build` 并选择该 tag；手动选择分支只构建，不发布 Release。

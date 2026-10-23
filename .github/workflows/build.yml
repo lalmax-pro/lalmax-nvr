@@ -27,6 +27,15 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  container-smoke:
+    needs: docker
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/container-smoke.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+
   plan:
     permissions:
       contents: read
