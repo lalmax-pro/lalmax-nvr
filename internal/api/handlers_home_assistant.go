@@ -308,7 +308,7 @@ func (h *Handler) handleHomeAssistantCatalog(w http.ResponseWriter, r *http.Requ
 		if name == "" {
 			name = p.StreamID
 		}
-		result.Streams = append(result.Streams, homeAssistantStream{WebRTCSupported: strings.EqualFold(s.VideoCodec, "h264") && (h.config == nil || h.config.Streaming.WebRTC.Enabled == nil || *h.config.Streaming.WebRTC.Enabled), PTZSupported: protocols[p.StreamID] == "onvif" || protocols[p.StreamID] == "gb28181", PTZPresetsSupported: protocols[p.StreamID] == "onvif", StreamID: p.StreamID, Name: name, Active: s.Active, VideoCodec: s.VideoCodec, AudioCodec: s.AudioCodec, RTSPURL: playURL, UnavailableReason: reason})
+		result.Streams = append(result.Streams, homeAssistantStream{WebRTCSupported: homeAssistantWebRTCCodec(s.VideoCodec) != "" && (h.config == nil || h.config.Streaming.WebRTC.Enabled == nil || *h.config.Streaming.WebRTC.Enabled), PTZSupported: protocols[p.StreamID] == "onvif" || protocols[p.StreamID] == "gb28181", PTZPresetsSupported: protocols[p.StreamID] == "onvif", StreamID: p.StreamID, Name: name, Active: s.Active, VideoCodec: s.VideoCodec, AudioCodec: s.AudioCodec, RTSPURL: playURL, UnavailableReason: reason})
 	}
 	// One bounded response, with stable ordering, avoids drifting pages as streams go offline.
 	slices.SortFunc(result.Streams, func(a, b homeAssistantStream) int { return strings.Compare(a.StreamID, b.StreamID) })

@@ -59,6 +59,15 @@ func TestHomeAssistantPublicationLifecycle(t *testing.T) {
 	require.True(t, catalog.Streams[0].Active)
 	require.NotContains(t, res.Body.String(), "source_url")
 	require.NotContains(t, res.Body.String(), "password")
+	for _, tc := range []struct {
+		codec     string
+		supported bool
+	}{{"H264", true}, {"H265", true}, {"HEVC", true}, {"AV1", false}} {
+		engine.streams[0].VideoCodec = tc.codec
+		res = request("GET", "/api/integrations/home-assistant", "")
+		require.NoError(t, json.Unmarshal(res.Body.Bytes(), &catalog))
+		require.Equal(t, tc.supported, catalog.Streams[0].WebRTCSupported, tc.codec)
+	}
 	engine.streams = nil
 	res = request("GET", "/api/integrations/home-assistant", "")
 	require.NoError(t, json.Unmarshal(res.Body.Bytes(), &catalog))

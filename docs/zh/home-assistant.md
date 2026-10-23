@@ -106,9 +106,19 @@ HA 使用临时签名地址代理播放，地址不包含 NVR 账号密码和文
 
 ## 可选 WebRTC 低延迟播放
 
-在 HA 集成的“重新配置”中启用低延迟选项。在线 H.264 发布流会同时提供 WebRTC 和 HLS，由 HA 播放器选择路径。默认关闭，可随时重新配置关闭。AAC 音频不能通过当前 WebRTC 路径播放，需要声音时使用 HLS；不会启动转码。
+在 HA 集成的“重新配置”中启用低延迟选项。在线 H.264 和 H.265/HEVC 发布流会同时提供 WebRTC 和 HLS，由 HA 播放器选择路径。默认关闭，可随时重新配置关闭。H.265 WebRTC 需要终端支持 HEVC 协商和解码；不包含源编码的 offer 会被明确拒绝，可关闭低延迟选项使用 HLS，或改用 H.264 子码流。AAC 音频不能通过当前 WebRTC 路径播放，需要声音时使用 HLS；不会启动转码。
 
-HA 通过 NVR 鉴权接口完成 WHEP 协商，不直接访问媒体引擎的 HTTP 地址。媒体通过 ICE 在终端与引擎之间传输，请确保终端可访问引擎公布的 UDP 地址与端口；只验证了局域网直连，未提供 TURN 中继或公网 NAT 穿透保证。引擎返回完整 ICE answer，LAN 已验证初始 offer 无 candidate 时也能连接。
+HA 通过 NVR 鉴权接口完成 WHEP 协商，不直接访问媒体引擎的 HTTP 地址。媒体通过 ICE 在终端与引擎之间传输，请确保终端可访问引擎公布的 UDP 地址与端口；已验证 H.264/H.265 直连，以及 HA `web_rtc` 配置下强制走认证 TURN/UDP 中继的真实收包与解码，初始 offer 不带 candidate 也能连接。TURN 服务需另行提供，本地中继验证不等于真实公网 NAT 验证。
+
+如已有 TURN 服务，可在 HA 的 `configuration.yaml` 中配置并重启 HA（替换地址和凭据，不要把凭据提交到仓库）：
+
+```yaml
+web_rtc:
+  ice_servers:
+    - url: ["turn:turn.example.com:3478?transport=udp"]
+      username: "your-turn-user"
+      credential: "your-turn-password"
+```
 
 关闭播放器、卸载集成或撤回发布会清理会话。撤回发布后，已经签发的清理令牌只能删除原会话，不能再创建播放。令牌绑定流、实例及引擎来源，24 小时过期，NVR 重启后失效；异常退出时还依赖引擎的超时清理。
 

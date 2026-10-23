@@ -1,6 +1,6 @@
 # Home Assistant 对接测试记录
 
-跟踪：[Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。本文不包含账号密码、播放 token 或测试配置文件；展示截图待全部阶段完成后统一准备。
+跟踪：[Issue #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)。本文不包含账号密码、播放 token 或测试配置文件；最终展示截图见接入文档。
 
 ## 阶段一：视频流发布与 HA 摄像头集成
 
@@ -82,7 +82,7 @@
 
 ## 阶段六：H.265 兼容
 
-用本机已有 FFmpeg 生成 Enhanced RTMP 的 H.265/AAC 合成源，实际进入 NVR，再由 HA 通过鉴权 RTSP 读取。HA 快照为有效 JPEG；HLS master 宣告 `hvc1` 和 AAC，取回 init 与真实分片后可解码 HEVC 视频和 AAC 音频。HEVC 流不宣告当前 H.264 WebRTC 能力。未启动自动转码，也不要求用户安装 FFmpeg；测试源生成使用测试机既有工具。
+用本机已有 FFmpeg 生成 Enhanced RTMP 的 H.265/AAC 合成源，实际进入 NVR，再由 HA 通过鉴权 RTSP 读取。HA 快照为有效 JPEG；HLS master 宣告 `hvc1` 和 AAC，取回 init 与真实分片后可解码 HEVC 视频和 AAC 音频。当时 HEVC 流尚未宣告 WebRTC 能力；2026-10-23 的补充验证已解除此限制，见下文。未启动自动转码，也不要求用户安装 FFmpeg；测试源生成使用测试机既有工具。
 
 中途启动录像时发现 CRA 源无片段：原 H.265 录像器只等待 IDR，错过初始 IDR 后无限等待。已增加 BLA/IDR/CRA 随机访问点处理，开始新片段时丢弃可能引用片段外帧的 leading RASL，直到 trailing pictures。实际再录制，HA 原生媒体解析出的 MP4 可解码 HEVC 与 AAC，并完成 10 秒 seek。回归包含 CRA 开始与旋转、首段 RASL 排除和 Enhanced RTMP IRAP 标记，相关 recorder/media/nalutil race 检查通过。
 
@@ -94,3 +94,34 @@
 从官方 Release 获取 HACS 2.0.5，在隔离 Python/HA 环境运行其真实集成仓库校验与 GitHub 下载路径，取得主仓库 main 的完整集成。显式选择 main 才能避开不包含集成的旧 NVR Release；默认最新 Release 的首次安装尚不可用，不能记为 HACS UI 首次安装通过。独立 HA 分发仓库可以隔离两者版本，仓库选择待确认；官方目录和 Brands 审核仍是外部事项。
 
 打包脚本只收集集成公开源码、翻译和 MIT 许可证，排除缓存与测试状态，ZIP 根目录直接为 `manifest.json`。实际生成 0.6.0 ZIP，清除隔离 HA 的旧集成目录，从 ZIP 安装后重启，原摄像头恢复，配置与实体身份保留。HA 专项 CI 在测试后生成同一 ZIP，后续 NVR tag Release 会附带此包。支持导出 HA-only 源码目录，但脚本不创建或发布仓库。
+
+## 2026-10-23 补充：HEVC WebRTC、TURN 与设备授权
+
+此前 HA 接口额外限制了 H.264，底层 lalmax 的 H.265 WebRTC 实现已经存在。本次解除该限制，目录同时宣告 H.264/H.265 能力，并在调用媒体引擎前校验 offer 中的视频编码，拒绝只有 H.264 的 HEVC 请求、无效 SDP、被禁用的视频 m-line 和不接收视频的方向。不会启动转码。
+
+隔离环境仍为 HA 2026.10.2、集成 0.6.1，以及两路 640×360/15fps 的合成 H.264/AAC、H.265/AAC 输入。真实 HA WebSocket 协商后，Pion 接收端取得 H.265 RTP，按 RFC 7798 解包，再由 PyAV 实际解出至少三帧 640×360 视频。HA 浏览器中的两路 `ha-web-rtc-player` 均持续播放，HEVC 视频尺寸为 640×360、播放时间持续增长。H.264 原路径也完成实际收包与解码回归。
+
+使用 `tests/home_assistant/turn_server` 启动真实的认证 TURN/UDP 测试服务，通过 HA `web_rtc.ice_servers` 配置传给接收端。接收端强制 `ICETransportPolicyRelay`，初始 offer 不包含候选地址，连接后检查选中候选类型确实为 `relay`，H.264/H.265 的 RTP 与实际解码均通过。H.265 关闭播放器、撤销发布及重载集成的会话清理通过；HLS 仍可单独请求。随后再次验证 HEVC JPEG、HA HLS 的 HEVC/AAC 实际解码，以及 HA 录像的 HEVC/AAC 解码和 10 秒 seek，均通过。TURN 控制端只监听回环地址，权限仅允许测试媒体主机，测试凭据存于临时私有文件。
+
+该验证覆盖受控环境中的真实 TURN 协议和中继媒体，没有覆盖真实公网、双端 NAT、不同运营商网络或 TURN/TCP/TLS。实体云台仍需真实设备；现有 ONVIF/GB28181 验证使用协议模拟设备。
+
+复现时先准备原有隔离 HA/NVR 与两路合成输入，并启动接收端。普通部署不需要运行这些测试程序：
+
+```sh
+go run ./tests/home_assistant/webrtc_peer
+python tests/home_assistant/live_webrtc.py --runtime <隔离目录> --codec h265 --mode close
+```
+
+TURN 测试需要私有 JSON 文件，包含 `username`、`credential` 和 `relay_address`（本机拥有的、引擎公布的局域网 IPv4 地址）。将相同凭据配置到隔离 HA 的 `web_rtc.ice_servers`，URL 为 `turn:127.0.0.1:13478?transport=udp`，重启测试 HA 后运行：
+
+```sh
+go run ./tests/home_assistant/turn_server --config <私有凭据文件>
+python tests/home_assistant/live_webrtc.py --runtime <隔离目录> --codec h265 --mode close --relay
+python tests/home_assistant/live_webrtc.py --runtime <隔离目录> --codec h265 --mode revoke --relay
+python tests/home_assistant/live_webrtc.py --runtime <隔离目录> --codec h265 --mode reload --relay
+python tests/home_assistant/live_webrtc.py --runtime <隔离目录> --codec h264 --mode close --relay
+```
+
+这些脚本共享同一测试接收端，并会改变发布和集成状态，必须依次执行。能力断言使用 HA 的 `camera/capabilities` WebSocket 接口，不能从 camera state attributes 推断 `frontend_stream_types`。
+
+另建没有 GitHub 凭据的隔离 HA，运行官方 HACS 2.0.5 配置流程，由该实例生成设备代码，在 GitHub 完成交互式设备授权。授权页面明确只申请公开资料，不申请私有仓库权限。HACS 成功创建配置项并进入 `running`，`disabled_reason` 为空，实际加载 5009 个仓库条目。此前正式版首次安装和 RC → V1.0.2 升级测试保持有效；此次补齐了先前未覆盖的真实设备授权流程。HACS 官方目录/Brands 外部审核仍未完成。

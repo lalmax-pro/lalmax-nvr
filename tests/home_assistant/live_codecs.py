@@ -72,8 +72,14 @@ state = wait(
         else None
     )
 )
-assert "web_rtc" not in state["attributes"].get("frontend_stream_types", [])
-print("PASS HA tracks actual HEVC codec; no unsupported WebRTC", flush=True)
+capabilities = asyncio.run(
+    command({"type": "camera/capabilities", "entity_id": entity})
+)
+assert "web_rtc" in capabilities["frontend_stream_types"]
+assert "hls" in capabilities["frontend_stream_types"]
+print(
+    "PASS HA tracks actual HEVC codec and advertises WebRTC alongside HLS", flush=True
+)
 r = req(ha, "GET", H + "/api/camera_proxy/" + entity)
 assert r.content.startswith(b"\xff\xd8")
 print("PASS actual HEVC JPEG through HA", len(r.content), flush=True)

@@ -28,6 +28,14 @@ func (e *haWHEPEngine) BuildPlayURL(_ context.Context, req media.PlayURLRequest)
 }
 
 func TestHomeAssistantWHEPScopedSession(t *testing.T) {
+	for _, codec := range []string{"H264", "H265"} {
+		t.Run(codec, func(t *testing.T) { testHomeAssistantWHEPScopedSession(t, codec) })
+	}
+}
+
+func testHomeAssistantWHEPScopedSession(t *testing.T, codec string) {
+	t.Helper()
+	offer := "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=recvonly\r\na=rtpmap:102 " + codec + "/90000\r\n"
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })
 	cfg, err := db.GetHomeAssistantSettings(context.Background())
@@ -47,19 +55,19 @@ func TestHomeAssistantWHEPScopedSession(t *testing.T) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
-		require.Equal(t, "v=0\r\n", string(body))
+		require.Equal(t, offer, string(body))
 		w.Header().Set("Location", location)
 		w.WriteHeader(201)
 		_, _ = io.WriteString(w, answer)
 	}))
 	t.Cleanup(upstream.Close)
-	engine := &haWHEPEngine{stubMediaEngine: &stubMediaEngine{stream: &media.StreamInfo{Active: true, AppName: "custom-app", VideoCodec: "H264"}}, target: upstream.URL + "/whep"}
+	engine := &haWHEPEngine{stubMediaEngine: &stubMediaEngine{stream: &media.StreamInfo{Active: true, AppName: "custom-app", VideoCodec: codec}}, target: upstream.URL + "/whep"}
 	h := NewHandler(db, store, noopAuthMW(), &config.Config{Auth: config.AuthConfig{PlaybackTokens: map[string]string{"main": "media-secret"}}}, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 	router := h.Routes()
 	request := func(method, path string) *httptest.ResponseRecorder {
 		t.Helper()
-		r := httptest.NewRequest(method, path, strings.NewReader("v=0\r\n"))
+		r := httptest.NewRequest(method, path, strings.NewReader(offer))
 		r.Header.Set("Content-Type", "application/sdp")
 		r.Header.Set("Authorization", "Basic test")
 		r.Header.Set("Cookie", "session=private")
@@ -92,10 +100,26 @@ func TestHomeAssistantWHEPScopedSession(t *testing.T) {
 	require.Equal(t, 502, request("POST", path).Code)
 	location, answer = "/session/test", "not SDP"
 	require.Equal(t, 502, request("POST", path).Code)
-	engine.stream.VideoCodec = "H265"
+	engine.stream.VideoCodec = "AV1"
 	require.Equal(t, 400, request("POST", path).Code)
 	// Origin comparisons never permit other schemes or hosts.
 	a, _ := url.Parse(upstream.URL)
 	b, _ := url.Parse("file:///tmp/unsafe")
 	require.False(t, sameWHEPOrigin(a, b))
+}
+
+func TestHomeAssistantOfferCodecNegotiation(t *testing.T) {
+	offer := "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=recvonly\r\na=rtpmap:102 H265/90000\r\n"
+	require.True(t, homeAssistantOfferSupportsCodec([]byte(offer), "H265"))
+	require.False(t, homeAssistantOfferSupportsCodec([]byte(offer), "H264"))
+	for _, invalid := range []string{
+		"not SDP", "v=0\r\n",
+		strings.Replace(offer, "m=video", "m=audio", 1),
+		strings.Replace(offer, "video 9", "video 0", 1),
+		strings.Replace(offer, "a=recvonly", "a=inactive", 1),
+		strings.Replace(offer, "a=recvonly", "a=sendonly", 1),
+		strings.Replace(offer, "rtpmap:102", "rtpmap:103", 1),
+	} {
+		require.False(t, homeAssistantOfferSupportsCodec([]byte(invalid), "H265"), invalid)
+	}
 }

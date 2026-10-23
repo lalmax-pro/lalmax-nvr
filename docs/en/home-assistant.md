@@ -94,9 +94,19 @@ NVR performs the automatic stop for continuous movement, including caller discon
 
 ## Optional low-latency WebRTC
 
-Enable the low-latency option in HA Reconfigure. Online published H.264 streams then offer both WebRTC and HLS to HA's player. The option defaults to off. Current WebRTC playback does not carry AAC audio; use HLS for audio. No transcoding is started.
+Enable the low-latency option in HA Reconfigure. Online published H.264 and H.265/HEVC streams then offer both WebRTC and HLS to HA's player. The option defaults to off. HEVC WebRTC requires browser negotiation and decoding support. Offers without the source codec are rejected; disable low latency to use HLS, or publish an H.264 substream. Current WebRTC playback does not carry AAC audio; use HLS for audio. No transcoding is started.
 
-HA negotiates WHEP through authenticated NVR endpoints. Media travels directly between the viewer and engine over ICE, so the viewer must reach the engine's advertised UDP addresses and ports. LAN connectivity, including an initial candidate-free offer, is tested; TURN relaying and public NAT traversal are not provided.
+HA negotiates WHEP through authenticated NVR endpoints. Media travels directly between the viewer and engine over ICE, so the viewer must reach the engine's advertised UDP addresses and ports. Actual H.264/HEVC reception and decoding are tested with candidate-free offers over direct connections and forced authenticated TURN/UDP relays configured through HA's `web_rtc` component. Supply your own TURN service; the controlled local relay test does not establish real public NAT compatibility.
+
+To use an existing TURN service, configure HA's `configuration.yaml` and restart HA. Replace the placeholders and keep credentials out of version control:
+
+```yaml
+web_rtc:
+  ice_servers:
+    - url: ["turn:turn.example.com:3478?transport=udp"]
+      username: "your-turn-user"
+      credential: "your-turn-password"
+```
 
 Closing a viewer, unloading the integration or withdrawing a publication cleans up its sessions. A signed cleanup token remains usable after withdrawal only to delete the original session. Tokens are scoped to the stream, instance and configured engine origin, expire in 24 hours and become invalid after an NVR restart. Abnormal termination also relies on engine timeout cleanup.
 

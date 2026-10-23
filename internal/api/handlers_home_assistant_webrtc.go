@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
+	"github.com/pion/sdp/v3"
 )
 
 type homeAssistantWHEPSession struct {
@@ -25,6 +26,42 @@ type homeAssistantWHEPSession struct {
 	AppName    string `json:"app_name"`
 	URL        string `json:"url"`
 	Expires    int64  `json:"expires"`
+}
+
+func homeAssistantWebRTCCodec(codec string) string {
+	switch strings.ToLower(codec) {
+	case "h264":
+		return "H264"
+	case "h265", "hevc":
+		return "H265"
+	default:
+		return ""
+	}
+}
+
+func homeAssistantOfferSupportsCodec(offer []byte, codec string) bool {
+	var description sdp.SessionDescription
+	if description.Unmarshal(offer) != nil {
+		return false
+	}
+	for _, m := range description.MediaDescriptions {
+		if m.MediaName.Media != "video" || m.MediaName.Port.Value == 0 {
+			continue
+		}
+		if _, inactive := m.Attribute("inactive"); inactive {
+			continue
+		}
+		if _, sendonly := m.Attribute("sendonly"); sendonly {
+			continue
+		}
+		for _, a := range m.Attributes {
+			fields := strings.Fields(a.Value)
+			if a.Key == "rtpmap" && len(fields) == 2 && slices.Contains(m.MediaName.Formats, fields[0]) && strings.EqualFold(fields[1], codec+"/90000") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func sameWHEPOrigin(a, b *url.URL) bool {
@@ -127,8 +164,9 @@ func (h *Handler) handleHomeAssistantWHEP(w http.ResponseWriter, r *http.Request
 		writeError(w, 503, "published stream is offline")
 		return
 	}
-	if !strings.EqualFold(info.VideoCodec, "h264") {
-		writeError(w, 400, "WebRTC requires H.264; use HLS or RTSP for this codec")
+	codec := homeAssistantWebRTCCodec(info.VideoCodec)
+	if codec == "" {
+		writeError(w, 400, "WebRTC requires H.264 or H.265; use HLS or RTSP for this codec")
 		return
 	}
 	cfg, err := h.db.GetHomeAssistantSettings(r.Context())
@@ -156,6 +194,10 @@ func (h *Handler) handleHomeAssistantWHEP(w http.ResponseWriter, r *http.Request
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil || len(body) == 0 {
 		writeError(w, 400, "invalid SDP offer")
+		return
+	}
+	if !homeAssistantOfferSupportsCodec(body, codec) {
+		writeError(w, 400, "WebRTC offer does not support the stream codec; use HLS or RTSP")
 		return
 	}
 	resp, err := h.requestHomeAssistantWHEP(r, "POST", upstream, strings.NewReader(string(body)))

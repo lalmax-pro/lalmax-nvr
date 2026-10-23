@@ -7,16 +7,22 @@ Requires prepared isolated HA/NVR runtime; reconfigures no production systems.
 
 import argparse
 import asyncio
+import io
 import json
 import pathlib
 
 import aiohttp
+import av
 import requests
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--runtime", type=pathlib.Path, required=True)
 parser.add_argument("--mode", choices=["close", "revoke", "reload"], default="close")
+parser.add_argument("--codec", choices=["h264", "h265"], default="h264")
+parser.add_argument("--relay", action="store_true", help="require HA-configured TURN")
 args = parser.parse_args()
+sid = "ha-test-main" if args.codec == "h264" else "ha-test-second"
+entity = "camera.ha_test_main" if args.codec == "h264" else "camera.ha_test_second"
 root = args.runtime.resolve()
 H = "http://127.0.0.1:18123"
 N = "http://127.0.0.1:19090"
@@ -30,31 +36,77 @@ ha.headers["Authorization"] = "Bearer " + tok
 
 
 async def main():
+    if args.codec == "h265":
+        incompatible = await asyncio.to_thread(
+            requests.get, P + "/offer?candidates=false&codec=h264", timeout=10
+        )
+        rejected = await asyncio.to_thread(
+            nvr.post,
+            N + "/api/integrations/home-assistant/streams/" + sid + "/webrtc",
+            data=incompatible.text,
+            headers={"Content-Type": "application/sdp"},
+            timeout=10,
+        )
+        assert rejected.status_code == 400, rejected.status_code
+        print("PASS H.264-only offer rejected for HEVC source", flush=True)
     async with aiohttp.ClientSession() as s, s.ws_connect(H + "/api/websocket") as ws:
         await ws.receive_json()
         await ws.send_json({"type": "auth", "access_token": tok})
         assert (await ws.receive_json())["type"] == "auth_ok"
+        # Capabilities are a WebSocket API result, not camera state attributes.
+        # Wait for publication restoration by HA's polling coordinator.
+        for attempt in range(90):
+            await ws.send_json(
+                {
+                    "id": 100 + attempt,
+                    "type": "camera/capabilities",
+                    "entity_id": entity,
+                }
+            )
+            capability = await ws.receive_json(timeout=10)
+            if (
+                capability.get("success")
+                and "web_rtc" in capability["result"]["frontend_stream_types"]
+            ):
+                assert "hls" in capability["result"]["frontend_stream_types"]
+                break
+            await asyncio.sleep(0.5)
+        else:
+            raise AssertionError("HA camera WebRTC capability did not recover")
         await ws.send_json(
             {
-                "id": 1,
+                "id": 200,
                 "type": "camera/webrtc/get_client_config",
-                "entity_id": "camera.ha_test_main",
+                "entity_id": entity,
             }
         )
         m = await ws.receive_json()
-        print("WebRTC client capability", m, flush=True)
         assert m.get("success")
+        configuration = m["result"]["configuration"]
+        print("PASS HA WebRTC client configuration", flush=True)
+        if args.relay:
+            assert any(
+                url.startswith("turn:")
+                for server in configuration["iceServers"]
+                for url in server["urls"]
+            ), "configure a TURN server in the isolated HA web_rtc configuration"
         offer = (
             await asyncio.to_thread(
-                requests.get, P + "/offer?candidates=false", timeout=10
+                requests.post,
+                P
+                + "/offer?candidates=false&codec="
+                + args.codec
+                + ("&relay=true" if args.relay else ""),
+                json=configuration if args.relay else {},
+                timeout=10,
             )
         ).text
         assert offer.startswith("v=0") and "a=candidate:" not in offer
         await ws.send_json(
             {
-                "id": 2,
+                "id": 201,
                 "type": "camera/webrtc/offer",
-                "entity_id": "camera.ha_test_main",
+                "entity_id": entity,
                 "offer": offer,
             }
         )
@@ -66,6 +118,7 @@ async def main():
                 if e.get("type") == "error":
                     raise AssertionError(e)
                 if e.get("type") == "answer":
+                    assert args.codec.upper() + "/90000" in e["answer"]
                     a = await asyncio.to_thread(
                         requests.post, P + "/answer", data=e["answer"], timeout=5
                     )
@@ -75,9 +128,11 @@ async def main():
             raise AssertionError("no answer")
         for _ in range(60):
             st = (await asyncio.to_thread(requests.get, P + "/stats", timeout=5)).json()
-            if st["packets"] > 30 and st["state"] == "connected":
+            if st["packets"] > 100 and st["state"] == "connected":
                 print(
-                    "PASS HA WebRTC -> real H264 RTP, candidate-free offer",
+                    "PASS HA WebRTC -> real "
+                    + args.codec.upper()
+                    + " RTP, candidate-free offer",
                     st,
                     flush=True,
                 )
@@ -85,11 +140,35 @@ async def main():
             await asyncio.sleep(0.5)
         else:
             raise AssertionError(st)
+        assert st["codec"].lower() == "video/" + args.codec
+        if args.relay:
+            assert st.get("local_candidate_type") == "relay", st
+            print(
+                "PASS selected ICE candidate uses authenticated TURN relay", flush=True
+            )
+        video = (await asyncio.to_thread(requests.get, P + "/video", timeout=5)).content
+        with av.open(
+            io.BytesIO(video), format="hevc" if args.codec == "h265" else "h264"
+        ) as container:
+            decoded = 0
+            for frame in container.decode(video=0):
+                assert (frame.width, frame.height) == (640, 360)
+                decoded += 1
+                if decoded >= 3:
+                    break
+            assert decoded >= 3
+        print(
+            "PASS actual received WebRTC video decodes",
+            args.codec,
+            len(video),
+            decoded,
+            flush=True,
+        )
         await ws.send_json(
             {
-                "id": 3,
+                "id": 202,
                 "type": "camera/stream",
-                "entity_id": "camera.ha_test_main",
+                "entity_id": entity,
                 "format": "hls",
             }
         )
@@ -98,13 +177,13 @@ async def main():
         print("PASS HLS retained alongside WebRTC", flush=True)
         if args.mode == "close":
             await ws.send_json(
-                {"id": 4, "type": "unsubscribe_events", "subscription": 2}
+                {"id": 203, "type": "unsubscribe_events", "subscription": 201}
             )
             m = await ws.receive_json(timeout=20)
             assert m.get("success")
         elif args.mode == "revoke":
             r = nvr.put(
-                N + "/api/integrations/home-assistant/streams/ha-test-main",
+                N + "/api/integrations/home-assistant/streams/" + sid,
                 json={"enabled": False},
                 timeout=10,
             )
@@ -127,7 +206,7 @@ async def main():
         finally:
             if args.mode == "revoke":
                 r = nvr.put(
-                    N + "/api/integrations/home-assistant/streams/ha-test-main",
+                    N + "/api/integrations/home-assistant/streams/" + sid,
                     json={"enabled": True},
                     timeout=10,
                 )
