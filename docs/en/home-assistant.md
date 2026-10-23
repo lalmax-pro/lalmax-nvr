@@ -105,7 +105,7 @@ Closing a viewer, unloading the integration or withdrawing a publication cleans 
 
 This repository follows the HACS single-integration layout and includes `hacs.json`, with HA 2026.10.2 as the tested minimum. The integration has its own version in `manifest.json`; it is independent of the NVR binary version. HACS official catalog inclusion and Home Assistant Brands review are external steps and have not been completed.
 
-The Home Assistant CI workflow builds `lalmax_nvr.zip` as an artifact after tests. Future NVR tag releases also attach this ZIP. To package locally:
+The Home Assistant CI workflow builds `lalmax_nvr.zip` as an artifact after tests. NVR tag releases attach this ZIP. To package locally:
 
 ```sh
 python scripts/package_home_assistant.py --output /tmp/lalmax_nvr.zip
@@ -113,6 +113,10 @@ python scripts/package_home_assistant.py --output /tmp/lalmax_nvr.zip
 
 For a separate HA-only repository, add `--export-dir /tmp/lalmax-nvr-home-assistant` (a new directory). The export contains only the integration, HACS metadata, installation guides and license. It does not publish or create repositories. This avoids mixing NVR binary release versions with HA integration updates.
 
-HACS 2.0.5's real validation and download logic was tested against the public main branch. Existing NVR releases published before the integration do not contain `custom_components/lalmax_nvr`, and HACS defaults to the latest release. Therefore those old releases cannot be used to install this integration. Use the manual ZIP until a release containing the integration, or an independent distribution repository, is available. Do not treat a successful branch download as a validated HACS first-install UI flow.
+Keep distribution in this main repository. In HACS, open **⋮ → Custom repositories**, add `https://github.com/lalmax-pro/lalmax-nvr` with type **Integration**, open the repository and download the latest stable release. Restart HA, then configure **lalmax-nvr** under **Settings → Devices & services**. Use releases **V1.0.1 or newer**; V1.0.0 predates this integration.
+
+Actual UI first installation of **V1.0.2** was tested with HACS 2.0.5 / HA 2026.10.2. A separate HA instance upgraded through HACS from **v1.0.1-rc.1** to **V1.0.2**, preserving all 24 entity IDs, unique IDs and config entry IDs. Both tags contain integration version 0.6.1; this validates the repository release upgrade path. HACS GitHub authentication was preconfigured; interactive GitHub device authorization was not part of this test. The tested installation supports live media, snapshots, events, recordings and protocol-simulated PTZ.
+
+To leave prereleases, turn off the repository's beta switch entity and select the stable release in **Redownload → Need a different version?** if necessary. Restart HA after downloading an update. HACS 2.x displays the repository README; `info.md` does not replace it.
 
 References: [HACS integration structure](https://www.hacs.dev/docs/publish/integration/), [repository manifest](https://www.hacs.dev/docs/publish/start/#hacsjson).

@@ -16,6 +16,10 @@
 
 [**English**](README.md)
 
+## Home Assistant / HACS
+
+在 HACS 中将 `https://github.com/lalmax-pro/lalmax-nvr` 添加为 **Integration** 类型的自定义仓库，下载最新稳定版并重启 Home Assistant（2026.10.2 或更新版本）。HACS 只安装 HA 集成，NVR 需单独运行。在 NVR 的“设置 → Home Assistant”选择发布流，再在 HA“设置 → 设备与服务”中添加 **lalmax-nvr**。HTTP 与 RTSP 账号分别配置。[安装、播放、事件与云台指南](docs/zh/home-assistant.md)。
+
 ## 截图
 
 ![登录页](docs/images/login-light-zh.png)

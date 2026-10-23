@@ -117,7 +117,7 @@ HA 通过 NVR 鉴权接口完成 WHEP 协商，不直接访问媒体引擎的 HT
 
 仓库符合 HACS 单集成目录结构，提供 `hacs.json`，声明已验证的最低 HA 2026.10.2。集成版本在 `manifest.json` 中独立维护，不与 NVR 二进制版本号绑定。HACS 官方目录收录及 Home Assistant Brands 需要外部审核，尚未完成。
 
-HA 专项 CI 在检查通过后生成 `lalmax_nvr.zip` 构建产物；后续 NVR tag 发版也会附带此包。手动打包：
+HA 专项 CI 在检查通过后生成 `lalmax_nvr.zip` 构建产物；NVR tag 发版也会附带此包。手动打包：
 
 ```sh
 python scripts/package_home_assistant.py --output /tmp/lalmax_nvr.zip
@@ -125,6 +125,10 @@ python scripts/package_home_assistant.py --output /tmp/lalmax_nvr.zip
 
 如采用独立 HA 分发仓库，可增加 `--export-dir /tmp/lalmax-nvr-home-assistant`（新目录），导出集成、HACS 元数据、安装说明与许可证，不包含测试状态或 NVR 二进制，不会自动创建或发布仓库。这样可以避免 NVR 版本号干扰 HA 更新。
 
-已用 HACS 2.0.5 的真实校验及下载逻辑验证公开 main 分支。集成之前发布的旧 NVR Release 不包含 `custom_components/lalmax_nvr`，而 HACS 默认优先使用最新 Release，因此不能从那些旧版本安装。包含集成的新 Release 或独立分发仓库准备好前，可使用手动 ZIP；分支下载成功不等于 HACS 界面首次安装已通过。
+继续使用本主仓库分发。在 HACS 中打开 **⋮ → Custom repositories**，添加 `https://github.com/lalmax-pro/lalmax-nvr`，类型选择 **Integration**。打开仓库并下载最新稳定版，重启 HA 后在“设置 → 设备与服务”中添加 **lalmax-nvr**。使用 **V1.0.1 或更新版本**；V1.0.0 尚未包含本集成。
+
+已在 HACS 2.0.5 / HA 2026.10.2 中实际通过界面首次安装 **V1.0.2**；另一套隔离 HA 从 **v1.0.1-rc.1** 通过 HACS 升级到 **V1.0.2**，24 个实体的 entity_id、unique_id 和配置项 ID 均保留。两个标签的集成版本均为 0.6.1，此次验证的是仓库 Release 升级路径。测试预先配置 HACS 的 GitHub 身份，未覆盖交互式 GitHub 设备授权。安装后已联调实时媒体、缩略图、事件、录像及协议模拟云台。
+
+退出测试版时，关闭仓库的 beta 开关实体；必要时在 **Redownload → Need a different version?** 中选择稳定版。下载更新后重启 HA。HACS 2.x 显示仓库 README，`info.md` 不会替代它。
 
 参考：[HACS 集成结构](https://www.hacs.dev/docs/publish/integration/)、[仓库元数据](https://www.hacs.dev/docs/publish/start/#hacsjson)。

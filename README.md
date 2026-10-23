@@ -16,6 +16,10 @@ This project was inspired by MiBeeNVR, and has since been developed into a dedic
 
 [**中文**](README.zh.md)
 
+## Home Assistant / HACS
+
+In HACS, add `https://github.com/lalmax-pro/lalmax-nvr` as an **Integration** custom repository, download the latest stable release, then restart Home Assistant (2026.10.2 or newer). HACS installs the HA integration only; run the NVR separately. In the NVR, select streams under **Settings → Home Assistant**, then add **lalmax-nvr** under HA **Settings → Devices & services**. HTTP and RTSP credentials are configured separately. [Setup, playback, events and PTZ guide](docs/en/home-assistant.md) · [中文](docs/zh/home-assistant.md).
+
 ## Screenshots
 
 ![Login](docs/images/login-light.png)
