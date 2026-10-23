@@ -1,5 +1,5 @@
 # ---- Stage 1: Build frontend SPA ----
-FROM node:24-slim AS frontend
+FROM --platform=$BUILDPLATFORM node:24-slim AS frontend
 
 WORKDIR /build/web
 
@@ -12,7 +12,7 @@ COPY web/ ./
 RUN npm run build
 
 # ---- Stage 2: Build Go binary ----
-FROM golang:1.26-bookworm AS backend
+FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS backend
 
 WORKDIR /build
 
@@ -32,7 +32,11 @@ COPY --from=frontend /build/web/dist ./internal/ui/static/
 # Static build — no C dependencies, pure Go binary
 ENV CGO_ENABLED=0
 ARG VERSION=dev
-RUN go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /lalmax-nvr ./cmd/lalmax-nvr/
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
+RUN GOOS="$TARGETOS" GOARCH="$TARGETARCH" GOARM="${TARGETVARIANT#v}" \
+    go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /lalmax-nvr ./cmd/lalmax-nvr/
 
 # ---- Stage 3: Minimal runtime image ----
 FROM alpine:3.21
