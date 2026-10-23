@@ -44,3 +44,5 @@ Find guides by task. For configuration examples, see [`config/config.example.yam
 | [AI detection](ai-setup-guide.md) | Deploy and configure detection services |
 
 - [Home Assistant: stream publication, live video, snapshots and availability](home-assistant.md)
+
+- [Releases and automatic builds](releases.md)

@@ -44,3 +44,5 @@
 | [AI 检测](ai-setup-guide.md) | 检测服务的部署与配置 |
 
 - [Home Assistant：流发布、实时预览、缩略图与在线状态](home-assistant.md)
+
+- [发布与自动构建](releases.md)
