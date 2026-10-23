@@ -62,3 +62,12 @@ jobs:
           echo "$actual"
           test "$actual" = "lalmax-nvr version $RELEASE_TAG"
           docker run --rm --platform "$PLATFORM" --entrypoint ffmpeg "$IMAGE" -version
+
+      - name: Verify anonymous pull
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        shell: bash
+        run: |
+          anonymous_config=$(mktemp -d)
+          trap 'rm -rf "$anonymous_config"' EXIT
+          docker --config "$anonymous_config" pull --platform "$PLATFORM" "$IMAGE"

@@ -109,7 +109,7 @@ Captured after the complete integration and release tests, using NVR V1.0.2 and 
 
 [Detection events and PTZ](../images/home-assistant/events-ptz.png) · [HEVC recording playback](../images/home-assistant/recording.png) · [NVR publication settings](../images/home-assistant/publication.png)
 
-Release validation: [complete build and seven assets](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884373628), [duplicate publication skipped](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884376124), and [published binary/FFmpeg runtime on all three Docker architectures](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39886532867). The GHCR package is currently private; anonymous pulls require an administrator to configure public visibility. HACS installation and Release ZIP downloads are independent of that setting.
+Release validation: [complete build and seven assets](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884373628), [duplicate publication skipped](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884376124), and [published binary/FFmpeg runtime on all three Docker architectures](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39886532867). The GHCR package is public. Anonymous `docker pull ghcr.io/lalmax-pro/lalmax-nvr:1.0.2` and execution of the downloaded container were verified with an empty Docker credential configuration.
 
 ## HACS packaging and distribution
 

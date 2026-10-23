@@ -121,7 +121,7 @@ HA 通过 NVR 鉴权接口完成 WHEP 协商，不直接访问媒体引擎的 HT
 
 [事件联动与云台](../images/home-assistant/events-ptz.png) · [HEVC 录像播放](../images/home-assistant/recording.png) · [NVR 发布设置](../images/home-assistant/publication.png)
 
-发版验证：[完整构建及 7 个附件](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884373628)、[重复发布事件跳过构建](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884376124)、[三种 Docker 架构的正式二进制与 FFmpeg 运行](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39886532867)。GHCR 包当前为私有，匿名拉取需管理员设置公开可见性；HACS 安装和 Release ZIP 下载不受该设置影响。
+发版验证：[完整构建及 7 个附件](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884373628)、[重复发布事件跳过构建](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884376124)、[三种 Docker 架构的正式二进制与 FFmpeg 运行](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39886532867)。GHCR 包已公开。已用空 Docker 凭据配置实际验证匿名 `docker pull ghcr.io/lalmax-pro/lalmax-nvr:1.0.2`，并运行下载的容器确认版本。
 
 ## HACS 安装包与分发
 
