@@ -113,6 +113,16 @@ HA 通过 NVR 鉴权接口完成 WHEP 协商，不直接访问媒体引擎的 HT
 关闭播放器、卸载集成或撤回发布会清理会话。撤回发布后，已经签发的清理令牌只能删除原会话，不能再创建播放。令牌绑定流、实例及引擎来源，24 小时过期，NVR 重启后失效；异常退出时还依赖引擎的超时清理。
 
 
+## 最终展示
+
+全部集成及发版测试完成后截取，使用 NVR V1.0.2、HA 集成 0.6.1 与隔离 HA 2026.10.2。视频是合成测试输入，云台通过 ONVIF/GB28181 协议测试端验证。以下均为实际应用截图。
+
+![HA 中的 H.264 与 H.265 双路预览](../images/home-assistant/live.png)
+
+[事件联动与云台](../images/home-assistant/events-ptz.png) · [HEVC 录像播放](../images/home-assistant/recording.png) · [NVR 发布设置](../images/home-assistant/publication.png)
+
+发版验证：[完整构建及 7 个附件](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884373628)、[重复发布事件跳过构建](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884376124)、[三种 Docker 架构的正式二进制与 FFmpeg 运行](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39886532867)。GHCR 包当前为私有，匿名拉取需管理员设置公开可见性；HACS 安装和 Release ZIP 下载不受该设置影响。
+
 ## HACS 安装包与分发
 
 仓库符合 HACS 单集成目录结构，提供 `hacs.json`，声明已验证的最低 HA 2026.10.2。集成版本在 `manifest.json` 中独立维护，不与 NVR 二进制版本号绑定。HACS 官方目录收录及 Home Assistant Brands 需要外部审核，尚未完成。

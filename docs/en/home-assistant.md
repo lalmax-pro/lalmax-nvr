@@ -101,6 +101,16 @@ HA negotiates WHEP through authenticated NVR endpoints. Media travels directly b
 Closing a viewer, unloading the integration or withdrawing a publication cleans up its sessions. A signed cleanup token remains usable after withdrawal only to delete the original session. Tokens are scoped to the stream, instance and configured engine origin, expire in 24 hours and become invalid after an NVR restart. Abnormal termination also relies on engine timeout cleanup.
 
 
+## Final demonstration
+
+Captured after the complete integration and release tests, using NVR V1.0.2 and HA integration 0.6.1 on isolated HA 2026.10.2. Video is synthetic test input; PTZ uses ONVIF/GB28181 protocol fixtures. These are actual application screenshots.
+
+![HA H.264 and HEVC live preview](../images/home-assistant/live.png)
+
+[Detection events and PTZ](../images/home-assistant/events-ptz.png) · [HEVC recording playback](../images/home-assistant/recording.png) · [NVR publication settings](../images/home-assistant/publication.png)
+
+Release validation: [complete build and seven assets](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884373628), [duplicate publication skipped](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39884376124), and [published binary/FFmpeg runtime on all three Docker architectures](https://github.com/lalmax-pro/lalmax-nvr/actions/runs/39886532867). The GHCR package is currently private; anonymous pulls require an administrator to configure public visibility. HACS installation and Release ZIP downloads are independent of that setting.
+
 ## HACS packaging and distribution
 
 This repository follows the HACS single-integration layout and includes `hacs.json`, with HA 2026.10.2 as the tested minimum. The integration has its own version in `manifest.json`; it is independent of the NVR binary version. HACS official catalog inclusion and Home Assistant Brands review are external steps and have not been completed.
