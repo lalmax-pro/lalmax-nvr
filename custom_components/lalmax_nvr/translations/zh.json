@@ -10,7 +10,7 @@
           "password": "NVR HTTP 密码",
           "rtsp_username": "RTSP 用户名（可选）",
           "rtsp_password": "RTSP 密码（可选）",
-          "low_latency": "启用低延迟 WebRTC（H.264，AAC 音频不可用）"
+          "low_latency": "启用低延迟 WebRTC（H.264/H.265，AAC 音频不可用）"
         }
       },
       "reauth_confirm": {
@@ -22,7 +22,7 @@
           "password": "NVR HTTP 密码",
           "rtsp_username": "RTSP 用户名（可选）",
           "rtsp_password": "RTSP 密码（可选）",
-          "low_latency": "启用低延迟 WebRTC（H.264，AAC 音频不可用）"
+          "low_latency": "启用低延迟 WebRTC（H.264/H.265，AAC 音频不可用）"
         }
       },
       "reconfigure": {
@@ -34,7 +34,7 @@
           "password": "NVR HTTP 密码",
           "rtsp_username": "RTSP 用户名（可选）",
           "rtsp_password": "RTSP 密码（可选）",
-          "low_latency": "启用低延迟 WebRTC（H.264，AAC 音频不可用）"
+          "low_latency": "启用低延迟 WebRTC（H.264/H.265，AAC 音频不可用）"
         }
       }
     },
@@ -54,12 +54,16 @@
     "event": {
       "activity": {
         "name": "事件",
-        "event_types": {
-          "ai_detection": "AI 检测",
-          "motion": "移动检测",
-          "mqtt_trigger": "MQTT 触发",
-          "recorder_reconnected": "录制重连",
-          "health": "健康事件"
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "ai_detection": "AI 检测",
+              "motion": "移动检测",
+              "mqtt_trigger": "MQTT 触发",
+              "recorder_reconnected": "录制重连",
+              "health": "健康事件"
+            }
+          }
         }
       }
     },

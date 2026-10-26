@@ -1,0 +1,29 @@
+name: HACS submission validation
+
+on:
+  pull_request:
+    paths: ['custom_components/**', 'hacs.json', 'LICENSE', '.github/workflows/hacs-validation.yml']
+  push:
+    branches: [main]
+    paths: ['custom_components/**', 'hacs.json', 'LICENSE', '.github/workflows/hacs-validation.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration
+          comment: false
+
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: home-assistant/actions/hassfest@master

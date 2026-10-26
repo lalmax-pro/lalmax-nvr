@@ -1,17 +1,19 @@
 {
   "domain": "lalmax_nvr",
   "name": "lalmax-nvr",
-  "version": "0.6.1",
-  "config_flow": true,
-  "documentation": "https://github.com/lalmax-pro/lalmax-nvr/blob/main/docs/en/home-assistant.md",
-  "issue_tracker": "https://github.com/lalmax-pro/lalmax-nvr/issues",
-  "dependencies": [
-    "media_source",
-    "stream"
-  ],
   "codeowners": [
     "@zkevindev"
   ],
+  "config_flow": true,
+  "dependencies": [
+    "http",
+    "media_source",
+    "stream"
+  ],
+  "documentation": "https://github.com/lalmax-pro/lalmax-nvr/blob/main/docs/en/home-assistant.md",
+  "integration_type": "hub",
   "iot_class": "local_polling",
-  "requirements": []
+  "issue_tracker": "https://github.com/lalmax-pro/lalmax-nvr/issues",
+  "requirements": [],
+  "version": "0.6.2"
 }

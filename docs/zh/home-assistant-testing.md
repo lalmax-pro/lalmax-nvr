@@ -141,3 +141,11 @@ python tests/home_assistant/live_webrtc.py --runtime <隔离目录> \
 云台方面，经 HA 调用的读取预置位、0.1 秒连续变焦与自动停止、原生停止按钮，均得到 NVR 和真实设备成功响应。设备报告的坐标始终为零，不能据此确认镜头发生物理位移。进一步读取真实 ONVIF 配置：只声明连续速度空间，未声明绝对位置空间；`AbsoluteMove` 被设备返回 401（SOAP 客户端最终报告 `password text auth failed (401)`），相同凭据的其他已测命令成功。绝对位置不标记通过，也不把失败误记为 HA 的 NVR 登录失效。已补发停止，设备报告 `moving=false`。该设备不能代替具备完整云台能力的真机验收。
 
 真实 GB28181 注册及控制尚未验证；本次没有修改摄像机已有 GB 配置，现有 GB 验证仍是实际 SIP/Digest 协议模拟端。真实公网环境暂不可用，按维护者决定暂缓；本地强制 TURN/UDP 中继的结果保持有效。
+
+## 2026-10-26：HACS 默认目录提交准备
+
+集成 0.6.2 复用现有项目 Logo，在 `brand/icon.png` 中随集成提供，不再依赖单独 Brands 仓库收录。打包器只增加对八个标准品牌 PNG 文件名的支持，不收集任意截图；新增回归验证品牌资源入包、无关图片排除和 ZIP 可复现性。
+
+运行官方 `ghcr.io/home-assistant/hassfest` 后补齐 `http` 依赖，并将事件类型翻译调整为 `state_attributes.event_type.state`；校验最终报告 1 个集成、0 个无效集成。添加官方 HACS Action 与 Hassfest 工作流，不设置 `ignore`，也不关闭任何检查。中英文低延迟选项同步说明 H.264/H.265。
+
+从新 ZIP 安装到隔离 HA 2026.10.2 并重启，确认 `icon.png`、`logo.png`、`icon@2x.png` 端点均返回本地 PNG（后两者使用标准回退），与项目 Logo 字节一致；英语、中文事件类型翻译实际返回 Motion / 移动检测，原 36 个实体身份保持不变。23 项 Python 测试、Ruff、actionlint 和 diff 检查通过。满足官方校验及新 Release 要求后，再以个人账号向 `hacs/default` 提交，仅增加一条仓库记录；提交不等于收录。

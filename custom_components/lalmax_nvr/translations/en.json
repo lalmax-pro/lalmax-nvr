@@ -10,7 +10,7 @@
           "password": "NVR HTTP password",
           "rtsp_username": "RTSP username (optional)",
           "rtsp_password": "RTSP password (optional)",
-          "low_latency": "Enable low-latency WebRTC (H.264; AAC audio unavailable)"
+          "low_latency": "Enable low-latency WebRTC (H.264/H.265; AAC audio unavailable)"
         }
       },
       "reauth_confirm": {
@@ -22,7 +22,7 @@
           "password": "NVR HTTP password",
           "rtsp_username": "RTSP username (optional)",
           "rtsp_password": "RTSP password (optional)",
-          "low_latency": "Enable low-latency WebRTC (H.264; AAC audio unavailable)"
+          "low_latency": "Enable low-latency WebRTC (H.264/H.265; AAC audio unavailable)"
         }
       },
       "reconfigure": {
@@ -34,7 +34,7 @@
           "password": "NVR HTTP password",
           "rtsp_username": "RTSP username (optional)",
           "rtsp_password": "RTSP password (optional)",
-          "low_latency": "Enable low-latency WebRTC (H.264; AAC audio unavailable)"
+          "low_latency": "Enable low-latency WebRTC (H.264/H.265; AAC audio unavailable)"
         }
       }
     },
@@ -54,12 +54,16 @@
     "event": {
       "activity": {
         "name": "Activity",
-        "event_types": {
-          "ai_detection": "AI detection",
-          "motion": "Motion",
-          "mqtt_trigger": "MQTT trigger",
-          "recorder_reconnected": "Recorder reconnected",
-          "health": "Health event"
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "ai_detection": "AI detection",
+              "motion": "Motion",
+              "mqtt_trigger": "MQTT trigger",
+              "recorder_reconnected": "Recorder reconnected",
+              "health": "Health event"
+            }
+          }
         }
       }
     },

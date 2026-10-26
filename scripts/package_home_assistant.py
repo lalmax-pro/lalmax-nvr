@@ -11,6 +11,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "custom_components" / "lalmax_nvr"
+BRAND_FILES = {
+    f"brand/{name}.png"
+    for name in (
+        "icon",
+        "icon@2x",
+        "dark_icon",
+        "dark_icon@2x",
+        "logo",
+        "logo@2x",
+        "dark_logo",
+        "dark_logo@2x",
+    )
+}
 
 
 def package(output: Path, export: Path | None = None) -> None:
@@ -24,6 +37,7 @@ def package(output: Path, export: Path | None = None) -> None:
         and (
             path.suffix in {".py", ".json", ".yaml", ".yml", ".md"}
             or path.name == "LICENSE"
+            or path.relative_to(SOURCE).as_posix() in BRAND_FILES
         )
         and "__pycache__" not in path.parts
     ]
