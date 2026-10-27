@@ -98,3 +98,9 @@ HA 快照已改为使用所选派生输出并隔离缓存；已测试输出不�
 - 源尺寸探测暂使用 ffprobe，GStreamer 路径尚非完全独立依赖。
 - Docker linux/arm64 构建/有限编码已通过；完整容器 API 媒体链路、其他架构运行、Windows Job Object、外部引擎和硬件编码未验收。
 - 源服务、日常浏览器和运行中的旧版 NVR 均未替换；隔离测试服务已清理。
+
+### 审查问题复测（2026-10-27）
+
+- 显式停止意图写入任务持久化数据；重建服务和关闭重开数据库后，常驻任务不会重新自检或启动。再次显式启动才清除该意图。
+- 删除同名任务或模板时保留版本水位，重建后的 generation/revision 高于旧值；旧的更新、删除和停止请求被拒绝。版本水位随已删除 ID 累积，后续需设计安全的保留策略，不能删除仍可能被旧请求使用的水位。
+- 在 macOS ARM64 上实际运行 `NVR_TRANSCODE_MEDIA_TEST=1 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib NVR_GSTREAMER_SELFTEST=1 go test -count=1 -v ./internal/transcode -run 'Test(FFmpegRealSelfTest|GStreamerActualSelfTest)'`，FFmpeg 和 GStreamer 的 AAC、无音轨编码/探测/解码自检均通过。此项使用合成数据，不代表本次重新执行 RTSP 回灌、真实摄像机或 HA 端到端验收。

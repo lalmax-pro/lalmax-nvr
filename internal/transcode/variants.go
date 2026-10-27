@@ -44,7 +44,7 @@ func (s *Service) Variants(ctx context.Context, sourceID string) ([]Variant, err
 				v.ErrorCode = runtime.ErrorCode
 			}
 		}
-		if retry, ok := s.retry[job.ID]; ok && retry.generation == job.Generation && retry.errorCode != "" && job.Enabled && s.stopped[job.ID] != job.Generation && v.State != Running && v.State != Starting {
+		if retry, ok := s.retry[job.ID]; ok && retry.generation == job.Generation && retry.errorCode != "" && job.Enabled && !job.StoppedByUser && v.State != Running && v.State != Starting {
 			v.State = Backoff
 			v.ErrorCode = retry.errorCode
 			next := retry.next

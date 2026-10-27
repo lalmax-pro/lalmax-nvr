@@ -3,6 +3,9 @@ package storage
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -11,6 +14,50 @@ import (
 )
 
 type failedRecoveryProbe struct{ calls atomic.Int32 }
+
+type resumeTestProcess struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func (p *resumeTestProcess) Wait() error { <-p.done; return nil }
+func (p *resumeTestProcess) Stop(context.Context) error {
+	p.once.Do(func() { close(p.done) })
+	return nil
+}
+
+type resumeTestExecutor struct{}
+
+func (resumeTestExecutor) Start(context.Context, transcode.SourceRef, transcode.Profile, string) (transcode.Process, error) {
+	return &resumeTestProcess{done: make(chan struct{})}, nil
+}
+func (resumeTestExecutor) Ready(context.Context, string) bool { return true }
+
+func TestTranscodeExplicitStartClearsPersistedStop(t *testing.T) {
+	if os.Getenv("NVR_TRANSCODE_MEDIA_TEST") != "1" {
+		t.Skip("requires installed FFmpeg")
+	}
+	db := transcodeTestDB(t)
+	ctx := context.Background()
+	p, err := db.SaveTranscodeProfile(ctx, transcode.DefaultProfile("ffmpeg"), 0)
+	require.NoError(t, err)
+	j, err := db.SaveTranscodeJob(ctx, transcode.Job{ID: "resume", Source: transcode.SourceRef{EngineID: "embedded", StreamID: "camera", AppName: "live"}, ProfileID: p.ID, ProfileRevision: p.Revision, Enabled: true, RunPolicy: transcode.Always}, 0)
+	require.NoError(t, err)
+	manager := transcode.NewManager(ctx, resumeTestExecutor{}, 1)
+	defer manager.Close(ctx)
+	probes := transcode.NewProbeService(nil)
+	cfg := transcode.Config{Enabled: true}
+	report, err := probes.Probe(ctx, cfg.Tools(), p)
+	require.NoError(t, err)
+	require.True(t, report.CanEnable)
+	service := transcode.NewService(db, manager, probes, cfg)
+	require.NoError(t, service.Stop(ctx, j.ID, j.Generation))
+	_, err = service.Start(ctx, j.ID, j.Generation)
+	require.NoError(t, err)
+	jobs, err := db.ListTranscodeJobs(ctx)
+	require.NoError(t, err)
+	require.False(t, jobs[0].StoppedByUser)
+}
 
 func (p *failedRecoveryProbe) Run(context.Context, string, ...string) ([]byte, error) {
 	p.calls.Add(1)
@@ -33,6 +80,38 @@ func TestTranscodeAlwaysRevalidatesAfterRestart(t *testing.T) {
 	calls := runner.calls.Load()
 	service.ReconcileAlways(ctx)
 	require.Equal(t, calls, runner.calls.Load(), "failed recovery must respect backoff")
+}
+
+func TestTranscodeExplicitStopSurvivesServiceRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "restart.db")
+	db, err := New(path)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	p, err := db.SaveTranscodeProfile(ctx, transcode.DefaultProfile("ffmpeg"), 0)
+	require.NoError(t, err)
+	j, err := db.SaveTranscodeJob(ctx, transcode.Job{ID: "stopped", Source: transcode.SourceRef{EngineID: "embedded", StreamID: "camera", AppName: "live"}, ProfileID: p.ID, ProfileRevision: p.Revision, Enabled: true, RunPolicy: transcode.Always}, 0)
+	require.NoError(t, err)
+	service := transcode.NewService(db, nil, nil, transcode.Config{})
+	require.NoError(t, service.Stop(ctx, j.ID, j.Generation))
+	require.NoError(t, db.Close())
+	db, err = New(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.Init(ctx))
+	runner := &failedRecoveryProbe{}
+	manager := transcode.NewManager(ctx, nil, 1)
+	defer manager.Close(ctx)
+	restarted := transcode.NewService(db, manager, transcode.NewProbeService(runner), transcode.Config{Enabled: true})
+	require.Empty(t, restarted.ReconcileAlways(ctx))
+	require.Zero(t, runner.calls.Load())
+	jobs, err := db.ListTranscodeJobs(ctx)
+	require.NoError(t, err)
+	require.True(t, jobs[0].StoppedByUser)
+	jobs[0].StoppedByUser = false // edits cannot silently clear explicit stop
+	updated, err := db.SaveTranscodeJob(ctx, jobs[0], jobs[0].Generation)
+	require.NoError(t, err)
+	require.True(t, updated.StoppedByUser)
 }
 
 func TestTranscodeVariantCatalogAndCrossSourceRejection(t *testing.T) {

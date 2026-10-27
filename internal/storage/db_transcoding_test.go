@@ -68,3 +68,27 @@ func TestTranscodeConcurrentProfileCAS(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 2, profiles[0].Revision)
 }
+
+func TestTranscodeRecreatedIDsRejectStaleVersions(t *testing.T) {
+	db := transcodeTestDB(t)
+	ctx := context.Background()
+	p, err := db.SaveTranscodeProfile(ctx, transcode.DefaultProfile("ffmpeg"), 0)
+	require.NoError(t, err)
+	j := transcode.Job{ID: "job1", Source: transcode.SourceRef{EngineID: "embedded", StreamID: "camera", AppName: "live"}, ProfileID: p.ID, ProfileRevision: p.Revision, RunPolicy: transcode.Manual}
+	j, err = db.SaveTranscodeJob(ctx, j, 0)
+	require.NoError(t, err)
+	require.NoError(t, db.DeleteTranscodeJob(ctx, j.ID, j.Generation))
+	newJob, err := db.SaveTranscodeJob(ctx, j, 0)
+	require.NoError(t, err)
+	require.Greater(t, newJob.Generation, j.Generation)
+	require.Error(t, db.DeleteTranscodeJob(ctx, j.ID, j.Generation))
+	_, err = db.SaveTranscodeJob(ctx, j, j.Generation)
+	require.Error(t, err)
+	require.Error(t, db.SetTranscodeJobStopped(ctx, j.ID, j.Generation, true))
+	require.NoError(t, db.DeleteTranscodeJob(ctx, newJob.ID, newJob.Generation))
+	require.NoError(t, db.DeleteTranscodeProfile(ctx, p.ID, p.Revision))
+	newProfile, err := db.SaveTranscodeProfile(ctx, p, 0)
+	require.NoError(t, err)
+	require.Greater(t, newProfile.Revision, p.Revision)
+	require.Error(t, db.DeleteTranscodeProfile(ctx, p.ID, p.Revision))
+}

@@ -16,13 +16,12 @@ type Service struct {
 	manager *Manager
 	probes  *ProbeService
 	config  Config
-	stopped map[string]uint64
 	retry   map[string]retryState
 }
 
 func NewService(repo Repository, manager *Manager, probes *ProbeService, cfg Config) *Service {
 	cfg.ApplyDefaults()
-	return &Service{repo: repo, manager: manager, probes: probes, config: cfg, stopped: map[string]uint64{}, retry: map[string]retryState{}}
+	return &Service{repo: repo, manager: manager, probes: probes, config: cfg, retry: map[string]retryState{}}
 }
 func (s *Service) profile(ctx context.Context, j Job) (Profile, error) {
 	profiles, err := s.repo.ListTranscodeProfiles(ctx)
@@ -105,9 +104,17 @@ func (s *Service) Start(ctx context.Context, id string, generation uint64) (Runt
 	if err = s.allow(p); err != nil {
 		return Runtime{}, err
 	}
+	_, alreadyActive := s.manager.Status(id)
 	runtime, err := s.manager.Acquire(j, p)
-	if err == nil {
-		delete(s.stopped, id)
+	if err == nil && j.StoppedByUser {
+		if err = s.repo.SetTranscodeJobStopped(ctx, id, generation, false); err != nil {
+			if !alreadyActive {
+				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = s.manager.Release(cleanup, id, generation)
+				cancel()
+			}
+			return Runtime{}, err
+		}
 	}
 	return runtime, err
 }
@@ -117,7 +124,9 @@ func (s *Service) Stop(ctx context.Context, id string, generation uint64) error 
 	if _, err := s.job(ctx, id, generation); err != nil {
 		return err
 	}
-	s.stopped[id] = generation
+	if err := s.repo.SetTranscodeJobStopped(ctx, id, generation, true); err != nil {
+		return err
+	}
 	if s.manager == nil {
 		return nil
 	}
@@ -137,7 +146,6 @@ func (s *Service) Delete(ctx context.Context, id string, generation uint64) erro
 	if err := s.repo.DeleteTranscodeJob(ctx, id, generation); err != nil {
 		return err
 	}
-	delete(s.stopped, id)
 	delete(s.retry, id)
 	return nil
 }
@@ -187,7 +195,7 @@ func (s *Service) ReconcileAlways(ctx context.Context) map[string]error {
 		return results
 	}
 	for _, j := range jobs {
-		if !j.Enabled || j.RunPolicy != Always || s.stopped[j.ID] == j.Generation {
+		if !j.Enabled || j.RunPolicy != Always || j.StoppedByUser {
 			continue
 		}
 		if s.manager != nil {

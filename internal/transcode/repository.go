@@ -11,6 +11,7 @@ type Repository interface {
 	ListTranscodeJobs(context.Context) ([]Job, error)
 	SaveTranscodeJob(context.Context, Job, uint64) (Job, error)
 	DeleteTranscodeJob(context.Context, string, uint64) error
+	SetTranscodeJobStopped(context.Context, string, uint64, bool) error
 }
 
 // VariantID is the logical job output identity, independent of process generations.

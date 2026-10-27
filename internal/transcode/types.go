@@ -164,6 +164,7 @@ type Job struct {
 	Enabled         bool      `json:"enabled"`
 	RunPolicy       RunPolicy `json:"run_policy"`
 	Generation      uint64    `json:"generation"`
+	StoppedByUser   bool      `json:"stopped_by_user,omitempty"`
 }
 
 func (j Job) Validate() error {

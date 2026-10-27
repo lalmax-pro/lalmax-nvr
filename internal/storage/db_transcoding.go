@@ -12,8 +12,10 @@ import (
 // One versioned intent document makes profile references and edits atomic across
 // all supported SQL drivers. Runtime state and credentials are never stored here.
 type transcodeIntent struct {
-	Profiles []transcode.Profile `json:"profiles"`
-	Jobs     []transcode.Job     `json:"jobs"`
+	Profiles        []transcode.Profile `json:"profiles"`
+	Jobs            []transcode.Job     `json:"jobs"`
+	ProfileVersions map[string]uint64   `json:"profile_versions,omitempty"`
+	JobVersions     map[string]uint64   `json:"job_versions,omitempty"`
 }
 
 func (d *DB) createTranscodeTable(ctx context.Context) error {
@@ -92,7 +94,6 @@ func (d *DB) SaveTranscodeProfile(ctx context.Context, p transcode.Profile, expe
 	if expected >= math.MaxInt64 {
 		return p, conflict()
 	}
-	p.Revision = expected + 1
 	err := d.changeTranscodeIntent(ctx, func(s *transcodeIntent) error {
 		index := -1
 		for i, old := range s.Profiles {
@@ -111,6 +112,10 @@ func (d *DB) SaveTranscodeProfile(ctx context.Context, p transcode.Profile, expe
 			if len(s.Profiles) >= 256 {
 				return &transcode.Error{Code: "capacity_exceeded", Message: "profile limit reached"}
 			}
+			if s.ProfileVersions[p.ID] >= math.MaxInt64 {
+				return conflict()
+			}
+			p.Revision = s.ProfileVersions[p.ID] + 1
 			s.Profiles = append(s.Profiles, p)
 			return nil
 		}
@@ -120,6 +125,7 @@ func (d *DB) SaveTranscodeProfile(ctx context.Context, p transcode.Profile, expe
 				return &transcode.Error{Code: "profile_in_use", Message: "remove referencing jobs before changing this profile"}
 			}
 		}
+		p.Revision = expected + 1
 		s.Profiles[index] = p
 		return nil
 	})
@@ -137,6 +143,10 @@ func (d *DB) DeleteTranscodeProfile(ctx context.Context, id string, expected uin
 						return &transcode.Error{Code: "profile_in_use", Message: "profile is referenced by a job"}
 					}
 				}
+				if s.ProfileVersions == nil {
+					s.ProfileVersions = map[string]uint64{}
+				}
+				s.ProfileVersions[id] = p.Revision
 				s.Profiles = append(s.Profiles[:i], s.Profiles[i+1:]...)
 				return nil
 			}
@@ -151,7 +161,6 @@ func (d *DB) SaveTranscodeJob(ctx context.Context, j transcode.Job, expected uin
 	if expected >= math.MaxInt64 {
 		return j, conflict()
 	}
-	j.Generation = expected + 1
 	err := d.changeTranscodeIntent(ctx, func(s *transcodeIntent) error {
 		found := false
 		for _, p := range s.Profiles {
@@ -167,6 +176,8 @@ func (d *DB) SaveTranscodeJob(ctx context.Context, j transcode.Job, expected uin
 				if old.Generation != expected {
 					return conflict()
 				}
+				j.Generation = expected + 1
+				j.StoppedByUser = old.StoppedByUser
 				s.Jobs[i] = j
 				return nil
 			}
@@ -177,6 +188,11 @@ func (d *DB) SaveTranscodeJob(ctx context.Context, j transcode.Job, expected uin
 		if len(s.Jobs) >= 256 {
 			return &transcode.Error{Code: "capacity_exceeded", Message: "job limit reached"}
 		}
+		if s.JobVersions[j.ID] >= math.MaxInt64 {
+			return conflict()
+		}
+		j.Generation = s.JobVersions[j.ID] + 1
+		j.StoppedByUser = false
 		s.Jobs = append(s.Jobs, j)
 		return nil
 	})
@@ -189,7 +205,26 @@ func (d *DB) DeleteTranscodeJob(ctx context.Context, id string, expected uint64)
 				if j.Generation != expected {
 					return conflict()
 				}
+				if s.JobVersions == nil {
+					s.JobVersions = map[string]uint64{}
+				}
+				s.JobVersions[id] = j.Generation
 				s.Jobs = append(s.Jobs[:i], s.Jobs[i+1:]...)
+				return nil
+			}
+		}
+		return conflict()
+	})
+}
+
+func (d *DB) SetTranscodeJobStopped(ctx context.Context, id string, generation uint64, stopped bool) error {
+	return d.changeTranscodeIntent(ctx, func(s *transcodeIntent) error {
+		for i := range s.Jobs {
+			if s.Jobs[i].ID == id {
+				if s.Jobs[i].Generation != generation {
+					return conflict()
+				}
+				s.Jobs[i].StoppedByUser = stopped
 				return nil
 			}
 		}
