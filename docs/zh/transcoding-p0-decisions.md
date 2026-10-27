@@ -1,8 +1,8 @@
 # 通用实时转码 P0 决策与支持边界
 
-- 状态：技术方案已整理并自审，等待 PR 的独立评审和合并；不是发布或媒体验收结论。
+- 状态：P0 方案已整理并自审，本设计 PR 待独立评审；PR #67 的转码实现尚未合并或完成媒体验收。
 - 日期：2026-10-27；跟踪 [Issue #66](https://github.com/lalmax-pro/lalmax-nvr/issues/66)、[PR #67](https://github.com/lalmax-pro/lalmax-nvr/pull/67)。
-- 实现核对基线：`34579a5317af5fa905eb324c682d41e3b4331f85`。本文是 P0 首批决策；架构文档中较宽泛的目标不代表已有实现。实际媒体验收见[验收记录](transcoding-testing.md)。
+- 实现核对基线：`34579a5317af5fa905eb324c682d41e3b4331f85`。本文是 P0 首批决策；架构文档中较宽泛的目标不代表已有实现。实际媒体验收见[验收记录](https://github.com/lalmax-pro/lalmax-nvr/blob/849198a0c9d4b5d9c00aef171c8bbf1e55f2d170/docs/zh/transcoding-testing.md)。
 
 ## 对象、映射与运行意图
 
@@ -46,7 +46,7 @@
 
 ## API、界面命名与默认值
 
-- 管理入口：`/api/transcoding/capabilities`、`/api/transcoding/profiles`、`/api/transcoding/jobs`，通过 profile `probe` 和 job `start`/`stop` 子路径执行操作；逻辑输出使用 `/api/streams/{stream_id}/variants` 及其 `play`、`stream.flv` 子路径。详细方法和权限以 [路由](../../internal/api/handler.go) 为准，命名对应 Profile（模板）、Job（任务）、Variant（输出）。
+- 管理入口：`/api/transcoding/capabilities`、`/api/transcoding/profiles`、`/api/transcoding/jobs`，通过 profile `probe` 和 job `start`/`stop` 子路径执行操作；逻辑输出使用 `/api/streams/{stream_id}/variants` 及其 `play`、`stream.flv` 子路径。详细方法和权限以 [路由](https://github.com/lalmax-pro/lalmax-nvr/blob/849198a0c9d4b5d9c00aef171c8bbf1e55f2d170/internal/api/handler.go) 为准，命名对应 Profile（模板）、Job（任务）、Variant（输出）。
 - 设置页使用“通用转码能力”和任务管理；当前界面支持默认模板及手动草稿，不代表已有通用模板编辑器、always 策略设置或完整原流/派生选择。HA 只保存任务引用，不改变源 ID、事件和 PTZ 身份。
 - 全局默认关闭；最大并发工作数 2（配置范围 1–32，0 使用默认），每任务线程参数默认 2（1–16，0 使用默认）；它们不是 CPU/内存硬隔离。默认模板为 H.264、上限 1280×720、15 fps、1500 kbps、GOP 30，AAC 48 kHz/单声道/64 kbps。
 - 后端启动阶段及首个输出各最多 20 秒；running 后媒体健康容忍 10 秒，帧需在最近 5 秒内更新。停止进程有界等待并强杀；清理最多 3 次、每次 1 秒。GStreamer 源尺寸探测最多 8 秒。

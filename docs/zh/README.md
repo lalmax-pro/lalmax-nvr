@@ -30,7 +30,7 @@
 | [小米摄像头](xiaomi-setup.md) | 小米摄像头接入 |
 | [MediaMTX](mediamtx-guide.md) | 通过可选的 MediaMTX 接入摄像头 |
 | [DLNA](dlna.md) | 在局域网播放器中发现并观看实时流、录像 |
-| [通用实时转码架构设计](transcoding-design.md) | 设计提案：FFmpeg/GStreamer、派生流、任务管理、部署与分阶段验收（Draft PR 部分实现） |
+| [通用实时转码架构设计](transcoding-design.md) | 转码设计及 P0 决策；功能实现和媒体验收单独跟踪 |
 
 ## 录像与集成
 

@@ -2,11 +2,11 @@
 
 - 状态：Proposed（部分功能已在 Draft PR 实现，P0 决策待独立评审和合并）
 - 日期：2026-10-26
-- 跟踪 Issue：[通用实时转码 #66](https://github.com/lalmax-pro/lalmax-nvr/issues/66)；本地正文备份见 [Issue 草稿](transcoding-tracking-issue.md)
+- 跟踪 Issue：[通用实时转码 #66](https://github.com/lalmax-pro/lalmax-nvr/issues/66)；本地正文备份见 [Issue 草稿](https://github.com/lalmax-pro/lalmax-nvr/blob/849198a0c9d4b5d9c00aef171c8bbf1e55f2d170/docs/zh/transcoding-tracking-issue.md)
 - 背景关联：[Home Assistant 集成 #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)
 - 范围：通用实时媒体转码，FFmpeg / GStreamer 可替换后端，本地与 Docker 部署。
 
-> 本文保留总体目标和方案。首批具体决策、当前实现、平台验证与未完成边界以 [P0 决策记录](transcoding-p0-decisions.md) 为准；实施与媒体验收见 [验收记录](transcoding-testing.md)。
+> 本文保留总体目标和方案。首批具体决策、当前实现、平台验证与未完成边界以 [P0 决策记录](transcoding-p0-decisions.md) 为准；实施与媒体验收见 [验收记录](https://github.com/lalmax-pro/lalmax-nvr/blob/849198a0c9d4b5d9c00aef171c8bbf1e55f2d170/docs/zh/transcoding-testing.md)。
 
 ## 1. 背景与定位
 
