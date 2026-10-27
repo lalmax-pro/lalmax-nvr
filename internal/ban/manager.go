@@ -64,7 +64,7 @@ func (m *Manager) SetPublishTokens(protocol string, keys map[string]string) {
 // OnPubStart checks if the stream is banned. Returns error to reject the session.
 func (m *Manager) OnPubStart(info base.PubStartInfo) error {
 	if strings.EqualFold(info.Protocol, base.SessionProtocolRtmpStr) {
-		if !m.rtmpPublishAuthEnabled {
+		if !m.rtmpPublishAuthEnabled && !m.mediaAuth.InternalPlaybackRequired(info.StreamName) {
 			return m.rejectBannedStream(info.StreamName, info.Protocol, true)
 		}
 		token, err := auth.QueryToken(info.UrlParam, "stream_key")
@@ -74,10 +74,10 @@ func (m *Manager) OnPubStart(info base.PubStartInfo) error {
 		return m.AuthorizePublish("rtmp", info.StreamName, token)
 	}
 	if strings.EqualFold(info.Protocol, base.SessionProtocolRtspStr) {
-		if !m.rtspPublishAuthEnabled {
+		if !m.rtspPublishAuthEnabled && !m.mediaAuth.InternalPlaybackRequired(info.StreamName) {
 			return m.rejectBannedStream(info.StreamName, info.Protocol, true)
 		}
-		if m.mediaAuth.SharedPublishRequired() {
+		if m.mediaAuth.SharedPublishRequired() || m.mediaAuth.InternalPlaybackRequired(info.StreamName) {
 			token, err := auth.QueryToken(info.UrlParam, "token")
 			if err != nil {
 				return fmt.Errorf("invalid RTSP publish parameters for stream %q", info.StreamName)
@@ -125,7 +125,7 @@ func (m *Manager) rejectBannedStream(streamID, protocol string, failClosed bool)
 
 // OnSubStart applies the shared stream playback-token policy when configured.
 func (m *Manager) OnSubStart(info base.SubStartInfo) error {
-	if !m.mediaAuth.PlaybackRequired() {
+	if !m.mediaAuth.PlaybackRequired() && !m.mediaAuth.InternalPlaybackRequired(info.StreamName) {
 		return nil
 	}
 	token, err := auth.QueryToken(info.UrlParam, "token")
@@ -138,7 +138,7 @@ func (m *Manager) OnSubStart(info base.SubStartInfo) error {
 // OnHls applies the shared stream playback-token policy to HLS playlists and
 // segments when configured.
 func (m *Manager) OnHls(streamName, urlParam string) error {
-	if !m.mediaAuth.PlaybackRequired() {
+	if !m.mediaAuth.PlaybackRequired() && !m.mediaAuth.InternalPlaybackRequired(streamName) {
 		return nil
 	}
 	token, err := auth.QueryToken(urlParam, "token")

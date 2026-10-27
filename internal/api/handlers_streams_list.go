@@ -305,12 +305,18 @@ func (h *Handler) buildMergedStreamList(
 	byID := make(map[string]streamSummary, len(liveStreams)+len(cameraRows)+len(createdByID))
 
 	for _, info := range liveStreams {
+		if h.isInternalMediaStream != nil && h.isInternalMediaStream(info.StreamID) {
+			continue
+		}
 		item := h.streamSummaryFromMediaInfo(ctx, info, bindingByStreamID, cameraByID, ownStreamByCamera)
 		applyCreatedStream(&item, createdByID)
 		byID[info.StreamID] = item
 	}
 
 	for streamID, cameraID := range bindingByStreamID {
+		if h.isInternalMediaStream != nil && h.isInternalMediaStream(streamID) {
+			continue
+		}
 		if _, ok := byID[streamID]; ok {
 			continue
 		}
@@ -340,6 +346,9 @@ func (h *Handler) buildMergedStreamList(
 		logger.Error("list recent stream snapshots failed", "err", err)
 	} else {
 		for _, snap := range recent {
+			if h.isInternalMediaStream != nil && h.isInternalMediaStream(snap.StreamID) {
+				continue
+			}
 			if _, ok := byID[snap.StreamID]; ok {
 				continue
 			}
@@ -373,6 +382,9 @@ func (h *Handler) buildMergedStreamList(
 	}
 
 	for id, created := range createdByID {
+		if h.isInternalMediaStream != nil && h.isInternalMediaStream(id) {
+			continue
+		}
 		if _, ok := byID[id]; ok {
 			continue
 		}

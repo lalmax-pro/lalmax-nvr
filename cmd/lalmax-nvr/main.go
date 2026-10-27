@@ -56,6 +56,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/relay"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/streamhistory"
+	"github.com/lalmax-pro/lalmax-nvr/internal/transcode"
 	ui "github.com/lalmax-pro/lalmax-nvr/internal/ui"
 	"github.com/lalmax-pro/lalmax-nvr/internal/upload"
 	"github.com/lalmax-pro/lalmax-nvr/internal/voip"
@@ -70,6 +71,21 @@ var (
 )
 
 var appVersion = "0.1.0-dev" // overridden via -ldflags at build time
+
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+func cloneStringMap(values map[string]string) map[string]string {
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return copied
+}
 
 func autoInitConfig(configPath string) *config.Config {
 	// Determine data directory
@@ -381,9 +397,11 @@ func resolveConfigPath(path string) string {
 //  14. FTP server — depends on Config, Storage, DB
 //  15. HTTP server — depends on Router (which depends on all above)
 type App struct {
-	cfg        *config.Config
-	configPath string
-	watcher    *config.Watcher
+	transcodeManager *transcode.Manager
+	transcodeService *transcode.Service
+	cfg              *config.Config
+	configPath       string
+	watcher          *config.Watcher
 
 	// Core infrastructure
 	db          *storage.DB
@@ -649,7 +667,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		lalmaxserver.WithAuthentication(a.banMgr),
 		lalmaxserver.WithPublisherAuthorizer(a.banMgr.AuthorizePublish),
 		lalmaxserver.WithSubscriberAuthorizer(func(protocol, streamID, token string) error {
-			if !a.mediaAuth.PlaybackRequired() {
+			if !a.mediaAuth.PlaybackRequired() && !a.mediaAuth.InternalPlaybackRequired(streamID) {
 				return nil
 			}
 			return a.mediaAuth.AuthorizePlayback(protocol, streamID, token)
@@ -756,7 +774,6 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 			}
 		}
 	}
-
 
 	// Register on_stream_not_found even when disabled so GB28181 hot reload can
 	// toggle this capability. HTTP requests are authorized by lalmax before
@@ -873,7 +890,9 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 func (a *App) RestartGB28181(ctx context.Context, cfg *config.GB28181Config) error {
 	a.gb28181Mu.Lock()
 	defer a.gb28181Mu.Unlock()
-	if a.gbWHEPHook != nil { a.gbWHEPHook.SetEnabled(false) }
+	if a.gbWHEPHook != nil {
+		a.gbWHEPHook.SetEnabled(false)
+	}
 	// Dispose old server
 	if a.gb28181Svr != nil {
 		a.gb28181Svr.Stop()
@@ -915,7 +934,9 @@ func (a *App) RestartGB28181(ctx context.Context, cfg *config.GB28181Config) err
 		return fmt.Errorf("restart GB28181 SIP listeners: %w", err)
 	}
 	a.gb28181Svr = gbSvr
-	if a.gbWHEPHook != nil { a.gbWHEPHook.SetEnabled(cfg.WHEPOnDemandEnabled) }
+	if a.gbWHEPHook != nil {
+		a.gbWHEPHook.SetEnabled(cfg.WHEPOnDemandEnabled)
+	}
 
 	slog.Info("GB28181 SIP server restarted", "port", cfg.Port, "id", cfg.ID)
 	return nil
@@ -931,6 +952,24 @@ func (a *App) buildRouter() http.Handler {
 
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.configPath, a.mergeMgr, cloudProxy)
+	// Capture runtime configuration at bootstrap; changes to executable paths or
+	// media listener settings require a restart before starting new transcodes.
+	transcodeCfg := *cfg
+	transcodeCfg.RTMP.Enabled = cloneBool(cfg.RTMP.Enabled)
+	transcodeCfg.RTMP.StreamKeys = cloneStringMap(cfg.RTMP.StreamKeys)
+	transcodeCfg.Auth.PlaybackTokens = make(map[string]string, len(cfg.Auth.PlaybackTokens))
+	for id, token := range cfg.Auth.PlaybackTokens {
+		transcodeCfg.Auth.PlaybackTokens[id] = token
+	}
+	adapter := &media.TranscodeAdapter{Engine: a.mediaEngine, Auth: a.mediaAuth, Config: &transcodeCfg}
+	executor := &transcode.BackendExecutor{Adapter: adapter, Config: cfg.Transcoding}
+	a.transcodeManager = transcode.NewManager(context.Background(), executor, cfg.Transcoding.MaxConcurrent)
+	a.transcodeService = transcode.NewService(a.db, a.transcodeManager, handler.TranscodeProbeService(), cfg.Transcoding)
+	handler.SetTranscodeService(a.transcodeService)
+	handler.SetTranscodePlayback(adapter)
+	if a.mediaAuth != nil {
+		handler.SetInternalMediaStreamCheck(a.mediaAuth.InternalPlaybackRequired)
+	}
 	handler.SetServiceLogPath(authmw.ResolveServiceLogPath())
 	if a.dlna != nil {
 		handler.SetDLNAApply(a.dlna.Apply)
@@ -1464,6 +1503,10 @@ func (a *App) Start() error {
 		}()
 	}
 
+	if a.transcodeService != nil {
+		go a.transcodeService.Run(ctx)
+	}
+
 	// Start media runtime (optional protocols live behind this boundary)
 	if a.media != nil {
 		go func() {
@@ -1595,6 +1638,11 @@ func (a *App) Stop() error {
 
 		log := authmw.ComponentLogger("server")
 		log.Info("shutting down...")
+		if a.transcodeManager != nil {
+			if err := a.transcodeManager.Close(shutdownCtx); err != nil {
+				log.Warn("transcoding shutdown incomplete", "error", err)
+			}
+		}
 
 		// 0. Remote log handler — flush remaining logs
 		if a.remoteLogHandler != nil {
@@ -1740,7 +1788,6 @@ func (a *App) Stop() error {
 
 	return nil
 }
-
 
 // mediaHTTPPlaybackAuth retains account authentication unless the operator
 // explicitly disables it for embedded lalmax's direct HTTP playback routes.

@@ -3,12 +3,24 @@
   import { getHomeAssistantSettings, saveHomeAssistantSettings } from '$lib/api/home-assistant';
   import type { HomeAssistantSettings } from '$lib/api/home-assistant';
   import { listStreams } from '$lib/api/streams';
+  import { listTranscodeJobs } from '$lib/api/transcoding';
+  import type { TranscodeJob } from '$lib/api/transcoding';
   import type { StreamInfo } from '$lib/api/streams';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
 
   let settings = $state<HomeAssistantSettings | null>(null);
   let streams = $state<StreamInfo[]>([]);
+  let transcodeJobs = $state<TranscodeJob[]>([]);
+  let variantsLoaded = $state(false);
+  async function loadVariants() {
+    try { const result = await listTranscodeJobs(controller.signal); transcodeJobs = result.jobs; variantsLoaded = true; }
+    catch (e) { if (!controller.signal.aborted) error = e instanceof Error ? e.message : t('ha.loadFailed'); }
+  }
+  function chooseVariant(id: string, job: string) {
+    if (!settings) return;
+    settings.streams = settings.streams.map(p => p.stream_id === id ? { ...p, transcode_job_id: job || undefined } : p);
+  }
   let loading = $state(true);
   let saving = $state(false);
   let error = $state('');
@@ -102,6 +114,7 @@
           <button type="button" class="btn btn-secondary btn-sm" onclick={() => select(rows, true)}>{t('ha.selectVisible')}</button>
           <button type="button" class="btn btn-secondary btn-sm" onclick={() => select(rows, false)}>{t('ha.clearVisible')}</button>
         </div>
+        <button type="button" class="btn btn-secondary btn-sm" onclick={loadVariants}>{t('ha.loadTranscodeOutputs')}</button>
         <div class="max-h-96 overflow-auto border th-border rounded-lg divide-y th-border">
           {#each rows as stream (stream.stream_id)}
             <label class="flex items-center gap-3 p-3 text-sm th-text-primary">
@@ -110,6 +123,22 @@
               <span class="badge {stream.active ? 'badge-success' : 'badge-neutral'}">{stream.active ? t('streams.active') : t('streams.idle')}</span>
               <span class="th-text-tertiary">{stream.video_codec || ''}</span>
             </label>
+            {#if selected.has(stream.stream_id) && variantsLoaded}
+              {@const selectedJob = settings.streams.find(p => p.stream_id === stream.stream_id)?.transcode_job_id}
+              <label class="block px-3 pb-3 space-y-1">
+                <span class="input-label">{t('ha.outputFor', { name: stream.name || stream.stream_id })}</span>
+                <select aria-label={t('ha.outputFor', { name: stream.name || stream.stream_id })} class="input w-full" value={settings.streams.find(p => p.stream_id === stream.stream_id)?.transcode_job_id || ''} onchange={e => chooseVariant(stream.stream_id, e.currentTarget.value)}>
+                  <option value="">{t('ha.originalOutput')}</option>
+                  {#if selectedJob && !transcodeJobs.some(j => j.id === selectedJob && j.source.stream_id === stream.stream_id)}
+                    <option value={selectedJob}>{selectedJob} ({t('transcode.notReady')})</option>
+                  {/if}
+                  {#each transcodeJobs.filter(j => j.source.stream_id === stream.stream_id) as job}
+                    <option value={job.id}>{job.id} · {job.profile_id}</option>
+                  {/each}
+                </select>
+                <span class="text-xs th-text-tertiary">{t('ha.transcodeOutputHint')}</span>
+              </label>
+            {/if}
           {:else}<p class="p-4 text-sm th-text-secondary">{t('ha.empty')}</p>{/each}
         </div>
       </div>

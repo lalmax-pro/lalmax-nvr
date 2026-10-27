@@ -10,6 +10,19 @@
 server:
   listen: ":9090"
 
+# Optional real-time transcoding (experimental; off by default).
+# Restart after changing paths/listeners. Use Settings > Transcoding capabilities
+# to check tools and each saved profile before enabling jobs. Embedded engine and
+# an enabled RTMP listener are required; no listener is enabled automatically.
+transcoding:
+  enabled: false
+  max_concurrent: 2
+  threads_per_job: 2
+  ffmpeg_path: ""       # Empty: resolve ffmpeg from PATH
+  ffprobe_path: ""      # Used for media inspection, including GStreamer dimensions
+  gst_launch_path: ""   # Empty: resolve gst-launch-1.0 from PATH
+  gst_inspect_path: ""  # Empty: resolve gst-inspect-1.0 from PATH
+
 # Storage settings
 # root_dir: where recordings, database, and HLS segments are stored.
 # Docker: set via NVR_DATA_DIR env var (default /data). See docker-compose.yml.

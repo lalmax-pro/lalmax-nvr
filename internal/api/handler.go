@@ -35,6 +35,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
 	"github.com/lalmax-pro/lalmax-nvr/internal/relay"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
+	"github.com/lalmax-pro/lalmax-nvr/internal/transcode"
 	"github.com/lalmax-pro/lalmax-nvr/internal/voip"
 )
 
@@ -147,25 +148,29 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
-	homeAssistantMu      sync.Mutex
-	homeAssistantWHEPKey []byte
-	voipSettingsMu       sync.Mutex
-	voipRestarter        VoIPRestarter
-	db                   storage.APIRepository
-	store                *storage.Manager
-	authMW               func(http.Handler) http.Handler
-	multiUserMW          func(http.Handler) http.Handler
-	config               *config.Config
-	configWatcher        *config.Watcher
-	restartFunc          func()
-	restartOnce          sync.Once
-	camMgr               *camera.CameraManager
-	recPlanner           *recorder.RecordingPlanner
-	reconcileRecording   func(context.Context)
-	mediaEngine          media.Engine
-	mediaProxy           *http.Client
-	wsMgr                media.WS
-	groupStreamSource    interface {
+	isInternalMediaStream func(string) bool
+	transcodePlayback     derivedPlaybackProvider
+	transcodeService      *transcode.Service
+	transcodeProbe        *transcode.ProbeService
+	homeAssistantMu       sync.Mutex
+	homeAssistantWHEPKey  []byte
+	voipSettingsMu        sync.Mutex
+	voipRestarter         VoIPRestarter
+	db                    storage.APIRepository
+	store                 *storage.Manager
+	authMW                func(http.Handler) http.Handler
+	multiUserMW           func(http.Handler) http.Handler
+	config                *config.Config
+	configWatcher         *config.Watcher
+	restartFunc           func()
+	restartOnce           sync.Once
+	camMgr                *camera.CameraManager
+	recPlanner            *recorder.RecordingPlanner
+	reconcileRecording    func(context.Context)
+	mediaEngine           media.Engine
+	mediaProxy            *http.Client
+	wsMgr                 media.WS
+	groupStreamSource     interface {
 		StreamInfo(string) (model.Format, []byte, []byte, []byte, *model.StreamHub, bool)
 	}
 	configPath        string
@@ -279,6 +284,7 @@ func NewHandler(db storage.APIRepository, store *storage.Manager, authMW func(ht
 		onvifNewClient: func(endpoint, username, password string) onvifDeviceClient {
 			return onvif.NewClient(endpoint, username, password)
 		},
+		transcodeProbe:       transcode.NewProbeService(nil),
 		homeAssistantWHEPKey: []byte(rand.Text()),
 		eventHub:             event.NewLiveHub(),
 		logRing:              middleware.DefaultLogRing(),
@@ -492,6 +498,21 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Put("/api/recording-plans/{id}", h.handleUpdateRecordingPlan)
 		r.With(middleware.RequireOperatePermission()).Delete("/api/recording-plans/{id}", h.handleDeleteRecordingPlan)
 		r.Get("/api/streams", h.handleListStreams)
+		r.With(middleware.RequireOperatePermission()).Get("/api/transcoding/capabilities", h.handleTranscodeCapabilities)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/capabilities/probe", h.handleTranscodeProbe)
+		r.With(middleware.RequireOperatePermission()).Get("/api/transcoding/profiles", h.handleTranscodeProfiles)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/profiles", h.handleSaveTranscodeProfile)
+		r.With(middleware.RequireOperatePermission()).Patch("/api/transcoding/profiles/{id}", h.handleSaveTranscodeProfile)
+		r.With(middleware.RequireOperatePermission()).Delete("/api/transcoding/profiles/{id}", h.handleDeleteTranscodeProfile)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/profiles/{id}/probe", h.handleProbeTranscodeProfile)
+		r.With(middleware.RequireOperatePermission()).Get("/api/transcoding/jobs", h.handleTranscodeJobs)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs", h.handleSaveTranscodeJob)
+		r.With(middleware.RequireOperatePermission()).Patch("/api/transcoding/jobs/{id}", h.handleSaveTranscodeJob)
+		r.With(middleware.RequireOperatePermission()).Delete("/api/transcoding/jobs/{id}", h.handleDeleteTranscodeJob)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/start", h.handleStartTranscodeJob)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/stop", h.handleStopTranscodeJob)
+		r.With(middleware.RequireOperatePermission()).Get("/api/streams/{stream_id}/variants", h.handleTranscodeVariants)
+		r.With(middleware.RequireOperatePermission()).Get("/api/streams/{stream_id}/variants/{job_id}/play", h.handleTranscodePlayURL)
 		r.Get("/api/settings/home-assistant", h.handleGetHomeAssistantSettings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/home-assistant", h.handleUpdateHomeAssistantSettings)
 		r.Get("/api/integrations/home-assistant", h.handleHomeAssistantCatalog)

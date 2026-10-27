@@ -4,6 +4,7 @@ export interface HomeAssistantPublication {
   stream_id: string;
   name?: string;
   app_name: string;
+  transcode_job_id?: string;
 }
 
 export interface HomeAssistantSettings {

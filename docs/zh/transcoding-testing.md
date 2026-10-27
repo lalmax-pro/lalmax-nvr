@@ -1,0 +1,82 @@
+# 通用转码实施与验收记录
+
+关联 [Issue #66](https://github.com/lalmax-pro/lalmax-nvr/issues/66)；设计见 [架构文档](transcoding-design.md)。
+
+> 当前仅为实施中的局部验证，不代表 P1–P3 已完成。未发布、未合并。
+
+## 2026-10-26：领域、进程与能力检测基础
+
+- 分支：`feat/66-general-transcoding`。
+- 环境：本地 macOS ARM64，Go 1.26.2，FFmpeg 8.0.1（Homebrew）。
+- 新增模板/任务模型、参数校验、有效模板哈希和跨引擎/应用的去重键。
+- FFmpeg 固定参数构造，进程停止/取消/回收测试；Unix 进程组清理，Windows Job Object 尚未实现。
+- 能力检查有总时间限制、子进程时间限制和有界输出。声明能力不等于实际转码可用。
+
+### 已执行并通过
+
+```sh
+go test -race ./internal/transcode
+NVR_TRANSCODE_MEDIA_TEST=1 go test -race -v ./internal/transcode
+```
+
+实际 FFmpeg 自检：合成 320×240 视频，分别使用 AAC 音轨/无音轨，编码 FLV，ffprobe 检查编码/尺寸/音频规格，再用 FFmpeg 实际解码。两个场景通过。该测试不接触真实摄像机，也不发布到媒体引擎。
+
+### GStreamer 环境诊断（未通过能力验收）
+
+本机存在 `gst-launch-1.0` / `gst-inspect-1.0`，但直接版本/插件检查发生停滞，scanner 报告 GLib/GObject 动态库加载失败以及 `can't find gi.repository.Gst`。已终止无界诊断命令，未修改或重装宿主机依赖。
+
+```sh
+NVR_GSTREAMER_MEDIA_TEST=1 go test -race -v ./internal/transcode \
+  -run 'TestGStreamerRealDiscovery|TestDiscover|TestBounded'
+```
+
+上面测试验证的是**故障诊断行为**，不是 GStreamer 转码成功：检测在约 15 秒预算内结束，程序检查标记 failed，未执行插件检查标记 not_tested，CanEnable 为 false。该诊断测试通过；GStreamer 实际编码尚未验证。
+
+### GStreamer 实际自检补测（同日）
+
+未重装或修改系统依赖，仅为测试进程设置 `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` 后，GStreamer 1.26.9 版本检查成功（仍有 GTK3/GTK4 重复类警告）。执行：
+
+```sh
+DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib NVR_GSTREAMER_SELFTEST=1 \
+  go test -race -v ./internal/transcode -run TestGStreamerActualSelfTest
+```
+
+H.264/AAC 和纯 H.264 两项实际自检通过：GStreamer 编码、ffprobe 检查、GStreamer 视频/音频解码。此为本地能力验证，**不是实际摄像机 RTSP 输入/RTMP 回灌/HA 播放验收**。测试环境变量没有写入全局配置或运行中的 NVR。
+
+### 扩展回归（同日）
+
+- `go test -race ./internal/transcode ./internal/auth ./internal/ban ./internal/config ./internal/storage ./internal/media ./internal/api ./cmd/lalmax-nvr` 全部通过（8 个受影响包的完整测试，不只是名称筛选）。
+- 前端 TranscodeJobs / TranscodingApi / TranscodingSettings 三个测试文件共 6 项通过，覆盖禁用手动草稿、模板 revision、删除取消、204 空响应、显式检测和过期状态。
+- 前端完整测试 `npm test`：33 个测试文件、388 个测试通过；生产构建通过。既有 VoIP/Svelte 警告和测试环境相对 URL 日志不影响退出码，未新增转码失败。
+- 尚未进行真实浏览器操作与实际源媒体联调。
+- 复测真实源时发现当前运行的 NVR 是已发布 V1.0.3 二进制，`/api/transcoding/capabilities` 返回 404；因此不能用其验证本分支新增 API。独立 FFmpeg→RTMP 回灌过程可启动但无法从 RTSP 取回输出，尚未判定为通过。- 真实已运行 NVR 源探测：`ha-test-main` 经 RTSP Digest/播放 token 取回，ffprobe 确认 H.264 640x360 + AAC 44100，证明测试源、RTSP 鉴权和源编解码可用。随后使用独立随机输出名尝试本机 FFmpeg RTSP→RTMP 回灌；FFmpeg 进程可正常结束但通过 RTSP 取回派生输出未成功，尚未判定为转码链路通过，保留为失败待查，不修改运行中的 NVR 配置。
+- 尝试用本分支二进制启动隔离实例时，复用了已有 `lalmax.json`/WebRTC 端口，因 UDP 4888 已被占用而初始化失败；未继续抢占端口或影响现有实例。需要生成独立媒体引擎配置并关闭/迁移全部冲突监听后再做端到端测试。
+- 后续已生成独立 `lalmax.json` 并关闭 WebRTC/GB28181；首次仍碰到 19190 端口被另一个进程占用，改用 19290 后分支 NVR 健康检查成功，`/api/transcoding/capabilities` 确认已存在但返回 401。由于隔离实例认证明文凭据不在当前可读运行目录，未绕过认证继续调用，也未修改现有服务。
+- Docker 实际验证：`docker build --build-arg WITH_GSTREAMER=true -t lalmax-nvr:transcode-gst-check .` 成功（Docker Desktop linux/arm64）；显式 shell smoke test 确认 GStreamer 1.24.11、x264enc、avenc_aac、FFmpeg 6.1.2 可用，并完成有限帧 H.264 编码。该镜像未推送，容器运行 NVR 的默认 entrypoint 未作为媒体验收。
+- 复核时后端受影响包普通测试通过；首次将 npm 命令误在仓库根目录执行（无 package.json，退出 254），随后在 `web/` 正确执行，4 个转码/HA 测试文件、8 项测试通过。该误执行不影响代码。
+- `go test ./...` 已执行：转码及其他大多数包通过；现有 `internal/ftp` 的 12 项路径安全测试因 macOS `/var` 与 `/private/var` 临时目录前缀差异失败，失败与本次转码改动无关；完整命令退出码为 1。
+
+### 路径与平台补测
+
+- 快照解析程序路径改为优先遵循 `transcoding.ffmpeg_path`，显式路径无效不回退 PATH；新增回归测试通过 race 检查。
+- 转码包测试程序 `GOOS=windows GOARCH=amd64 go test -c`、`GOOS=linux GOARCH=arm64 go test -c` 交叉编译通过；这不是目标平台运行验收。Windows Job Object 进程树回收尚未实现。
+
+### 安全复核补充
+
+独立只读审查发现预先订阅可预测物理流名及清理失败丢失注册信息两项风险，随后修复：物理 group 每次执行使用随机身份（逻辑输出 ID 不变）；任何同名 group 均拒绝预留；撤销凭据后清理失败保留注册信息，并作有限重试。新增非活跃 group 订阅碰撞、重启身份轮换、失败清理可重试测试均通过 race 检查。源身份过滤仍需进程重启/历史数据场景的进一步验证。
+
+独立审查另发现 generation 水位在停止后阻塞未启动的新 generation，以及 RTMP 配置指针浅拷贝问题；已修复并增加“先停止再保存/停止”的回归覆盖。源标识现拒绝 URL 分隔符、反斜杠、控制字符和过长值，防止改变派生 URL 结构。
+
+HA 快照已改为使用所选派生输出并隔离缓存；已测试输出不可用时不返回旧原流图片、不回退原流。真实 HA 图片/视频仍未实测。
+
+### 未覆盖 / 后续工作
+
+- FFmpeg copy 模式尚无实际源 fixture 自检，不能据此启用已验证标志。
+- FFmpeg HEVC 输入解码、真实 RTSP/RTMP 回灌和多消费者播放尚未验证。
+- GStreamer 固定执行管线已实现参数构造；本地及 linux/arm64 镜像的有限媒体自检通过，实际源回灌和消费者播放仍待验收。
+- 检测缓存/过期、并发限制、版本化意图存储、基础调度、权限 API、网页检测与任务草稿管理已实现，相关单元/集成测试通过；不等同于实际源端到端验收。
+- 派生输出的管理员 RTSP URL 接口已接入；网页播放选择、HA 消费者接入仍待完成。
+- 源尺寸探测暂使用 ffprobe，GStreamer 路径尚非完全独立依赖。
+- 能力检测只保存在内存且有有效期；重启后常驻任务需管理员重新检测模板。
+- 实际源验收改为用户指定的现有 NVR 源；已确认本机 19090 健康检查正常、流目录需要认证，目前等待指定源 ID 和可用认证配置位置。未替换运行中的 NVR。
+- Docker、Windows、Linux、外部引擎、硬件编码均未新增实测。

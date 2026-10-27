@@ -13,8 +13,9 @@ import (
 // MediaAuthorizer checks per-stream publish and playback credentials.
 // Credential maps are replaced atomically when configuration is reloaded.
 type MediaAuthorizer struct {
-	mu     sync.RWMutex
-	tokens map[string]map[string]map[string]string
+	mu       sync.RWMutex
+	tokens   map[string]map[string]map[string]string
+	internal map[string]internalMediaGrant
 }
 
 // NewMediaAuthorizer creates an empty media authorizer. Streams without a
@@ -103,6 +104,17 @@ func (a *MediaAuthorizer) authorize(direction, protocol, streamID, token string)
 		return fmt.Errorf("%s %s is not configured for stream %q", protocol, direction, streamID)
 	}
 	a.mu.RLock()
+	if grant, exists := a.internal[streamID]; exists {
+		want := grant.playback
+		if direction == "publish" {
+			want = grant.publish
+		}
+		a.mu.RUnlock()
+		if want == "" || !ConstantTimeEqual(token, want) {
+			return fmt.Errorf("invalid internal media credential")
+		}
+		return nil
+	}
 	want := a.tokens[direction][protocol][streamID]
 	if want == "" {
 		want = a.tokens[direction]["media"][streamID]

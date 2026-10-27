@@ -43,6 +43,16 @@ FROM alpine:3.21
 
 RUN apk add --no-cache su-exec ffmpeg
 
+# Optional fixed-pipeline GStreamer backend. FFmpeg/ffprobe remain installed for
+# snapshots and media inspection. Verify plugins on each target architecture.
+ARG WITH_GSTREAMER=false
+RUN if [ "$WITH_GSTREAMER" = "true" ]; then \
+      apk add --no-cache gstreamer-tools gst-plugins-base gst-plugins-good \
+        gst-plugins-bad gst-plugins-ugly gst-libav; \
+    elif [ "$WITH_GSTREAMER" != "false" ]; then \
+      echo "WITH_GSTREAMER must be true or false" >&2; exit 1; \
+    fi
+
 # Default data and config directories
 # These can be overridden via volume mounts
 ENV NVR_DATA_DIR=/data

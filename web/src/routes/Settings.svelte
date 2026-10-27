@@ -10,6 +10,8 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Tab from '$lib/components/Tab.svelte';
   import HomeAssistantSettings from '$lib/components/HomeAssistantSettings.svelte';
+  import TranscodingSettings from '$lib/components/TranscodingSettings.svelte';
+  import TranscodeJobs from '$lib/components/TranscodeJobs.svelte';
   let settings = $state<SettingsConfig | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -160,6 +162,7 @@ let originalFeatureFlags = $state<Record<string, boolean>>({});
 let activeSettingsTab = $state('general');
 let settingsTabs = $derived([
   { id: 'home-assistant', label: 'Home Assistant' },
+  { id: 'transcoding', label: t('transcode.title') },
   { id: 'general', label: t('settings.tabs.general') },
   { id: 'traces', label: t('settings.tabs.traces') },
   { id: 'advanced', label: t('settings.tabs.advanced') },
@@ -1088,6 +1091,9 @@ function getAffectedCameraCount(protocol: string): number {
       <div class="space-y-6 mt-6">
       {#if activeSettingsTab === 'home-assistant'}
         <HomeAssistantSettings />
+      {:else if activeSettingsTab === 'transcoding'}
+        <TranscodingSettings />
+        <TranscodeJobs />
       {:else if activeSettingsTab === 'general'}
         <!-- Cleanup Policy -->
         <div class="card p-8 border th-border">
@@ -2566,7 +2572,7 @@ type="button"
         {/if}
 
         <!-- Save + utility buttons -->
-        {#if activeSettingsTab !== 'database' && activeSettingsTab !== 'security' && activeSettingsTab !== 'home-assistant'}
+        {#if activeSettingsTab !== 'database' && activeSettingsTab !== 'security' && activeSettingsTab !== 'home-assistant' && activeSettingsTab !== 'transcoding'}
         <div class="flex items-center gap-4 pt-2">
           <button
             onclick={save}

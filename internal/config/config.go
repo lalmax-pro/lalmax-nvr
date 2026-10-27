@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/lalmax-pro/lalmax-nvr/internal/transcode"
 	"github.com/lalmax-pro/lalmax-nvr/internal/voip"
 )
 
@@ -28,6 +29,7 @@ const (
 )
 
 type Config struct {
+	Transcoding   transcode.Config    `yaml:"transcoding"`
 	VoIP          voip.Config         `yaml:"voip"`
 	Server        ServerConfig        `yaml:"server"`
 	Storage       StorageConfig       `yaml:"storage"`
@@ -88,26 +90,26 @@ type DatabaseTargetConfig struct {
 }
 
 type MediaConfig struct {
-	Mode             string `yaml:"mode"`
+	Mode string `yaml:"mode"`
 	// HTTPPlayAuthEnabled controls NVR account authentication for direct embedded
 	// lalmax HTTP playback routes (WHEP/HLS/fMP4). Default true.
 	// Publishing and control APIs use separate authentication policies.
-	HTTPPlayAuthEnabled *bool `yaml:"http_play_auth_enabled,omitempty"`
-	LalmaxHTTPAddr   string `yaml:"lalmax_http_addr"`
-	LalmaxPublicURL  string `yaml:"lalmax_public_url"`
-	LalmaxConfigPath string `yaml:"lalmax_config_path"`
+	HTTPPlayAuthEnabled *bool  `yaml:"http_play_auth_enabled,omitempty"`
+	LalmaxHTTPAddr      string `yaml:"lalmax_http_addr"`
+	LalmaxPublicURL     string `yaml:"lalmax_public_url"`
+	LalmaxConfigPath    string `yaml:"lalmax_config_path"`
 	// Lal protocol ports (used when mode=http)
 	RTMPPort int `yaml:"rtmp_port,omitempty"`
 	RTSPPort int `yaml:"rtsp_port,omitempty"`
 	HTTPPort int `yaml:"http_port,omitempty"` // HTTP-FLV port
 	// RTSP server authentication
-	RTSPAuthEnable bool   `yaml:"rtsp_auth_enable,omitempty"` // RTSP Basic/Digest server auth (default false)
+	RTSPAuthEnable bool `yaml:"rtsp_auth_enable,omitempty"` // RTSP Basic/Digest server auth (default false)
 	// RTSPPublishAuthEnabled controls shared auth.publish_tokens on RTSP publishes.
 	// It defaults to true; false skips RTSP publish token checks but still rejects banned streams.
-	RTSPPublishAuthEnabled *bool `yaml:"rtsp_publish_auth_enabled,omitempty"`
-	RTSPAuthMethod int    `yaml:"rtsp_auth_method,omitempty"` // 0=Basic, 1=Digest (default 0)
-	RTSPUsername   string `yaml:"rtsp_username,omitempty"`    // RTSP server username
-	RTSPPassword   string `yaml:"rtsp_password,omitempty"`    // RTSP server password
+	RTSPPublishAuthEnabled *bool  `yaml:"rtsp_publish_auth_enabled,omitempty"`
+	RTSPAuthMethod         int    `yaml:"rtsp_auth_method,omitempty"` // 0=Basic, 1=Digest (default 0)
+	RTSPUsername           string `yaml:"rtsp_username,omitempty"`    // RTSP server username
+	RTSPPassword           string `yaml:"rtsp_password,omitempty"`    // RTSP server password
 }
 
 // RTSPPublishTokenAuthEnabled preserves the current shared-token policy when
@@ -494,7 +496,7 @@ type RTMPConfig struct {
 	Enabled            *bool             `yaml:"enabled"` // default false
 	Port               int               `yaml:"port,omitempty"`
 	PublishAuthEnabled *bool             `yaml:"publish_auth_enabled,omitempty"` // default true; false allows anonymous RTMP publishing
-	StreamKeys         map[string]string `yaml:"stream_keys"` // stream_id → publish token
+	StreamKeys         map[string]string `yaml:"stream_keys"`                    // stream_id → publish token
 }
 
 // RTMPPublishAuthEnabled preserves the existing fail-closed default even for
@@ -539,15 +541,15 @@ type JT808Config struct {
 
 // GB28181Config configures the GB28181 SIP signaling server.
 type GB28181Config struct {
-	Enabled         *bool  `yaml:"enabled"`
-	Host            string `yaml:"host"`             // SIP listen host (empty = auto-detect from media_ip)
-	Port            int    `yaml:"port"`             // SIP listen port (default 5060)
-	ID              string `yaml:"id"`               // 20-digit platform SIP ID
-	Password        string `yaml:"password"`         // Global device registration password
-	MediaIP         string `yaml:"media_ip"`         // IP address for SDP media reception
-	MediaPort       int    `yaml:"media_port"`       // RTP media port (0=auto/multi-port, >0=single port mode)
-	StandardVersion string `yaml:"standard_version"` // GB28181 standard version: 2016 or 2022
-	WHEPOnDemandEnabled bool `yaml:"whep_on_demand_enabled"` // Opt in to WHEP-triggered SIP INVITE for known channels
+	Enabled             *bool  `yaml:"enabled"`
+	Host                string `yaml:"host"`                   // SIP listen host (empty = auto-detect from media_ip)
+	Port                int    `yaml:"port"`                   // SIP listen port (default 5060)
+	ID                  string `yaml:"id"`                     // 20-digit platform SIP ID
+	Password            string `yaml:"password"`               // Global device registration password
+	MediaIP             string `yaml:"media_ip"`               // IP address for SDP media reception
+	MediaPort           int    `yaml:"media_port"`             // RTP media port (0=auto/multi-port, >0=single port mode)
+	StandardVersion     string `yaml:"standard_version"`       // GB28181 standard version: 2016 or 2022
+	WHEPOnDemandEnabled bool   `yaml:"whep_on_demand_enabled"` // Opt in to WHEP-triggered SIP INVITE for known channels
 }
 
 // HealthConfig configures the camera health monitoring system.
@@ -748,6 +750,9 @@ func Save(path string, cfg *Config) error {
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
+	}
+	if err := cfg.Transcoding.Validate(); err != nil {
+		return err
 	}
 	if cfg.VoIP.Enable {
 		if cfg.Media.Mode != "embedded" {
@@ -1139,6 +1144,7 @@ func (cfg *Config) HLSIdleTimeout() time.Duration {
 }
 
 func (cfg *Config) ApplyDefaults() {
+	cfg.Transcoding.ApplyDefaults()
 	// Server
 	if strings.TrimSpace(cfg.Server.Listen) == "" {
 		cfg.Server.Listen = ":9090"

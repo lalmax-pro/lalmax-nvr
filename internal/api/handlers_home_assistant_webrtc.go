@@ -179,6 +179,10 @@ func (h *Handler) handleHomeAssistantWHEP(w http.ResponseWriter, r *http.Request
 		writeError(w, 404, "stream is not published to Home Assistant")
 		return
 	}
+	if cfg.Streams[i].TranscodeJobID != "" {
+		writeError(w, 400, "derived output currently supports RTSP/HLS only")
+		return
+	}
 	app := info.AppName
 	if app == "" {
 		app = cfg.Streams[i].AppName

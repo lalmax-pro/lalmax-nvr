@@ -108,6 +108,27 @@ func (h *Handler) handleUpdateHomeAssistantSettings(w http.ResponseWriter, r *ht
 			writeError(w, 400, "invalid or duplicate publication")
 			return
 		}
+		if p.TranscodeJobID != "" {
+			if h.transcodeService == nil {
+				writeError(w, 400, "transcoding unavailable")
+				return
+			}
+			variants, err := h.transcodeService.Variants(r.Context(), p.StreamID)
+			if err != nil {
+				writeError(w, 503, "transcode output lookup failed")
+				return
+			}
+			found := false
+			for _, variant := range variants {
+				if variant.JobID == p.TranscodeJobID {
+					found = true
+				}
+			}
+			if !found {
+				writeError(w, 400, "transcode output does not belong to publication source")
+				return
+			}
+		}
 		seen[p.StreamID] = true
 	}
 	for i := range body.Streams {
@@ -295,6 +316,9 @@ func (h *Handler) handleHomeAssistantCatalog(w http.ResponseWriter, r *http.Requ
 			app = s.AppName
 		}
 		playURL, err := h.homeAssistantRTSPURL(r.Context(), cfg, p.StreamID, app)
+		if p.TranscodeJobID != "" {
+			playURL, s, err = h.homeAssistantVariant(r.Context(), cfg, p)
+		}
 		reason := ""
 		if err != nil {
 			playURL = ""
@@ -308,7 +332,7 @@ func (h *Handler) handleHomeAssistantCatalog(w http.ResponseWriter, r *http.Requ
 		if name == "" {
 			name = p.StreamID
 		}
-		result.Streams = append(result.Streams, homeAssistantStream{WebRTCSupported: homeAssistantWebRTCCodec(s.VideoCodec) != "" && (h.config == nil || h.config.Streaming.WebRTC.Enabled == nil || *h.config.Streaming.WebRTC.Enabled), PTZSupported: protocols[p.StreamID] == "onvif" || protocols[p.StreamID] == "gb28181", PTZPresetsSupported: protocols[p.StreamID] == "onvif", StreamID: p.StreamID, Name: name, Active: s.Active, VideoCodec: s.VideoCodec, AudioCodec: s.AudioCodec, RTSPURL: playURL, UnavailableReason: reason})
+		result.Streams = append(result.Streams, homeAssistantStream{WebRTCSupported: p.TranscodeJobID == "" && homeAssistantWebRTCCodec(s.VideoCodec) != "" && (h.config == nil || h.config.Streaming.WebRTC.Enabled == nil || *h.config.Streaming.WebRTC.Enabled), PTZSupported: protocols[p.StreamID] == "onvif" || protocols[p.StreamID] == "gb28181", PTZPresetsSupported: protocols[p.StreamID] == "onvif", StreamID: p.StreamID, Name: name, Active: s.Active, VideoCodec: s.VideoCodec, AudioCodec: s.AudioCodec, RTSPURL: playURL, UnavailableReason: reason})
 	}
 	// One bounded response, with stable ordering, avoids drifting pages as streams go offline.
 	slices.SortFunc(result.Streams, func(a, b homeAssistantStream) int { return strings.Compare(a.StreamID, b.StreamID) })
@@ -327,7 +351,7 @@ func (h *Handler) handleHomeAssistantSnapshot(w http.ResponseWriter, r *http.Req
 		writeError(w, 404, "stream is not published to Home Assistant")
 		return
 	}
-	cacheID := "home-assistant:" + id
+	cacheID := "home-assistant:" + id + ":" + cfg.Streams[index].TranscodeJobID
 	if data, ok := h.getCachedSnapshot(cacheID, snapshotCacheTTL); ok {
 		serveSnapshotBytes(w, data, "no-store")
 		return
@@ -341,6 +365,9 @@ func (h *Handler) handleHomeAssistantSnapshot(w http.ResponseWriter, r *http.Req
 	localCfg := cfg
 	localCfg.RTSPBaseURL = ""
 	playURL, err := h.homeAssistantRTSPURL(r.Context(), localCfg, id, cfg.Streams[index].AppName)
+	if cfg.Streams[index].TranscodeJobID != "" {
+		playURL, _, err = h.homeAssistantVariant(r.Context(), localCfg, cfg.Streams[index])
+	}
 	if err != nil {
 		writeError(w, 503, "RTSP playback unavailable")
 		return

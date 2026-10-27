@@ -229,7 +229,11 @@ func (h *Handler) captureStreamSnapshot(ctx context.Context, cameraID string) ([
 }
 
 func (h *Handler) resolveSnapshotFFmpegPath() (string, error) {
-	if path, err := exec.LookPath("ffmpeg"); err == nil {
+	name := "ffmpeg"
+	if h.config != nil && h.config.Transcoding.FFmpegPath != "" {
+		name = h.config.Transcoding.FFmpegPath
+	}
+	if path, err := exec.LookPath(name); err == nil {
 		return path, nil
 	}
 	return "", fmt.Errorf("ffmpeg not available for stream snapshot fallback")
