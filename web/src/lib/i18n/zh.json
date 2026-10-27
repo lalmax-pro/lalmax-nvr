@@ -1,4 +1,6 @@
 {
+  "transcode.preview": "预览转码输出",
+  "transcode.closePreview": "关闭预览",
   "ha.loadTranscodeOutputs": "加载转码输出",
   "ha.outputFor": "{name} 的播放输出",
   "ha.originalOutput": "原始流",

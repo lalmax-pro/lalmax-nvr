@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
+  import FlvPlayer from '../../components/FlvPlayer.svelte';
+  let preview = $state<TranscodeJob | null>(null);
   import { listTranscodeJobs, listTranscodeProfiles, createTranscodeProfile, probeSavedTranscodeProfile, saveTranscodeJob, transcodeJobAction } from '$lib/api/transcoding';
   import type { TranscodeProfile, TranscodeJob, TranscodeVariant } from '$lib/api/transcoding';
   let profiles = $state<TranscodeProfile[]>([]);
@@ -72,6 +74,14 @@
         <button type="submit" class="btn btn-primary">{t('transcode.createDraft')}</button>
       </form>
       {#if jobs.length === 0}<p class="text-sm th-text-secondary">{t('transcode.noJobs')}</p>{/if}
+      {#if preview}
+        <div class="space-y-2">
+          <div class="flex justify-between gap-2"><span class="text-sm th-text-primary">{preview.id}</span><button class="btn btn-secondary" onclick={() => preview = null}>{t('transcode.closePreview')}</button></div>
+          <div class="aspect-video bg-neutral-900 rounded overflow-hidden">
+            {#key preview.id}<FlvPlayer cameraId={preview.source.stream_id} cameraName={preview.id} streamUrl={`/api/streams/${encodeURIComponent(preview.source.stream_id)}/variants/${encodeURIComponent(preview.id)}/stream.flv`} />{/key}
+          </div>
+        </div>
+      {/if}
       <ul class="divide-y th-border">
         {#each jobs as job}
           {@const runtime = variants.find(v => v.job_id === job.id)}
@@ -80,6 +90,7 @@
           {#if runtime}<p role="status" class="text-xs th-text-secondary">{runtime.state}{runtime.error_code ? ` · ${runtime.error_code}` : ''}</p>{/if}
           <div class="flex flex-wrap gap-2">
             <button class="btn btn-secondary" onclick={() => act(() => saveTranscodeJob({...job, enabled: !job.enabled}, controller.signal))}>{job.enabled ? t('transcode.disable') : t('transcode.enable')}</button>
+            <button class="btn btn-secondary" disabled={runtime?.state !== 'running' || busy} onclick={() => preview = job}>{t('transcode.preview')}</button>
             <button class="btn btn-secondary" disabled={!job.enabled || busy} onclick={() => act(() => transcodeJobAction(job, 'start', controller.signal))}>{t('transcode.start')}</button>
             <button class="btn btn-secondary" onclick={() => act(() => transcodeJobAction(job, 'stop', controller.signal))}>{t('transcode.stop')}</button>
             <button class="btn btn-secondary" onclick={() => { if (window.confirm(t('transcode.deleteConfirm'))) void act(() => transcodeJobAction(job, 'delete', controller.signal)); }}>{t('transcode.delete')}</button>

@@ -1,4 +1,6 @@
 {
+  "transcode.preview": "Preview output",
+  "transcode.closePreview": "Close preview",
   "ha.loadTranscodeOutputs": "Load transcoding outputs",
   "ha.outputFor": "Playback output for {name}",
   "ha.originalOutput": "Original stream",
