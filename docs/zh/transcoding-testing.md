@@ -11,7 +11,7 @@
 - 从现有 NVR 鉴权 RTSP 的 `ha-test-main` 拉入分支 `real-source`（这是运行中的合成测试发布流，不是实体摄像机，不能记作真机验收）。API 创建返回 201，源状态 active/H264。
 - 通过 API 创建 FFmpeg 模板、自检、启用手动任务、启动，任务进入 running。
 - 派生 RTSP 实际取回并以 FFmpeg 解码 3 秒，退出码 0；ffprobe 确认 H.264 640x360、AAC 48000。删除播放 token 后访问失败，鉴权拒绝通过。
-- 同一输入的 GStreamer 模板本地自检通过，但 API 管理的 RTSP→GStreamer→RTMP 输出超时（output_timeout），未获得可播放输出，明确失败待查。
+- GStreamer 首次同链路 output_timeout，实际诊断显示 rtspsrc AAC 动态 pad delayed linking 失败。修复为视频/音频 caps 后立即加 queue，避免单路阻塞源暴露另一路。重新构建后，通过同一持久化任务 API 自检、启动进入 running；派生 RTSP 解码 3 秒退出 0、无解码错误，ffprobe 确认 H.264 640x360 / AAC 48000。无 token 访问被拒绝，停止返回 204。此前失败保留为修复前证据，不混作通过。
 - 两个任务的停止 API 均返回 204，随后终止隔离实例。测试凭据和媒体地址仅保留在私有临时目录，无真实图像产物入库。
 - 一次 FFmpeg 解码诊断使用了当前版本不适用的 `-rw_timeout` 导致退出 8，去除该参数后实际解码通过；不将前者记为媒体不兼容。
 

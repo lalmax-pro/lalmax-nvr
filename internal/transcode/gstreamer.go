@@ -29,7 +29,7 @@ func GStreamerArgs(spec JobSpec, width, height int) ([]string, error) {
 		parser = "h265parse"
 		decoder = "avdec_h265"
 	}
-	args := []string{"-e", "rtspsrc", gstProperty("location", spec.InputURL), "protocols=tcp", "latency=200", "name=src", "flvmux", "name=mux", "streamable=true", "!", "rtmpsink", gstProperty("location", spec.OutputURL), "src.", "!", "application/x-rtp,media=video,encoding-name=" + codec, "!", depay, "!", parser}
+	args := []string{"-e", "rtspsrc", gstProperty("location", spec.InputURL), "protocols=tcp", "latency=200", "name=src", "flvmux", "name=mux", "streamable=true", "!", "rtmpsink", gstProperty("location", spec.OutputURL), "src.", "!", "application/x-rtp,media=video,encoding-name=" + codec, "!", "queue", "!", depay, "!", parser}
 	if spec.Profile.Video.Codec != "copy" {
 		w, h, err := outputDimensions(width, height, spec.Profile.Video)
 		if err != nil {
@@ -56,7 +56,10 @@ func GStreamerArgs(spec JobSpec, width, height int) ([]string, error) {
 		return nil, &Error{Code: "unsupported_input", Message: "unsupported GStreamer audio input"}
 	}
 	args = append(args, "src.", "!")
-	args = append(args, audioElements...)
+	// Queue immediately after the dynamic pad caps: a downstream decoder or
+	// mux must not block rtspsrc from exposing the other media pad.
+	args = append(args, audioElements[0], "!", "queue", "!")
+	args = append(args, audioElements[2:]...)
 	if a.Codec != "copy" {
 		if audio == "aac" {
 			args = append(args, "!", "avdec_aac")

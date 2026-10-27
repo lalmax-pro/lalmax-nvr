@@ -13,6 +13,10 @@ func TestGStreamerFixedPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pipeline := strings.Join(args, " ")
+	if !strings.Contains(pipeline, "encoding-name=H265 ! queue ! rtph265depay") || !strings.Contains(pipeline, "encoding-name=MPEG4-GENERIC ! queue ! rtpmp4gdepay") {
+		t.Fatal("dynamic RTSP branches must be decoupled before depayloading")
+	}
 	for _, want := range []string{"rtph265depay", "avdec_h265", "x264enc", "avenc_aac", "mux.video", "mux.audio"} {
 		if !slices.Contains(args, want) {
 			t.Fatalf("missing %s", want)
