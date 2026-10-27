@@ -32,6 +32,11 @@ func (s *ProbeService) Probe(ctx context.Context, paths ToolPaths, p Profile) (C
 	default:
 		return CapabilityReport{}, &Error{Code: "probe_busy", Message: "another capability check is already running"}
 	}
+	// Rechecking invalidates previous approval immediately. A canceled or failed
+	// replacement probe must not leave an earlier success usable for activation.
+	s.mu.Lock()
+	delete(s.reports, p.ID)
+	s.mu.Unlock()
 	var report CapabilityReport
 	var err error
 	if p.Backend == "ffmpeg" {

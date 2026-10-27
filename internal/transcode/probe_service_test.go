@@ -22,6 +22,33 @@ func (b *blockingProbe) Run(ctx context.Context, path string, args ...string) ([
 		return nil, ctx.Err()
 	}
 }
+func TestCanceledReprobeRevokesOldApproval(t *testing.T) {
+	runner := &blockingProbe{entered: make(chan struct{}), release: make(chan struct{})}
+	service := NewProbeService(runner)
+	profile := testProfile(t)
+	paths := (Config{}).Tools()
+	fingerprint, err := ProbeFingerprint(paths, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.reports[profile.ID] = CapabilityReport{ProfileID: profile.ID, CanEnable: true, Fingerprint: fingerprint, CheckedAt: time.Now()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := service.Probe(ctx, paths, profile); done <- err }()
+	<-runner.entered
+	if service.Allows(profile.ID, fingerprint) {
+		t.Error("old approval survived active reprobe")
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("canceled check returned success")
+	}
+	if service.Allows(profile.ID, fingerprint) {
+		t.Fatal("canceled check restored old approval")
+	}
+}
+
 func TestProbeServiceRejectsConcurrentChecks(t *testing.T) {
 	r := &blockingProbe{entered: make(chan struct{}), release: make(chan struct{})}
 	s := NewProbeService(r)
