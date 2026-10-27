@@ -1,4 +1,5 @@
 {
+  "transcode.retryAt": "下次重试",
   "transcode.preview": "预览转码输出",
   "transcode.closePreview": "关闭预览",
   "ha.loadTranscodeOutputs": "加载转码输出",

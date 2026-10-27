@@ -12,7 +12,7 @@ export interface TranscodeJob {
   run_policy: 'always' | 'manual'; generation: number;
 }
 export interface TranscodeVariant {
-  id: string; job_id: string; source_id: string; state: string; error_code?: string;
+  id: string; job_id: string; source_id: string; state: string; error_code?: string; retry_at?: string;
 }
 export function listTranscodeProfiles(signal?: AbortSignal) {
   return apiRequest<{ profiles: TranscodeProfile[] }>('/transcoding/profiles', { signal });

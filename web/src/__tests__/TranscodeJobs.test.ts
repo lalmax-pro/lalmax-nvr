@@ -5,6 +5,17 @@ import { i18nState } from '$lib/i18n';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const profile = {id: 'h264_720p', name: '720p', revision: 2, backend: 'ffmpeg'};
+it('shows safe retry diagnostics without offering preview for a backoff job', async () => {
+ i18nState.currentLang = 'en';vi.stubGlobal('sessionStorage', {getItem: () => null});
+ const retry = '2026-10-27T07:00:00Z';
+ const job = {id: 'waiting', source: {stream_id: 'source'}, profile_id: profile.id, enabled: true, generation: 1, run_policy: 'always'};
+ vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => ({ok: true, status: 200, json: async () => url.endsWith('/profiles') ? {profiles: [profile]} : {jobs: [job], variants: [{job_id: 'waiting', state: 'backoff', error_code: 'probe_required', retry_at: retry}]}})));
+ const view = render(TranscodeJobs);
+ await waitFor(() => expect(view.getByRole('status').textContent).toContain('probe_required'));
+ expect(view.getByRole('status').textContent).toContain('Next retry');
+ expect(view.container.querySelector('time')?.getAttribute('datetime')).toBe(retry);
+ expect((view.getByText('Preview output') as HTMLButtonElement).disabled).toBe(true);
+});
 it('creates a GStreamer template with its matching encoder', async () => {
  i18nState.currentLang = 'en';
  vi.stubGlobal('sessionStorage', {getItem: () => null});

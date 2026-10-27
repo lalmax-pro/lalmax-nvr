@@ -90,7 +90,7 @@
           {@const runtime = variants.find(v => v.job_id === job.id)}
           <li class="py-3 space-y-2">
           <p class="text-sm th-text-primary">{job.id} · {job.source.stream_id} → {job.profile_id} · {job.run_policy} · v{job.generation}</p>
-          {#if runtime}<p role="status" class="text-xs th-text-secondary">{runtime.state}{runtime.error_code ? ` · ${runtime.error_code}` : ''}</p>{/if}
+          {#if runtime}<p role="status" class="text-xs th-text-secondary">{runtime.state}{runtime.error_code ? ` · ${runtime.error_code}` : ''}{#if runtime.retry_at} · {t('transcode.retryAt')}: <time datetime={runtime.retry_at}>{new Date(runtime.retry_at).toLocaleString()}</time>{/if}</p>{/if}
           <div class="flex flex-wrap gap-2">
             <button class="btn btn-secondary" onclick={() => act(() => saveTranscodeJob({...job, enabled: !job.enabled}, controller.signal))}>{job.enabled ? t('transcode.disable') : t('transcode.enable')}</button>
             <button class="btn btn-secondary" disabled={runtime?.state !== 'running' || busy} onclick={() => preview = job}>{t('transcode.preview')}</button>
