@@ -42,6 +42,23 @@ func (a *MediaAuthorizer) RevokeInternalStream(id string) {
 		a.internal[id] = internalMediaGrant{}
 	}
 }
+
+// RestoreInternalStream restores a deny-only historical identity at bootstrap.
+// Old credentials cannot become valid merely because the NVR restarted.
+func (a *MediaAuthorizer) RestoreInternalStream(id string) {
+	if a == nil || id == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.internal == nil {
+		a.internal = map[string]internalMediaGrant{}
+	}
+	if _, exists := a.internal[id]; !exists {
+		a.internal[id] = internalMediaGrant{}
+	}
+}
+
 func (a *MediaAuthorizer) InternalPlaybackRequired(id string) bool {
 	if a == nil {
 		return false

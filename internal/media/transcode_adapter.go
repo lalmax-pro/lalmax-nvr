@@ -21,11 +21,12 @@ type derivedOutput struct {
 // TranscodeAdapter is initially embedded-only. It never modifies listener
 // configuration or camera configuration to make a task succeed.
 type TranscodeAdapter struct {
-	Engine  Engine
-	Auth    *auth.MediaAuthorizer
-	Config  *config.Config
-	mu      sync.RWMutex
-	outputs map[string]derivedOutput
+	Engine         Engine
+	Auth           *auth.MediaAuthorizer
+	Config         *config.Config
+	RegisterOutput func(context.Context, string, string) error
+	mu             sync.RWMutex
+	outputs        map[string]derivedOutput
 }
 
 func (a *TranscodeAdapter) Resolve(ctx context.Context, source transcode.SourceRef) (transcode.ResolvedInput, error) {
@@ -91,6 +92,12 @@ func (a *TranscodeAdapter) Reserve(ctx context.Context, source transcode.SourceR
 	}
 	if err = a.Auth.ReserveInternalStream(id, publish, playback); err != nil {
 		return "", err
+	}
+	if a.RegisterOutput != nil {
+		if err := a.RegisterOutput(ctx, id, source.StreamID); err != nil {
+			a.Auth.RevokeInternalStream(id)
+			return "", fmt.Errorf("internal output registry unavailable")
+		}
 	}
 	if a.outputs == nil {
 		a.outputs = map[string]derivedOutput{}

@@ -961,7 +961,18 @@ func (a *App) buildRouter() http.Handler {
 	for id, token := range cfg.Auth.PlaybackTokens {
 		transcodeCfg.Auth.PlaybackTokens[id] = token
 	}
-	adapter := &media.TranscodeAdapter{Engine: a.mediaEngine, Auth: a.mediaAuth, Config: &transcodeCfg}
+	// Restore trusted physical identities before requests or publishers can run.
+	if ids, err := a.db.ListTranscodeOutputIDs(context.Background()); err != nil {
+		slog.Error("load internal output registry failed")
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "internal media registry unavailable", http.StatusServiceUnavailable)
+		})
+	} else {
+		for _, id := range ids {
+			a.mediaAuth.RestoreInternalStream(id)
+		}
+	}
+	adapter := &media.TranscodeAdapter{Engine: a.mediaEngine, Auth: a.mediaAuth, Config: &transcodeCfg, RegisterOutput: a.db.RegisterTranscodeOutput}
 	executor := &transcode.BackendExecutor{Adapter: adapter, Config: cfg.Transcoding}
 	a.transcodeManager = transcode.NewManager(context.Background(), executor, cfg.Transcoding.MaxConcurrent)
 	a.transcodeService = transcode.NewService(a.db, a.transcodeManager, handler.TranscodeProbeService(), cfg.Transcoding)

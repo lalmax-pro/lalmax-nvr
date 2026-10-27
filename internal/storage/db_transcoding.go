@@ -21,6 +21,9 @@ func (d *DB) createTranscodeTable(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if _, err = d.execContext(ctx, `CREATE TABLE IF NOT EXISTS transcode_outputs_v1 (id TEXT PRIMARY KEY, source_id TEXT NOT NULL)`); err != nil {
+		return err
+	}
 	_, err = d.execContext(ctx, `INSERT OR IGNORE INTO transcode_intent_v1 (id, revision, payload) VALUES (?, ?, ?)`, "main", 1, `{"profiles":[],"jobs":[]}`)
 	return err
 }
