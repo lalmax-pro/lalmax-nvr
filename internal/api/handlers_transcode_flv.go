@@ -32,6 +32,11 @@ func (h *Handler) handleTranscodeFLV(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "invalid preview endpoint")
 		return
 	}
+	h.proxyDerivedFLV(w, r, upstream)
+}
+
+// proxyDerivedFLV takes a trusted URL constructed by the runtime registry only.
+func (h *Handler) proxyDerivedFLV(w http.ResponseWriter, r *http.Request, upstream *url.URL) {
 	w.Header().Set("Cache-Control", "no-store")
 	// Prevent a redirect carrying user authorization to an arbitrary authority.
 	client := *h.playProxyClient()
