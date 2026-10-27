@@ -85,9 +85,9 @@ jobs:
     if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Main pushes publish the coverage badge branch.
     permissions:
-      contents: write
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4.2.2
 
@@ -134,42 +134,15 @@ jobs:
       - name: Display coverage
         run: go tool cover -func=coverage.out
 
-      - name: Publish coverage badge
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
-          color=red
-          if (( $(echo "$total >= 70" | bc -l) )); then
-            color=brightgreen
-          elif (( $(echo "$total >= 50" | bc -l) )); then
-            color=yellowgreen
-          elif (( $(echo "$total >= 35" | bc -l) )); then
-            color=yellow
-          fi
-          work=$(mktemp -d)
-          git -C "$work" init -q -b badges
-          git -C "$work" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          auth=(-c "http.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}")
-          if git -C "$work" "${auth[@]}" fetch --depth 1 origin badges; then
-            git -C "$work" checkout -B badges FETCH_HEAD
-          fi
-          printf '%s\n' \
-            '{' \
-            '  "schemaVersion": 1,' \
-            '  "label": "Coverage",' \
-            "  \"message\": \"${total}%\"," \
-            "  \"color\": \"${color}\"" \
-            '}' > "$work/coverage.json"
-          git -C "$work" add coverage.json
-          if git -C "$work" diff --cached --quiet; then
-            echo "Coverage badge unchanged at ${total}%"
-            exit 0
-          fi
-          git -C "$work" -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "ci: update coverage badge"
-          git -C "$work" "${auth[@]}" push origin badges
-          echo "Published coverage badge ${total}%"
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7.1.1
+        with:
+          use_oidc: true
+          files: coverage.out
+          disable_search: true
+          flags: go
+          name: go-unit
+          fail_ci_if_error: true
 
       - name: Check coverage threshold
         run: |
