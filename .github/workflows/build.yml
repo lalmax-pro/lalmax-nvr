@@ -131,6 +131,15 @@ jobs:
       - name: Display coverage
         run: go tool cover -func=coverage.out
 
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5.5.2
+        with:
+          files: coverage.out
+          disable_search: true
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
       - name: Check coverage threshold
         run: |
           echo "Checking coverage threshold..."

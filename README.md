@@ -2,6 +2,7 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/lalmax-pro/lalmax-nvr?style=flat&label=Release)](https://github.com/lalmax-pro/lalmax-nvr/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/lalmax-pro/lalmax-nvr/ci.yml?style=flat&label=CI)](https://github.com/lalmax-pro/lalmax-nvr/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/lalmax-pro/lalmax-nvr?style=flat&label=Coverage)](https://codecov.io/gh/lalmax-pro/lalmax-nvr)
 [![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev/)
 [![Svelte](https://img.shields.io/badge/Svelte-FF3E00?style=flat&logo=svelte&logoColor=white)](https://svelte.dev/)
 [![Databases](https://img.shields.io/badge/SQLite%20%7C%20PostgreSQL%20%7C%20MySQL-003B57?style=flat)](docs/en/database-migration.md)
