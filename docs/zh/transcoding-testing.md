@@ -17,6 +17,7 @@
 - 常驻任务重启恢复实测：将 FFmpeg 手动任务改为 always（generation 2），停止进程后重新启动，不调用手动检测；后台自动自检、恢复 running，取回输出解码 3 秒退出 0，输出 always_restart_e2e=passed。测试结束通过 API 停止、恢复 manual（generation 3）并关闭隔离实例。
 - HA 发布 API 实测：发布 real-source 并选择 FFmpeg 派生任务，HA 目录保留源 ID、报告实际 H264 且禁用派生 WebRTC；目录 RTSP 实际解码退出 0，快照接口返回 19460 字节有效 JPEG，停止任务后目录离线且 URL 清空。脚本输出 ha_publication_api_e2e=passed。仅验证 NVR 的 HA 接口，不等同于真实 HA HLS/浏览器播放；设置已恢复，实例关闭。
 - 网页同源 FLV 接口实测：管理员 HTTP 请求取回派生 FLV，FFmpeg 从该 API URL 解码 3 秒退出 0，无解码错误；匿名请求返回 401。仅证明代理/媒体链路有效，真实浏览器 MSE 播放仍需确认。停止任务并关闭隔离实例。
+- Chrome 实际 MSE 补测：独立 HeadlessChrome 156，经项目已安装 mpegts.js 播放鉴权同源派生 FLV（私有临时代理提供账户头，不把内部 token 交给页面）；currentTime 增至 3.097 秒、readyState=4、videoWidth=640、totalVideoFrames=50、播放器错误数组为空。第一次尝试等候超时，第二次带进度诊断后通过，保留首帧启动时间的不确定性。此为真实浏览器/播放器媒体验证，不等同于完整设置页按钮交互或 HA 页面验收。NVR、临时代理与独立 Chrome 均由脚本清理。
 - HEVC 实际输入补测：ffprobe 确认现有 NVR 的 ha-test-second 为 HEVC/AAC，拉入隔离分支 hevc-source 后分别通过 API 创建 FFmpeg、GStreamer 任务，两者进入 running 并各取回输出解码 3 秒退出 0，脚本输出 hevc_input_dual_backend_e2e=passed。仍为合成发布流，不标记为真机；任务已停止、实例关闭。
 - 两个任务的停止 API 均返回 204，随后终止隔离实例。测试凭据和媒体地址仅保留在私有临时目录，无真实图像产物入库。
 - 一次 FFmpeg 解码诊断使用了当前版本不适用的 `-rw_timeout` 导致退出 8，去除该参数后实际解码通过；不将前者记为媒体不兼容。
