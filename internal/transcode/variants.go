@@ -1,17 +1,21 @@
 package transcode
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Variant describes a logical output; credentials and physical media group names
 // are deliberately excluded from catalog responses.
 type Variant struct {
-	ID         string `json:"id"`
-	JobID      string `json:"job_id"`
-	SourceID   string `json:"source_id"`
-	ProfileID  string `json:"profile_id"`
-	Generation uint64 `json:"generation"`
-	State      State  `json:"state"`
-	ErrorCode  string `json:"error_code,omitempty"`
+	ID         string     `json:"id"`
+	JobID      string     `json:"job_id"`
+	SourceID   string     `json:"source_id"`
+	ProfileID  string     `json:"profile_id"`
+	Generation uint64     `json:"generation"`
+	State      State      `json:"state"`
+	ErrorCode  string     `json:"error_code,omitempty"`
+	RetryAt    *time.Time `json:"retry_at,omitempty"`
 }
 
 func (s *Service) Variants(ctx context.Context, sourceID string) ([]Variant, error) {
@@ -39,6 +43,12 @@ func (s *Service) Variants(ctx context.Context, sourceID string) ([]Variant, err
 				v.State = runtime.State
 				v.ErrorCode = runtime.ErrorCode
 			}
+		}
+		if retry, ok := s.retry[job.ID]; ok && retry.generation == job.Generation && retry.errorCode != "" && job.Enabled && s.stopped[job.ID] != job.Generation && v.State != Running && v.State != Starting {
+			v.State = Backoff
+			v.ErrorCode = retry.errorCode
+			next := retry.next
+			v.RetryAt = &next
 		}
 		variants = append(variants, v)
 	}

@@ -146,6 +146,7 @@ type retryState struct {
 	generation uint64
 	attempts   int
 	next       time.Time
+	errorCode  string
 }
 
 // Run periodically reconciles persisted enabled always jobs. Previously enabled
@@ -231,6 +232,14 @@ func (s *Service) ReconcileAlways(ctx context.Context) map[string]error {
 			delay = time.Minute
 		}
 		retry.next = time.Now().Add(delay)
+		retry.errorCode = ""
+		if err != nil {
+			retry.errorCode = "reconcile_failed"
+			var domain *Error
+			if errors.As(err, &domain) {
+				retry.errorCode = domain.Code
+			}
+		}
 		s.retry[j.ID] = retry
 		if err != nil {
 			results[j.ID] = err

@@ -94,6 +94,24 @@ func TestTranscodeReconcileBackoffAndManualExclusion(t *testing.T) {
 	require.Contains(t, first, "always")
 	require.NotContains(t, first, "manual")
 	require.Empty(t, service.ReconcileAlways(ctx), "immediate retry must be suppressed")
+	variants, err := service.Variants(ctx, "camera")
+	require.NoError(t, err)
+	for _, variant := range variants {
+		if variant.JobID == "always" {
+			require.Equal(t, transcode.Backoff, variant.State)
+			require.Equal(t, "transcoding_disabled", variant.ErrorCode)
+			require.NotNil(t, variant.RetryAt)
+		}
+	}
+	require.NoError(t, service.Stop(ctx, "always", 1))
+	variants, err = service.Variants(ctx, "camera")
+	require.NoError(t, err)
+	for _, variant := range variants {
+		if variant.JobID == "always" {
+			require.Equal(t, transcode.Stopped, variant.State)
+			require.Nil(t, variant.RetryAt)
+		}
+	}
 }
 
 func TestTranscodeServiceRequiresProfileProbe(t *testing.T) {
