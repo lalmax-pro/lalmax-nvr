@@ -216,6 +216,38 @@ func TestManagerRejectsDelayedGenerationOperations(t *testing.T) {
 	}
 }
 
+func TestReleasedSharedOwnerCanBeRecreated(t *testing.T) {
+	m := NewManager(context.Background(), &fakeExecutor{}, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	defer m.Close(ctx)
+	p := testProfile(t)
+	original := managerJob(t, "recreated", p)
+	original.Generation = 5
+	runtime, err := m.Acquire(original, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.Acquire(managerJob(t, "keeper", p), p); err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Release(ctx, original.ID, original.Generation); err != nil {
+		t.Fatal(err)
+	}
+	recreated := original
+	recreated.Generation = 1
+	joined, err := m.Acquire(recreated, p)
+	if err != nil {
+		t.Fatal("released shared owner retained stale generation:", err)
+	}
+	if joined.VariantID != runtime.VariantID {
+		t.Fatal("recreated owner failed to share existing output")
+	}
+	if _, ok := m.Status("keeper"); !ok {
+		t.Fatal("other owner lost its lease")
+	}
+}
+
 func TestManagerDetectsMediaLossAfterRunning(t *testing.T) {
 	e := &fakeExecutor{}
 	e.ready.Store(true)

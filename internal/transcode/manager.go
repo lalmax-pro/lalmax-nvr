@@ -236,6 +236,9 @@ func (m *Manager) Release(ctx context.Context, jobID string, generation uint64) 
 	delete(m.jobs, jobID)
 	delete(w.owners, jobID)
 	if len(w.owners) > 0 {
+		// This owner no longer has a lease. Its persisted intent may now be
+		// deleted/recreated; other owners retain the shared physical process.
+		delete(m.generations, jobID)
 		m.mu.Unlock()
 		return nil
 	}
