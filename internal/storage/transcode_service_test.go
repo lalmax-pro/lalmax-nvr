@@ -2,11 +2,38 @@ package storage
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/transcode"
 	"github.com/stretchr/testify/require"
 )
+
+type failedRecoveryProbe struct{ calls atomic.Int32 }
+
+func (p *failedRecoveryProbe) Run(context.Context, string, ...string) ([]byte, error) {
+	p.calls.Add(1)
+	return nil, errors.New("missing tool")
+}
+func TestTranscodeAlwaysRevalidatesAfterRestart(t *testing.T) {
+	db := transcodeTestDB(t)
+	ctx := context.Background()
+	p, err := db.SaveTranscodeProfile(ctx, transcode.DefaultProfile("ffmpeg"), 0)
+	require.NoError(t, err)
+	_, err = db.SaveTranscodeJob(ctx, transcode.Job{ID: "recover", Source: transcode.SourceRef{EngineID: "embedded", StreamID: "camera", AppName: "live"}, ProfileID: p.ID, ProfileRevision: p.Revision, Enabled: true, RunPolicy: transcode.Always}, 0)
+	require.NoError(t, err)
+	runner := &failedRecoveryProbe{}
+	manager := transcode.NewManager(ctx, nil, 1)
+	defer manager.Close(ctx)
+	service := transcode.NewService(db, manager, transcode.NewProbeService(runner), transcode.Config{Enabled: true})
+	result := service.ReconcileAlways(ctx)
+	require.Greater(t, runner.calls.Load(), int32(0), "restart must revalidate rather than silently stall on empty cache")
+	require.Contains(t, result, "recover")
+	calls := runner.calls.Load()
+	service.ReconcileAlways(ctx)
+	require.Equal(t, calls, runner.calls.Load(), "failed recovery must respect backoff")
+}
 
 func TestTranscodeVariantCatalogAndCrossSourceRejection(t *testing.T) {
 	db := transcodeTestDB(t)

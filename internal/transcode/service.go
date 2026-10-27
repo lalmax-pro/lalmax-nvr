@@ -2,6 +2,8 @@ package transcode
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -146,8 +148,9 @@ type retryState struct {
 	next       time.Time
 }
 
-// Run periodically reconciles persisted always jobs. It performs no media probe
-// automatically: an administrator must first validate the installed environment.
+// Run periodically reconciles persisted enabled always jobs. Previously enabled
+// jobs revalidate expired capabilities before recovery; new enablement still
+// requires an administrator's successful interactive probe.
 func (s *Service) Run(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -156,8 +159,15 @@ func (s *Service) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			attempt, cancel := context.WithTimeout(ctx, 5*time.Second)
-			s.ReconcileAlways(attempt)
+			attempt, cancel := context.WithTimeout(ctx, 45*time.Second)
+			for id, err := range s.ReconcileAlways(attempt) {
+				code := "reconcile_failed"
+				var domain *Error
+				if errors.As(err, &domain) {
+					code = domain.Code
+				}
+				slog.Warn("transcoding reconciliation deferred", "job_id", id, "code", code)
+			}
 			cancel()
 		}
 	}
@@ -194,6 +204,20 @@ func (s *Service) ReconcileAlways(ctx context.Context) map[string]error {
 		p, err := s.profile(ctx, j)
 		if err == nil {
 			err = s.allow(p)
+			if err != nil {
+				var gate *Error
+				if errors.As(err, &gate) && gate.Code == "probe_required" {
+					// Always jobs may recover after restart or probe expiry. The
+					// probe is bounded by the reconciliation context and never
+					// accepts arbitrary user commands or URLs.
+					_, probeErr := s.probes.Probe(ctx, s.config.Tools(), p)
+					if probeErr == nil {
+						err = s.allow(p)
+					} else {
+						err = probeErr
+					}
+				}
+			}
 		}
 		if err == nil {
 			_, err = s.manager.Acquire(j, p)
