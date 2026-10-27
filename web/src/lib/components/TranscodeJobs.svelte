@@ -21,7 +21,10 @@
   const controller = new AbortController();
   async function load() {
     const [p, j] = await Promise.all([listTranscodeProfiles(controller.signal), listTranscodeJobs(controller.signal)]);
-    if (!controller.signal.aborted) { profiles = p.profiles; jobs = j.jobs; variants = j.variants ?? []; }
+    if (!controller.signal.aborted) {
+      profiles = p.profiles; jobs = j.jobs; variants = j.variants ?? [];
+      if (preview && !variants.some(v => v.job_id === preview!.id && v.state === 'running')) preview = null;
+    }
   }
   async function act(fn: () => Promise<unknown>) {
     if (busy) return;
