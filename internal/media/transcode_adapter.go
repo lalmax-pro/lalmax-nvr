@@ -34,14 +34,14 @@ func (a *TranscodeAdapter) Resolve(ctx context.Context, source transcode.SourceR
 		return transcode.ResolvedInput{}, err
 	}
 	if a.Config == nil || a.Engine == nil || a.Config.Media.Mode != "embedded" || source.EngineID != "embedded" {
-		return transcode.ResolvedInput{}, fmt.Errorf("embedded media engine required")
+		return transcode.ResolvedInput{}, &transcode.Error{Code: "engine_unavailable", Message: "embedded media engine required"}
 	}
 	if a.Auth != nil && a.Auth.InternalPlaybackRequired(source.StreamID) {
 		return transcode.ResolvedInput{}, fmt.Errorf("derived source cannot be transcoded")
 	}
 	info, err := a.Engine.GetStream(ctx, source.StreamID)
 	if err != nil || info == nil || !info.Active {
-		return transcode.ResolvedInput{}, fmt.Errorf("source offline")
+		return transcode.ResolvedInput{}, &transcode.Error{Code: "source_offline", Message: "source is offline"}
 	}
 	app := info.AppName
 	if app == "" {
@@ -72,7 +72,7 @@ func (a *TranscodeAdapter) Reserve(ctx context.Context, source transcode.SourceR
 		return "", fmt.Errorf("embedded media authorization unavailable")
 	}
 	if a.Config.RTMP.Enabled == nil || !*a.Config.RTMP.Enabled {
-		return "", fmt.Errorf("RTMP listener is disabled")
+		return "", &transcode.Error{Code: "rtmp_disabled", Message: "RTMP listener is disabled"}
 	}
 	// Listing must succeed; inability to check collisions must fail closed.
 	streams, err := a.Engine.ListStreams(ctx)

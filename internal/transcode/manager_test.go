@@ -2,6 +2,7 @@ package transcode
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -40,6 +41,42 @@ func (failingExecutor) Start(context.Context, SourceRef, Profile, string) (Proce
 	return nil, invalid("test failure")
 }
 func (failingExecutor) Ready(context.Context, string) bool { return false }
+
+type errorCodeExecutor struct{ err error }
+
+func (e errorCodeExecutor) Start(context.Context, SourceRef, Profile, string) (Process, error) {
+	return nil, e.err
+}
+func (errorCodeExecutor) Ready(context.Context, string) bool { return false }
+func TestStartFailureExposesOnlySafeDomainCode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"rtmp_disabled", &Error{Code: "rtmp_disabled", Message: "RTMP listener is disabled"}, "rtmp_disabled"},
+		{"source_offline", &Error{Code: "source_offline", Message: "source is offline"}, "source_offline"},
+		{"raw_error", errors.New("rtsp://user:secret@camera"), "backend_start_failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewManager(context.Background(), errorCodeExecutor{tc.err}, 1)
+			defer m.Close(context.Background())
+			p := testProfile(t)
+			r, err := m.Acquire(managerJob(t, "a", p), p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.mu.Lock()
+			done := m.work[r.Key].done
+			m.mu.Unlock()
+			<-done
+			r, ok := m.Status("a")
+			if !ok || r.State != Failed || r.ErrorCode != tc.want {
+				t.Fatalf("unexpected runtime: %+v", r)
+			}
+		})
+	}
+}
 func TestTerminalWorkDoesNotConsumeCapacity(t *testing.T) {
 	m := NewManager(context.Background(), failingExecutor{}, 1)
 	defer m.Close(context.Background())

@@ -3,6 +3,7 @@ package transcode
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"sync"
 	"time"
 )
@@ -136,6 +137,10 @@ func (m *Manager) run(ctx context.Context, w *managedWork, source SourceRef, pro
 	startTimer.Stop()
 	if err != nil {
 		code := "backend_start_failed"
+		var domain *Error
+		if errors.As(err, &domain) && domain.Code != "" {
+			code = domain.Code
+		}
 		if ctx.Err() != nil {
 			code = "start_canceled_or_timed_out"
 		}

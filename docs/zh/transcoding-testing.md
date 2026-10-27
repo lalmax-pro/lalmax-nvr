@@ -89,12 +89,12 @@ HA 快照已改为使用所选派生输出并隔离缓存；已测试输出不�
 
 ### 当前未覆盖 / 后续工作（以本节及 2026-10-27 记录为最新状态）
 
-- 实体摄像机输入、长时间稳定性及真实公网未验收；已通过的是现有 NVR 中运行的 H.264/HEVC 合成发布流，不混作真机。
+- 海康实体摄像机 H.264/AAC 已完成 FFmpeg 视频 copy + 音频转码的有限链路测试；GStreamer、实体 H.265、长时间稳定性及真实公网仍未验收。H.264/HEVC 合成发布流不混作真机。
 - 完整设置页按钮交互、实际 FlvPlayer Svelte 组件生命周期仍待浏览器验证；Chrome/mpegts.js MSE 媒体播放已通过。
 - 真实 Home Assistant 实例的 HLS/浏览器播放未验收；NVR 面向 HA 的目录、RTSP、JPEG 和离线语义已实际通过。
 - FFmpeg/GStreamer 的 RTSP 输入→转码→RTMP 回灌→派生 RTSP 解码、共享任务、常驻重启恢复、身份隔离重启均有实际通过证据，见顶部记录。
 - 检测缓存仅保存在内存；已启用 always 任务重启时自动重新自检恢复已实际通过，手动任务仍需管理员检测后显式启动。
-- FFmpeg copy 模式自检尚无源 fixture 支持，不能据此启用已验证标志。
+- FFmpeg copy 模式现通过内置合成样本自检；GStreamer copy 模式自检仍未支持。实际源限制和链路验收另行验证。
 - 源尺寸探测暂使用 ffprobe，GStreamer 路径尚非完全独立依赖。
 - Docker linux/arm64 构建/有限编码已通过；完整容器 API 媒体链路、其他架构运行、Windows Job Object、外部引擎和硬件编码未验收。
 - 源服务、日常浏览器和运行中的旧版 NVR 均未替换；隔离测试服务已清理。
@@ -104,3 +104,14 @@ HA 快照已改为使用所选派生输出并隔离缓存；已测试输出不�
 - 显式停止意图写入任务持久化数据；重建服务和关闭重开数据库后，常驻任务不会重新自检或启动。再次显式启动才清除该意图。
 - 删除同名任务或模板时保留版本水位，重建后的 generation/revision 高于旧值；旧的更新、删除和停止请求被拒绝。版本水位随已删除 ID 累积，后续需设计安全的保留策略，不能删除仍可能被旧请求使用的水位。
 - 在 macOS ARM64 上实际运行 `NVR_TRANSCODE_MEDIA_TEST=1 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib NVR_GSTREAMER_SELFTEST=1 go test -count=1 -v ./internal/transcode -run 'Test(FFmpegRealSelfTest|GStreamerActualSelfTest)'`，FFmpeg 和 GStreamer 的 AAC、无音轨编码/探测/解码自检均通过。此项使用合成数据，不代表本次重新执行 RTSP 回灌、真实摄像机或 HA 端到端验收。
+
+### P1：FFmpeg copy 与海康真实源（2026-10-27）
+
+- FFmpeg copy 模式使用内置的无隐私合成 H.264/AAC 样本自检。macOS ARM64 / FFmpeg 7.0.2 实际验证四组：视频 copy + AAC 转码、视频 copy + 无音频、H.264 编码 + 音频 copy、音视频均 copy；均经 ffprobe 检查及 FFmpeg 解码。自检不能代替源兼容及引擎回灌。
+- Linux ARM64 隔离容器中，基于已存在的 `ghcr.io/lalmax-pro/lalmax-nvr:1.0.3` 运行镜像替换为当前工作树编译的二进制，FFmpeg 6.1.2；该测试镜像未推送，不将其记作完整默认 Dockerfile 构建通过。API 新建视频 copy + AAC 模板，能力检测、任务运行、合成源 RTSP → 转码 → RTMP 回灌 → 派生 RTSP 实际解码通过。停止合成源、检测任务异常、重新发布后，always 任务自动恢复并再次解码通过。
+- 经用户授权只读获取本地海康 ONVIF/RTSP 流，原始视频为 1920×1080 H.264、音频 AAC；通过独立 FFmpeg 直拷转入隔离 NVR RTMP 输入，运行同一视频 copy + AAC 转码任务，派生 RTSP 解码 3 秒成功，ffprobe 确认 H.264 1920×1080 + AAC。没有保存画面或修改摄像机、运行中的 NVR 或录像配置。
+- 第一次从合成源直接切换海康源时，任务状态显示 running，但派生解码失败；当时没有保存足够诊断信息，原因未确定。两次后续测试在等待旧任务检测断流后重新接入海康源，均通过，不把首次失败记作通过。
+- 已将 RTMP 未启用、源离线等安全错误码从异步后端启动传递到任务状态；未知原始错误仍映射为通用错误码，避免暴露凭据。对应单元和 race 测试通过。
+- 当前工作树默认 Dockerfile 在 Linux ARM64 构建成功，FFmpeg 6.1.2；镜像未推送。独立容器的 API 建模板、copy 自检、合成源回灌/RTSP 解码、源断开后恢复，以及海康真实源（经宿主 FFmpeg 直拷接入）回灌和解码均通过。
+- 默认镜像另以没有音轨的合成 RTMP 发布源启动视频 copy + AAC 模板，派生流经 RTSP 实际解码，并由 ffprobe 确认 H.264 视频且没有音轨。独立的 RTMP 禁用实例使用 RTSP 发布源，任务状态返回 `rtmp_disabled`。
+- 默认镜像第一次链路中的媒体解码通过，但测试脚本停止临时海康拉流进程时超时，导致整轮脚本退出失败；修正有界强制清理和错误脱敏后重跑，上述整轮测试通过。未修改摄像机配置，临时进程和容器已清理。

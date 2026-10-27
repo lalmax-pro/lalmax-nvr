@@ -18,6 +18,17 @@ func TestProbeMediaValidation(t *testing.T) {
 			t.Fatal("invalid output accepted")
 		}
 	}
+	p.Video = VideoSpec{Codec: "copy"}
+	p.Audio = AudioSpec{Codec: "copy"}
+	if !validProbeMedia(good, p) {
+		t.Fatal("valid copy fixture rejected")
+	}
+	if validProbeMedia([]byte(strings.ReplaceAll(string(good), "48000", "8000")), p) {
+		t.Fatal("copy fixture with wrong audio accepted")
+	}
+	if validProbeMedia([]byte(strings.ReplaceAll(string(good), "h264", "hevc")), p) {
+		t.Fatal("copy fixture with wrong video accepted")
+	}
 }
 func TestBoundedProbeOutput(t *testing.T) {
 	b := &boundedOutput{limit: 4}
@@ -57,6 +68,40 @@ func TestFFmpegRealSelfTest(t *testing.T) {
 			for _, check := range report.Checks {
 				if check.Name == "engine_roundtrip" && check.Status != NotTested {
 					t.Fatal("self-test must not claim network validation")
+				}
+			}
+		})
+	}
+}
+
+func TestFFmpegRealCopySelfTest(t *testing.T) {
+	if os.Getenv("NVR_TRANSCODE_MEDIA_TEST") != "1" {
+		t.Skip("set NVR_TRANSCODE_MEDIA_TEST=1 to run installed FFmpeg")
+	}
+	for _, tc := range []struct{ name, video, audio string }{
+		{"video_copy_audio_aac", "copy", "aac"},
+		{"video_copy_no_audio", "copy", "none"},
+		{"video_h264_audio_copy", "h264", "copy"},
+		{"video_copy_audio_copy", "copy", "copy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := DefaultProfile("ffmpeg")
+			if tc.video == "copy" {
+				p.Video = VideoSpec{Codec: "copy"}
+			}
+			if tc.audio != "aac" {
+				p.Audio = AudioSpec{Codec: tc.audio}
+			}
+			report, err := ProbeFFmpeg(context.Background(), (Config{}).Tools(), p, CommandProbeRunner{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !report.CanEnable {
+				t.Fatalf("copy probe failed: %+v", report.Checks)
+			}
+			for _, check := range report.Checks {
+				if check.Name == "engine_roundtrip" && check.Status != NotTested {
+					t.Fatal("local probe claimed engine roundtrip")
 				}
 			}
 		})
