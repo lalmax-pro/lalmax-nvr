@@ -33,7 +33,7 @@ docker build --build-arg WITH_GSTREAMER=true -t lalmax-nvr:transcode-gst .
 
 默认参数为 false。镜像保留 FFmpeg/ffprobe，因为快照、媒体检查与 GStreamer 源尺寸探测仍使用它们。不要挂载 Docker socket。
 
-插件依赖包括 gstreamer-tools、base/good/bad/ugly 和 libav 包；具体目标架构可用性必须通过构建与实际检测确认。包含 x264 的构建涉及对应许可证，请在分发镜像时核对许可证要求。本文没有宣称 Docker 镜像构建或各架构转码已验收。
+插件依赖包括 gstreamer-tools、base/good/bad/ugly 和 libav 包；具体目标架构可用性必须通过构建与实际检测确认。包含 x264 的构建涉及对应许可证，请在分发镜像时核对许可证要求。linux/arm64 可选镜像构建和有限编码 smoke test 已通过；其他架构和完整容器 API 媒体链路仍未验收，详见[记录](transcoding-testing.md)。
 
 ## 首次使用步骤
 
@@ -49,11 +49,11 @@ docker build --build-arg WITH_GSTREAMER=true -t lalmax-nvr:transcode-gst .
 ## 已知限制
 
 - 全局开启目前通过配置文件完成，网页不会自动开启。
-- GStreamer 固定模板的本机和可选 linux/arm64 镜像自检已通过；实际源 RTSP → GStreamer → RTMP 回灌 → RTSP 播放尚未验收，不能据此宣称生产可用。macOS Homebrew 本机自检需为进程设置 `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`，该环境变量并未写入 NVR 全局配置。
+- GStreamer 固定模板的本机和可选 linux/arm64 镜像自检已通过；运行中的 H.264/HEVC 合成发布源已经通过 API 管理的 RTSP → GStreamer → RTMP → RTSP 解码；实体摄像机和生产稳定性仍未验收。macOS Homebrew 本机自检需为进程设置 `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`，该环境变量并未写入 NVR 全局配置。
 - FFmpeg copy 模式自检尚待源 fixture 支持，当前也不能通过正常门禁启用。
-- 管理员 RTSP 派生地址接口已实现，真实取流仍待验收；HA 派生 WebRTC 暂不开放。
+- 管理员 RTSP 派生地址、同源 FLV 接口以及 HA 目录地址均已实际取回解码；真实 HA HLS/浏览器和网页 MSE 仍待验收；HA 派生 WebRTC 暂不开放。
 - 检测有效期 10 分钟；已运行任务不会因检测过期被停止，但失败后的重新启动需要新的有效检测。
-- 常驻策略 API 可配置；当前网页创建的是手动任务。持久化的已启用常驻任务在重启或检测过期后，由有界后台协调重新自检再恢复；自检失败遵循退避并记录安全错误码，真实源无人值守恢复仍待端到端验收。
+- 常驻策略 API 可配置；当前网页创建的是手动任务。持久化的已启用常驻任务在重启或检测过期后，由有界后台协调重新自检再恢复；自检失败遵循退避并记录安全错误码，运行中合成源的常驻任务实际进程重启恢复和解码已通过，实体源及长时间运行仍待验证。
 - 不支持自动硬件加速、跨后端回退、任意命令、任意外部输入 URL 或离线录像转码。
 - 独立 [ARM64 scratch Dockerfile](../../Dockerfile.arm64) 不包含后端工具，不应当作转码镜像使用。
 
