@@ -1,7 +1,7 @@
 # lalmax-nvr
 
 [![GitHub Release](https://img.shields.io/github/v/release/lalmax-pro/lalmax-nvr?style=flat&label=Release)](https://github.com/lalmax-pro/lalmax-nvr/releases)
-[![CI](https://img.shields.io/github/actions/workflow/status/lalmax-pro/lalmax-nvr/ci.yml?style=flat&label=CI)](https://github.com/lalmax-pro/lalmax-nvr/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/lalmax-pro/lalmax-nvr/build.yml?style=flat&label=CI)](https://github.com/lalmax-pro/lalmax-nvr/actions/workflows/build.yml)
 [![Go coverage](https://codecov.io/gh/lalmax-pro/lalmax-nvr/branch/main/graph/badge.svg)](https://app.codecov.io/gh/lalmax-pro/lalmax-nvr)
 [![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev/)
 [![Svelte](https://img.shields.io/badge/Svelte-FF3E00?style=flat&logo=svelte&logoColor=white)](https://svelte.dev/)
