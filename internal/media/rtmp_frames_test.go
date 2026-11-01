@@ -26,6 +26,21 @@ func TestRtmpMsgToFrames_AVCNALU(t *testing.T) {
 	require.Equal(t, append([]byte{0, 0, 0, 1}, nal...), frames[0].Data)
 }
 
+func TestRtmpMsgToFrames_EnhancedHEVCCRA(t *testing.T) {
+	for _, typ := range []byte{16, 17, 18, 19, 20, 21, 1, 8, 22, 32} {
+		nal := []byte{typ << 1, 1, 0x80}
+		avcc := make([]byte, 4+len(nal))
+		binary.BigEndian.PutUint32(avcc, uint32(len(nal)))
+		copy(avcc[4:], nal)
+		// Enhanced RTMP: keyframe + CodedFramesX, fourcc hvc1, no CTS.
+		payload := append([]byte{0x93, 'h', 'v', 'c', '1'}, avcc...)
+		frames := rtmpMsgToFrames(base.RtmpMsg{Header: base.RtmpHeader{MsgTypeId: base.RtmpTypeIdVideo}, Payload: payload})
+		require.Len(t, frames, 1)
+		require.Equal(t, "h265", frames[0].Codec)
+		require.Equal(t, typ >= 16 && typ <= 21, frames[0].IsKey, "NAL type %d", typ)
+	}
+}
+
 func TestRtmpMsgToFrames_AVCSeqHeader(t *testing.T) {
 	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xf8, 0x41, 0xa2}
 	pps := []byte{0x68, 0xce, 0x38, 0x80}

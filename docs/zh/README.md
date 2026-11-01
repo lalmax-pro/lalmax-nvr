@@ -30,6 +30,7 @@
 | [小米摄像头](xiaomi-setup.md) | 小米摄像头接入 |
 | [MediaMTX](mediamtx-guide.md) | 通过可选的 MediaMTX 接入摄像头 |
 | [DLNA](dlna.md) | 在局域网播放器中发现并观看实时流、录像 |
+| [通用实时转码架构设计](transcoding-design.md) | 转码设计及 P0 决策；功能实现和媒体验收单独跟踪 |
 
 ## 录像与集成
 
@@ -42,3 +43,7 @@
 | [MQTT](mqtt-integration.md) | 事件触发录像 |
 | [WebDAV](webdav-integration.md) / [FTP](ftp-integration.md) | 浏览存储文件；FTP 指南说明当前认证限制 |
 | [AI 检测](ai-setup-guide.md) | 检测服务的部署与配置 |
+
+- [Home Assistant：流发布、实时预览、缩略图与在线状态](home-assistant.md)
+
+- [发布与自动构建](releases.md)
