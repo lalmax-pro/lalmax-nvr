@@ -25,3 +25,8 @@ jobs:
             -run '^TestRelay(TaskLifecycle|PushPullAndCancel|StatsHelpers|StatsAndStopBeforePushHandshake)$'
       - name: Relay package race regression
         run: go test -race -count=1 -timeout=180s ./internal/relay
+      - name: RTMP connection lifecycle race regression
+        run: |
+          cd third/lal
+          go test -race -count=3 -timeout=120s ./pkg/rtmp -run '^TestClientSessionDisposeDuringConnect
+
