@@ -28,5 +28,4 @@ jobs:
       - name: RTMP connection lifecycle race regression
         run: |
           cd third/lal
-          go test -race -count=3 -timeout=120s ./pkg/rtmp -run '^TestClientSessionDisposeDuringConnect
-
+          go test -race -count=3 -timeout=120s ./pkg/rtmp -run TestClientSessionDisposeDuringConnect
