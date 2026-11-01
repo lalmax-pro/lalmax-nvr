@@ -144,13 +144,13 @@ func (ts *TalkSession) connectTCP(peerIP string, peerPort int) {
 
 // SendAudioData 发送音频数据到通道
 func (ts *TalkSession) SendAudioData(data []byte) error {
+	// Hold the lock across the send so a concurrent Stop cannot close the
+	// channel between the stopped check and the send.
 	ts.mu.Lock()
+	defer ts.mu.Unlock()
 	if ts.stopped {
-		ts.mu.Unlock()
 		return fmt.Errorf("session stopped")
 	}
-	ts.mu.Unlock()
-
 	select {
 	case ts.AudioChan <- data:
 		return nil
@@ -270,7 +270,6 @@ func (ts *TalkSession) Stop() error {
 		ts.mu.Lock()
 		ts.stopped = true
 		close(ts.AudioChan)
-		ts.AudioChan = nil
 		ts.mu.Unlock()
 
 		if ts.RTPConn != nil {
