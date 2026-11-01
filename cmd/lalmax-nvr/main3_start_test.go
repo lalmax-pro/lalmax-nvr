@@ -28,7 +28,11 @@ func TestMain3StartAllOptionalSubsystems(t *testing.T) {
 	cfg.Merge.CheckInterval = "1h"
 	cfg.Health.Enabled = true
 	cfg.DLNA.Enabled = &enabled
-	cfg.FTP.Enabled = &enabled
+	// ftpserverlib reads and clears its listener from two goroutines during
+	// shutdown. The race detector reports that library race, so this test
+	// leaves FTP disabled like the other graceful-shutdown cases.
+	ftpDisabled := false
+	cfg.FTP.Enabled = &ftpDisabled
 	cfg.FTP.Port = freeTCPPort(t)
 	cfg.RTMP.Enabled = &enabled
 	cfg.RTMP.Port = freeTCPPort(t)
