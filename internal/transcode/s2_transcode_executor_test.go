@@ -3,6 +3,10 @@ package transcode
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -66,6 +70,26 @@ func (a *s2MediaAdapter) releaseCount() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.releaseCalls
+}
+
+// s2NoopExecutable builds a program that exits 0 for any arguments. Windows CI
+// has no /bin/echo, and the test binary itself rejects the generated argv.
+func s2NoopExecutable(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(src, []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "noop")
+	if runtime.GOOS == "windows" {
+		out += ".exe"
+	}
+	cmd := exec.Command("go", "build", "-o", out, src)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build noop executable: %v\n%s", err, output)
+	}
+	return out
 }
 
 func TestS2ProbeInputDimensions(t *testing.T) {
@@ -229,8 +253,9 @@ func TestS2BackendExecutorStart(t *testing.T) {
 	}
 
 	// A successful FFmpeg start registers the reservation and cleans up on wait.
+	noop := s2NoopExecutable(t)
 	adapter = &s2MediaAdapter{input: ResolvedInput{URL: "rtsp://cam/stream", VideoCodec: "h264", AudioCodec: "aac"}}
-	executor = &BackendExecutor{Adapter: adapter, Config: Config{FFmpegPath: "/bin/echo"}}
+	executor = &BackendExecutor{Adapter: adapter, Config: Config{FFmpegPath: noop}}
 	process, err := executor.Start(ctx, source, p, "variant")
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
@@ -248,7 +273,7 @@ func TestS2BackendExecutorStart(t *testing.T) {
 	gstProfile.Backend = "gstreamer"
 	gstProfile.Video.Encoder = "x264enc"
 	adapter = &s2MediaAdapter{input: ResolvedInput{URL: "rtsp://cam/stream", VideoCodec: "h264", AudioCodec: "aac", Width: 640, Height: 360}}
-	executor = &BackendExecutor{Adapter: adapter, Config: Config{GSTLaunchPath: "/bin/echo"}}
+	executor = &BackendExecutor{Adapter: adapter, Config: Config{GSTLaunchPath: noop}}
 	process, err = executor.Start(ctx, source, gstProfile, "variant-gst")
 	if err != nil {
 		t.Fatalf("gstreamer start failed: %v", err)
@@ -262,7 +287,7 @@ func TestS2StartGStreamer(t *testing.T) {
 	p.Video.Encoder = "x264enc"
 	spec := JobSpec{Profile: p, InputURL: "rtsp://cam/stream", OutputURL: "rtmp://127.0.0.1/live/variant", VideoCodec: "h264", AudioCodec: "aac", Threads: 2}
 
-	process, err := StartGStreamer(context.Background(), "/bin/echo", spec, 640, 360)
+	process, err := StartGStreamer(context.Background(), s2NoopExecutable(t), spec, 640, 360)
 	if err != nil {
 		t.Fatalf("gstreamer start failed: %v", err)
 	}
