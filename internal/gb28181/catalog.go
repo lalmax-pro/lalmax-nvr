@@ -283,12 +283,16 @@ func (g *GB28181API) getExistingChannelIDs(deviceID string) []string {
 func (g *GB28181API) QueryCatalog(deviceID string) error {
 	slog.Debug("QueryCatalog", "device_id", deviceID)
 	dev, ok := g.store.Load(deviceID)
-	if !ok || !dev.IsOnline {
+	if !ok {
+		return ErrDeviceOffline
+	}
+	snap := dev.messagingSnapshot()
+	if !snap.online {
 		return ErrDeviceOffline
 	}
 
 	xmlBody := catalogXML(deviceID)
-	return g.sendMessage(deviceID, dev, xmlBody)
+	return g.sendMessage(deviceID, &Device{Address: snap.address, Transport: snap.transport}, xmlBody)
 }
 
 func catalogXML(deviceID string) []byte {

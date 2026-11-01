@@ -84,7 +84,9 @@ jobs:
     needs: plan
     if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The race-enabled suite's largest package can exceed Go's default
+    # 10 minute limit on a slow runner. Keep the job limit above that.
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
@@ -124,12 +126,12 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race -timeout 30m -coverprofile=coverage.out ./...
 
       - name: Test embedded lalmax RTC, server and VoIP
         run: |
           cd third/lalmax
-          go test -race -count=1 ./logic ./rtc ./server ./voip/...
+          go test -race -timeout 20m -count=1 ./logic ./rtc ./server ./voip/...
 
       - name: Display coverage
         run: go tool cover -func=coverage.out
@@ -149,8 +151,8 @@ jobs:
           echo "Checking coverage threshold..."
           total=$(go tool cover -func=coverage.out | grep 'total:' | awk '{print $3}' | sed 's/%//' )
           echo "Total coverage: $total%"
-          if (( $(echo "$total < 35" | bc -l) )); then
-            echo "Coverage $total% is below threshold of 35%"
+          if (( $(echo "$total < 85" | bc -l) )); then
+            echo "Coverage $total% is below threshold of 85%"
             exit 1
           fi
           echo "Coverage threshold check passed"

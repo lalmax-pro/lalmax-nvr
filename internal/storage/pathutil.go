@@ -23,12 +23,6 @@ func ValidatePath(baseDir, targetPath string) (string, error) {
 		return "", fmt.Errorf("pathutil: failed to resolve base directory %q: %w", baseDir, err)
 	}
 
-	// Resolve symlinks in baseDir first for consistent comparison
-	baseEval, baseErr := filepath.EvalSymlinks(baseDirAbs)
-	if baseErr == nil {
-		baseDirAbs = baseEval
-	}
-
 	// If targetPath is already absolute, use it directly; otherwise join with baseDir.
 	var resolvedPath string
 	if filepath.IsAbs(targetPath) {
@@ -37,24 +31,46 @@ func ValidatePath(baseDir, targetPath string) (string, error) {
 		resolvedPath = filepath.Join(baseDirAbs, targetPath)
 	}
 
-	// Canonicalize to absolute path.
+	// Canonicalize to absolute path. Keep this lexical form for the return
+	// value so callers can compare it with the root they passed in.
 	absPath, err := filepath.Abs(resolvedPath)
 	if err != nil {
 		return "", fmt.Errorf("pathutil: failed to resolve path %q: %w", targetPath, err)
 	}
 
-	// If EvalSymlinks fails (e.g., path doesn't exist), fall through to
-	// the containment check on the non-resolved path.
-	pathEval, pathErr := filepath.EvalSymlinks(absPath)
-	if pathErr == nil {
-		absPath = pathEval
+	// Compare symlink-resolved paths. A missing file still has to follow
+	// symlinks in its existing parents, or /var vs /private/var looks like
+	// an escape on macOS.
+	baseCanon, err := canonicalPath(baseDirAbs)
+	if err != nil {
+		return "", fmt.Errorf("pathutil: failed to resolve base directory %q: %w", baseDir, err)
+	}
+	targetCanon, err := canonicalPath(absPath)
+	if err != nil {
+		return "", fmt.Errorf("pathutil: failed to resolve path %q: %w", targetPath, err)
 	}
 
-	// Verify containment: the resolved path must be within baseDirAbs.
-	rel, err := filepath.Rel(baseDirAbs, absPath)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	rel, err := filepath.Rel(baseCanon, targetCanon)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("pathutil: path %q resolves outside storage root %q", targetPath, baseDirAbs)
 	}
 
 	return absPath, nil
+}
+
+// canonicalPath resolves symlinks through the nearest existing ancestor.
+// EvalSymlinks fails for a path that has not been created yet.
+func canonicalPath(abs string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+	parent := filepath.Dir(abs)
+	if parent == abs {
+		return abs, nil
+	}
+	resolvedParent, err := canonicalPath(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolvedParent, filepath.Base(abs)), nil
 }

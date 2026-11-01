@@ -1534,6 +1534,9 @@ func (a *App) Start() error {
 		}
 	}
 	if a.mediaEngine != nil {
+		// Copy the scheduler before the goroutine. Stop nils the field while
+		// this startup path may still be reconciling.
+		recSched := a.recSched
 		go func() {
 			if err := a.mediaEngine.Start(ctx); err != nil {
 				slog.Error("media engine", "error", err)
@@ -1542,8 +1545,8 @@ func (a *App) Start() error {
 			if a.apiHandler != nil {
 				a.apiHandler.RestoreCreatedPulls(ctx)
 			}
-			if a.recSched != nil {
-				a.recSched.ReconcileNow()
+			if recSched != nil {
+				recSched.ReconcileNow()
 			}
 		}()
 
@@ -1606,6 +1609,12 @@ func (a *App) Start() error {
 		}
 	}
 
+	// Register before the listener accepts connections. A SIGTERM that arrives
+	// in the gap after Listen succeeds and before Notify is installed kills
+	// the process instead of running graceful shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 	// Start HTTP server
 	go func() {
 		slog.Info("lalmax-nvr listening", "version", appVersion, "addr", a.cfg.Server.Listen)
@@ -1615,9 +1624,6 @@ func (a *App) Start() error {
 		}
 	}()
 
-	// Wait for shutdown signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	slog.Info("received signal, shutting down", "signal", sig.String())
 

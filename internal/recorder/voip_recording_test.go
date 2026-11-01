@@ -15,6 +15,19 @@ import (
 	"time"
 )
 
+// mediaToolRuns reports whether the installed binary can actually start.
+// A quarantined or wrong-architecture ffprobe/ffmpeg is killed on launch and
+// cannot validate the recording.
+func mediaToolRuns(t *testing.T, path string) bool {
+	t.Helper()
+	out, err := exec.Command(path, "-version").CombinedOutput()
+	if err != nil {
+		t.Logf("skipping %s validation: %v %s", filepath.Base(path), err, out)
+		return false
+	}
+	return true
+}
+
 func TestVoIPAudioRecordingAndCleanup(t *testing.T) {
 	for _, codec := range []string{"opus", "g711"} {
 		t.Run(codec, func(t *testing.T) {
@@ -48,7 +61,7 @@ func TestVoIPAudioRecordingAndCleanup(t *testing.T) {
 				require.GreaterOrEqual(t, i, 0)
 				require.Equal(t, uint16(3840), binary.BigEndian.Uint16(data[i+6:i+8]))
 			}
-			if probe, err := exec.LookPath("ffprobe"); err == nil {
+			if probe, err := exec.LookPath("ffprobe"); err == nil && mediaToolRuns(t, probe) {
 				output, err := exec.Command(probe, "-v", "error", "-show_entries", "stream=codec_name,sample_rate,channels,duration", "-of", "json", files[0]).CombinedOutput()
 				require.NoError(t, err, string(output))
 				var report struct {
@@ -66,7 +79,7 @@ func TestVoIPAudioRecordingAndCleanup(t *testing.T) {
 				}
 				require.True(t, strings.HasPrefix(report.Streams[0].Duration, "3."), string(output))
 			}
-			if ffmpeg, err := exec.LookPath("ffmpeg"); err == nil {
+			if ffmpeg, err := exec.LookPath("ffmpeg"); err == nil && mediaToolRuns(t, ffmpeg) {
 				output, err := exec.Command(ffmpeg, "-v", "error", "-i", files[0], "-f", "null", "-").CombinedOutput()
 				require.NoError(t, err, string(output))
 				output, err = exec.Command(ffmpeg, "-v", "error", "-ss", "1.5", "-i", files[0], "-t", "1", "-f", "null", "-").CombinedOutput()
