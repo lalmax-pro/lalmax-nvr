@@ -1318,7 +1318,7 @@ func (a *App) wireRecordTasks() {
 		}
 		cam := a.camMgr.CameraByStream(streamID)
 		if cam == nil {
-			return recorder.StreamOwner{CameraID: streamID, Name: streamID}
+			return recorder.StreamOwner{CameraID: streamID, Name: streamID, AudioEnabled: true}
 		}
 		return recorder.StreamOwner{
 			CameraID:     cam.ID,
