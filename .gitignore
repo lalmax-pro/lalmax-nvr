@@ -27,6 +27,9 @@ lalmax-nvr.yaml
 
 # Node
 node_modules/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
 
 # Frontend
 web/node_modules/
@@ -74,6 +77,7 @@ docs/private/
 .DS_Store
 
 # Build output
+/dist/
 build/
 .build-tmp/
 .tmp-gocache/

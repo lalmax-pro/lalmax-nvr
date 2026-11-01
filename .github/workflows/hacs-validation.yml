@@ -1,0 +1,32 @@
+name: HACS submission validation
+
+on:
+  pull_request:
+    paths: ['custom_components/**', 'hacs.json', 'LICENSE', '.github/workflows/hacs-validation.yml']
+  push:
+    branches: [main]
+    paths: ['custom_components/**', 'hacs.json', 'LICENSE', '.github/workflows/hacs-validation.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hacs:
+    # Repository Issues/Topics validation applies to the published upstream repository.
+    # Forks still run Hassfest and Home Assistant integration code tests.
+    if: github.repository == 'lalmax-pro/lalmax-nvr'
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration
+          comment: false
+
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: home-assistant/actions/hassfest@master

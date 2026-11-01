@@ -4,6 +4,17 @@
 // This is the single source of truth for IDR/keyframe detection across the codebase.
 package nalutil
 
+// IsH265RandomAccessNALU recognizes the defined HEVC IRAP types: BLA, IDR
+// and CRA (16..21). Decoders starting at CRA/BLA must discard leading RASL
+// pictures, which can depend on pictures before the access point.
+func IsH265RandomAccessNALU(nalu []byte) bool {
+	if len(nalu) == 0 {
+		return false
+	}
+	t := (nalu[0] >> 1) & 0x3f
+	return t >= 16 && t <= 21
+}
+
 // IsKeyframeNALU checks if a single NALU is an IDR frame.
 //
 // H.264: NAL type 5 = IDR (extract via nalu[0] & 0x1F)

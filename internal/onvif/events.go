@@ -192,19 +192,31 @@ func (e *EventSubscriberImpl) publishEvents(ctx context.Context, cameraID string
 }
 
 func (e *EventSubscriberImpl) pollAndPublish(ctx context.Context, cameraID string, ps *pullPointSubscription) bool {
-	if time.Until(ps.terminationTime) < SubscriptionRenewBefore {
+	e.mu.Lock()
+	ref := ps.subscriptionRef
+	needsRenew := time.Until(ps.terminationTime) < SubscriptionRenewBefore
+	duration := e.subDuration
+	pullTimeout := e.pullTimeout
+	limit := e.messageLimit
+	e.mu.Unlock()
+
+	if needsRenew {
 		events := e.client.EventsService()
-		if err := events.Renew(ctx, ps.subscriptionRef, e.subDuration); err != nil {
+		if err := events.Renew(ctx, ref, duration); err != nil {
 			eventLogger.Warn("subscription renewal failed, stopping polling",
 				"camera_id", cameraID, "error", err)
+			e.mu.Lock()
 			ps.active = false
+			e.mu.Unlock()
 			return false
 		}
-		ps.terminationTime = time.Now().Add(e.subDuration)
+		e.mu.Lock()
+		ps.terminationTime = time.Now().Add(duration)
+		e.mu.Unlock()
 	}
 
 	events := e.client.EventsService()
-	messages, err := events.PullMessages(ctx, ps.subscriptionRef, e.pullTimeout, e.messageLimit)
+	messages, err := events.PullMessages(ctx, ref, pullTimeout, limit)
 	if err != nil {
 		eventLogger.Warn("PullMessages failed",
 			"camera_id", cameraID,

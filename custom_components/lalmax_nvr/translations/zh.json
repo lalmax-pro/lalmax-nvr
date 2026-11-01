@@ -1,0 +1,135 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "lalmax-nvr",
+        "description": "在 HA 中填写 NVR HTTP 账号。如开启 RTSP 鉴权，还需单独填写 RTSP 用户名与密码。",
+        "data": {
+          "url": "NVR 地址",
+          "username": "NVR HTTP 用户名",
+          "password": "NVR HTTP 密码",
+          "rtsp_username": "RTSP 用户名（可选）",
+          "rtsp_password": "RTSP 密码（可选）",
+          "low_latency": "启用低延迟 WebRTC（H.264/H.265，AAC 音频不可用）"
+        }
+      },
+      "reauth_confirm": {
+        "title": "lalmax-nvr",
+        "description": "在 HA 中填写 NVR HTTP 账号。如开启 RTSP 鉴权，还需单独填写 RTSP 用户名与密码。",
+        "data": {
+          "url": "NVR 地址",
+          "username": "NVR HTTP 用户名",
+          "password": "NVR HTTP 密码",
+          "rtsp_username": "RTSP 用户名（可选）",
+          "rtsp_password": "RTSP 密码（可选）",
+          "low_latency": "启用低延迟 WebRTC（H.264/H.265，AAC 音频不可用）"
+        }
+      },
+      "reconfigure": {
+        "title": "lalmax-nvr",
+        "description": "在 HA 中填写 NVR HTTP 账号。如开启 RTSP 鉴权，还需单独填写 RTSP 用户名与密码。",
+        "data": {
+          "url": "NVR 地址",
+          "username": "NVR HTTP 用户名",
+          "password": "NVR HTTP 密码",
+          "rtsp_username": "RTSP 用户名（可选）",
+          "rtsp_password": "RTSP 密码（可选）",
+          "low_latency": "启用低延迟 WebRTC（H.264/H.265，AAC 音频不可用）"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接 NVR",
+      "invalid_auth": "NVR 凭据无效",
+      "invalid_url": "请输入有效的 HTTP(S) 地址"
+    },
+    "abort": {
+      "already_configured": "已添加此 NVR",
+      "unique_id_mismatch": "此地址属于另一个 NVR 实例",
+      "reauth_successful": "凭据已更新",
+      "reconfigure_successful": "配置已更新"
+    }
+  },
+  "entity": {
+    "event": {
+      "activity": {
+        "name": "事件",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "ai_detection": "AI 检测",
+              "motion": "移动检测",
+              "mqtt_trigger": "MQTT 触发",
+              "recorder_reconnected": "录制重连",
+              "health": "健康事件"
+            }
+          }
+        }
+      }
+    },
+    "binary_sensor": {
+      "motion": {
+        "name": "移动检测"
+      },
+      "person": {
+        "name": "人员检测"
+      },
+      "vehicle": {
+        "name": "车辆检测"
+      }
+    },
+    "button": {
+      "ptz_left": {
+        "name": "左转"
+      },
+      "ptz_right": {
+        "name": "右转"
+      },
+      "ptz_up": {
+        "name": "上转"
+      },
+      "ptz_down": {
+        "name": "下转"
+      },
+      "ptz_zoom_in": {
+        "name": "放大"
+      },
+      "ptz_zoom_out": {
+        "name": "缩小"
+      },
+      "ptz_stop": {
+        "name": "停止云台"
+      }
+    }
+  },
+  "services": {
+    "ptz": {
+      "name": "云台控制",
+      "description": "控制发布流绑定的摄像头，连续移动后自动停止。",
+      "fields": {
+        "mode": {
+          "name": "模式"
+        },
+        "pan": {
+          "name": "水平"
+        },
+        "tilt": {
+          "name": "垂直"
+        },
+        "zoom": {
+          "name": "缩放"
+        },
+        "duration": {
+          "name": "时长"
+        },
+        "preset_token": {
+          "name": "预置位标识"
+        }
+      }
+    },
+    "ptz_presets": {
+      "name": "读取云台预置位",
+      "description": "返回摄像头的预置位列表。"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "lalmax-nvr",
+  "homeassistant": "2026.10.2",
+  "content_in_root": false,
+  "render_readme": true
+}
