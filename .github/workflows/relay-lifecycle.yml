@@ -1,0 +1,27 @@
+name: Relay lifecycle race regression
+
+on:
+  pull_request:
+    paths:
+      - 'internal/relay/**'
+      - '.github/workflows/relay-lifecycle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.2.0
+        with:
+          go-version: '1.26.2'
+      - name: Repeated race regression for relay lifecycle and shutdown
+        run: |
+          go test -race -count=5 -timeout=120s ./internal/relay \
+            -run '^TestRelay(TaskLifecycle|PushPullAndCancel|StatsHelpers|StatsAndStopBeforePushHandshake)$'
+      - name: Relay package race regression
+        run: go test -race -count=1 -timeout=180s ./internal/relay
