@@ -142,6 +142,10 @@ type activeTask struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
 	statsMu     sync.Mutex
+	// The RTMP push session's UpdateStat panics before Push has established
+	// its connection. Both flags are protected by statsMu, including disposal.
+	pushReady   bool
+	disposed    bool
 	videoFrames uint64
 	audioFrames uint64
 	videoBytes  uint64
@@ -203,12 +207,16 @@ func (m *Manager) stopActiveTask(task *activeTask) {
 	}
 	// Capture the last wire counters before disposing either RTMP session.
 	// The snapshot remains available after an error/stop for API consumers.
-	m.collectTaskStats(context.Background(), task.task, task)
+	if task.task != nil {
+		m.collectTaskStats(context.Background(), task.task, task)
+	}
 	if task.cancel != nil {
 		task.cancel()
 	}
 	task.statsMu.Lock()
 	defer task.statsMu.Unlock()
+	task.pushReady = false
+	task.disposed = true
 	if task.pullSession != nil {
 		_ = task.pullSession.Dispose()
 	}
@@ -269,6 +277,9 @@ func (m *Manager) collectAllStats() {
 
 // collectTaskStats collects and stores stats for a single task.
 func (m *Manager) collectTaskStats(ctx context.Context, task *Task, at *activeTask) {
+	if task == nil || at == nil {
+		return
+	}
 	now := time.Now()
 	sample := StatSample{
 		Timestamp: now,
@@ -311,7 +322,7 @@ func (m *Manager) collectTaskStats(ctx context.Context, task *Task, at *activeTa
 	// UpdateStat is required by lal before GetStat computes WriteBitrateKbits.
 	// Serialize both calls with API reads because lal's stat object mutates its
 	// cached rate fields and is not safe for concurrent UpdateStat/GetStat.
-	if at.session != nil {
+	if at.session != nil && at.pushReady {
 		at.session.UpdateStat(uint32(intervalSec))
 		stat := at.session.GetStat()
 		sample.OutputBitrate = stat.WriteBitrateKbits * 1000
@@ -543,10 +554,19 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 		resolved, url, resolveErr := m.derivedResolver(ctx, task.StreamID, task.TranscodeJobID)
 		if resolveErr != nil || resolved == "" || url == "" { return fmt.Errorf("derived output is not ready") }
 		physicalID, pullAddress = resolved, url
-	} else {
-		if m.isInternalStream != nil && m.isInternalStream(task.StreamID) {
-			return fmt.Errorf("internal stream requires a source-bound transcode job")
-		}
+	} else if m.isInternalStream != nil && m.isInternalStream(task.StreamID) {
+		return fmt.Errorf("internal stream requires a source-bound transcode job")
+	}
+	// Check source state before requesting a playback URL. This distinguishes
+	// a missing/offline source from an RTMP URL/token-resolution failure.
+	streamInfo, err := m.engine.GetStream(ctx, physicalID)
+	if err != nil {
+		return fmt.Errorf("get stream: %w", err)
+	}
+	if streamInfo == nil || !streamInfo.Active {
+		return fmt.Errorf("relay source is not active")
+	}
+	if task.TranscodeJobID == "" {
 		token := ""
 		if m.playbackTokenResolver != nil {
 			token = m.playbackTokenResolver(task.StreamID)
@@ -555,10 +575,6 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 		if err != nil {
 			return err
 		}
-	}
-	streamInfo, err := m.engine.GetStream(ctx, physicalID)
-	if err != nil || streamInfo == nil || !streamInfo.Active {
-		return fmt.Errorf("relay source is offline")
 	}
 
 	// Create context for this task
@@ -600,6 +616,8 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 		defer close(at.done)
 		defer func() {
 			at.statsMu.Lock()
+			at.pushReady = false
+			at.disposed = true
 			_ = pullSession.Dispose()
 			_ = pushSession.Dispose()
 			at.statsMu.Unlock()
@@ -629,6 +647,13 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 			m.updateTaskStoppedAt(taskID, &stoppedAt)
 			return
 		}
+		// UpdateStat/GetStat must not touch an unconnected or disposed session.
+		// StopTask may cancel and dispose while Push is completing.
+		at.statsMu.Lock()
+		if !at.disposed && taskCtx.Err() == nil {
+			at.pushReady = true
+		}
+		at.statsMu.Unlock()
 		if taskCtx.Err() != nil {
 			m.updateTaskStatus(taskID, TaskStatusStopped, "")
 			stoppedAt := time.Now()

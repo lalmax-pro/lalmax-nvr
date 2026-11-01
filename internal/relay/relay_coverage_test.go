@@ -357,7 +357,10 @@ func TestRelayStatsHelpers(t *testing.T) {
 	putActive(manager, live.ID, &activeTask{task: live, session: session})
 	liveStats, err := manager.GetTaskStats(ctx, live.ID)
 	require.NoError(t, err)
-	require.Equal(t, 25.0, liveStats.VideoFPS)
+	// No media frames were received; the stream info's input FPS must not
+	// be confused with media actually forwarded by this relay.
+	require.Zero(t, liveStats.VideoFPS)
+	require.Zero(t, liveStats.OutputBitrate)
 	require.Positive(t, liveStats.Duration)
 
 	engine.getErr = errors.New("down")
@@ -460,3 +463,24 @@ func waitTask(t *testing.T, manager *Manager, taskID string) {
 }
 
 func ptrTime(value time.Time) *time.Time { return &value }
+
+ // A push session exists before the network handshake, but lal's UpdateStat
+ // dereferences a nil connection in that state. A stop/snapshot must be safe.
+ func TestRelayStatsAndStopBeforePushHandshake(t *testing.T) {
+ 	manager := NewManager(newMemoryRelayRepo(), nil)
+ 	t.Cleanup(manager.Stop)
+ 	push := rtmp.NewPushSession()
+ 	task := &Task{ID: "unconnected", StreamID: "cam", Status: TaskStatusStopped}
+ 	at := &activeTask{task: task, session: push}
+ 	putActive(manager, task.ID, at)
+ 	require.NotPanics(t, func() {
+ 		manager.collectTaskStats(context.Background(), task, at)
+ 		manager.stopActiveTask(at)
+ 		manager.collectTaskStats(context.Background(), task, at)
+ 	})
+ 	require.True(t, at.hasStats)
+ 	require.Zero(t, at.latestStats.OutputBitrate)
+ 	require.Zero(t, at.latestStats.TotalBytes)
+ 	// Nil task metadata is possible during shutdown of a partially built task.
+ 	require.NotPanics(t, func() { manager.stopActiveTask(&activeTask{cancel: func() {}}) })
+ }
