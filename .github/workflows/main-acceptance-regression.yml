@@ -1,0 +1,51 @@
+name: OpenClaw main acceptance regressions
+
+on:
+  pull_request:
+    paths:
+      - 'internal/camera/**'
+      - 'internal/dlna/**'
+      - 'internal/onvif/**'
+      - 'web/src/__tests__/VoIPStatusPanel.test.ts'
+      - '.github/workflows/main-acceptance-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu-go-127:
+    name: Ubuntu Go 1.27.2 parallel acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.2.0
+        with:
+          go-version: '1.27.2'
+      - name: Vet affected packages
+        run: go vet ./internal/camera ./internal/dlna ./internal/onvif
+      - name: Repeat focused race tests under load
+        run: CGO_ENABLED=1 go test -race -count=10 -timeout=4m ./internal/camera ./internal/dlna ./internal/onvif
+      - name: Full non-race suite (default package concurrency)
+        run: CGO_ENABLED=1 go test -count=1 -timeout=15m ./...
+      - name: Full race suite (default package concurrency)
+        run: CGO_ENABLED=1 go test -race -count=1 -timeout=15m ./...
+
+  ubuntu-node-26:
+    name: Ubuntu Node 26.6 parallel Vitest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.2.0
+        with:
+          node-version: '26.6.0'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      - name: Restore locked dependencies
+        run: npm --prefix web ci
+      - name: Exact parallel frontend test gate
+        run: CI=1 npm --prefix web test
+      - name: Frontend production build
+        run: npm --prefix web run build
