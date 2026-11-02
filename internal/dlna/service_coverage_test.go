@@ -368,8 +368,9 @@ func TestDLNAMediaStreaming(t *testing.T) {
 	limit(available, httptest.NewRequest(http.MethodGet, "/dlna/live/cam.ts", nil))
 	require.Equal(t, http.StatusOK, available.Code)
 	svc.viewerMu.Lock()
-	require.Zero(t, svc.viewers, "successful requests must release their viewer slot")
+	remaining := svc.viewers
 	svc.viewerMu.Unlock()
+	require.Zero(t, remaining, "successful requests must release their viewer slot")
 
 	rr := httptest.NewRecorder()
 	svc.live(rr, httptest.NewRequest(http.MethodGet, "/dlna/live/.ts", nil))
