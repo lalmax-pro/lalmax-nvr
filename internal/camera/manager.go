@@ -2503,11 +2503,9 @@ func (cm *CameraManager) hasExistingLalmaxStream(ctx context.Context, cam config
 		return false
 	}
 	ingestID := cm.ingestStreamID(cam)
-	if cm.db != nil {
-		if binding, _ := cm.db.GetBindingByCameraID(ctx, cam.ID); binding != nil {
-			return true
-		}
-	}
+	// A camera-to-stream binding is metadata, not evidence of a live media
+	// producer. Both normal RTSP cameras and promoted push streams have one;
+	// treating any binding as active silently disables RTSP camera ingestion.
 	if info, err := cm.mediaEngine.GetStream(ctx, ingestID); err == nil && info != nil && info.Active {
 		return true
 	}
@@ -2525,16 +2523,30 @@ func (cm *CameraManager) hasExistingLalmaxStream(ctx context.Context, cam config
 	return false
 }
 
+// sameMediaURLPath is used only to detect a camera URL that points back to
+// this NVR's own RTSP playback endpoint (e.g. a promoted push stream). Matching
+// the path alone is unsafe: an unrelated camera can expose /live/{streamID}.
 func sameMediaURLPath(a, b string) bool {
 	if a == b {
 		return true
 	}
 	au, errA := url.Parse(a)
 	bu, errB := url.Parse(b)
-	if errA != nil || errB != nil {
+	if errA != nil || errB != nil || au.Hostname() == "" || bu.Hostname() == "" {
 		return false
 	}
-	return au.Scheme == bu.Scheme && au.Path == bu.Path
+	port := func(u *url.URL) string {
+		if p := u.Port(); p != "" {
+			return p
+		}
+		if strings.EqualFold(u.Scheme, "rtsp") {
+			return "554"
+		}
+		return ""
+	}
+	return strings.EqualFold(au.Scheme, bu.Scheme) &&
+		strings.EqualFold(au.Hostname(), bu.Hostname()) &&
+		port(au) == port(bu) && au.EscapedPath() == bu.EscapedPath()
 }
 
 func (cm *CameraManager) resolveMediaSourceURL(ctx context.Context, cam config.CameraConfig) (string, error) {
