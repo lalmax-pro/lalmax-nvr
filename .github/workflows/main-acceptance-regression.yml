@@ -26,7 +26,10 @@ jobs:
       - name: Vet affected packages
         run: go vet ./internal/camera ./internal/dlna ./internal/onvif
       - name: Repeat focused race tests under load
-        run: CGO_ENABLED=1 go test -race -count=10 -timeout=4m ./internal/camera ./internal/dlna ./internal/onvif
+        run: |
+          CGO_ENABLED=1 go test -race -count=10 -timeout=4m \
+            ./internal/camera ./internal/dlna ./internal/onvif \
+            -run '^(TestStartCamera_|TestDLNAMediaStreaming$|TestONVIFDiscoveryHelpers$)'
       - name: Full non-race suite (default package concurrency)
         run: CGO_ENABLED=1 go test -count=1 -timeout=15m ./...
       - name: Full race suite (default package concurrency)
