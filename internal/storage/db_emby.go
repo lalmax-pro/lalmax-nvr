@@ -86,7 +86,9 @@ func (d *DB) SaveEmbyServer(ctx context.Context, s EmbyServer) error {
 }
 
 func (d *DB) ListEmbyItems(ctx context.Context) ([]EmbyItem, error) {
-	rows, err := d.queryContext(ctx, `SELECT id,emby_item_id,name,item_type,overview,image_tag,run_time_ticks,stream_id,publish_enabled,loop,created_at,updated_at FROM emby_items ORDER BY name COLLATE NOCASE`)
+	// LOWER() is available on SQLite, PostgreSQL and MySQL. SQLite's
+	// COLLATE NOCASE is not portable and prevented Emby startup recovery.
+	rows, err := d.queryContext(ctx, `SELECT id,emby_item_id,name,item_type,overview,image_tag,run_time_ticks,stream_id,publish_enabled,loop,created_at,updated_at FROM emby_items ORDER BY LOWER(name), name`)
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -134,6 +135,41 @@ def main():
         else:
             proc.terminate()
             proc.wait(timeout=15)
+
+    def process_gone(pid):
+        # /proc zombie state is an exited process waiting for its parent to reap it.
+        try:
+            with open(f"/proc/{pid}/stat", encoding="ascii") as status:
+                fields = status.read().split()
+            if len(fields) > 2 and fields[2] == "Z":
+                return True
+        except FileNotFoundError:
+            return True
+        return subprocess.run(
+            ["kill", "-0", str(pid)], stderr=subprocess.DEVNULL, check=False
+        ).returncode != 0
+
+    def media_listener_ready():
+        # Web/API readiness alone does not guarantee RTMP is accepting publishers.
+        try:
+            with socket.create_connection(("127.0.0.1", 11935), timeout=1):
+                return True
+        except OSError:
+            return False
+
+    def streams_active(*stream_ids):
+        # If this gate fails, it is a media-publisher/startup failure, not
+        # evidence of a Home Assistant coordinator recovery defect.
+        response = nvr.get(
+            nvr_url + "/api/integrations/home-assistant", timeout=10
+        )
+        if response.status_code != 200:
+            return False
+        published = {
+            item["stream_id"]: item
+            for item in response.json().get("streams", [])
+        }
+        return all(published.get(sid, {}).get("active") for sid in stream_ids)
 
     async def ws_command(message):
         async with (
@@ -400,15 +436,7 @@ def main():
     stop(second)
     pid = int((root / "nvr.pid").read_text())
     os.kill(pid, signal.SIGTERM)
-    wait_for(
-        lambda: (
-            subprocess.run(
-                ["kill", "-0", str(pid)], stderr=subprocess.DEVNULL, check=False
-            ).returncode
-            != 0
-        ),
-        20,
-    )
+    wait_for(lambda: process_gone(pid), 45)
     with (root / "nvr-console.log").open("a") as output:
         proc = subprocess.Popen(
             [str(args.nvr_binary), "--config", str(root / "nvr.yaml")],
@@ -426,22 +454,29 @@ def main():
             == identity
         )
     )
+    wait_for(media_listener_ready)
     main_publisher, second = publisher("ha-test-main"), publisher("ha-test-second")
+
+    def recovered_sources_active():
+        for sid, proc in (
+            ("ha-test-main", main_publisher),
+            ("ha-test-second", second),
+        ):
+            if proc.poll() is not None:
+                raise AssertionError(
+                    f"After NVR restart RTMP publisher {sid} exited with "
+                    f"{proc.returncode}; see {root / (sid + '.log')}"
+                )
+        return streams_active("ha-test-main", "ha-test-second")
+
+    wait_for(recovered_sources_active)
     wait_for(lambda: available("ha-test-main", True))
     video("ha-test-main")
     passed("NVR restart preserves database identity, publication choices and HA entity")
 
     pid = int((root / "ha.pid").read_text())
     os.kill(pid, signal.SIGTERM)
-    wait_for(
-        lambda: (
-            subprocess.run(
-                ["kill", "-0", str(pid)], stderr=subprocess.DEVNULL, check=False
-            ).returncode
-            != 0
-        ),
-        20,
-    )
+    wait_for(lambda: process_gone(pid), 45)
     with (root / "ha-console.log").open("a") as output:
         proc = subprocess.Popen(
             [
