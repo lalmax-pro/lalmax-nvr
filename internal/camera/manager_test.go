@@ -977,17 +977,21 @@ func TestRestartRecorder_Disabled(t *testing.T) {
 	assert.Contains(t, err.Error(), "disabled")
 }
 
-func TestStartCamera_SkipsMediaPullForBoundLalmaxStream(t *testing.T) {
+func TestStartCamera_BoundExternalRTSPStillStartsPull(t *testing.T) {
 	mgr, _, db, _ := newTestManager(t)
 	engine := &stubMediaEngine{}
 	mgr.SetMediaEngine(engine)
 
 	ctx := context.Background()
+	// A normal camera is bound when created or imported from YAML. The
+	// binding must not be mistaken for an already published media stream.
 	require.NoError(t, db.BindStreamToCamera(ctx, "cam-h264", "cam-h264"))
 
 	err := mgr.StartCamera(ctx, "cam-h264")
 	require.NoError(t, err)
-	assert.Empty(t, engine.startPulls)
+	require.Len(t, engine.startPulls, 1)
+	assert.Equal(t, "cam-h264", engine.startPulls[0].StreamID)
+	assert.Equal(t, "rtsp://127.0.0.1:1/stream", engine.startPulls[0].SourceURL)
 }
 
 func TestStartCamera_SkipsMediaPullForActiveLalmaxStream(t *testing.T) {
@@ -1020,6 +1024,30 @@ func TestStartCamera_SkipsMediaPullForLalPlayURL(t *testing.T) {
 	err := mgr.StartCamera(ctx, "cam-h264")
 	require.NoError(t, err)
 	assert.Empty(t, engine.startPulls)
+}
+
+func TestStartCamera_ExternalRTSPMatchingPlaybackPathMustPull(t *testing.T) {
+	// An external camera may use the same stream path as the local media
+	// engine. It is not this NVR's output unless host and port match too.
+	for _, tt := range []struct {
+		name string
+		url  string
+	}{
+		{name: "other host", url: "rtsp://camera.example/live/cam-h264"},
+		{name: "other port", url: "rtsp://127.0.0.1:8554/live/cam-h264"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr, _, _, _ := newTestManager(t)
+			engine := &stubMediaEngine{}
+			mgr.SetMediaEngine(engine)
+			mgr.cfg.Cameras[0].URL = tt.url
+
+			err := mgr.StartCamera(context.Background(), "cam-h264")
+			require.NoError(t, err)
+			require.Len(t, engine.startPulls, 1)
+			require.Equal(t, tt.url, engine.startPulls[0].SourceURL)
+		})
+	}
 }
 
 func TestStartCamera_StartsMediaPullForRTSP(t *testing.T) {

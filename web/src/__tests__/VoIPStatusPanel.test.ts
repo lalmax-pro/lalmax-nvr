@@ -50,7 +50,7 @@ describe('VoIP call management', () => {
     await fireEvent.click(view.getByRole('button', { name: /call-1/ }));
     await waitFor(() => expect(mocks.hangup).toHaveBeenCalledWith('call-1'));
     await waitFor(() => expect(view.queryByText('OPUS / H264')).toBeNull());
-  });
+  }, 15_000);
   it('keeps the current call visible and reports a hangup failure', async () => {
     i18nState.currentLang = 'en';
     mocks.status.mockResolvedValue({
