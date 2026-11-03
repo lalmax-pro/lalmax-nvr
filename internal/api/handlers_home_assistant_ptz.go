@@ -30,7 +30,7 @@ func (h *Handler) homeAssistantPTZCamera(w http.ResponseWriter, r *http.Request)
 		writeError(w, 500, "failed to resolve PTZ camera")
 		return nil
 	}
-	if cam == nil || (cam.Protocol != "onvif" && cam.Protocol != "gb28181") {
+	if cam == nil || (cam.Protocol != "onvif" && cam.Protocol != "gb28181" && cam.Protocol != "xiaomi") {
 		writeError(w, 400, "published stream has no supported PTZ camera")
 		return nil
 	}
@@ -130,6 +130,18 @@ func (h *Handler) handleHomeAssistantPTZ(w http.ResponseWriter, r *http.Request)
 				return stop(ctx)
 			}
 		}
+	} else if cam.Protocol == "xiaomi" {
+		direction, speed := "stop", 0
+		if req.Mode != "stop" {
+			var err error
+			direction, speed, err = xiaomiMotorVector(req.Mode, req.Pan, req.Tilt, req.Zoom)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+		}
+		stop = func(ctx context.Context) error { return h.sendXiaomiMotor(ctx, cam.ID, "stop", 0) }
+		move = func(ctx context.Context) error { return h.sendXiaomiMotor(ctx, cam.ID, direction, speed) }
 	} else {
 		if req.Mode != "continuous" && req.Mode != "stop" {
 			writeError(w, 400, "GB28181 supports continuous movement and stop only")
@@ -172,11 +184,29 @@ func (h *Handler) handleHomeAssistantPTZ(w http.ResponseWriter, r *http.Request)
 	if req.Mode == "continuous" {
 		if moveErr == nil {
 			timer := time.NewTimer(time.Duration(req.Duration * float64(time.Second)))
-			select {
-			case <-timer.C:
-			case <-r.Context().Done():
+			var renew *time.Ticker
+			var renewCh <-chan time.Time
+			if cam.Protocol == "xiaomi" {
+				renew = time.NewTicker(500 * time.Millisecond)
+				renewCh = renew.C
+			}
+		wait:
+			for {
+				select {
+				case <-timer.C:
+					break wait
+				case <-r.Context().Done():
+					break wait
+				case <-renewCh:
+					if moveErr = move(r.Context()); moveErr != nil {
+						break wait
+					}
+				}
 			}
 			timer.Stop()
+			if renew != nil {
+				renew.Stop()
+			}
 		}
 		// Stop uses the captured device even if publication is withdrawn or the
 		// caller disconnects during the pulse. Do not reauthorize a cleanup stop.

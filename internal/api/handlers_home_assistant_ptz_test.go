@@ -31,3 +31,29 @@ func TestHomeAssistantPTZScopePermissionAndValidation(t *testing.T) {
 	h.SetMultiUserAuthMW(middleware.InjectUser(&model.User{Role: model.RoleUser}))
 	require.Equal(t, http.StatusForbidden, doRequest(t, h.Routes(), "POST", path, strings.NewReader(`{"mode":"stop"}`), "", "").Code)
 }
+
+func TestHomeAssistantXiaomiPTZ(t *testing.T) {
+	db, store := setupTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertCamera(ctx, "mi", "Camera", "xiaomi", "h264", "xiaomi://1", "", "", true, "", "", ""))
+	require.NoError(t, db.BindStreamToCamera(ctx, "published", "mi"))
+	api3HAPublish(t, db, "", storage.HomeAssistantPublication{StreamID: "published", AppName: "live"})
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
+	var directions []string
+	h.xiaomiMotorDispatch = func(_ context.Context, id, direction string, speed int) error {
+		require.Equal(t, "mi", id)
+		directions = append(directions, direction)
+		return nil
+	}
+	path := "/api/integrations/home-assistant/streams/published/ptz"
+	rr := doRequest(t, h.Routes(), http.MethodPost, path, strings.NewReader(`{"mode":"continuous","pan":0.5,"duration":0.6}`), "", "")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Equal(t, []string{"right", "right", "stop"}, directions)
+	for _, body := range []string{`{"mode":"absolute","pan":1}`, `{"mode":"continuous","zoom":1}`} {
+		rr = doRequest(t, h.Routes(), http.MethodPost, path, strings.NewReader(body), "", "")
+		require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+	}
+	rr = doRequest(t, h.Routes(), http.MethodGet, path+"/presets", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"presets":[]`)
+}

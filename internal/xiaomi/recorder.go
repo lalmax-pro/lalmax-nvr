@@ -65,7 +65,9 @@ type XiaomiCloudConfig struct {
 // XiaomiRecorderConfig holds configuration for the Xiaomi recorder.
 type XiaomiRecorderConfig struct {
 	CameraID            string
-	DID                 string                   // Device ID extracted from xiaomi:// URL (e.g. "655448418")
+	DID                 string // Device ID extracted from xiaomi:// URL (e.g. "655448418")
+	Channel             string
+	Quality             string
 	Model               string                   // Camera model (e.g. ModelC200, ModelC300)
 	CloudCfg            XiaomiCloudConfig        // Credentials for callers without a provider.
 	CloudConfigProvider func() XiaomiCloudConfig // Read fresh credentials before each reconnect.
@@ -107,6 +109,7 @@ type XiaomiRecorder struct {
 	pubSession media.CustomizePubSession
 
 	// Codec state (probed from first packets)
+	codecMu sync.RWMutex
 	codec   model.Format // "h264" or "h265"
 	sps     []byte
 	pps     []byte
@@ -251,7 +254,24 @@ func (r *XiaomiRecorder) setStatus(s model.RecorderStatus) {
 // CodecParams returns the current codec parameters detected from the stream.
 // Implements model.CodecParamsProvider.
 func (r *XiaomiRecorder) CodecParams() (codec model.Format, sps, pps, vps []byte) {
+	r.codecMu.RLock()
+	defer r.codecMu.RUnlock()
+	return r.codec, append([]byte(nil), r.sps...), append([]byte(nil), r.pps...), append([]byte(nil), r.vps...)
+}
+
+// Codec parameter buffers are replaced rather than modified after publication.
+func (r *XiaomiRecorder) codecSnapshot() (codec model.Format, sps, pps, vps []byte) {
+	r.codecMu.RLock()
+	defer r.codecMu.RUnlock()
 	return r.codec, r.sps, r.pps, r.vps
+}
+
+func (r *XiaomiRecorder) resetCodec() {
+	r.codecMu.Lock()
+	defer r.codecMu.Unlock()
+	r.codec = ""
+	r.codecOK = false
+	r.sps, r.pps, r.vps = nil, nil, nil
 }
 
 // forwardHLS feeds a video NALU to HLS consumers via StreamHub.
@@ -265,19 +285,20 @@ func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
 
 	var nalus [][]byte
 	var isIDR bool
-	switch r.codec {
+	codec, sps, pps, vps := r.codecSnapshot()
+	switch codec {
 	case model.FormatH264:
 		naluType := nalu[0] & 0x1F
-		if naluType == 5 && r.sps != nil && r.pps != nil {
-			nalus = [][]byte{r.sps, r.pps, nalu}
+		if naluType == 5 && sps != nil && pps != nil {
+			nalus = [][]byte{sps, pps, nalu}
 			isIDR = true
 		} else {
 			nalus = [][]byte{nalu}
 		}
 	case model.FormatH265:
 		naluType := (nalu[0] >> 1) & 0x3F
-		if hevc.IsIrapNalu(naluType) && r.vps != nil && r.sps != nil && r.pps != nil {
-			nalus = [][]byte{r.vps, r.sps, r.pps, nalu}
+		if hevc.IsIrapNalu(naluType) && vps != nil && sps != nil && pps != nil {
+			nalus = [][]byte{vps, sps, pps, nalu}
 			isIDR = true
 		} else {
 			nalus = [][]byte{nalu}
@@ -473,7 +494,11 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 // connectAndRecord connects to the Xiaomi camera, starts media, and records packets.
 // Tries HD first; falls back to SD if the camera sends no video.
 func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (error, bool) {
-	return r.connectAndRecordWithQuality(ctx, missURL, "hd")
+	quality := r.cfg.Quality
+	if quality == "" {
+		quality = "hd"
+	}
+	return r.connectAndRecordWithQuality(ctx, missURL, quality)
 }
 
 // connectAndRecordWithQuality connects to the camera with the given quality ("hd" or "sd").
@@ -488,7 +513,7 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 	defer stopCancel()
 
 	ctx, err = observability.RunBusinessOperation(ctx, "recorder.xiaomi.start_media", func(context.Context) error {
-		return client.StartMedia("", quality, r.cfg.AudioEnabled)
+		return client.StartMedia(r.cfg.Channel, quality, r.cfg.AudioEnabled)
 	},
 		attribute.String("nvr.camera.id", r.cfg.CameraID),
 		attribute.String("nvr.stream.id", r.cfg.CameraID),
@@ -508,10 +533,7 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 	r.setStatus(model.StatusRecording)
 
 	// Reset codec probe state for each new connection.
-	r.codecOK = false
-	r.sps = nil
-	r.pps = nil
-	r.vps = nil
+	r.resetCodec()
 	r.audioCodecID = 0
 	r.audioNormalizer = missAudioNormalizer{}
 
@@ -570,6 +592,7 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 			videoReceived = true
 		}
 		// Probe codec type from first video packet.
+		r.codecMu.Lock()
 		if !r.codecOK {
 			switch pkt.CodecID {
 			case missCodecH264:
@@ -580,6 +603,7 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 			r.codecOK = true
 			xiaomiLogger.Info("codec detected", "camera_id", r.cfg.CameraID, "codec", r.codec, "quality", quality)
 		}
+		r.codecMu.Unlock()
 
 		// Parse Annex B NALUs from payload and process each one.
 		nalus := splitAnnexBNALUs(pkt.Payload)
@@ -595,7 +619,8 @@ func (r *XiaomiRecorder) processNALU(nalu []byte, timestamp uint64, lastTimestam
 		return
 	}
 
-	switch r.codec {
+	codec, _, _, _ := r.codecSnapshot()
+	switch codec {
 	case model.FormatH264:
 		r.processH264NALU(nalu, timestamp, lastTimestamp)
 	case model.FormatH265:
@@ -605,21 +630,26 @@ func (r *XiaomiRecorder) processNALU(nalu []byte, timestamp uint64, lastTimestam
 
 // processH264NALU handles an H.264 NAL unit.
 func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTimestamp *uint64) {
+	_, sps, pps, _ := r.codecSnapshot()
 	naluType := nalu[0] & 0x1F
 	switch naluType {
 	case 7: // SPS
+		r.codecMu.Lock()
 		r.sps = append([]byte(nil), nalu...)
+		r.codecMu.Unlock()
 		return
 	case 8: // PPS
+		r.codecMu.Lock()
 		r.pps = append([]byte(nil), nalu...)
+		r.codecMu.Unlock()
 		return
 	case 5: // IDR
-		if r.sps == nil || r.pps == nil {
+		if sps == nil || pps == nil {
 			return
 		}
 		r.forwardVideo(nalu)
 	case 1: // non-IDR
-		if r.sps == nil || r.pps == nil {
+		if sps == nil || pps == nil {
 			return
 		}
 		r.forwardVideo(nalu)
@@ -631,13 +661,19 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	naluType := (nalu[0] >> 1) & 0x3F
 	switch naluType {
 	case 32: // VPS
+		r.codecMu.Lock()
 		r.vps = append([]byte(nil), nalu...)
+		r.codecMu.Unlock()
 		return
 	case 33: // SPS
+		r.codecMu.Lock()
 		r.sps = append([]byte(nil), nalu...)
+		r.codecMu.Unlock()
 		return
 	case 34: // PPS
+		r.codecMu.Lock()
 		r.pps = append([]byte(nil), nalu...)
+		r.codecMu.Unlock()
 		return
 	}
 
@@ -645,7 +681,8 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	if naluType >= 32 {
 		return
 	}
-	if r.vps == nil || r.sps == nil || r.pps == nil {
+	_, sps, pps, vps := r.codecSnapshot()
+	if vps == nil || sps == nil || pps == nil {
 		return
 	}
 	r.forwardVideo(nalu)
@@ -666,18 +703,19 @@ func (r *XiaomiRecorder) forwardVideo(nalu []byte) {
 	pts := time.Since(start).Milliseconds()
 
 	var nalus [][]byte
-	switch r.codec {
+	codec, sps, pps, vps := r.codecSnapshot()
+	switch codec {
 	case model.FormatH264:
 		naluType := nalu[0] & 0x1F
-		if naluType == 5 && r.sps != nil && r.pps != nil {
-			nalus = [][]byte{r.sps, r.pps, nalu}
+		if naluType == 5 && sps != nil && pps != nil {
+			nalus = [][]byte{sps, pps, nalu}
 		} else {
 			nalus = [][]byte{nalu}
 		}
 	case model.FormatH265:
 		naluType := (nalu[0] >> 1) & 0x3F
-		if hevc.IsIrapNalu(naluType) && r.vps != nil && r.sps != nil && r.pps != nil {
-			nalus = [][]byte{r.vps, r.sps, r.pps, nalu}
+		if hevc.IsIrapNalu(naluType) && vps != nil && sps != nil && pps != nil {
+			nalus = [][]byte{vps, sps, pps, nalu}
 		} else {
 			nalus = [][]byte{nalu}
 		}
@@ -705,7 +743,8 @@ func (r *XiaomiRecorder) forwardVideo(nalu []byte) {
 
 // avPacketPt returns the lal payload type for the current codec.
 func (r *XiaomiRecorder) avPacketPt() base.AvPacketPt {
-	switch r.codec {
+	codec, _, _, _ := r.codecSnapshot()
+	switch codec {
 	case model.FormatH264:
 		return base.AvPacketPtAvc
 	case model.FormatH265:
