@@ -238,7 +238,7 @@ func (c *MISSClient) MotorControlContext(ctx context.Context, direction string, 
 // StartMedia sends the video start command for the given channel and quality.
 // Quality: "auto"=0, "sd"=1, "hd"=2 (or 3 for C200/C300), default="hd".
 func (c *MISSClient) StartMedia(channel, quality string, audioEnabled ...bool) error {
-	if channel != "" && channel != "0" && channel != "1" {
+	if channel != "" && channel != "0" && channel != "1" && channel != "2" {
 		return fmt.Errorf("unsupported camera channel %q", channel)
 	}
 	switch quality {
