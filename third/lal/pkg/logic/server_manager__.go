@@ -221,7 +221,13 @@ func (sm *ServerManager) RunLoop() error {
 	if err := addMux(sm.config.HttptsConfig.CommonHttpServerConfig, sm.httpServerHandler.ServeSubSession, "httpts"); err != nil {
 		return err
 	}
-	if err := addMux(sm.config.HlsConfig.CommonHttpServerConfig, sm.serveHls, "hls"); err != nil {
+	// HLS Enable can be changed at runtime by SetHlsEnabled. Take a
+	// snapshot while holding the same mutex before configuring the listener,
+	// rather than racing a live toggle against the RunLoop read.
+	sm.mutex.Lock()
+	hlsListenConfig := sm.config.HlsConfig.CommonHttpServerConfig
+	sm.mutex.Unlock()
+	if err := addMux(hlsListenConfig, sm.serveHls, "hls"); err != nil {
 		return err
 	}
 
