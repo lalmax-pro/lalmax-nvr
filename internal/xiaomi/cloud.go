@@ -79,6 +79,16 @@ func deletePendingCloud(id string) {
 	}
 }
 
+// ClearPendingLogins invalidates outstanding captcha and verification challenges.
+func ClearPendingLogins() {
+	pendingCloudsMu.Lock()
+	defer pendingCloudsMu.Unlock()
+	for id, entry := range pendingClouds {
+		entry.timer.Stop()
+		delete(pendingClouds, id)
+	}
+}
+
 // CloudSession holds authenticated Xiaomi cloud session data.
 type CloudSession struct {
 	UserID       string `json:"user_id"`
@@ -1019,7 +1029,6 @@ func findCookie(res *http.Response, name string) string {
 // randString generates a random alphanumeric string of the given length.
 
 // getAPIBaseURL returns the Xiaomi API base URL for the given region.
-// Matches go2rtc's GetBaseURL logic.
 func getAPIBaseURL(region string) string {
 	switch region {
 	case "de", "i2", "ru", "sg", "us":

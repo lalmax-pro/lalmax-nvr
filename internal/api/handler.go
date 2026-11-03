@@ -156,6 +156,7 @@ type Handler struct {
 	homeAssistantWHEPKey  []byte
 	voipSettingsMu        sync.Mutex
 	xiaomiMu              sync.Mutex
+	xiaomiAuthMu          sync.Mutex
 	xiaomiMotorDispatch   func(context.Context, string, string, int) error
 	voipRestarter         VoIPRestarter
 	db                    storage.APIRepository
@@ -647,6 +648,8 @@ func (h *Handler) Routes() http.Handler {
 		})
 		// Xiaomi cloud auth and device discovery
 		r.Route("/api/xiaomi", func(r chi.Router) {
+			r.Get("/status", h.handleXiaomiStatus)
+			r.With(middleware.RequireOperatePermission()).Post("/logout", h.handleXiaomiLogout)
 			r.Post("/auth", h.handleXiaomiAuth)
 			r.Post("/captcha", h.handleXiaomiCaptcha)
 			r.Post("/verify", h.handleXiaomiVerify)

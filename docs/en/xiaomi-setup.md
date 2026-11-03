@@ -35,8 +35,8 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 - **Protocol**: CS2 P2P (Xiaomi's proprietary cloud protocol)
 - **Authentication**: Xiaomi cloud services with token-based auth
 - **Supported Models**: CS2-based cameras (see table below)
-- **Features**: Live streaming, recording, two-way audio, dual-lens support
-- **Transport**: UDP (CS2 over TCP has known 6-second disconnect issue)
+- **Features**: Live streaming, recording, two-way audio, directional PTZ
+- **Transport**: UDP and TCP, including camera keepalive responses
 
 ## Prerequisites
 
@@ -65,7 +65,7 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 - **Audio sample rate**: Received 16 kHz G.711/PCM is low-pass filtered and resampled to the downstream 8 kHz rate; Opus retains its encoding.
 - **Pan/Tilt**: Direction, speed and stop controls for motor-equipped models.
 - **Two-way Audio**: Send audio to camera speaker via WebSocket
-- **Dual-lens Support**: Main/secondary channel selection
+- **Dual-lens Devices**: Uses the default lens; main/secondary channel selection is not exposed in configuration or the UI yet
 - **Auto Fallback**: HD to SD fallback when the first video frame times out, including audio-only connections
 
 ## Setup Methods
@@ -78,7 +78,7 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 
 3. **Xiaomi Discovery**: Expand the "Xiaomi Device Discovery" section
 
-4. **Authenticate**: Enter your Xiaomi account credentials and click "Sign In"
+4. **Authenticate**: Select the same account region as Mi Home, enter your Xiaomi account credentials and click "Sign In"
    - If captcha/2FA is required, follow the prompts
 
 5. **Select Devices**: Browse the discovered devices and select cameras you want to add
@@ -88,6 +88,8 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 7. **Configure**: Customize settings for each camera (retention, quality, etc.)
 
 8. **Save**: Click "Save Configuration" to apply changes
+
+An account with no cameras stays signed in. Device refresh errors are shown without discarding the account controls. Sign Out removes persisted server credentials and pending captcha/2FA challenges; a failed save retains the signed-in state and displays an error. Camera configurations remain available. Existing streaming connections continue until disconnected; reconnecting then requires signing in again.
 
 A wrong verification code or temporary network failure can be retried in the current login session. Sessions expire after 10 minutes, after which login must restart. Credentials are applied to running cameras only after the configuration is saved successfully; persistence failures are reported as errors.
 

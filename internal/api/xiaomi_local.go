@@ -44,6 +44,9 @@ func (a *LocalXiaomiAuth) SetCloudConfig(ctx context.Context, userID, token, reg
 		Region: region,
 	}
 	xiaomi.SetCloudConfig(a.cfg)
+	if token == "" {
+		xiaomi.ClearPendingLogins()
+	}
 	return nil
 }
 
@@ -189,7 +192,7 @@ func isCaptchaErr(err error, target **xiaomi.CaptchaSessionError) bool {
 }
 
 // isXiaomiCameraModel returns true if the model string looks like a Xiaomi camera.
-// Uses Contains matching like go2rtc: .camera., .cateye., .feeder.
+// Matches camera, doorbell and feeder model families.
 func isXiaomiCameraModel(model string) bool {
 	return strings.Contains(model, ".camera.") ||
 		strings.Contains(model, ".cateye.") ||
