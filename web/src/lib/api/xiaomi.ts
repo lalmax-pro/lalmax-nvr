@@ -15,7 +15,13 @@ export interface XiaomiDevice {
 
 export interface XiaomiDevicesResponse {
   devices: XiaomiDevice[];
+  authenticated: boolean;
   message?: string;
+}
+
+export interface XiaomiStatusResponse {
+  authenticated: boolean;
+  region: string;
 }
 
 export interface XiaomiAuthResponse {
@@ -44,6 +50,14 @@ export async function xiaomiAuth(
 
 export async function xiaomiDevices(signal?: AbortSignal): Promise<XiaomiDevicesResponse> {
   return apiRequest<XiaomiDevicesResponse>('/xiaomi/devices', { signal });
+}
+
+export async function xiaomiStatus(signal?: AbortSignal): Promise<XiaomiStatusResponse> {
+  return apiRequest('/xiaomi/status', { signal });
+}
+
+export async function xiaomiLogout(signal?: AbortSignal): Promise<{ status: string }> {
+  return apiRequest('/xiaomi/logout', { method: 'POST', signal });
 }
 
 export async function xiaomiCaptcha(

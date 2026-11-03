@@ -18,6 +18,8 @@ import (
 // --- Xiaomi cloud endpoints ---
 
 func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
+	h.xiaomiAuthMu.Lock()
+	defer h.xiaomiAuthMu.Unlock()
 	if h.cloudProxy == nil {
 		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
@@ -67,6 +69,8 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
+	h.xiaomiAuthMu.Lock()
+	defer h.xiaomiAuthMu.Unlock()
 	if h.cloudProxy == nil {
 		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
@@ -110,6 +114,8 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
+	h.xiaomiAuthMu.Lock()
+	defer h.xiaomiAuthMu.Unlock()
 	if h.cloudProxy == nil {
 		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
@@ -152,6 +158,25 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) handleXiaomiStatus(w http.ResponseWriter, r *http.Request) {
+	cfg := h.xiaomiConfig()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"authenticated": cfg.UserID != "" && cfg.Token != "",
+		"region":        cfg.Region,
+	})
+}
+
+func (h *Handler) handleXiaomiLogout(w http.ResponseWriter, r *http.Request) {
+	h.xiaomiAuthMu.Lock()
+	defer h.xiaomiAuthMu.Unlock()
+	if err := h.saveXiaomiConfig(r.Context(), config.XiaomiConfig{}); err != nil {
+		logger.Error("failed to clear Xiaomi credentials", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to clear Xiaomi credentials")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
 func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 	if h.cloudProxy == nil {
 		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
@@ -159,10 +184,12 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get stored token from config
-	if h.config == nil || h.xiaomiConfig().Token == "" {
+	cfg := h.xiaomiConfig()
+	if cfg.UserID == "" || cfg.Token == "" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"devices": []CloudDeviceInfo{},
-			"message": "not authenticated",
+			"authenticated": false,
+			"devices":       []CloudDeviceInfo{},
+			"message":       "not authenticated",
 		})
 		return
 	}
@@ -172,9 +199,13 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 		return
 	}
+	if devices == nil {
+		devices = []CloudDeviceInfo{}
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"devices": devices,
+		"authenticated": true,
+		"devices":       devices,
 	})
 }
 
@@ -306,22 +337,29 @@ func (h *Handler) xiaomiConfig() config.XiaomiConfig {
 // saveXiaomiToken persists a candidate before publishing it to running cameras.
 // Failed writes leave both the in-memory config and cloud credentials unchanged.
 func (h *Handler) saveXiaomiToken(ctx context.Context, result *CloudAuthResult) error {
+	if result == nil || result.UserID == "" || result.PassToken == "" {
+		return errors.New("missing Xiaomi auth result")
+	}
+	return h.saveXiaomiConfig(ctx, config.XiaomiConfig{UserID: result.UserID, Token: result.PassToken, Region: result.Region})
+}
+
+func (h *Handler) saveXiaomiConfig(ctx context.Context, credentials config.XiaomiConfig) error {
 	h.xiaomiMu.Lock()
 	defer h.xiaomiMu.Unlock()
-	if h.config == nil || result == nil || result.UserID == "" || result.PassToken == "" {
-		return errors.New("missing Xiaomi auth result or configuration")
+	if h.config == nil {
+		return errors.New("missing Xiaomi configuration")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	previous := h.config.Xiaomi
 	candidate := *h.config
-	candidate.Xiaomi = config.XiaomiConfig{UserID: result.UserID, Token: result.PassToken, Region: result.Region}
+	candidate.Xiaomi = credentials
 	if err := config.Save(h.configPath, &candidate); err != nil {
 		return err
 	}
 	if h.cloudProxy != nil {
-		if err := h.cloudProxy.SetCloudConfig(ctx, result.UserID, result.PassToken, result.Region); err != nil {
+		if err := h.cloudProxy.SetCloudConfig(ctx, credentials.UserID, credentials.Token, credentials.Region); err != nil {
 			rollbackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			restoreErr := h.cloudProxy.SetCloudConfig(rollbackCtx, previous.UserID, previous.Token, previous.Region)
