@@ -65,7 +65,9 @@ type XiaomiCloudConfig struct {
 // XiaomiRecorderConfig holds configuration for the Xiaomi recorder.
 type XiaomiRecorderConfig struct {
 	CameraID            string
-	DID                 string                   // Device ID extracted from xiaomi:// URL (e.g. "655448418")
+	DID                 string // Device ID extracted from xiaomi:// URL (e.g. "655448418")
+	Channel             string
+	Quality             string
 	Model               string                   // Camera model (e.g. ModelC200, ModelC300)
 	CloudCfg            XiaomiCloudConfig        // Credentials for callers without a provider.
 	CloudConfigProvider func() XiaomiCloudConfig // Read fresh credentials before each reconnect.
@@ -490,7 +492,11 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 // connectAndRecord connects to the Xiaomi camera, starts media, and records packets.
 // Tries HD first; falls back to SD if the camera sends no video.
 func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (error, bool) {
-	return r.connectAndRecordWithQuality(ctx, missURL, "hd")
+	quality := r.cfg.Quality
+	if quality == "" {
+		quality = "hd"
+	}
+	return r.connectAndRecordWithQuality(ctx, missURL, quality)
 }
 
 // connectAndRecordWithQuality connects to the camera with the given quality ("hd" or "sd").
@@ -505,7 +511,7 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 	defer stopCancel()
 
 	ctx, err = observability.RunBusinessOperation(ctx, "recorder.xiaomi.start_media", func(context.Context) error {
-		return client.StartMedia("", quality, r.cfg.AudioEnabled)
+		return client.StartMedia(r.cfg.Channel, quality, r.cfg.AudioEnabled)
 	},
 		attribute.String("nvr.camera.id", r.cfg.CameraID),
 		attribute.String("nvr.stream.id", r.cfg.CameraID),
