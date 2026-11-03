@@ -4,7 +4,7 @@ Publish selected lalmax-nvr streams as Home Assistant camera entities, with live
 
 ## Installation
 
-1. Copy the complete repository directory `custom_components/lalmax_nvr` into the same path under your HA configuration directory. Restart HA. The tested version is **Home Assistant 2026.10.2**. Use HA **2026.10.2 or newer**. Alternatively, extract the `lalmax_nvr.zip` CI/release asset directly into `custom_components/lalmax_nvr` (the ZIP contains `manifest.json` at its root). This is a custom integration, not built into HA.
+1. In HACS, search for **lalmax-nvr**, open it and download the latest stable release. Restart HA. Use **Home Assistant 2026.10.2 or newer**. HACS installs the HA integration only; run the NVR separately. If the repository is not yet visible in your catalog, use the [custom repository fallback](#hacs-packaging-and-distribution) below.
 2. Open **NVR Settings → Home Assistant**, enable publication, select streams and save. Search and bulk selection are supported. Stream cards also have individual publication buttons. Unregistered push streams can be published without creating camera devices.
 3. Optionally enter an RTSP server origin such as `rtsp://192.168.1.20:15544`, without credentials or a stream path. Otherwise the media engine URL is used. The HA client replaces advertised loopback hosts with the NVR HTTP hostname. With a separate media engine, explicitly configure its reachable address.
 4. In HA, use **Settings → Devices & services → Add integration → lalmax-nvr**. Enter the NVR HTTP URL, username and password. A dedicated ordinary NVR user is sufficient for reads.
@@ -16,6 +16,8 @@ type: picture-entity
 entity: camera.front_door
 camera_view: live
 ```
+
+For manual installation without HACS, copy the complete repository directory `custom_components/lalmax_nvr` into the same path under your HA configuration directory. Alternatively, extract the `lalmax_nvr.zip` CI/release asset directly into that directory (the ZIP contains `manifest.json` at its root). Restart HA, then follow steps 2–6 above. This is a community integration listed in HACS, not built into HA.
 
 ## Lifecycle and authentication
 
@@ -125,7 +127,7 @@ Release validation: [complete build and seven assets](https://github.com/lalmax-
 
 ## HACS packaging and distribution
 
-This repository follows the HACS single-integration layout and includes `hacs.json`, with HA 2026.10.2 as the tested minimum. The integration has its own version in `manifest.json`; it is independent of the NVR binary version. HACS official catalog inclusion and Home Assistant Brands review are external steps and have not been completed.
+This repository is included in the HACS default catalog ([submission](https://github.com/hacs/default/pull/12704)). It follows the HACS single-integration layout and includes `hacs.json`, with HA 2026.10.2 as the tested minimum. The integration has its own version in `manifest.json`; it is independent of the NVR binary version. Brand assets are bundled in the integration's `brand/` directory.
 
 The Home Assistant CI workflow builds `lalmax_nvr.zip` as an artifact after tests. NVR tag releases attach this ZIP. To package locally:
 
@@ -135,7 +137,9 @@ python scripts/package_home_assistant.py --output /tmp/lalmax_nvr.zip
 
 For a separate HA-only repository, add `--export-dir /tmp/lalmax-nvr-home-assistant` (a new directory). The export contains only the integration, HACS metadata, installation guides and license. It does not publish or create repositories. This avoids mixing NVR binary release versions with HA integration updates.
 
-Keep distribution in this main repository. In HACS, open **⋮ → Custom repositories**, add `https://github.com/lalmax-pro/lalmax-nvr` with type **Integration**, open the repository and download the latest stable release. Restart HA, then configure **lalmax-nvr** under **Settings → Devices & services**. Use releases **V1.0.1 or newer**; V1.0.0 predates this integration.
+Distribution stays in this main repository. In HACS, search for **lalmax-nvr**, open it and download the latest stable release. Restart HA, then configure **lalmax-nvr** under **Settings → Devices & services**. Use releases **V1.0.1 or newer**; V1.0.0 predates this integration.
+
+**Custom repository fallback:** If **lalmax-nvr** is not yet visible in your HACS catalog, open **⋮ → Custom repositories**, add `https://github.com/lalmax-pro/lalmax-nvr` with type **Integration**, then open the repository and download it. Restart HA and configure the integration as above.
 
 Actual UI first installation of **V1.0.2** was tested with HACS 2.0.5 / HA 2026.10.2. A separate HA instance upgraded through HACS from **v1.0.1-rc.1** to **V1.0.2**, preserving all 24 entity IDs, unique IDs and config entry IDs. Both tags contain integration version 0.6.1; this validates the repository release upgrade path. HACS GitHub authentication was preconfigured; interactive GitHub device authorization was not part of this test. The tested installation supports live media, snapshots, events, recordings and protocol-simulated PTZ.
 

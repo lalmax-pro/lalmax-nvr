@@ -61,13 +61,20 @@ func (g *GB28181API) handleDeviceInfoResponse(deviceID string, body []byte) {
 }
 
 func (g *GB28181API) sendDeviceInfoQuery(deviceID string) {
-	dev, ok := g.store.Load(deviceID)
-	if !ok || !dev.IsOnline {
+	// Snapshot the connection fields under the device lock: REGISTER/login and
+	// logout mutate them concurrently while this goroutine runs.
+	var snap messagingSnapshot
+	err := g.store.withExistingDevice(deviceID, func(dev *Device) error {
+		// The store already holds the device lock for this callback.
+		snap = messagingSnapshot{online: dev.IsOnline, address: dev.Address, transport: dev.Transport}
+		return nil
+	})
+	if err != nil || !snap.online {
 		return
 	}
 
 	xmlBody := deviceInfoXML(deviceID)
-	if err := g.sendMessage(deviceID, dev, xmlBody); err != nil {
+	if err := g.sendMessage(deviceID, &Device{Address: snap.address, Transport: snap.transport}, xmlBody); err != nil {
 		slog.Error("send DeviceInfo query failed", "device_id", deviceID, "error", err)
 	}
 }

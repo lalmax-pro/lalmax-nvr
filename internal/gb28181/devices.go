@@ -42,6 +42,21 @@ type Device struct {
 	GBVersion    GBVersion // GB28181标准版本 (2016/2022)
 }
 
+// messagingSnapshot is a consistent copy of the fields used to address SIP
+// messages. REGISTER/login and logout mutate them from other goroutines, so
+// background senders must read through the device lock instead of the struct.
+type messagingSnapshot struct {
+	online    bool
+	address   string
+	transport string
+}
+
+func (d *Device) messagingSnapshot() messagingSnapshot {
+	d.registerWithKeepaliveMutex.Lock()
+	defer d.registerWithKeepaliveMutex.Unlock()
+	return messagingSnapshot{online: d.IsOnline, address: d.Address, transport: d.Transport}
+}
+
 func (d *Device) Conn() sip.Connection {
 	return d.conn
 }
