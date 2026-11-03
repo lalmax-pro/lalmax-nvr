@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
 
 const api = vi.hoisted(() => ({
-  status: vi.fn(), devices: vi.fn(), auth: vi.fn(), logout: vi.fn(),
+  status: vi.fn(), accounts: vi.fn(), devices: vi.fn(), auth: vi.fn(), logout: vi.fn(),
 }));
 vi.mock('$lib/api', async importOriginal => ({
   ...await importOriginal<typeof import('$lib/api')>(),
   xiaomiStatus: api.status, xiaomiDevices: api.devices,
+  xiaomiAccounts: api.accounts,
   xiaomiAuth: api.auth, xiaomiLogout: api.logout,
 }));
 vi.mock('$lib/i18n', () => ({ t: (key: string) => key }));
@@ -15,6 +16,7 @@ vi.mock('$lib/i18n', () => ({ t: (key: string) => key }));
 beforeEach(() => {
   vi.resetAllMocks();
   api.status.mockResolvedValue({ authenticated: true, region: 'sg' });
+  api.accounts.mockImplementation(async () => ({ accounts: [{ id: 'default', ...await api.status() }] }));
   api.devices.mockResolvedValue({ authenticated: true, devices: [] });
   api.auth.mockResolvedValue({ status: 'ok' });
   api.logout.mockResolvedValue({ status: 'ok' });

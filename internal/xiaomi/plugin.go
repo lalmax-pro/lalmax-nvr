@@ -28,14 +28,24 @@ func (p *XiaomiPlugin) Protocols() []string { return []string{"xiaomi"} }
 
 // cloudCfg stores the Xiaomi cloud credentials, set via SetCloudConfig.
 var (
-	cloudCfg   XiaomiCloudConfig
-	cloudCfgMu sync.RWMutex
+	cloudCfg      XiaomiCloudConfig
+	cloudCfgMu    sync.RWMutex
+	cloudAccounts map[string]XiaomiCloudConfig
 )
 
 func currentCloudConfig() XiaomiCloudConfig {
 	cloudCfgMu.RLock()
 	defer cloudCfgMu.RUnlock()
 	return cloudCfg
+}
+
+func cloudConfigForAccount(id string) XiaomiCloudConfig {
+	cloudCfgMu.RLock()
+	defer cloudCfgMu.RUnlock()
+	if id == "" || id == "default" {
+		return cloudCfg
+	}
+	return cloudAccounts[id]
 }
 
 // SetCloudConfig stores the Xiaomi cloud credentials for use by recorders.
@@ -48,16 +58,27 @@ func SetCloudConfig(cfg config.XiaomiConfig) {
 		Token:  cfg.Token,
 		Region: cfg.Region,
 	}
+	cloudAccounts = make(map[string]XiaomiCloudConfig, len(cfg.Accounts))
+	for id, account := range cfg.Accounts {
+		cloudAccounts[id] = XiaomiCloudConfig{UserID: account.UserID, Token: account.Token, Region: account.Region}
+	}
 }
 
 // extractDID extracts the device ID from a xiaomi:// URL.
 // Input: "xiaomi://655448418" → Output: "655448418"
 func extractDID(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err == nil && u.Scheme == "xiaomi" {
+	if u, err := url.Parse(rawURL); err == nil && u.Scheme == "xiaomi" {
 		return u.Host
 	}
 	return strings.TrimPrefix(rawURL, "xiaomi://")
+}
+
+func cameraAccount(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("account")
 }
 
 func cameraStreamOptions(rawURL string) (string, string) {
@@ -69,6 +90,7 @@ func cameraStreamOptions(rawURL string) (string, string) {
 }
 
 func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manager, db RecordingDB, opts ...*metrics.Metrics) model.Recorder {
+	account := cameraAccount(cfg.URL)
 	channel, quality := cameraStreamOptions(cfg.URL)
 	did := cfg.DID
 	if did == "" {
@@ -80,8 +102,8 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 		DID:                 did,
 		Channel:             channel,
 		Quality:             quality,
-		CloudCfg:            currentCloudConfig(),
-		CloudConfigProvider: currentCloudConfig,
+		CloudCfg:            cloudConfigForAccount(account),
+		CloudConfigProvider: func() XiaomiCloudConfig { return cloudConfigForAccount(account) },
 		SegmentDur:          30 * time.Second,
 		DB:                  db,
 		AudioEnabled:        cfg.AudioEnabled,
@@ -90,6 +112,7 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 }
 
 func (p *XiaomiPlugin) NewRecorderWithMediaEngine(cfg config.CameraConfig, store *storage.Manager, db RecordingDB, mediaEngine media.Engine, opts ...*metrics.Metrics) model.Recorder {
+	account := cameraAccount(cfg.URL)
 	channel, quality := cameraStreamOptions(cfg.URL)
 	did := cfg.DID
 	if did == "" {
@@ -101,8 +124,8 @@ func (p *XiaomiPlugin) NewRecorderWithMediaEngine(cfg config.CameraConfig, store
 		DID:                 did,
 		Channel:             channel,
 		Quality:             quality,
-		CloudCfg:            currentCloudConfig(),
-		CloudConfigProvider: currentCloudConfig,
+		CloudCfg:            cloudConfigForAccount(account),
+		CloudConfigProvider: func() XiaomiCloudConfig { return cloudConfigForAccount(account) },
 		SegmentDur:          30 * time.Second,
 		DB:                  db,
 		AudioEnabled:        cfg.AudioEnabled,

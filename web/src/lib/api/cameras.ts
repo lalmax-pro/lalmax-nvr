@@ -650,8 +650,8 @@ export interface VendorCheckResult {
   message?: string;
 }
 
-export async function checkVendor(did: string): Promise<VendorCheckResult> {
-  return apiRequest<VendorCheckResult>(`/xiaomi/check-vendor?did=${encodeURIComponent(did)}`);
+export async function checkVendor(did: string, account = 'default'): Promise<VendorCheckResult> {
+  return apiRequest<VendorCheckResult>(`/xiaomi/check-vendor?did=${encodeURIComponent(did)}&account=${encodeURIComponent(account)}`);
 }
 
 // --- Imaging ---

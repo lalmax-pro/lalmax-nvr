@@ -650,6 +650,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Route("/api/xiaomi", func(r chi.Router) {
 			r.Get("/status", h.handleXiaomiStatus)
 			r.With(middleware.RequireOperatePermission()).Post("/logout", h.handleXiaomiLogout)
+
+			r.Get("/accounts", h.handleXiaomiAccounts)
 			r.Post("/auth", h.handleXiaomiAuth)
 			r.Post("/captcha", h.handleXiaomiCaptcha)
 			r.Post("/verify", h.handleXiaomiVerify)

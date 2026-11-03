@@ -24,6 +24,16 @@ export interface XiaomiStatusResponse {
   region: string;
 }
 
+export interface XiaomiAccountInfo {
+  id: string;
+  region: string;
+  authenticated: boolean;
+}
+
+export async function xiaomiAccounts(signal?: AbortSignal): Promise<{ accounts: XiaomiAccountInfo[] }> {
+  return apiRequest('/xiaomi/accounts', { signal });
+}
+
 export interface XiaomiAuthResponse {
   user_id?: string;
   status?: string;
@@ -48,8 +58,8 @@ export async function xiaomiAuth(
   });
 }
 
-export async function xiaomiDevices(signal?: AbortSignal): Promise<XiaomiDevicesResponse> {
-  return apiRequest<XiaomiDevicesResponse>('/xiaomi/devices', { signal });
+export async function xiaomiDevices(signal?: AbortSignal, account = 'default'): Promise<XiaomiDevicesResponse> {
+  return apiRequest<XiaomiDevicesResponse>(`/xiaomi/devices?account=${encodeURIComponent(account)}`, { signal });
 }
 
 export async function xiaomiStatus(signal?: AbortSignal): Promise<XiaomiStatusResponse> {
@@ -84,6 +94,6 @@ export async function xiaomiVerify(
   });
 }
 
-export async function xiaomiSync(signal?: AbortSignal): Promise<{ synced: number; total: number }> {
-  return apiRequest('/xiaomi/sync', { method: 'POST', signal });
+export async function xiaomiSync(signal?: AbortSignal, account = 'default'): Promise<{ synced: number; total: number }> {
+  return apiRequest(`/xiaomi/sync?account=${encodeURIComponent(account)}`, { method: 'POST', signal });
 }

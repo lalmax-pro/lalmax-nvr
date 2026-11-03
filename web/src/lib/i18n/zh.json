@@ -1062,6 +1062,7 @@
   "cameras.tutkToastTitle": "摄像头不兼容",
   "xiaomi.title": "小米设备发现",
   "xiaomi.signInHint": "登录小米账号以发现摄像头。",
+  "xiaomi.accountSelection": "小米账号",
   "xiaomi.account": "小米账号",
   "xiaomi.accountPlaceholder": "邮箱或手机号",
   "xiaomi.region": "账号地区",

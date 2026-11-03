@@ -301,6 +301,15 @@ func decryptConfig(cfg *Config, key []byte) {
 	if v, err := Decrypt(cfg.Xiaomi.Token, key); err == nil {
 		cfg.Xiaomi.Token = v
 	}
+	for id, account := range cfg.Xiaomi.Accounts {
+		if v, err := Decrypt(account.UserID, key); err == nil {
+			account.UserID = v
+		}
+		if v, err := Decrypt(account.Token, key); err == nil {
+			account.Token = v
+		}
+		cfg.Xiaomi.Accounts[id] = account
+	}
 	if v, err := Decrypt(cfg.GB28181.Password, key); err == nil {
 		cfg.GB28181.Password = v
 	}
@@ -413,6 +422,21 @@ func encryptConfig(cfg *Config, key []byte) []string {
 			encrypted = append(encrypted, "xiaomi.token")
 		}
 	}
+	for id, account := range cfg.Xiaomi.Accounts {
+		if account.UserID != "" && !IsEncrypted(account.UserID) {
+			if v, err := Encrypt(account.UserID, key); err == nil {
+				account.UserID = v
+				encrypted = append(encrypted, "xiaomi.accounts."+id+".user_id")
+			}
+		}
+		if account.Token != "" && !IsEncrypted(account.Token) {
+			if v, err := Encrypt(account.Token, key); err == nil {
+				account.Token = v
+				encrypted = append(encrypted, "xiaomi.accounts."+id+".token")
+			}
+		}
+		cfg.Xiaomi.Accounts[id] = account
+	}
 	if cfg.GB28181.Password != "" && !IsEncrypted(cfg.GB28181.Password) {
 		if v, err := Encrypt(cfg.GB28181.Password, key); err == nil {
 			cfg.GB28181.Password = v
@@ -501,6 +525,14 @@ func SensitiveFieldPaths(cfg *Config) []string {
 	if cfg.Xiaomi.Token != "" && !IsEncrypted(cfg.Xiaomi.Token) {
 		fields = append(fields, "xiaomi.token")
 	}
+	for id, account := range cfg.Xiaomi.Accounts {
+		if account.UserID != "" && !IsEncrypted(account.UserID) {
+			fields = append(fields, "xiaomi.accounts."+id+".user_id")
+		}
+		if account.Token != "" && !IsEncrypted(account.Token) {
+			fields = append(fields, "xiaomi.accounts."+id+".token")
+		}
+	}
 	if cfg.GB28181.Password != "" && !IsEncrypted(cfg.GB28181.Password) {
 		fields = append(fields, "gb28181.password")
 	}
@@ -567,10 +599,22 @@ type sensitiveSnapshot struct {
 	MQTTPassword         string
 	XiaomiUserID         string
 	XiaomiToken          string
+	XiaomiAccounts       map[string]XiaomiAccount
 	GB28181Password      string
 	CameraPasswords      []string
 	MetricsAuthPassword  string
 	AutoDiscoverPassword string
+}
+
+func cloneXiaomiAccounts(accounts map[string]XiaomiAccount) map[string]XiaomiAccount {
+	if accounts == nil {
+		return nil
+	}
+	cloned := make(map[string]XiaomiAccount, len(accounts))
+	for id, account := range accounts {
+		cloned[id] = account
+	}
+	return cloned
 }
 
 func snapshotSensitive(cfg *Config) sensitiveSnapshot {
@@ -585,6 +629,7 @@ func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 		MQTTPassword:         cfg.MQTT.Password,
 		XiaomiUserID:         cfg.Xiaomi.UserID,
 		XiaomiToken:          cfg.Xiaomi.Token,
+		XiaomiAccounts:       cloneXiaomiAccounts(cfg.Xiaomi.Accounts),
 		GB28181Password:      cfg.GB28181.Password,
 		CameraPasswords:      make([]string, len(cfg.Cameras)),
 		VoIPPasswords:        make([]string, len(cfg.VoIP.Users)),
@@ -616,6 +661,7 @@ func (s sensitiveSnapshot) restore(cfg *Config) {
 	cfg.MQTT.Password = s.MQTTPassword
 	cfg.Xiaomi.UserID = s.XiaomiUserID
 	cfg.Xiaomi.Token = s.XiaomiToken
+	cfg.Xiaomi.Accounts = cloneXiaomiAccounts(s.XiaomiAccounts)
 	cfg.GB28181.Password = s.GB28181Password
 	for i := range cfg.Cameras {
 		if i < len(s.CameraPasswords) {
