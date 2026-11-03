@@ -85,9 +85,10 @@ type XiaomiRecorderConfig struct {
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
 type XiaomiRecorder struct {
-	cfg     XiaomiRecorderConfig
-	store   SegmentStore
-	metrics *metrics.Metrics
+	cfg        XiaomiRecorderConfig
+	store      SegmentStore
+	metrics    *metrics.Metrics
+	cloudCache *recorderCloudCache
 
 	lifecycleMu sync.Mutex // Serializes Start and Stop through cleanup.
 	active      bool
@@ -154,6 +155,7 @@ func NewXiaomiRecorder(cfg XiaomiRecorderConfig, store SegmentStore, opts ...*me
 		cfg:        cfg,
 		store:      store,
 		metrics:    m,
+		cloudCache: newRecorderCloudCache(),
 		status:     model.StatusStopped,
 		motorLease: 2 * time.Second,
 	}
@@ -445,7 +447,7 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			attribute.String("nvr.camera.id", r.cfg.CameraID),
 			attribute.String("nvr.media.protocol", "xiaomi"),
 		)
-		missURL, err := ResolveMISSURLContext(resolveCtx, r.currentCloudConfig(), r.cfg.DID, r.cfg.Model)
+		missURL, err := r.cloudCache.resolve(resolveCtx, r.currentCloudConfig(), r.cfg.DID, r.cfg.Model)
 		observability.EndBusinessSpan(resolveSpan, err)
 		if err != nil {
 			if ctx.Err() != nil {
