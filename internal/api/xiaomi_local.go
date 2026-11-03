@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/xiaomi"
@@ -13,31 +14,48 @@ import (
 
 // LocalXiaomiAuth implements CloudAuthProxy by calling the internal xiaomi package directly.
 type LocalXiaomiAuth struct {
-	cfg *config.Config
+	mu  sync.RWMutex
+	cfg config.XiaomiConfig
 }
 
 // NewLocalXiaomiAuth creates a LocalXiaomiAuth and initializes cloud config.
-// The config pointer is kept so auth results can update it in-place.
+// The credential snapshot is updated through SetCloudConfig.
 func NewLocalXiaomiAuth(cfg *config.Config) *LocalXiaomiAuth {
 	// Initialize cloud config for MISS URL resolution (was previously called
 	// from main.go as xiaomi.SetCloudConfig(cfg.Xiaomi)).
-	xiaomi.SetCloudConfig(cfg.Xiaomi)
-	return &LocalXiaomiAuth{cfg: cfg}
+	a := &LocalXiaomiAuth{}
+	if cfg != nil {
+		a.cfg = cfg.Xiaomi
+	}
+	xiaomi.SetCloudConfig(a.cfg)
+	return a
 }
 
 // SetCloudConfig pushes credentials to the xiaomi package's cloud state.
-func (a *LocalXiaomiAuth) SetCloudConfig(_ context.Context, userID, token, region string) error {
-	xiaomi.SetCloudConfig(config.XiaomiConfig{
+func (a *LocalXiaomiAuth) SetCloudConfig(ctx context.Context, userID, token, region string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cfg = config.XiaomiConfig{
 		UserID: userID,
 		Token:  token,
 		Region: region,
-	})
+	}
+	xiaomi.SetCloudConfig(a.cfg)
 	return nil
 }
 
+func (a *LocalXiaomiAuth) cloudConfig() config.XiaomiConfig {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.cfg
+}
+
 // SignIn calls the xiaomi cloud sign-in flow.
-func (a *LocalXiaomiAuth) SignIn(_ context.Context, username, password, region string) (*CloudAuthResult, *CloudVerificationRequired, error) {
-	session, captchaSessionID, err := xiaomi.SignInWithCaptcha(username, password, region)
+func (a *LocalXiaomiAuth) SignIn(ctx context.Context, username, password, region string) (*CloudAuthResult, *CloudVerificationRequired, error) {
+	session, captchaSessionID, err := xiaomi.SignInWithCaptchaContext(ctx, username, password, region)
 	if err != nil {
 		var loginErr *xiaomi.LoginError
 		if isLoginErr(err, &loginErr) {
@@ -49,8 +67,8 @@ func (a *LocalXiaomiAuth) SignIn(_ context.Context, username, password, region s
 }
 
 // SubmitCaptcha submits a captcha code for a pending auth session.
-func (a *LocalXiaomiAuth) SubmitCaptcha(_ context.Context, sessionID, captchaCode string) (*CloudAuthResult, *CloudVerificationRequired, error) {
-	session, err := xiaomi.LoginWithCaptcha(sessionID, captchaCode)
+func (a *LocalXiaomiAuth) SubmitCaptcha(ctx context.Context, sessionID, captchaCode string) (*CloudAuthResult, *CloudVerificationRequired, error) {
+	session, err := xiaomi.LoginWithCaptchaContext(ctx, sessionID, captchaCode)
 	if err != nil {
 		var captchaErr *xiaomi.CaptchaSessionError
 		if isCaptchaErr(err, &captchaErr) {
@@ -62,8 +80,8 @@ func (a *LocalXiaomiAuth) SubmitCaptcha(_ context.Context, sessionID, captchaCod
 }
 
 // SubmitVerify submits a 2FA ticket for a pending auth session.
-func (a *LocalXiaomiAuth) SubmitVerify(_ context.Context, sessionID, ticket string) (*CloudAuthResult, *CloudVerificationRequired, error) {
-	session, err := xiaomi.LoginWithVerify(sessionID, ticket)
+func (a *LocalXiaomiAuth) SubmitVerify(ctx context.Context, sessionID, ticket string) (*CloudAuthResult, *CloudVerificationRequired, error) {
+	session, err := xiaomi.LoginWithVerifyContext(ctx, sessionID, ticket)
 	if err != nil {
 		var captchaErr *xiaomi.CaptchaSessionError
 		if isCaptchaErr(err, &captchaErr) {
@@ -75,13 +93,14 @@ func (a *LocalXiaomiAuth) SubmitVerify(_ context.Context, sessionID, ticket stri
 }
 
 // ListDevices returns Xiaomi cloud devices filtered to camera models.
-func (a *LocalXiaomiAuth) ListDevices(_ context.Context) ([]CloudDeviceInfo, error) {
-	session, err := xiaomi.SignInWithToken(a.cfg.Xiaomi.UserID, a.cfg.Xiaomi.Token, a.cfg.Xiaomi.Region)
+func (a *LocalXiaomiAuth) ListDevices(ctx context.Context) ([]CloudDeviceInfo, error) {
+	cfg := a.cloudConfig()
+	session, err := xiaomi.SignInWithTokenContext(ctx, cfg.UserID, cfg.Token, cfg.Region)
 	if err != nil {
 		return nil, err
 	}
 
-	devices, err := xiaomi.GetDeviceList(session)
+	devices, err := xiaomi.GetDeviceListContext(ctx, session)
 	if err != nil {
 		return nil, err
 	}
@@ -104,16 +123,17 @@ func (a *LocalXiaomiAuth) ListDevices(_ context.Context) ([]CloudDeviceInfo, err
 }
 
 // CheckVendor checks the vendor protocol for a Xiaomi device by DID.
-func (a *LocalXiaomiAuth) CheckVendor(_ context.Context, did string) (string, error) {
-	if a.cfg == nil {
+func (a *LocalXiaomiAuth) CheckVendor(ctx context.Context, did string) (string, error) {
+	cfg := a.cloudConfig()
+	if cfg.UserID == "" || cfg.Token == "" {
 		return "", fmt.Errorf("xiaomi config not available")
 	}
 	cloudCfg := xiaomi.XiaomiCloudConfig{
-		UserID: a.cfg.Xiaomi.UserID,
-		Token:  a.cfg.Xiaomi.Token,
-		Region: a.cfg.Xiaomi.Region,
+		UserID: cfg.UserID,
+		Token:  cfg.Token,
+		Region: cfg.Region,
 	}
-	missURL, err := xiaomi.ResolveMISSURL(cloudCfg, did, "")
+	missURL, err := xiaomi.ResolveMISSURLContext(ctx, cloudCfg, did, "")
 	if err != nil {
 		return "", err
 	}

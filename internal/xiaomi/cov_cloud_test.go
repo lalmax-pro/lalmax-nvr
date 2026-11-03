@@ -336,7 +336,8 @@ func TestCovXiaomiCaptchaFlowPlainError(t *testing.T) {
 	sid := storePendingCloud(c)
 	_, err := LoginWithCaptcha(sid, "1234")
 	require.ErrorContains(t, err, "dial refused")
-	require.Nil(t, loadPendingCloud(sid), "pending session must be consumed")
+	require.NotNil(t, loadPendingCloud(sid), "transient failure must allow retry")
+	deletePendingCloud(sid)
 }
 
 // --- token sign-in -------------------------------------------------------

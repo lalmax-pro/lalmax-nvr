@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1393,9 +1394,11 @@ func TestApi2IOXiaomiUnavailable(t *testing.T) {
 }
 
 func TestApi2IOXiaomiAuthValidation(t *testing.T) {
+	t.Helper()
 	cloud := &api2ioCloud{}
 	cfg := &config.Config{}
 	h, _, _, _ := api2ioNewHandler(t, cfg, cloud)
+	h.configPath = filepath.Join(t.TempDir(), "nvr.yaml")
 
 	for _, tc := range []struct{ path, body string }{
 		{"/api/xiaomi/auth", `{`},
@@ -1649,10 +1652,11 @@ func TestApi2IOXiaomiSyncEdgeCases(t *testing.T) {
 }
 
 func TestApi2IOXiaomiAuthWithoutConfig(t *testing.T) {
+	t.Helper()
 	cloud := &api2ioCloud{signInResult: &CloudAuthResult{UserID: "user-1", PassToken: "token-1"}}
 	h, _, _, _ := api2ioNewHandler(t, nil, cloud)
 	rr := api2ioDo(t, h, http.MethodPost, "/api/xiaomi/auth", `{"username":"u","password":"p"}`)
-	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Equal(t, http.StatusInternalServerError, rr.Code, rr.Body.String())
 }
 
 // --- IPTV endpoints ---
