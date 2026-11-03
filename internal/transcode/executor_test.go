@@ -113,6 +113,22 @@ func TestExecutorAcceptsFreshVideoFrame(t *testing.T) {
 	}
 }
 
+func TestExecutorReadyWithReservedButNoStateMap(t *testing.T) {
+	adapter := &adapterStub{observation: OutputObservation{
+		Active: true, VideoCodec: "h264", LastFrame: time.Now(),
+	}}
+	executor := &BackendExecutor{
+		Adapter:  adapter,
+		reserved: map[string]time.Time{"output": time.Now().Add(-time.Second)},
+	}
+	if !executor.Ready(context.Background(), "output") {
+		t.Fatal("fresh frame should be ready even with an initially nil ready map")
+	}
+	if executor.ready["output"] == nil {
+		t.Fatal("Ready must initialize per-output progress state")
+	}
+}
+
 func TestExecutorRejectsNoVideoFrameAndExitedProcess(t *testing.T) {
 	a := &adapterStub{observations: []OutputObservation{
 		{Active: true, VideoCodec: "h264", MediaBytes: 0},

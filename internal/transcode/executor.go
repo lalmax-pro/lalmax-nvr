@@ -133,6 +133,11 @@ func (e *BackendExecutor) Ready(ctx context.Context, id string) bool {
 		e.mu.Unlock()
 		return false
 	}
+	// Start initializes the map for normal execution. Keep Ready safe when
+	// callers construct a reserved executor directly (e.g. recovery/tests).
+	if e.ready == nil {
+		e.ready = make(map[string]*readinessState)
+	}
 	state := e.ready[id]
 	if state == nil {
 		// Keep direct test/manual construction of reserved compatible while
