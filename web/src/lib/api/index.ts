@@ -370,9 +370,9 @@ export type {
 } from './streams';
 
 // Xiaomi — cloud auth, devices, sync
-export { xiaomiAuth, xiaomiDevices, xiaomiStatus, xiaomiLogout, xiaomiCaptcha, xiaomiVerify, xiaomiSync } from './xiaomi';
+export { xiaomiAuth, xiaomiDevices, xiaomiStatus, xiaomiLogout, xiaomiAccounts, xiaomiCaptcha, xiaomiVerify, xiaomiSync } from './xiaomi';
 
-export type { XiaomiDevice, XiaomiDevicesResponse, XiaomiStatusResponse, XiaomiAuthResponse } from './xiaomi';
+export type { XiaomiDevice, XiaomiDevicesResponse, XiaomiStatusResponse, XiaomiAccountInfo, XiaomiAuthResponse } from './xiaomi';
 
 // Health — camera health status and events
 export { getHealthStatus, getHealthEvents, getCameraHealth, getHealthCameras, getStabilityData } from './health';

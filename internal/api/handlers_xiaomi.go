@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"net/url"
+	"sort"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -184,8 +187,9 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get stored token from config
-	cfg := h.xiaomiConfig()
-	if cfg.UserID == "" || cfg.Token == "" {
+	accountID := r.URL.Query().Get("account")
+	account, exists := h.xiaomiConfig().Account(accountID)
+	if !exists || account.UserID == "" || account.Token == "" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"authenticated": false,
 			"devices":       []CloudDeviceInfo{},
@@ -194,7 +198,7 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	devices, err := h.cloudProxy.ListDevices(r.Context())
+	devices, err := h.listXiaomiDevices(r.Context(), accountID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 		return
@@ -209,6 +213,33 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) listXiaomiDevices(ctx context.Context, id string) ([]CloudDeviceInfo, error) {
+	if id == "" || id == "default" {
+		return h.cloudProxy.ListDevices(ctx)
+	}
+	if proxy, ok := h.cloudProxy.(interface {
+		ListDevicesForAccount(context.Context, string) ([]CloudDeviceInfo, error)
+	}); ok {
+		return proxy.ListDevicesForAccount(ctx, id)
+	}
+	return nil, errors.New("named Xiaomi accounts unavailable")
+}
+
+func (h *Handler) handleXiaomiAccounts(w http.ResponseWriter, r *http.Request) {
+	cfg := h.xiaomiConfig()
+	type accountInfo struct {
+		ID            string `json:"id"`
+		Region        string `json:"region"`
+		Authenticated bool   `json:"authenticated"`
+	}
+	accounts := []accountInfo{{ID: "default", Region: cfg.Region, Authenticated: cfg.UserID != "" && cfg.Token != ""}}
+	for id, account := range cfg.Accounts {
+		accounts = append(accounts, accountInfo{ID: id, Region: account.Region, Authenticated: account.UserID != "" && account.Token != ""})
+	}
+	sort.Slice(accounts[1:], func(i, j int) bool { return accounts[i+1].ID < accounts[j+1].ID })
+	writeJSON(w, http.StatusOK, map[string]any{"accounts": accounts})
+}
+
 // handleXiaomiSync syncs Xiaomi cloud device info (name, model, MAC) to NVR camera config.
 // It fetches all devices from Xiaomi cloud, matches them to existing NVR cameras by DID,
 // and updates name, model, brand, and serial_number (MAC). Returns count of synced cameras.
@@ -217,7 +248,9 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
-	if h.config == nil || h.xiaomiConfig().Token == "" {
+	accountID := r.URL.Query().Get("account")
+	account, exists := h.xiaomiConfig().Account(accountID)
+	if !exists || account.Token == "" {
 		writeError(w, http.StatusUnauthorized, "xiaomi cloud not authenticated")
 		return
 	}
@@ -226,7 +259,7 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	devices, err := h.cloudProxy.ListDevices(r.Context())
+	devices, err := h.listXiaomiDevices(r.Context(), accountID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 		return
@@ -243,6 +276,19 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 		cam := &h.config.Cameras[i]
 		if cam.Protocol != "xiaomi" {
 			continue
+		}
+		if source, err := url.Parse(cam.URL); err == nil {
+			cameraAccount := source.Query().Get("account")
+			if cameraAccount == "default" {
+				cameraAccount = ""
+			}
+			selectedAccount := accountID
+			if selectedAccount == "default" {
+				selectedAccount = ""
+			}
+			if cameraAccount != selectedAccount {
+				continue
+			}
 		}
 
 		did := cam.DID
@@ -286,7 +332,9 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if h.config == nil || h.xiaomiConfig().Token == "" {
+	accountID := r.URL.Query().Get("account")
+	account, exists := h.xiaomiConfig().Account(accountID)
+	if !exists || account.Token == "" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"vendor":     "unknown",
 			"compatible": true,
@@ -300,7 +348,17 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vendor, err := h.cloudProxy.CheckVendor(r.Context(), did)
+	var vendor string
+	var err error
+	if accountID == "" || accountID == "default" {
+		vendor, err = h.cloudProxy.CheckVendor(r.Context(), did)
+	} else if proxy, ok := h.cloudProxy.(interface {
+		CheckVendorForAccount(context.Context, string, string) (string, error)
+	}); ok {
+		vendor, err = proxy.CheckVendorForAccount(r.Context(), accountID, did)
+	} else {
+		err = errors.New("named Xiaomi accounts unavailable")
+	}
 	if err != nil {
 		// For errors, return unknown/compatible (don't block on uncertainty)
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -355,6 +413,7 @@ func (h *Handler) saveXiaomiConfig(ctx context.Context, credentials config.Xiaom
 	previous := h.config.Xiaomi
 	candidate := *h.config
 	candidate.Xiaomi = credentials
+	candidate.Xiaomi.Accounts = maps.Clone(previous.Accounts)
 	if err := config.Save(h.configPath, &candidate); err != nil {
 		return err
 	}
@@ -433,8 +492,17 @@ func (h *Handler) handleXiaomiTalkWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.xiaomiConfig()
+	accountID := ""
+	if source, err := url.Parse(cam.URL); err == nil {
+		accountID = source.Query().Get("account")
+	}
+	account, ok := cfg.Account(accountID)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "xiaomi account not found")
+		return
+	}
 	cloudCfg := xiaomi.XiaomiCloudConfig{
-		UserID: cfg.UserID, Token: cfg.Token, Region: cfg.Region,
+		UserID: account.UserID, Token: account.Token, Region: account.Region,
 	}
 	missURL, err := xiaomi.ResolveMISSURLContext(r.Context(), cloudCfg, did, "")
 	if err != nil {

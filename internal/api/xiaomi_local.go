@@ -38,11 +38,7 @@ func (a *LocalXiaomiAuth) SetCloudConfig(ctx context.Context, userID, token, reg
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.cfg = config.XiaomiConfig{
-		UserID: userID,
-		Token:  token,
-		Region: region,
-	}
+	a.cfg.UserID, a.cfg.Token, a.cfg.Region = userID, token, region
 	xiaomi.SetCloudConfig(a.cfg)
 	if token == "" {
 		xiaomi.ClearPendingLogins()
@@ -97,7 +93,14 @@ func (a *LocalXiaomiAuth) SubmitVerify(ctx context.Context, sessionID, ticket st
 
 // ListDevices returns Xiaomi cloud devices filtered to camera models.
 func (a *LocalXiaomiAuth) ListDevices(ctx context.Context) ([]CloudDeviceInfo, error) {
-	cfg := a.cloudConfig()
+	return a.ListDevicesForAccount(ctx, "")
+}
+
+func (a *LocalXiaomiAuth) ListDevicesForAccount(ctx context.Context, id string) ([]CloudDeviceInfo, error) {
+	cfg, ok := a.cloudConfig().Account(id)
+	if !ok {
+		return nil, fmt.Errorf("xiaomi account not found")
+	}
 	session, err := xiaomi.SignInWithTokenContext(ctx, cfg.UserID, cfg.Token, cfg.Region)
 	if err != nil {
 		return nil, err
@@ -127,7 +130,14 @@ func (a *LocalXiaomiAuth) ListDevices(ctx context.Context) ([]CloudDeviceInfo, e
 
 // CheckVendor checks the vendor protocol for a Xiaomi device by DID.
 func (a *LocalXiaomiAuth) CheckVendor(ctx context.Context, did string) (string, error) {
-	cfg := a.cloudConfig()
+	return a.CheckVendorForAccount(ctx, "", did)
+}
+
+func (a *LocalXiaomiAuth) CheckVendorForAccount(ctx context.Context, id, did string) (string, error) {
+	cfg, ok := a.cloudConfig().Account(id)
+	if !ok {
+		return "", fmt.Errorf("xiaomi account not found")
+	}
 	if cfg.UserID == "" || cfg.Token == "" {
 		return "", fmt.Errorf("xiaomi config not available")
 	}

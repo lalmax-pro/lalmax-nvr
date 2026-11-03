@@ -83,6 +83,22 @@ sequenceDiagram
 
 账号相关 API：`GET /api/xiaomi/status` 返回已保存的登录状态和地区，不访问云服务、不返回凭据；`POST /api/xiaomi/logout` 清除凭据及未完成的登录验证，需要管理员权限。
 
+可在配置文件中添加命名账号，再在设备发现面板选择账号：
+
+```yaml
+xiaomi:
+  user_id: "默认账号用户 ID"
+  token: "默认账号令牌"
+  region: "cn"
+  accounts:
+    home:
+      user_id: "另一个账号用户 ID"
+      token: "另一个账号令牌"
+      region: "sg"
+```
+
+命名账号当前通过配置文件添加和更新；摄像头地址可使用 `xiaomi://设备ID?account=home` 选择该账号，未指定时沿用默认账号。配置加密启用时，命名账号的用户 ID 和令牌与默认账号凭据一同加密保存。
+
 ```yaml
 xiaomi:
   user_id: "123456789"

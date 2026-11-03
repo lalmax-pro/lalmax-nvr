@@ -5,15 +5,15 @@
     probeONVIFDevice,
     xiaomiAuth,
     xiaomiDevices,
-    xiaomiStatus,
     xiaomiLogout,
+    xiaomiAccounts,
     xiaomiCaptcha,
     xiaomiVerify,
     createCamera,
     xiaomiSync,
     checkVendor
   } from '$lib/api';
-  import type { DiscoveredDevice, XiaomiDevice, XiaomiAuthResponse, Camera } from '$lib/api';
+  import type { DiscoveredDevice, XiaomiDevice, XiaomiAccountInfo, XiaomiAuthResponse, Camera } from '$lib/api';
   import { RefreshCw, WifiOff, Clock, AlertTriangle, Search } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
@@ -50,6 +50,8 @@
   let xiaomiError = $state('');
   let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
   let xiaomiLoggedIn = $state(false);
+  let xiaomiAccount = $state('default');
+  let xiaomiAccountList = $state<XiaomiAccountInfo[]>([]);
   let xiaomiAddingDid = $state<string | null>(null);
   let xiaomiCaptchaImage = $state('');
   let xiaomiCaptchaSessionId = $state('');
@@ -78,15 +80,16 @@
       xiaomiLoading = true;
       xiaomiError = '';
       try {
-        const status = await xiaomiStatus();
+        const result = await xiaomiAccounts();
         if (version !== xiaomiRequestVersion) return;
-        xiaomiLoggedIn = status.authenticated;
+        xiaomiAccountList = result.accounts.filter(a => a.id === 'default' || a.authenticated);
+        const account = xiaomiAccountList.find(a => a.id === xiaomiAccount);
+        xiaomiLoggedIn = account?.authenticated ?? false;
+        if (xiaomiAccount === 'default' && account?.region) xiaomiRegion = account.region;
         xiaomiDeviceList = [];
-        if (status.region) xiaomiRegion = status.region;
-        if (status.authenticated) {
-          const res = await xiaomiDevices();
+        if (xiaomiLoggedIn) {
+          const res = await xiaomiDevices(undefined, xiaomiAccount);
           if (version !== xiaomiRequestVersion) return;
-          xiaomiLoggedIn = res.authenticated;
           xiaomiDeviceList = res.devices || [];
         }
       } catch (e) {
@@ -202,6 +205,7 @@
     xiaomiVerifyType = '';
     xiaomiPassword = '';
     xiaomiLoggedIn = true;
+    xiaomiAccountList = xiaomiAccountList.map(a => a.id === 'default' ? { ...a, authenticated: true, region: xiaomiRegion } : a);
     await refreshXiaomiDevices();
   }
 
@@ -236,7 +240,13 @@
   }
 
   function isXiaomiDeviceAdded(did: string): boolean {
-    return cameras.some(c => c.protocol === 'xiaomi' && c.url === `xiaomi://${did}`);
+    return cameras.some(c => {
+      if (c.protocol !== 'xiaomi') return false;
+      try {
+        const source = new URL(c.url);
+        return source.hostname === did && (source.searchParams.get('account') || 'default') === xiaomiAccount;
+      } catch { return false; }
+    });
   }
 
   async function addXiaomiDevice(device: XiaomiDevice, skipVendorCheck = false) {
@@ -245,7 +255,7 @@
       // Check vendor compatibility before adding
       if (!skipVendorCheck) {
         try {
-          const result = await checkVendor(device.did);
+          const result = await checkVendor(device.did, xiaomiAccount);
           if (!result.compatible) {
             tutkWarningDevice = device;
             warningVendor = result.vendor;
@@ -262,7 +272,7 @@
         name: device.name,
         protocol: 'xiaomi',
         encoding: 'h264',
-        url: `xiaomi://${device.did}`,
+        url: `xiaomi://${device.did}${xiaomiAccount === 'default' ? '' : `?account=${encodeURIComponent(xiaomiAccount)}`}`,
         enabled: true,
       });
       showToast(t('cameras.cameraAdded'), 'success');
@@ -289,7 +299,7 @@
     xiaomiLoading = true;
     xiaomiError = '';
     try {
-      const res = await xiaomiDevices();
+      const res = await xiaomiDevices(undefined, xiaomiAccount);
       if (version !== xiaomiRequestVersion) return;
       xiaomiDeviceList = res.devices || [];
       xiaomiLoggedIn = res.authenticated;
@@ -306,6 +316,7 @@
     xiaomiError = '';
     try {
       await xiaomiLogout();
+      xiaomiAccountList = xiaomiAccountList.map(a => a.id === 'default' ? { ...a, authenticated: false } : a);
       xiaomiLoggedIn = false;
       xiaomiDeviceList = [];
       xiaomiUsername = '';
@@ -325,10 +336,17 @@
     }
   }
 
+  async function selectXiaomiAccount() {
+    xiaomiDeviceList = [];
+    xiaomiLoggedIn = xiaomiAccountList.find(a => a.id === xiaomiAccount)?.authenticated ?? false;
+    xiaomiError = '';
+    if (xiaomiLoggedIn) await refreshXiaomiDevices();
+  }
+
   async function handleSyncCloud() {
     syncing = true;
     try {
-      const result = await xiaomiSync();
+      const result = await xiaomiSync(undefined, xiaomiAccount);
       showToast(t('cameras.syncedCameras').replace('{count}', String(result.synced)), 'success');
       await refreshXiaomiDevices();
     } catch (e: any) {
@@ -380,6 +398,7 @@
           title={t('common.dismiss')}
         >&times;</button>
       </div>
+
 
       {#if scanning}
         <div class="flex items-center gap-3 th-text-secondary py-4">
@@ -511,6 +530,15 @@
           title={t('common.dismiss')}
         >&times;</button>
       </div>
+
+      {#if xiaomiAccountList.length > 1}
+        <label class="input-label text-xs" for="xiaomi-account-selector">{t('xiaomi.accountSelection')}</label>
+        <select id="xiaomi-account-selector" class="input py-1 text-sm mb-3" bind:value={xiaomiAccount} disabled={xiaomiLoading || syncing || xiaomiAddingDid !== null} onchange={selectXiaomiAccount}>
+          {#each xiaomiAccountList as account}
+            <option value={account.id}>{account.id} {account.region ? `(${account.region})` : ''}</option>
+          {/each}
+        </select>
+      {/if}
 
       {#if !xiaomiLoggedIn}
         <!-- Login form -->
@@ -652,9 +680,11 @@
             {/each}
           </div>
         {/if}
+        {#if xiaomiAccount === 'default'}
         <div class="mt-4 flex justify-end">
           <button class="btn btn-ghost btn-sm" onclick={handleXiaomiLogout} disabled={xiaomiLoading || syncing || xiaomiAddingDid !== null}>{t('xiaomi.signOut')}</button>
         </div>
+        {/if}
       {/if}
       {#if xiaomiError}
         <p class="th-color-danger text-sm" role="alert">{xiaomiError}</p>

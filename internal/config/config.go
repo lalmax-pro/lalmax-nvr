@@ -475,9 +475,24 @@ type FLVConfig struct {
 
 // XiaomiConfig holds Xiaomi cloud authentication settings.
 type XiaomiConfig struct {
-	UserID string `yaml:"user_id"` // Xiaomi account user ID (from auth response)
-	Token  string `yaml:"token"`   // Xiaomi passToken for API access
-	Region string `yaml:"region"`  // Region code (e.g. "cn", "sg", "de")
+	UserID   string                   `yaml:"user_id"` // Xiaomi account user ID (from auth response)
+	Token    string                   `yaml:"token"`   // Xiaomi passToken for API access
+	Region   string                   `yaml:"region"`  // Region code (e.g. "cn", "sg", "de")
+	Accounts map[string]XiaomiAccount `yaml:"accounts,omitempty" json:"accounts,omitempty"`
+}
+
+type XiaomiAccount struct {
+	UserID string `yaml:"user_id" json:"user_id"`
+	Token  string `yaml:"token" json:"-"`
+	Region string `yaml:"region" json:"region"`
+}
+
+func (c XiaomiConfig) Account(id string) (XiaomiAccount, bool) {
+	if id == "" || id == "default" {
+		return XiaomiAccount{UserID: c.UserID, Token: c.Token, Region: c.Region}, true
+	}
+	account, ok := c.Accounts[id]
+	return account, ok
 }
 
 // SRTConfig configures the SRT ingest server.
@@ -703,6 +718,7 @@ func Save(path string, cfg *Config) error {
 	saveCfg.VoIP = cfg.VoIP.Clone()
 	saveCfg.Auth.PublishTokens = cloneStringMap(cfg.Auth.PublishTokens)
 	saveCfg.Auth.PlaybackTokens = cloneStringMap(cfg.Auth.PlaybackTokens)
+	saveCfg.Xiaomi.Accounts = cloneXiaomiAccounts(cfg.Xiaomi.Accounts)
 	saveCfg.RTMP.StreamKeys = cloneStringMap(cfg.RTMP.StreamKeys)
 	saveCfg.SRT.StreamKeys = cloneStringMap(cfg.SRT.StreamKeys)
 	saveCfg.WHIP.StreamKeys = cloneStringMap(cfg.WHIP.StreamKeys)
@@ -750,6 +766,11 @@ func Save(path string, cfg *Config) error {
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
+	}
+	for id := range cfg.Xiaomi.Accounts {
+		if id == "" || id == "default" || len(id) > 64 || strings.ContainsAny(id, "/?&# ") {
+			return fmt.Errorf("invalid Xiaomi account ID %q", id)
+		}
 	}
 	if err := cfg.Transcoding.Validate(); err != nil {
 		return err
@@ -840,8 +861,15 @@ func Validate(cfg *Config) error {
 	}
 	// Validate Xiaomi configuration
 	for _, cam := range cfg.Cameras {
-		if cam.Protocol == "xiaomi" && strings.TrimSpace(cfg.Xiaomi.Token) == "" {
-			return fmt.Errorf("xiaomi camera %q requires xiaomi.token in config", cam.ID)
+		if cam.Protocol == "xiaomi" {
+			u, err := url.Parse(cam.URL)
+			if err != nil {
+				return fmt.Errorf("invalid Xiaomi camera URL: %w", err)
+			}
+			account, ok := cfg.Xiaomi.Account(u.Query().Get("account"))
+			if !ok || strings.TrimSpace(account.Token) == "" {
+				return fmt.Errorf("xiaomi camera %q requires xiaomi.token or selected account credentials in config", cam.ID)
+			}
 		}
 	}
 	// port ranges

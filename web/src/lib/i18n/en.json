@@ -1062,6 +1062,7 @@
   "cameras.tutkToastTitle": "Camera Incompatible",
   "xiaomi.title": "Xiaomi Device Discovery",
   "xiaomi.signInHint": "Sign in with your Xiaomi account to discover cameras.",
+  "xiaomi.accountSelection": "Xiaomi account",
   "xiaomi.account": "Xiaomi Account",
   "xiaomi.accountPlaceholder": "email or phone",
   "xiaomi.region": "Account region",
