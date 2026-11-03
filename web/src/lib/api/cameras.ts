@@ -239,7 +239,7 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     encodings: ['h264', 'h265'],
     builtIn: true,
     addable: true,
-    capabilities: { hls: true, ptz: false, snapshot: false, discovery: true, auth: true },
+    capabilities: { hls: true, ptz: true, snapshot: false, discovery: true, auth: true },
   },
   {
     id: 'rtmp-pull',

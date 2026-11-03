@@ -63,6 +63,7 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 - **Recording**: Automatic MP4 segment recording
 - **Audio**: G.711 (PCMA/PCMU) and Opus audio codecs
 - **Audio sample rate**: Received 16 kHz G.711/PCM is low-pass filtered and resampled to the downstream 8 kHz rate; Opus retains its encoding.
+- **Pan/Tilt**: Direction, speed and stop controls for motor-equipped models.
 - **Two-way Audio**: Send audio to camera speaker via WebSocket
 - **Dual-lens Support**: Main/secondary channel selection
 - **Auto Fallback**: HD to SD fallback when the first video frame times out, including audio-only connections
@@ -122,6 +123,19 @@ cameras:
 | `encoding` | Yes | string | "h264" | Video encoding (h264, h265) |
 | `audio_enabled` | No | boolean | true for H.264/H.265 | Enable audio recording; API creation can explicitly disable it |
 
+## Pan/Tilt Control
+
+The live-view control pad provides four directions and three speed settings. Holding a direction moves the camera; releasing, leaving the button, or leaving the view sends stop. Xiaomi controls omit optical zoom and presets.
+
+Controls reuse the active streaming connection. Disconnected or reconnecting cameras return `503`. Motor compatibility still requires testing on the specific model.
+
+- `POST /api/cameras/{id}/ptz/move`: `{"mode":"continuous","pan":-0.5,"tilt":0,"zoom":0}`.
+- `POST /api/cameras/{id}/ptz/stop`: no request body.
+
+Pan and tilt are normalized to `[-1,1]`; the larger axis wins when both are set. Magnitude maps to native speeds `1–10` (approximately `3/5/10` for the three UI settings). A zero vector stops movement. Only continuous movement is supported, and zoom must be zero.
+
+Movement expires after two seconds. Clients must renew commands to continue moving; the Web UI renews every 500 ms. The server attempts an automatic stop if a stop request is lost.
+
 ## Two-way Audio (Talk)
 
 Xiaomi cameras support two-way audio, allowing you to send audio to the camera's speaker.
@@ -159,7 +173,7 @@ The browser selects the encoder for the speaker codec. Opus talk requires WebCod
 
 ### Transport Protocol
 
-The system uses **UDP transport** by default for CS2 P2P communication. CS2 over TCP has a known 6-second disconnect issue.
+The system uses **UDP transport** by default for CS2 P2P communication and handles camera PING/PONG liveness probes.
 
 ### Network Requirements
 

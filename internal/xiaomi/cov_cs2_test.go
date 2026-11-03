@@ -253,7 +253,7 @@ func (d *covCS2Device) sendDrw(ch byte, payload []byte) error {
 	msg := make([]byte, 12+len(payload))
 	msg[0] = cs2Magic
 	msg[1] = cs2MsgDrw
-	binary.BigEndian.PutUint16(msg[2:], uint16(len(msg)))
+	binary.BigEndian.PutUint16(msg[2:], uint16(len(msg)-4))
 	msg[4] = cs2MagicDrw
 	msg[5] = ch
 	binary.BigEndian.PutUint16(msg[6:], seq)
@@ -523,36 +523,36 @@ func TestCovCS2TCPConnReadErrors(t *testing.T) {
 func TestCovCS2DataChannelPushSeqMatrix(t *testing.T) {
 	// Disabled reorder buffer: future seq cannot be stored.
 	disabled := newCS2DataChannel(0, 4)
-	n, err := disabled.PushSeq(3, []byte("future"))
+	n, err := disabled.PushSeq(3, makeDataWithSize("future"))
 	require.NoError(t, err)
 	require.Equal(t, -1, n)
 
 	// Small reorder buffer: stores up to pushSize future seqs, dedupes, refuses overflow.
 	ch := newCS2DataChannel(2, 4)
-	n, err = ch.PushSeq(2, []byte("two"))
+	n, err = ch.PushSeq(2, makeDataWithSize("two"))
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
-	n, err = ch.PushSeq(2, []byte("two-again"))
+	n, err = ch.PushSeq(2, makeDataWithSize("two-again"))
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
-	n, err = ch.PushSeq(3, []byte("three"))
+	n, err = ch.PushSeq(3, makeDataWithSize("three"))
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
-	n, err = ch.PushSeq(4, []byte("four"))
+	n, err = ch.PushSeq(4, makeDataWithSize("four"))
 	require.NoError(t, err)
 	require.Equal(t, -1, n, "buffer is full")
 
 	// Old sequence numbers are dropped.
-	n, err = ch.PushSeq(0, []byte("zero"))
+	n, err = ch.PushSeq(0, makeDataWithSize("zero"))
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "the in-order sequence number is delivered")
 
 	// In-order delivery drains the buffered continuations.
 	ch2 := newCS2DataChannel(4, 8)
-	n, err = ch2.PushSeq(1, []byte("one"))
+	n, err = ch2.PushSeq(1, makeDataWithSize("one"))
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
-	n, err = ch2.PushSeq(0, []byte("zero"))
+	n, err = ch2.PushSeq(0, makeDataWithSize("zero"))
 	require.NoError(t, err)
 	require.Equal(t, 2, n, "seq 0 and the buffered seq 1 are delivered")
 }
@@ -652,21 +652,16 @@ func TestCovCS2WorkerControlFramesUDP(t *testing.T) {
 		t.Fatal("expected a DRW ACK")
 	}
 
-	// A cmdAck callback fires on DRW ACK messages.
-	acked := make(chan struct{}, 1)
-	c.mu.Lock()
-	c.cmdAck = func() {
-		select {
-		case acked <- struct{}{}:
-		default:
-		}
-	}
-	c.mu.Unlock()
-	frames <- covCS2Pad(8, cs2MsgDrwAck)
+	// Only a matching channel-0 command ACK completes the pending command.
+	pending := &cs2CommandAck{seq: 7, done: make(chan struct{})}
+	c.ackMu.Lock()
+	c.pendingAck = pending
+	c.ackMu.Unlock()
+	frames <- []byte{cs2Magic, cs2MsgDrwAck, 0, 6, cs2MagicDrw, 0, 0, 1, 0, 7}
 	select {
-	case <-acked:
+	case <-pending.done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("cmdAck callback was not invoked")
+		t.Fatal("matching command was not acknowledged")
 	}
 
 	// Closing the input ends the worker and surfaces an error.

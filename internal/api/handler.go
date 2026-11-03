@@ -156,6 +156,7 @@ type Handler struct {
 	homeAssistantWHEPKey  []byte
 	voipSettingsMu        sync.Mutex
 	xiaomiMu              sync.Mutex
+	xiaomiMotorDispatch   func(context.Context, string, string, int) error
 	voipRestarter         VoIPRestarter
 	db                    storage.APIRepository
 	store                 *storage.Manager

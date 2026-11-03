@@ -444,7 +444,7 @@ func ResolveMISSURLContext(ctx context.Context, xiaomiCfg XiaomiCloudConfig, did
 	if model != "" {
 		q.Set("model", model)
 	}
-	// Force UDP transport for CS2 - TCP has known 6-second disconnect issue.
+	// Use UDP as the default LAN transport.
 	if vendorName == "cs2" {
 		q.Set("transport", "udp")
 	}
