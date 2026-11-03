@@ -260,6 +260,8 @@ RTSP Pull → MP4 Recording
 - `POST /api/xiaomi/auth` - Login with Xiaomi account
 - `POST /api/xiaomi/captcha` - Submit captcha code
 - `POST /api/xiaomi/verify` - Submit 2FA verification
+- `GET /api/xiaomi/status` - Read saved account status and region without contacting the cloud; credentials are never returned
+- `POST /api/xiaomi/logout` - Remove saved/runtime credentials and pending login challenges (administrator permission required)
 
 ### Device Management
 

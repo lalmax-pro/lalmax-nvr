@@ -81,6 +81,8 @@ sequenceDiagram
 
 ### 手动配置
 
+账号相关 API：`GET /api/xiaomi/status` 返回已保存的登录状态和地区，不访问云服务、不返回凭据；`POST /api/xiaomi/logout` 清除凭据及未完成的登录验证，需要管理员权限。
+
 ```yaml
 xiaomi:
   user_id: "123456789"
