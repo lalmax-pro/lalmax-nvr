@@ -4,7 +4,7 @@ lalmax-nvr 可以把选中的流发布为 Home Assistant 摄像头，支持实�
 
 ## 安装与配置
 
-1. 将本仓库 `custom_components/lalmax_nvr` 完整复制到 HA 配置目录的 `custom_components/lalmax_nvr`。该目录中应直接包含 `manifest.json`、`__init__.py` 等文件。重启 HA。要求 Home Assistant **2026.10.2 或更新版本**。也可将 CI / Release 的 `lalmax_nvr.zip` 直接解压到该目录，ZIP 根部就是 `manifest.json`。
+1. 在 HACS 中搜索 **lalmax-nvr**，打开并下载最新稳定版，再重启 HA。要求 Home Assistant **2026.10.2 或更新版本**。HACS 只安装 HA 集成，NVR 需单独运行。如果目录中暂时搜索不到，请使用下文的[自定义仓库备用方式](#hacs-安装包与分发)。
 2. 在 NVR 的 **设置 → Home Assistant** 中启用发布，选择流并保存。可以搜索后批量选择，也可以在流管理卡片上逐路选择。未登记为摄像头的推流也可以发布。
 3. 必要时设置 RTSP 服务地址，例如 `rtsp://192.168.1.20:15544`。不要包含用户名、密码或 `/live/流名`。留空使用媒体引擎对外地址；默认的回环地址由 HA 集成替换为 NVR HTTP 地址的主机名。如果媒体引擎与 NVR 不在同一主机，请显式配置 HA 能访问的媒体引擎地址。
 4. HA 中进入 **设置 → 设备与服务 → 添加集成 → lalmax-nvr**，填写 NVR HTTP 地址（例如 `http://192.168.1.20:9090`）和 NVR 账号。建议给 HA 单独创建普通用户，只允许读取。
@@ -17,7 +17,9 @@ entity: camera.front_door
 camera_view: live
 ```
 
-这是 HA 自定义集成；安装包与 HACS 分发说明见下文，尚未纳入官方目录。
+不使用 HACS 时，可将本仓库 `custom_components/lalmax_nvr` 完整复制到 HA 配置目录的同名路径，目录中应直接包含 `manifest.json`、`__init__.py` 等文件；也可将 CI / Release 的 `lalmax_nvr.zip` 直接解压到该目录，ZIP 根部就是 `manifest.json`。重启 HA 后继续上述第 2–6 步。
+
+这是已纳入 HACS 默认目录的社区集成，HA 本身不内置；安装包与分发说明见下文。
 
 ## 同步与撤销
 
@@ -137,7 +139,7 @@ web_rtc:
 
 ## HACS 安装包与分发
 
-仓库符合 HACS 单集成目录结构，提供 `hacs.json`，声明已验证的最低 HA 2026.10.2。集成版本在 `manifest.json` 中独立维护，不与 NVR 二进制版本号绑定。HACS 官方目录收录及 Home Assistant Brands 需要外部审核，尚未完成。
+仓库已纳入 HACS 默认目录（[收录申请](https://github.com/hacs/default/pull/12704)），符合 HACS 单集成目录结构，提供 `hacs.json`，声明已验证的最低 HA 2026.10.2。集成版本在 `manifest.json` 中独立维护，不与 NVR 二进制版本号绑定。品牌资源随集成的 `brand/` 目录分发。
 
 HA 专项 CI 在检查通过后生成 `lalmax_nvr.zip` 构建产物；NVR tag 发版也会附带此包。手动打包：
 
@@ -147,7 +149,9 @@ python scripts/package_home_assistant.py --output /tmp/lalmax_nvr.zip
 
 如采用独立 HA 分发仓库，可增加 `--export-dir /tmp/lalmax-nvr-home-assistant`（新目录），导出集成、HACS 元数据、安装说明与许可证，不包含测试状态或 NVR 二进制，不会自动创建或发布仓库。这样可以避免 NVR 版本号干扰 HA 更新。
 
-继续使用本主仓库分发。在 HACS 中打开 **⋮ → Custom repositories**，添加 `https://github.com/lalmax-pro/lalmax-nvr`，类型选择 **Integration**。打开仓库并下载最新稳定版，重启 HA 后在“设置 → 设备与服务”中添加 **lalmax-nvr**。使用 **V1.0.1 或更新版本**；V1.0.0 尚未包含本集成。
+继续使用本主仓库分发。在 HACS 中搜索 **lalmax-nvr**，打开并下载最新稳定版，重启 HA 后在“设置 → 设备与服务”中添加 **lalmax-nvr**。使用 **V1.0.1 或更新版本**；V1.0.0 尚未包含本集成。
+
+**自定义仓库备用方式：** 如果 HACS 目录中暂时搜索不到 **lalmax-nvr**，打开 **⋮ → Custom repositories**，添加 `https://github.com/lalmax-pro/lalmax-nvr`，类型选择 **Integration**。打开仓库下载后重启 HA，再按上述步骤配置集成。
 
 已在 HACS 2.0.5 / HA 2026.10.2 中实际通过界面首次安装 **V1.0.2**；另一套隔离 HA 从 **v1.0.1-rc.1** 通过 HACS 升级到 **V1.0.2**，24 个实体的 entity_id、unique_id 和配置项 ID 均保留。两个标签的集成版本均为 0.6.1，此次验证的是仓库 Release 升级路径。测试预先配置 HACS 的 GitHub 身份，未覆盖交互式 GitHub 设备授权。安装后已联调实时媒体、缩略图、事件、录像及协议模拟云台。
 

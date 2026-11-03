@@ -5,10 +5,12 @@ HACS installs the HA integration only; run the NVR separately.
 
 ## Set up
 
-1. Install this integration and restart Home Assistant (**2026.10.2 or newer**).
+1. In HACS, search for **lalmax-nvr**, open it and download the latest stable release, then restart Home Assistant (**2026.10.2 or newer**).
 2. In the NVR, open **Settings → Home Assistant**, enable publication, choose streams and save.
 3. In HA, open **Settings → Devices & services → Add integration → lalmax-nvr**. Enter the NVR address and HTTP account.
 4. If RTSP authentication is enabled, enter its username and password separately. Add the resulting camera entities to your dashboard.
+
+If the repository is not yet visible in your HACS catalog, use **⋮ → Custom repositories** to add `https://github.com/lalmax-pro/lalmax-nvr` with type **Integration** as a fallback, then download it and restart HA.
 
 Live video, snapshots, availability, detection events and automation triggers are supported. Existing MP4 recordings appear in HA Media. Streams bound to ONVIF or GB28181 cameras can expose PTZ controls; movement requires an NVR super administrator.
 
@@ -18,7 +20,9 @@ See the [English setup and troubleshooting guide](https://github.com/lalmax-pro/
 
 ## 中文说明
 
-HACS 只安装 HA 集成，NVR 需单独运行。安装后重启 HA，在 NVR 的“设置 → Home Assistant”启用发布并选择流，再在 HA“设备与服务”中添加 **lalmax-nvr**。HTTP 与 RTSP 账号分别填写。
+在 HACS 中搜索 **lalmax-nvr**，打开并下载最新稳定版，再重启 HA。HACS 只安装 HA 集成，NVR 需单独运行。在 NVR 的“设置 → Home Assistant”启用发布并选择流，再在 HA“设备与服务”中添加 **lalmax-nvr**。HTTP 与 RTSP 账号分别填写。
+
+如果 HACS 目录中暂时搜索不到，可通过 **⋮ → Custom repositories** 添加 `https://github.com/lalmax-pro/lalmax-nvr`，类型选择 **Integration**，作为备用安装方式。
 
 支持实时视频、缩略图、在线状态、检测事件、自动化、已有录像浏览及绑定设备的云台控制。H.264/AAC 可通过 HLS 播放；可选 WebRTC 当前提供 H.264 视频，AAC 声音请用 HLS。H.265 取决于终端支持，不会自动转码。发布流不会启动录像。
 
