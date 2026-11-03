@@ -132,7 +132,7 @@ passed(
     "GB28181 loopback SIP fixture authenticates with Digest and registers with the real NVR SIP server"
 )
 camid = D + ":" + C
-db = sqlite3.connect(root / "nvr-data/lalmax-nvr.db")
+db = sqlite3.connect(root / "data/lalmax-nvr.db")
 db.execute(
     "INSERT INTO cameras(id,name,protocol,encoding,url,enabled,onvif_endpoint,profile_token,stream_encoding) VALUES(?,?,?,?,?,?,?,?,?)",
     (

@@ -95,4 +95,10 @@ func checkEmbyListing(t *testing.T, db *DB) {
 		}
 	}
 	require.Equal(t, []string{"Alpha", "beta", "zeta"}, names)
+
+	require.NoError(t, db.SetEmbyItemPublish(ctx, fixtures[0].id, false, true))
+	updated, err := db.GetEmbyItem(ctx, fixtures[0].id)
+	require.NoError(t, err)
+	require.False(t, updated.PublishEnabled)
+	require.True(t, updated.Loop)
 }

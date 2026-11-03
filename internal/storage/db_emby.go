@@ -129,12 +129,12 @@ func (d *DB) SaveEmbyItem(ctx context.Context, i EmbyItem) error {
 	i.UpdatedAt = now
 	_, err := d.execContext(ctx, `INSERT INTO emby_items(id,emby_item_id,name,item_type,overview,image_tag,run_time_ticks,stream_id,publish_enabled,loop,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(emby_item_id) DO UPDATE SET name=excluded.name,item_type=excluded.item_type,overview=excluded.overview,image_tag=excluded.image_tag,run_time_ticks=excluded.run_time_ticks,updated_at=excluded.updated_at`,
-		i.ID, i.EmbyItemID, i.Name, i.ItemType, i.Overview, i.ImageTag, i.RunTimeTicks, i.StreamID, i.PublishEnabled, i.Loop, i.CreatedAt, i.UpdatedAt)
+		i.ID, i.EmbyItemID, i.Name, i.ItemType, i.Overview, i.ImageTag, i.RunTimeTicks, i.StreamID, boolToInt(i.PublishEnabled), boolToInt(i.Loop), i.CreatedAt, i.UpdatedAt)
 	return err
 }
 
 func (d *DB) SetEmbyItemPublish(ctx context.Context, id string, enabled, loop bool) error {
-	_, err := d.execContext(ctx, `UPDATE emby_items SET publish_enabled=?,loop=?,updated_at=? WHERE id=? OR emby_item_id=?`, enabled, loop, time.Now(), id, id)
+	_, err := d.execContext(ctx, `UPDATE emby_items SET publish_enabled=?,loop=?,updated_at=? WHERE id=? OR emby_item_id=?`, boolToInt(enabled), boolToInt(loop), time.Now(), id, id)
 	return err
 }
 

@@ -229,6 +229,60 @@ def main():
         assert len(payload) > 1000
 
     if not args.resume:
+        # Reset task-local fixtures so a prior run's password rotation cannot poison
+        # the next run. Reconfigure HA back to the admin account before exercising
+        # the ordinary viewer account below.
+        viewer_password = "local-viewer-test-only-2026"
+        users = request(nvr, "GET", nvr_url + "/api/users").json()
+        existing_viewer = next(
+            (user for user in users if user["username"] == "ha-viewer"), None
+        )
+        if existing_viewer is None:
+            request(
+                nvr,
+                "POST",
+                nvr_url + "/api/users",
+                json={
+                    "username": "ha-viewer",
+                    "password": viewer_password,
+                    "role": "user",
+                },
+            )
+        else:
+            request(
+                nvr,
+                "PUT",
+                nvr_url + f"/api/users/{existing_viewer['id']}",
+                json={
+                    "password": viewer_password,
+                    "role": "user",
+                    "enabled": True,
+                },
+            )
+        reset_form = request(
+            ha,
+            "POST",
+            ha_url + "/api/config/config_entries/flow",
+            json={"handler": "lalmax_nvr", "entry_id": entry_id},
+        ).json()
+        reset_values = {
+            "url": nvr_url,
+            "username": credentials["username"],
+            "password": credentials["password"],
+            "rtsp_username": credentials["rtsp_username"],
+            "rtsp_password": credentials["rtsp_password"],
+        }
+        reset_result = request(
+            ha,
+            "POST",
+            ha_url + "/api/config/config_entries/flow/" + reset_form["flow_id"],
+            json=reset_values,
+        ).json()
+        assert (
+            reset_result["type"] == "abort"
+            and reset_result["reason"] == "reconfigure_successful"
+        ), reset_result
+
         # These synthetic slots are deliberately independent of camera devices/recording plans.
         for sid in ["ha-test-main", "ha-test-second"]:
             response = nvr.post(
@@ -339,7 +393,7 @@ def main():
         )
         assert response.status_code == 401
         viewer = requests.Session()
-        viewer.auth = "ha-viewer", "local-viewer-test-only-2026"
+        viewer.auth = "ha-viewer", viewer_password
         assert (
             viewer.get(
                 nvr_url + "/api/integrations/home-assistant", timeout=10
@@ -432,71 +486,87 @@ def main():
     identity = request(nvr, "GET", nvr_url + "/api/settings/home-assistant").json()[
         "instance_id"
     ]
-    stop(main_publisher)
-    stop(second)
-    pid = int((root / "nvr.pid").read_text())
-    os.kill(pid, signal.SIGTERM)
-    wait_for(lambda: process_gone(pid), 45)
-    with (root / "nvr-console.log").open("a") as output:
-        proc = subprocess.Popen(
-            [str(args.nvr_binary), "--config", str(root / "nvr.yaml")],
-            cwd=root,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    (root / "nvr.pid").write_text(str(proc.pid))
-    wait_for(
-        lambda: (
-            request(nvr, "GET", nvr_url + "/api/settings/home-assistant").json()[
-                "instance_id"
-            ]
-            == identity
-        )
-    )
-    wait_for(media_listener_ready)
-    main_publisher, second = publisher("ha-test-main"), publisher("ha-test-second")
 
-    def recovered_sources_active():
-        for sid, proc in (
-            ("ha-test-main", main_publisher),
-            ("ha-test-second", second),
-        ):
-            if proc.poll() is not None:
-                raise AssertionError(
-                    f"After NVR restart RTMP publisher {sid} exited with "
-                    f"{proc.returncode}; see {root / (sid + '.log')}"
-                )
-        return streams_active("ha-test-main", "ha-test-second")
-
-    wait_for(recovered_sources_active)
-    wait_for(lambda: available("ha-test-main", True))
-    video("ha-test-main")
-    passed("NVR restart preserves database identity, publication choices and HA entity")
-
-    pid = int((root / "ha.pid").read_text())
-    os.kill(pid, signal.SIGTERM)
-    wait_for(lambda: process_gone(pid), 45)
-    with (root / "ha-console.log").open("a") as output:
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "homeassistant",
-                "--config",
-                str(root / "ha"),
-                "--log-file",
-                str(root / "ha.log"),
-            ],
-            cwd=root,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
+    def restart_nvr(round_number):
+        nonlocal main_publisher, second
+        stop(main_publisher)
+        stop(second)
+        pid = int((root / "nvr.pid").read_text())
+        os.kill(pid, signal.SIGTERM)
+        wait_for(lambda: process_gone(pid), 45)
+        with (root / "nvr-console.log").open("a") as output:
+            proc = subprocess.Popen(
+                [str(args.nvr_binary), "--config", str(root / "nvr.yaml")],
+                cwd=root,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        (root / "nvr.pid").write_text(str(proc.pid))
+        wait_for(
+            lambda: (
+                request(nvr, "GET", nvr_url + "/api/settings/home-assistant").json()[
+                    "instance_id"
+                ]
+                == identity
+            )
         )
-    (root / "ha.pid").write_text(str(proc.pid))
-    wait_for(lambda: available("ha-test-main", True))
-    video("ha-test-main")
-    passed("HA restart restores cameras and live playback without duplicate entities")
+        wait_for(media_listener_ready)
+        main_publisher = publisher("ha-test-main")
+        second = publisher("ha-test-second")
+
+        def recovered_sources_active():
+            for sid, source_proc in (
+                ("ha-test-main", main_publisher),
+                ("ha-test-second", second),
+            ):
+                if source_proc.poll() is not None:
+                    raise AssertionError(
+                        f"After NVR restart round {round_number} RTMP publisher {sid} "
+                        f"exited with {source_proc.returncode}; see {root / (sid + '.log')}"
+                    )
+            return streams_active("ha-test-main", "ha-test-second")
+
+        wait_for(recovered_sources_active)
+        wait_for(lambda: available("ha-test-main", True))
+        video("ha-test-main")
+        passed(
+            f"NVR restart round {round_number}/3 preserves database identity, "
+            "publication choices and HA entity"
+        )
+
+    def restart_ha(round_number):
+        pid = int((root / "ha.pid").read_text())
+        os.kill(pid, signal.SIGTERM)
+        wait_for(lambda: process_gone(pid), 45)
+        with (root / "ha-console.log").open("a") as output:
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "homeassistant",
+                    "--config",
+                    str(root / "ha"),
+                    "--log-file",
+                    str(root / "ha.log"),
+                ],
+                cwd=root,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        (root / "ha.pid").write_text(str(proc.pid))
+        wait_for(lambda: available("ha-test-main", True))
+        video("ha-test-main")
+        passed(
+            f"HA restart round {round_number}/2 restores cameras and live playback "
+            "without duplicate entities"
+        )
+
+    for round_number in range(1, 4):
+        restart_nvr(round_number)
+    for round_number in range(1, 3):
+        restart_ha(round_number)
 
     states = request(ha, "GET", ha_url + "/api/states").json()
     assert (
