@@ -357,23 +357,33 @@ func ResolveMISSURLContext(ctx context.Context, xiaomiCfg XiaomiCloudConfig, did
 		return "", fmt.Errorf("xiaomi cloud auth: %w", err)
 	}
 
-	// Get device LAN IP from cloud device list.
-	var deviceIP string
 	devices, err := GetDeviceListContext(ctx, session)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
 		cloudLogger.Warn("failed to get device list for IP lookup", "error", err)
-	} else {
-		for _, d := range devices {
-			if d.DID == did {
-				deviceIP = d.IP
-				if model == "" {
-					model = d.Model
-				}
-				break
+	}
+	return resolveMISSWithSession(ctx, session, did, model, devices)
+}
+
+func resolveMISSWithSession(ctx context.Context, session *CloudSession, did, model string, devices []CloudDevice) (string, error) {
+	var deviceIP string
+	for _, d := range devices {
+		if d.DID == did {
+			deviceIP = d.IP
+			if model == "" {
+				model = d.Model
 			}
+			break
+		}
+	}
+	if strings.Contains(model, ".cateye.") {
+		if err := wakeCamera(ctx, session, did); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			cloudLogger.Warn("camera wakeup failed", "did", did, "error", err)
 		}
 	}
 

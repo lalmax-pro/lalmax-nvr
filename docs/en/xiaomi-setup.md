@@ -129,6 +129,10 @@ The live-view control pad provides four directions and three speed settings. Hol
 
 Controls reuse the active streaming connection. Disconnected or reconnecting cameras return `503`. Motor compatibility still requires testing on the specific model.
 
+CW400 (`isa.camera.hlc8a`) and CW500 (`isa.camera.500dh`) use fixed-step motor commands; their step size is determined by the camera and the speed setting does not alter it.
+
+The recorder keeps an authenticated cloud session for up to 10 minutes and the device list for up to 30 seconds. A credential change or failed resolution invalidates the cached session; each connection still obtains a fresh device authorization. Doorbell models are sent a wakeup request before connection.
+
 - `POST /api/cameras/{id}/ptz/move`: `{"mode":"continuous","pan":-0.5,"tilt":0,"zoom":0}`.
 - `POST /api/cameras/{id}/ptz/stop`: no request body.
 

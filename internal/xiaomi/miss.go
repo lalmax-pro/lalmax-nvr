@@ -61,6 +61,8 @@ const (
 	ModelC300     = "chuangmi.camera.72ac1"
 	ModelXiaofang = "isa.camera.isc5c1"
 	ModelHLC8     = "isa.camera.hlc8"
+	ModelCW400    = "isa.camera.hlc8a"
+	ModelCW500    = "isa.camera.500dh"
 )
 
 // missHdrSize is the size of a MISS media packet header.
@@ -211,10 +213,24 @@ func (c *MISSClient) MotorControlContext(ctx context.Context, direction string, 
 	default:
 		return fmt.Errorf("unsupported motor direction %q", direction)
 	}
-	body, err := json.Marshal(struct {
+	if c.model == ModelCW400 || c.model == ModelCW500 {
+		// Each command is one step; these models stop on their own.
+		if direction == "stop" {
+			return ctx.Err()
+		}
+		operation := map[string]int{"left": 1, "right": 2, "up": 3, "down": 4}[direction]
+		return c.writeMotorBody(ctx, struct {
+			Operation int `json:"operation"`
+		}{operation})
+	}
+	return c.writeMotorBody(ctx, struct {
 		Direction string `json:"direction"`
 		Speed     int    `json:"speed"`
 	}{direction, speed})
+}
+
+func (c *MISSClient) writeMotorBody(ctx context.Context, payload any) error {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -247,7 +263,7 @@ func (c *MISSClient) StartMedia(channel, quality string, audioEnabled ...bool) e
 	case "", "hd":
 		// Different models require different default quality settings.
 		switch c.model {
-		case ModelC200, ModelC300:
+		case ModelC200, ModelC300, ModelCW400, ModelCW500:
 			quality = "3"
 		default:
 			quality = "2"
