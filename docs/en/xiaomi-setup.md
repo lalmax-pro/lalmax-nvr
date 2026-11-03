@@ -138,6 +138,8 @@ Movement expires after two seconds. Clients must renew commands to continue movi
 
 ## Two-way Audio (Talk)
 
+Set lens and quality in the camera URL, for example `xiaomi://123?channel=1&quality=sd`. `channel` accepts `0` (default lens) or `1` (second lens); `quality` accepts `hd`, `sd`, and `auto`, with `hd` as the default. These options are currently configured through the URL.
+
 Xiaomi cameras support two-way audio, allowing you to send audio to the camera's speaker.
 
 ### Usage

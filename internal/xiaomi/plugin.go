@@ -6,6 +6,7 @@
 package xiaomi
 
 import (
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -52,10 +53,23 @@ func SetCloudConfig(cfg config.XiaomiConfig) {
 // extractDID extracts the device ID from a xiaomi:// URL.
 // Input: "xiaomi://655448418" → Output: "655448418"
 func extractDID(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err == nil && u.Scheme == "xiaomi" {
+		return u.Host
+	}
 	return strings.TrimPrefix(rawURL, "xiaomi://")
 }
 
+func cameraStreamOptions(rawURL string) (string, string) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", ""
+	}
+	return u.Query().Get("channel"), u.Query().Get("quality")
+}
+
 func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manager, db RecordingDB, opts ...*metrics.Metrics) model.Recorder {
+	channel, quality := cameraStreamOptions(cfg.URL)
 	did := cfg.DID
 	if did == "" {
 		did = extractDID(cfg.URL)
@@ -64,6 +78,8 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 	recCfg := XiaomiRecorderConfig{
 		CameraID:            cfg.ID,
 		DID:                 did,
+		Channel:             channel,
+		Quality:             quality,
 		CloudCfg:            currentCloudConfig(),
 		CloudConfigProvider: currentCloudConfig,
 		SegmentDur:          30 * time.Second,
@@ -74,6 +90,7 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 }
 
 func (p *XiaomiPlugin) NewRecorderWithMediaEngine(cfg config.CameraConfig, store *storage.Manager, db RecordingDB, mediaEngine media.Engine, opts ...*metrics.Metrics) model.Recorder {
+	channel, quality := cameraStreamOptions(cfg.URL)
 	did := cfg.DID
 	if did == "" {
 		did = extractDID(cfg.URL)
@@ -82,6 +99,8 @@ func (p *XiaomiPlugin) NewRecorderWithMediaEngine(cfg config.CameraConfig, store
 	recCfg := XiaomiRecorderConfig{
 		CameraID:            cfg.ID,
 		DID:                 did,
+		Channel:             channel,
+		Quality:             quality,
 		CloudCfg:            currentCloudConfig(),
 		CloudConfigProvider: currentCloudConfig,
 		SegmentDur:          30 * time.Second,
