@@ -159,7 +159,7 @@ jobs:
 
   transcode-media:
     # Run real encoders for integration PRs and main: no branch-name skips.
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
