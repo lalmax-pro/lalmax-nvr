@@ -86,11 +86,13 @@ type XiaomiRecorder struct {
 	store   SegmentStore
 	metrics *metrics.Metrics
 
-	mu         sync.Mutex
-	status     model.RecorderStatus
-	cancel     context.CancelFunc
-	done       chan struct{}
-	retryCount int
+	lifecycleMu sync.Mutex // Serializes Start and Stop through cleanup.
+	active      bool
+	mu          sync.Mutex
+	status      model.RecorderStatus
+	cancel      context.CancelFunc
+	done        chan struct{}
+	retryCount  int
 
 	// lal custom pub session
 	pubSession media.CustomizePubSession
@@ -103,7 +105,8 @@ type XiaomiRecorder struct {
 	codecOK bool   // true once codec type is determined
 
 	// Audio state (probed from first audio packet)
-	audioCodecID uint32 // MISS codec ID for audio (0 = not detected yet)
+	audioNormalizer missAudioNormalizer
+	audioCodecID    uint32 // MISS codec ID for audio (0 = not detected yet)
 
 	Hub         *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
 	streamStart time.Time        // For PTS rebase (used by forwardHLS)
@@ -151,55 +154,73 @@ func (r *XiaomiRecorder) SetErrorReporter(reporter ErrorReporter) {
 
 // Start begins recording from the Xiaomi camera in a background goroutine.
 func (r *XiaomiRecorder) Start(ctx context.Context) error {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
 	r.mu.Lock()
-	if r.status == model.StatusRecording || r.status == model.StatusReconnecting {
-		r.mu.Unlock()
+	defer r.mu.Unlock()
+	if r.cancel != nil || r.pubSession != nil || r.status == model.StatusRecording || r.status == model.StatusReconnecting {
 		return fmt.Errorf("recorder for %q already running", r.cfg.CameraID)
 	}
 	ctx, cancel := context.WithCancel(observability.DetachedContext(ctx))
+	if r.cfg.MediaEngine != nil {
+		pub, err := r.cfg.MediaEngine.AddCustomizePubSession(ctx, r.cfg.CameraID)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("failed to register with lal: %w", err)
+		}
+		r.pubSession = pub
+	}
 	r.cancel = cancel
 	r.done = make(chan struct{})
 	r.status = model.StatusRecording
-	r.incActive()
 	r.streamStart = time.Now()
-
-	// Register with lal if mediaEngine is available
-	if r.cfg.MediaEngine != nil {
-		pubSession, err := r.cfg.MediaEngine.AddCustomizePubSession(ctx, r.cfg.CameraID)
-		if err != nil {
-			r.mu.Unlock()
-			r.decActive()
-			return fmt.Errorf("failed to register with lal: %w", err)
-		}
-		r.pubSession = pubSession
-	}
-	r.mu.Unlock()
-
+	r.active = true
+	r.incActive()
 	go r.run(ctx)
 	return nil
 }
 
-// Stop terminates the recording goroutine and waits for it to finish.
+// Stop waits for the producer before deleting its publish session. Concurrent
+// starts/stops serialize so an old goroutine cannot close a new run's channel.
 func (r *XiaomiRecorder) Stop() error {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
 	r.mu.Lock()
-	if r.status == model.StatusStopped {
+	if r.cancel == nil && r.pubSession == nil {
 		r.mu.Unlock()
 		return nil
 	}
-	r.status = model.StatusStopped
-	r.decActive()
-	if r.cancel != nil {
-		r.cancel()
-	}
-	// Clean up lal pub session
-	if r.pubSession != nil && r.cfg.MediaEngine != nil {
-		_ = r.cfg.MediaEngine.DelCustomizePubSession(context.Background(), r.pubSession)
-		r.pubSession = nil
+	done, cancel, pub := r.done, r.cancel, r.pubSession
+	if cancel != nil {
+		cancel()
 	}
 	r.mu.Unlock()
-
-	<-r.done
+	if done != nil {
+		<-done
+	}
+	if pub != nil && r.cfg.MediaEngine != nil {
+		if err := r.cfg.MediaEngine.DelCustomizePubSession(context.Background(), pub); err != nil {
+			return fmt.Errorf("failed to remove lal publish session: %w", err)
+		}
+	}
+	r.mu.Lock()
+	r.pubSession = nil
+	r.cancel = nil
+	r.status = model.StatusStopped
+	r.mu.Unlock()
 	return nil
+}
+
+func (r *XiaomiRecorder) finishRun() {
+	r.mu.Lock()
+	r.status = model.StatusStopped
+	if r.active {
+		r.active = false
+		r.decActive()
+	}
+	done := r.done
+	r.mu.Unlock()
+	close(done)
 }
 
 // Status returns the current recorder status.
@@ -384,8 +405,7 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			xiaomiLogger.Error("PANIC recovered in run", "camera_id", r.cfg.CameraID, "panic", panicErr, "stack", string(buf))
 		}
 	}()
-	defer close(r.done)
-	defer r.setStatus(model.StatusStopped)
+	defer r.finishRun()
 
 	var retryCount int
 	for {
@@ -394,7 +414,7 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			attribute.String("nvr.camera.id", r.cfg.CameraID),
 			attribute.String("nvr.media.protocol", "xiaomi"),
 		)
-		missURL, err := ResolveMISSURL(r.currentCloudConfig(), r.cfg.DID, r.cfg.Model)
+		missURL, err := ResolveMISSURLContext(resolveCtx, r.currentCloudConfig(), r.cfg.DID, r.cfg.Model)
 		observability.EndBusinessSpan(resolveSpan, err)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -447,7 +467,7 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 // connectAndRecordWithQuality connects to the camera with the given quality ("hd" or "sd").
 // If the first video packet times out on HD, retries with SD automatically.
 func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missURL string, quality string) (error, bool) {
-	client, err := NewMISSClient(missURL, r.cfg.IdleTimeout)
+	client, err := NewMISSClientContext(ctx, missURL, r.cfg.IdleTimeout)
 	if err != nil {
 		return fmt.Errorf("miss connect: %w", err), false
 	}
@@ -479,6 +499,7 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 	r.pps = nil
 	r.vps = nil
 	r.audioCodecID = 0
+	r.audioNormalizer = missAudioNormalizer{}
 
 	var lastTimestamp uint64
 	videoReceived := false
@@ -520,7 +541,7 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 		// Handle audio packets when AudioEnabled.
 		if pkt.CodecID >= 1024 {
 			if r.cfg.AudioEnabled {
-				r.forwardAudio(pkt.CodecID, pkt.Payload)
+				r.forwardAudio(pkt.CodecID, pkt.Payload, pkt.SampleRate())
 			}
 			continue
 		}
@@ -710,7 +731,11 @@ func missCodecToAudio(codecID uint32) (model.AudioCodec, bool) {
 }
 
 // forwardAudio feeds audio data to lal via CustomizePubSession and to HLS consumers via StreamHub.
-func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
+func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte, sampleRates ...uint32) {
+	rate := uint32(8000)
+	if len(sampleRates) > 0 {
+		rate = sampleRates[0]
+	}
 	if !r.cfg.AudioEnabled {
 		return
 	}
@@ -727,6 +752,14 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 
 	pts := time.Since(r.streamStart).Nanoseconds() * 90000 / int64(time.Second)
 
+	payload, err := r.audioNormalizer.normalize(codecID, rate, payload)
+	if err != nil {
+		xiaomiLogger.Warn("invalid audio sample rate or payload", "camera_id", r.cfg.CameraID, "error", err)
+		return
+	}
+	if len(payload) == 0 {
+		return
+	} // Carry an odd 16 kHz sample into the next packet.
 	pt, lalPayload, hubPayload, err := missAudioPayload(codecID, payload)
 	if err != nil {
 		xiaomiLogger.Warn("invalid audio payload", "camera_id", r.cfg.CameraID, "error", err)

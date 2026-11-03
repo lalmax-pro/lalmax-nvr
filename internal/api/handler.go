@@ -155,6 +155,7 @@ type Handler struct {
 	homeAssistantMu       sync.Mutex
 	homeAssistantWHEPKey  []byte
 	voipSettingsMu        sync.Mutex
+	xiaomiMu              sync.Mutex
 	voipRestarter         VoIPRestarter
 	db                    storage.APIRepository
 	store                 *storage.Manager

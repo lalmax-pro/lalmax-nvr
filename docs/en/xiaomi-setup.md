@@ -62,6 +62,7 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 - **Live Preview**: WebRTC, HLS, HTTP-FLV playback
 - **Recording**: Automatic MP4 segment recording
 - **Audio**: G.711 (PCMA/PCMU) and Opus audio codecs
+- **Audio sample rate**: Received 16 kHz G.711/PCM is low-pass filtered and resampled to the downstream 8 kHz rate; Opus retains its encoding.
 - **Two-way Audio**: Send audio to camera speaker via WebSocket
 - **Dual-lens Support**: Main/secondary channel selection
 - **Auto Fallback**: HD to SD fallback when the first video frame times out, including audio-only connections
@@ -86,6 +87,8 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 7. **Configure**: Customize settings for each camera (retention, quality, etc.)
 
 8. **Save**: Click "Save Configuration" to apply changes
+
+A wrong verification code or temporary network failure can be retried in the current login session. Sessions expire after 10 minutes, after which login must restart. Credentials are applied to running cameras only after the configuration is saved successfully; persistence failures are reported as errors.
 
 ### Manual Configuration
 

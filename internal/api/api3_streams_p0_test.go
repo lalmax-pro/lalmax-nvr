@@ -692,7 +692,7 @@ func TestApi3XiaomiLocalAuth(t *testing.T) {
 	require.NotNil(t, auth)
 	require.NoError(t, auth.SetCloudConfig(context.Background(), "user", "token", "cn"))
 
-	// Cloud calls fail fast with empty credentials and never reach the network.
+	// Invalid arguments and canceled operations never reach the network.
 	_, verify, err := auth.SignIn(context.Background(), "", "", "cn")
 	require.Error(t, err)
 	require.Nil(t, verify)
@@ -702,9 +702,11 @@ func TestApi3XiaomiLocalAuth(t *testing.T) {
 	_, verify, err = auth.SubmitVerify(context.Background(), "missing-session", "ticket")
 	require.Error(t, err)
 	require.Nil(t, verify)
-	_, err = auth.ListDevices(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = auth.ListDevices(ctx)
 	require.Error(t, err)
-	_, err = auth.CheckVendor(context.Background(), "did-1")
+	_, err = auth.CheckVendor(ctx, "did-1")
 	require.Error(t, err)
 
 	// Helper conversions.

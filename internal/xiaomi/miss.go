@@ -8,6 +8,7 @@ package xiaomi
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -105,6 +106,13 @@ func (p *MISSPacket) SampleRate() uint32 {
 // NewMISSClient parses a MISS URL, establishes a CS2 connection, and performs login.
 // URL format: miss://host?vendor=cs2&device_public=...&client_private=...&client_public=...&sign=...&model=...
 func NewMISSClient(rawURL string, idleTimeout time.Duration) (*MISSClient, error) {
+	return NewMISSClientContext(context.Background(), rawURL, idleTimeout)
+}
+
+func NewMISSClientContext(ctx context.Context, rawURL string, idleTimeout time.Duration) (*MISSClient, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, err
@@ -123,7 +131,7 @@ func NewMISSClient(rawURL string, idleTimeout time.Duration) (*MISSClient, error
 	var conn MISSConn
 	switch s := query.Get("vendor"); s {
 	case "cs2":
-		conn, err = CS2Dial(u.Host, query.Get("transport"), idleTimeout)
+		conn, err = CS2DialContext(ctx, u.Host, query.Get("transport"), idleTimeout)
 	default:
 		err = fmt.Errorf("miss: unsupported vendor %q", s)
 	}
@@ -132,13 +140,22 @@ func NewMISSClient(rawURL string, idleTimeout time.Duration) (*MISSClient, error
 		return nil, err
 	}
 
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
 	// 3. Login with credentials.
 	err = missLogin(conn, query.Get("client_public"), query.Get("sign"))
 	if err != nil {
 		_ = conn.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 
+	if err := ctx.Err(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	return &MISSClient{Conn: conn, key: key, model: model}, nil
 }
 

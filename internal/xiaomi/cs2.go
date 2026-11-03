@@ -9,6 +9,7 @@ package xiaomi
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -21,8 +22,15 @@ import (
 // CS2Dial establishes a CS2 P2P connection to a Xiaomi device.
 // transport: "udp" (default), "tcp", or "" (tries both).
 func CS2Dial(host, transport string, idleTimeout time.Duration) (*CS2Conn, error) {
-	conn, err := cs2Handshake(host, transport)
+	return CS2DialContext(context.Background(), host, transport, idleTimeout)
+}
+
+func CS2DialContext(ctx context.Context, host, transport string, idleTimeout time.Duration) (*CS2Conn, error) {
+	conn, err := cs2HandshakeContext(ctx, host, transport)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 
@@ -85,11 +93,20 @@ const cs2HdrSize = 32
 const cs2ReadTimeout = 15 * time.Second
 
 func cs2Handshake(host, transport string) (net.Conn, error) {
+	return cs2HandshakeContext(context.Background(), host, transport)
+}
+
+func cs2HandshakeContext(ctx context.Context, host, transport string) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	conn, err := cs2NewUDPConn(host, 32108)
 	if err != nil {
 		return nil, err
 	}
 
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	req := []byte{cs2Magic, cs2MsgLanSearch, 0, 0}
@@ -122,7 +139,7 @@ func cs2Handshake(host, transport string) (net.Conn, error) {
 
 	if res[1] == msgTCP {
 		_ = conn.Close()
-		return cs2NewTCPConn(conn.RemoteAddr().String())
+		return cs2NewTCPConnContext(ctx, conn.RemoteAddr().String())
 	}
 
 	return conn, nil
@@ -467,7 +484,11 @@ func (c *cs2UDPConn) WriteUntil(req []byte, ok func(res []byte) bool) ([]byte, e
 }
 
 func cs2NewTCPConn(addr string) (net.Conn, error) {
-	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	return cs2NewTCPConnContext(context.Background(), addr)
+}
+
+func cs2NewTCPConnContext(ctx context.Context, addr string) (net.Conn, error) {
+	conn, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
