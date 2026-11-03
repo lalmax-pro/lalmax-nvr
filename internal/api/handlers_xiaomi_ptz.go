@@ -89,3 +89,29 @@ func (h *Handler) handleXiaomiPTZStop(w http.ResponseWriter, r *http.Request, ca
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
+
+func (h *Handler) handleXiaomiPTZCapabilities(w http.ResponseWriter, r *http.Request) {
+	id := h.getCameraIDFromRequest(r)
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid camera ID")
+		return
+	}
+	camera, err := h.getCameraByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+	if camera.Protocol != "xiaomi" {
+		writeError(w, http.StatusBadRequest, "camera is not a Xiaomi device")
+		return
+	}
+	model := camera.Model
+	if h.camMgr != nil {
+		if recorder, ok := h.camMgr.GetRecorder(id).(interface{ MotorModel() string }); ok {
+			if activeModel := recorder.MotorModel(); activeModel != "" {
+				model = activeModel
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, xiaomi.MotorProfileForModel(model))
+}

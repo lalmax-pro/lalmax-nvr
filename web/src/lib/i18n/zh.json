@@ -886,6 +886,8 @@
   "onvif.encoding": "编码格式",
   "onvif.resolution": "分辨率",
   "ptz.control": "云台控制",
+  "ptz.fixedStep": "固定步长（速度不可调），需实机验证",
+  "ptz.capabilityUnknown": "云台能力未知，请实机验证",
   "ptz.speed": "云台速度",
   "ptz.speedLow": "低速",
   "ptz.speedMedium": "中速",

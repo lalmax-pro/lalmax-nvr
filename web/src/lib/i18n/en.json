@@ -886,6 +886,8 @@
   "onvif.encoding": "Encoding",
   "onvif.resolution": "Resolution",
   "ptz.control": "PTZ Control",
+  "ptz.fixedStep": "Fixed step (speed is not adjustable); verify on device",
+  "ptz.capabilityUnknown": "PTZ capability unknown; verify on device",
   "ptz.speed": "PTZ speed",
   "ptz.speedLow": "Slow",
   "ptz.speedMedium": "Medium",

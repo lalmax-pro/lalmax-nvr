@@ -992,3 +992,14 @@ export async function takeSnapshot(
 
   return response.blob();
 }
+
+export interface XiaomiMotorProfile {
+  model: string;
+  control: 'fixed_step' | 'unknown';
+  source: 'model' | 'unknown';
+  device_verified: boolean;
+}
+
+export async function getXiaomiMotorProfile(cameraId: string, signal?: AbortSignal): Promise<XiaomiMotorProfile> {
+  return apiRequest<XiaomiMotorProfile>(`/cameras/${encodeURIComponent(cameraId)}/ptz/capabilities`, { signal });
+}

@@ -1,15 +1,15 @@
 import { cleanup, fireEvent, render } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import PtzControl from '../components/PtzControl.svelte';
-const api = vi.hoisted(() => ({ move: vi.fn(), stop: vi.fn(), presets: vi.fn() }));
+const api = vi.hoisted(() => ({ move: vi.fn(), stop: vi.fn(), presets: vi.fn(), profile: vi.fn() }));
 vi.mock('$lib/api', async importOriginal => {
   const original = await importOriginal<typeof import('$lib/api')>();
-  return { ...original, ptzMove: api.move, ptzStop: api.stop, getPTZPresets: api.presets };
+  return { ...original, ptzMove: api.move, ptzStop: api.stop, getPTZPresets: api.presets, getXiaomiMotorProfile: api.profile };
 });
 vi.mock('$lib/i18n', () => ({ t: (key: string) => key }));
 afterEach(async () => { cleanup(); await new Promise(r => setTimeout(r, 0)); vi.clearAllMocks(); });
 function fixture(protocol = 'xiaomi') {
-  api.move.mockResolvedValue({}); api.stop.mockResolvedValue({}); api.presets.mockResolvedValue([]);
+  api.profile.mockResolvedValue({ control: 'unknown' }); api.move.mockResolvedValue({}); api.stop.mockResolvedValue({}); api.presets.mockResolvedValue([]);
   return render(PtzControl, { cameraId: 'cam', enabled: true, protocol });
 }
 describe('PTZ controls', () => {
@@ -23,6 +23,13 @@ describe('PTZ controls', () => {
     await vi.waitFor(() => expect(api.move).toHaveBeenCalledWith('cam', { mode: 'continuous', pan: 0, tilt: 1, zoom: 0 }));
     await fireEvent.pointerUp(window);
     await vi.waitFor(() => expect(api.stop).toHaveBeenCalledWith('cam'));
+  });
+  it('shows fixed-step control for recognized models', async () => {
+    const ui = fixture();
+    api.profile.mockResolvedValue({ control: 'fixed_step' });
+    await ui.rerender({ cameraId: 'next', enabled: true, protocol: 'xiaomi' });
+    await vi.waitFor(() => expect(ui.getByText('ptz.fixedStep')).toBeTruthy());
+    expect(ui.queryByRole('combobox', { name: 'ptz.speed' })).toBeNull();
   });
   it('retains zoom controls for other protocols', () => {
     const ui = fixture('onvif');

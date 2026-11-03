@@ -36,3 +36,17 @@ func TestStepMotorCommands(t *testing.T) {
 		})
 	}
 }
+
+func TestMotorProfileFromActiveSession(t *testing.T) {
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{}, nil)
+	require.Empty(t, r.MotorModel())
+	client, _ := newTestMISSClient()
+	client.model = ModelCW500
+	r.attachMotorClient(client)
+	profile := MotorProfileForModel(r.MotorModel())
+	require.Equal(t, "fixed_step", profile.Control)
+	require.False(t, profile.DeviceVerified)
+	r.detachMotorClient(client)
+	require.Empty(t, r.MotorModel())
+	require.Equal(t, "unknown", MotorProfileForModel("unrecognized").Control)
+}
