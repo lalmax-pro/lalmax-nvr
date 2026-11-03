@@ -214,6 +214,9 @@
             <button class="btn btn-secondary" disabled={runtime?.state !== 'running' || busy} onclick={() => act(() => derivedRecordingAction(job, 'start', controller.signal))}>开始派生录像</button>
             <button class="btn btn-secondary" disabled={runtime?.state !== 'running' || busy} onclick={() => act(() => derivedRecordingAction(job, 'stop', controller.signal))}>停止派生录像</button>
             <button class="btn btn-secondary" disabled={!job.enabled || busy || job.run_policy === 'on_demand'} onclick={() => act(() => transcodeJobAction(job, 'start', controller.signal))}>{t('transcode.start')}</button>
+            {#if job.run_policy === 'on_demand' && job.stopped_by_user}
+              <button class="btn btn-secondary" type="button" disabled={!job.enabled || busy} onclick={() => act(() => transcodeJobAction(job, 'resume', controller.signal))}>恢复按需播放</button>
+            {/if}
             <button class="btn btn-secondary" onclick={() => act(() => transcodeJobAction(job, 'stop', controller.signal))}>{t('transcode.stop')}</button>
             <button class="btn btn-secondary" onclick={() => { if (window.confirm(t('transcode.deleteConfirm'))) void act(() => transcodeJobAction(job, 'delete', controller.signal)); }}>{t('transcode.delete')}</button>
           </div>

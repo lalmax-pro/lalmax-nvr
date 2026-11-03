@@ -10,7 +10,7 @@ import (
 
 func TestTranscodeJobUnavailableFailsClosed(t *testing.T) {
 	h := &Handler{}
-	for _, handler := range []http.HandlerFunc{h.handleSaveTranscodeJob, h.handleStartTranscodeJob, h.handleStopTranscodeJob, h.handleDeleteTranscodeJob} {
+	for _, handler := range []http.HandlerFunc{h.handleSaveTranscodeJob, h.handleStartTranscodeJob, h.handleRearmTranscodeJob, h.handleStopTranscodeJob, h.handleDeleteTranscodeJob} {
 		w := httptest.NewRecorder()
 		handler(w, httptest.NewRequest("POST", "/jobs", nil))
 		if w.Code != 503 {

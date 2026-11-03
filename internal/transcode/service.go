@@ -129,6 +129,21 @@ func (s *Service) Start(ctx context.Context, id string, generation uint64) (Runt
 	}
 	return runtime, err
 }
+// RearmDemand is an explicit administrator action to clear a persisted Stop
+// intent. It does not acquire a process, create a lease, or bypass the probe
+// gate; only the next authorized consumer can start media with AcquireDemand.
+func (s *Service) RearmDemand(ctx context.Context, id string, generation uint64) error {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    j, err := s.job(ctx, id, generation)
+    if err != nil { return err }
+    if j.RunPolicy != OnDemand || !j.Enabled {
+        return &Error{Code: "demand_unavailable", Message: "only enabled on-demand jobs can be rearmed"}
+    }
+    if !j.StoppedByUser { return nil }
+    return s.repo.SetTranscodeJobStopped(ctx, id, generation, false)
+}
+
 func (s *Service) Stop(ctx context.Context, id string, generation uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

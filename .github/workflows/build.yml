@@ -158,8 +158,8 @@ jobs:
           echo "Coverage threshold check passed"
 
   transcode-media:
-    # Execute real encoders only in the dedicated Issue #66 PR.
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/issue-66-transcoding'
+    # Run real encoders for integration PRs and main: no branch-name skips.
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -178,10 +178,420 @@ jobs:
         env:
           NVR_TRANSCODE_MEDIA_TEST: '1'
         run: go test -count=1 -timeout=5m -v ./internal/transcode -run '^TestFFmpegReal(SelfTest|CopySelfTest|G711ASelfTest)$'
-      - name: GStreamer AAC and video-only real encode and decode
+      - name: GStreamer AAC and G711A real encode and decode
         env:
           NVR_GSTREAMER_SELFTEST: '1'
-        run: go test -count=1 -timeout=5m -v ./internal/transcode -run '^Test(GStreamerActualSelfTest|GStreamerRealG711ASelfTest)$'
+        run: go test -count=1 -timeout=5m -v ./internal/transcode -run '^Test(GStreamerActualSelfTest|GStreamerRealG711ASelfTest)
+
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: actions/setup-node@v4.2.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd web
+          npm ci
+          npm test
+          npm exec vitest run src/__tests__/flv-playback.test.ts
+          npm run build
+          cp -r dist/* ../internal/ui/static/
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend
+          path: internal/ui/static/
+
+  build-binaries:
+    runs-on: ubuntu-latest
+    needs: build-frontend
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+          - goos: linux
+            goarch: arm
+            goarm: 7
+            suffix: linux-armv7
+          - goos: windows
+            goarch: amd64
+            suffix: windows-amd64
+            ext: .exe
+          - goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: actions/setup-go@v5.2.0
+        with:
+          go-version: '1.26.2'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4.2.0
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4.2.0
+        with:
+          name: frontend
+          path: internal/ui/static/
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -ldflags="-s -w \
+            -X main.appVersion=${{ github.ref_name }} \
+            -X main.commitHash=${GITHUB_SHA::7} \
+            -X main.buildTime=$(date -u +%Y%m%d%H%M%S)" \
+            -o lalmax-nvr-${{ matrix.suffix }}${{ matrix.ext }} \
+            ./cmd/lalmax-nvr/
+
+      - name: Package release (unix)
+        if: matrix.goos != 'windows'
+        run: |
+          mkdir -p lalmax-nvr-${{ matrix.suffix }}-release
+          cp lalmax-nvr-${{ matrix.suffix }} lalmax-nvr-${{ matrix.suffix }}-release/
+          cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}-release/
+          cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}-release/
+          cp docs/QUICKSTART.md lalmax-nvr-${{ matrix.suffix }}-release/
+          cp -r scripts/unix lalmax-nvr-${{ matrix.suffix }}-release/scripts
+          tar czf lalmax-nvr-${{ matrix.suffix }}.tar.gz lalmax-nvr-${{ matrix.suffix }}-release
+
+      - name: Package release (windows)
+        if: matrix.goos == 'windows'
+        run: |
+          mkdir -p lalmax-nvr-${{ matrix.suffix }}-release
+          cp lalmax-nvr-${{ matrix.suffix }}.exe lalmax-nvr-${{ matrix.suffix }}-release/
+          cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}-release/
+          cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}-release/
+          cp docs/QUICKSTART.md lalmax-nvr-${{ matrix.suffix }}-release/
+          cp -r scripts/windows lalmax-nvr-${{ matrix.suffix }}-release/scripts
+          zip -r lalmax-nvr-${{ matrix.suffix }}.zip lalmax-nvr-${{ matrix.suffix }}-release
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4.2.0
+        with:
+          name: lalmax-nvr-${{ matrix.suffix }}
+          path: |
+            lalmax-nvr-${{ matrix.suffix }}.tar.gz
+            lalmax-nvr-${{ matrix.suffix }}.zip
+            lalmax-nvr-${{ matrix.suffix }}${{ matrix.ext }}
+
+  release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs: [build-binaries, home-assistant]
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V')
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4.2.0
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          append_body: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/lalmax-nvr-home-assistant/lalmax_nvr.zip
+            artifacts/lalmax-nvr-linux-amd64/lalmax-nvr-linux-amd64.tar.gz
+            artifacts/lalmax-nvr-linux-arm64/lalmax-nvr-linux-arm64.tar.gz
+            artifacts/lalmax-nvr-linux-armv7/lalmax-nvr-linux-armv7.tar.gz
+            artifacts/lalmax-nvr-windows-amd64/lalmax-nvr-windows-amd64.zip
+            artifacts/lalmax-nvr-darwin-amd64/lalmax-nvr-darwin-amd64.tar.gz
+            artifacts/lalmax-nvr-darwin-arm64/lalmax-nvr-darwin-arm64.tar.gz
+
+  docker:
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    needs: [build-binaries, home-assistant]
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V')
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalize release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          printf 'version=%s\n' "${RELEASE_TAG#[vV]}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5.6.1
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }},enable=${{ !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.version }},enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.8.0
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6.12.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify G711 RTMP-to-RTSP SDP clock
+        run: |
+          cd third/lal
+          go test -count=1 -timeout=2m ./pkg/remux -run '^TestG711MetadataDefaultsTo8000
+
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: actions/setup-node@v4.2.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd web
+          npm ci
+          npm test
+          npm exec vitest run src/__tests__/flv-playback.test.ts
+          npm run build
+          cp -r dist/* ../internal/ui/static/
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend
+          path: internal/ui/static/
+
+  build-binaries:
+    runs-on: ubuntu-latest
+    needs: build-frontend
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+          - goos: linux
+            goarch: arm
+            goarm: 7
+            suffix: linux-armv7
+          - goos: windows
+            goarch: amd64
+            suffix: windows-amd64
+            ext: .exe
+          - goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: actions/setup-go@v5.2.0
+        with:
+          go-version: '1.26.2'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4.2.0
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4.2.0
+        with:
+          name: frontend
+          path: internal/ui/static/
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -ldflags="-s -w \
+            -X main.appVersion=${{ github.ref_name }} \
+            -X main.commitHash=${GITHUB_SHA::7} \
+            -X main.buildTime=$(date -u +%Y%m%d%H%M%S)" \
+            -o lalmax-nvr-${{ matrix.suffix }}${{ matrix.ext }} \
+            ./cmd/lalmax-nvr/
+
+      - name: Package release (unix)
+        if: matrix.goos != 'windows'
+        run: |
+          mkdir -p lalmax-nvr-${{ matrix.suffix }}-release
+          cp lalmax-nvr-${{ matrix.suffix }} lalmax-nvr-${{ matrix.suffix }}-release/
+          cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}-release/
+          cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}-release/
+          cp docs/QUICKSTART.md lalmax-nvr-${{ matrix.suffix }}-release/
+          cp -r scripts/unix lalmax-nvr-${{ matrix.suffix }}-release/scripts
+          tar czf lalmax-nvr-${{ matrix.suffix }}.tar.gz lalmax-nvr-${{ matrix.suffix }}-release
+
+      - name: Package release (windows)
+        if: matrix.goos == 'windows'
+        run: |
+          mkdir -p lalmax-nvr-${{ matrix.suffix }}-release
+          cp lalmax-nvr-${{ matrix.suffix }}.exe lalmax-nvr-${{ matrix.suffix }}-release/
+          cp config/config.example.yaml lalmax-nvr-${{ matrix.suffix }}-release/
+          cp README.md README.zh.md LICENSE lalmax-nvr-${{ matrix.suffix }}-release/
+          cp docs/QUICKSTART.md lalmax-nvr-${{ matrix.suffix }}-release/
+          cp -r scripts/windows lalmax-nvr-${{ matrix.suffix }}-release/scripts
+          zip -r lalmax-nvr-${{ matrix.suffix }}.zip lalmax-nvr-${{ matrix.suffix }}-release
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4.2.0
+        with:
+          name: lalmax-nvr-${{ matrix.suffix }}
+          path: |
+            lalmax-nvr-${{ matrix.suffix }}.tar.gz
+            lalmax-nvr-${{ matrix.suffix }}.zip
+            lalmax-nvr-${{ matrix.suffix }}${{ matrix.ext }}
+
+  release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs: [build-binaries, home-assistant]
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V')
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4.2.0
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          append_body: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/lalmax-nvr-home-assistant/lalmax_nvr.zip
+            artifacts/lalmax-nvr-linux-amd64/lalmax-nvr-linux-amd64.tar.gz
+            artifacts/lalmax-nvr-linux-arm64/lalmax-nvr-linux-arm64.tar.gz
+            artifacts/lalmax-nvr-linux-armv7/lalmax-nvr-linux-armv7.tar.gz
+            artifacts/lalmax-nvr-windows-amd64/lalmax-nvr-windows-amd64.zip
+            artifacts/lalmax-nvr-darwin-amd64/lalmax-nvr-darwin-amd64.tar.gz
+            artifacts/lalmax-nvr-darwin-arm64/lalmax-nvr-darwin-arm64.tar.gz
+
+  docker:
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    needs: [build-binaries, home-assistant]
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V')
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalize release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          printf 'version=%s\n' "${RELEASE_TAG#[vV]}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5.6.1
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }},enable=${{ !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.version }},enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.8.0
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6.12.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
 
 
   build-frontend:

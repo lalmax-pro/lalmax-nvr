@@ -86,6 +86,12 @@ func (r *Rtmp2RtspRemuxer) FeedRtmpMsg(msg base.RtmpMsg) {
 			if samplerate, ok := meta.Find("audiosamplerate").(float64); ok {
 				r.audioSampleRate = int(samplerate)
 			}
+			// GStreamer flvmux emits G.711 codec metadata without an
+			// audiosamplerate field. The RTP clock for PCMA/PCMU is 8000 Hz;
+			// never emit a negative SDP clock when the metadata omits it.
+			if r.audioSampleRate <= 0 && (r.audioPt == base.AvPacketPtG711A || r.audioPt == base.AvPacketPtG711U) {
+				r.audioSampleRate = pcmDefaultSampleRate
+			}
 		}
 		return
 	case base.RtmpTypeIdAudio:

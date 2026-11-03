@@ -519,6 +519,7 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Patch("/api/transcoding/jobs/{id}", h.handleSaveTranscodeJob)
 		r.With(middleware.RequireOperatePermission()).Delete("/api/transcoding/jobs/{id}", h.handleDeleteTranscodeJob)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/start", h.handleStartTranscodeJob)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/resume", h.handleRearmTranscodeJob)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/record/start", h.handleStartDerivedRecording)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/record/stop", h.handleStopDerivedRecording)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/leases", h.handleAcquireTranscodeDemandLease)
