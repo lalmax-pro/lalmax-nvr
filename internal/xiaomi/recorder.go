@@ -374,13 +374,10 @@ func (r *XiaomiRecorder) reportVendorError(err error) {
 	if !strings.Contains(errMsg, "unsupported vendor") {
 		return
 	}
-	// Extract vendor name from error: "miss: unsupported vendor \"tutk\""
+	// Extract the unsupported vendor name from the error.
 	vendor := extractQuotedValue(errMsg)
-	msg := fmt.Sprintf("Camera uses unsupported transport vendor %q. Only CS2 is supported.", vendor)
+	msg := fmt.Sprintf("Camera uses unsupported transport vendor %q. Supported transports are CS2 and TUTK.", vendor)
 	errorType := "unsupported_vendor"
-	if vendor == "tutk" {
-		errorType = "tutk_incompatible"
-	}
 	r.cfg.ErrReporter.SetErrorDetail(r.cfg.CameraID, &model.CameraErrorDetail{
 		Type:       errorType,
 		Message:    msg,

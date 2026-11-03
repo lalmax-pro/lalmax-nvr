@@ -47,9 +47,9 @@ sequenceDiagram
 | 小方摄像头 | `isa.camera.isc5c1` | H264 | PCM | 云台摄像头 |
 | 小米 HLC8 | `isa.camera.hlc8` | H265 | PCMA | 双摄摄像头 |
 | Loock V2 | `loock.cateye.v02` | H264 | PCMA | 智能门铃 |
-| 大方摄像头 | `isa.camera.df3` | - | - | **不支持** - TUTK 协议 |
+| 大方摄像头 | `isa.camera.df3` | - | - | MISS 固件可尝试，旧版固件暂不支持 |
 
-**注意**：仅支持 CS2 协议的摄像头。大方摄像头使用 TUTK 协议，当前版本未实现。
+**注意**：支持 CS2 和 TUTK 传输的 MISS 设备；旧版设备专用登录和媒体协议暂不支持。TUTK 设备仍需实机验证。
 
 ## 功能特性
 
@@ -180,7 +180,7 @@ GET /api/xiaomi/talk/ws?camera_id={camera_id}
 ### 常见问题
 
 #### "不支持的厂商"错误
-- **原因**：摄像头使用 TUTK 协议
+- **原因**：摄像头使用尚未支持的传输协议
 - **解决方案**：确保您的摄像头型号在支持列表中
 
 #### "认证失败"错误

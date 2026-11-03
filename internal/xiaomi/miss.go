@@ -16,6 +16,8 @@ import (
 	"net"
 	"net/url"
 	"time"
+
+	"github.com/lalmax-pro/lalmax-nvr/internal/xiaomi/tutk"
 )
 
 // MISS protocol command constants.
@@ -131,11 +133,24 @@ func NewMISSClientContext(ctx context.Context, rawURL string, idleTimeout time.D
 
 	model := query.Get("model")
 
-	// 2. Establish transport connection (CS2 only, TUTK removed).
+	// 2. Establish the transport connection.
 	var conn MISSConn
 	switch s := query.Get("vendor"); s {
 	case "cs2":
 		conn, err = CS2DialContext(ctx, u.Host, query.Get("transport"), idleTimeout)
+	case "tutk":
+		if query.Get("uid") == "" {
+			return nil, errors.New("miss: TUTK UID is required")
+		}
+		var tutkConn *tutk.Conn
+		tutkConn, err = tutk.DialContext(ctx, u.Host, query.Get("uid"), "Miss", "client")
+		if err == nil {
+			if idleTimeout == 0 {
+				idleTimeout = defaultIdleTimeout
+			}
+			tutkConn.SetIdleTimeout(idleTimeout)
+			conn = tutkConn
+		}
 	default:
 		err = fmt.Errorf("miss: unsupported vendor %q", s)
 	}
