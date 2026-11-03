@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/event"
@@ -62,19 +63,21 @@ type XiaomiCloudConfig struct {
 
 // XiaomiRecorderConfig holds configuration for the Xiaomi recorder.
 type XiaomiRecorderConfig struct {
-	CameraID     string
-	DID          string            // Device ID extracted from xiaomi:// URL (e.g. "655448418")
-	Model        string            // Camera model (e.g. ModelC200, ModelC300)
-	CloudCfg     XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
-	SegmentDur   time.Duration
-	MaxBackoff   time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	InitBackoff  time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	DB           RecordingDB
-	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
-	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
-	IdleTimeout  time.Duration
-	EventBus     *event.EventBus
-	MediaEngine  media.Engine // For feeding frames into lal
+	CameraID            string
+	DID                 string                   // Device ID extracted from xiaomi:// URL (e.g. "655448418")
+	Model               string                   // Camera model (e.g. ModelC200, ModelC300)
+	CloudCfg            XiaomiCloudConfig        // Credentials for callers without a provider.
+	CloudConfigProvider func() XiaomiCloudConfig // Read fresh credentials before each reconnect.
+	SegmentDur          time.Duration
+	MaxBackoff          time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	InitBackoff         time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	DB                  RecordingDB
+	ErrReporter         ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
+	AudioEnabled        bool          // Capture and broadcast audio via StreamHub when true
+	FirstVideoTimeout   time.Duration
+	IdleTimeout         time.Duration
+	EventBus            *event.EventBus
+	MediaEngine         media.Engine // For feeding frames into lal
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
@@ -126,6 +129,9 @@ func NewXiaomiRecorder(cfg XiaomiRecorderConfig, store SegmentStore, opts ...*me
 	}
 	if cfg.InitBackoff == 0 {
 		cfg.InitBackoff = defaultInitBackoff
+	}
+	if cfg.FirstVideoTimeout == 0 {
+		cfg.FirstVideoTimeout = cs2ReadTimeout
 	}
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = defaultIdleTimeout
@@ -303,7 +309,7 @@ func (r *XiaomiRecorder) recordXiaomiReconnect() {
 	}
 }
 
-// reportVendorError checks if the error indicates an unsupported TUTK vendor
+// reportVendorError checks if the error indicates an unsupported transport vendor
 // and, if so, reports a detailed CameraErrorDetail via the ErrorReporter.
 // This fires on every reconnect attempt so the frontend always has current state.
 func (r *XiaomiRecorder) reportVendorError(err error) {
@@ -316,9 +322,13 @@ func (r *XiaomiRecorder) reportVendorError(err error) {
 	}
 	// Extract vendor name from error: "miss: unsupported vendor \"tutk\""
 	vendor := extractQuotedValue(errMsg)
-	msg := fmt.Sprintf("Camera uses unsupported transport vendor %q (TUTK). This camera model is not compatible.", vendor)
+	msg := fmt.Sprintf("Camera uses unsupported transport vendor %q. Only CS2 is supported.", vendor)
+	errorType := "unsupported_vendor"
+	if vendor == "tutk" {
+		errorType = "tutk_incompatible"
+	}
 	r.cfg.ErrReporter.SetErrorDetail(r.cfg.CameraID, &model.CameraErrorDetail{
-		Type:       "tutk_incompatible",
+		Type:       errorType,
 		Message:    msg,
 		DetectedAt: time.Now(),
 	})
@@ -358,6 +368,13 @@ func isTimeoutError(err error) bool {
 	return strings.Contains(msg, "no media data") || strings.Contains(msg, "no command data")
 }
 
+func (r *XiaomiRecorder) currentCloudConfig() XiaomiCloudConfig {
+	if r.cfg.CloudConfigProvider != nil {
+		return r.cfg.CloudConfigProvider()
+	}
+	return r.cfg.CloudCfg
+}
+
 // run is the main reconnect loop.
 func (r *XiaomiRecorder) run(ctx context.Context) {
 	defer func() {
@@ -377,7 +394,7 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			attribute.String("nvr.camera.id", r.cfg.CameraID),
 			attribute.String("nvr.media.protocol", "xiaomi"),
 		)
-		missURL, err := ResolveMISSURL(r.cfg.CloudCfg, r.cfg.DID, r.cfg.Model)
+		missURL, err := ResolveMISSURL(r.currentCloudConfig(), r.cfg.DID, r.cfg.Model)
 		observability.EndBusinessSpan(resolveSpan, err)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -422,22 +439,24 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 }
 
 // connectAndRecord connects to the Xiaomi camera, starts media, and records packets.
-// Tries HD first; falls back to SD if the camera sends no data on first packet.
+// Tries HD first; falls back to SD if the camera sends no video.
 func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (error, bool) {
 	return r.connectAndRecordWithQuality(ctx, missURL, "hd")
 }
 
 // connectAndRecordWithQuality connects to the camera with the given quality ("hd" or "sd").
-// If the first packet times out on HD, retries with SD automatically.
+// If the first video packet times out on HD, retries with SD automatically.
 func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missURL string, quality string) (error, bool) {
 	client, err := NewMISSClient(missURL, r.cfg.IdleTimeout)
 	if err != nil {
 		return fmt.Errorf("miss connect: %w", err), false
 	}
 	defer client.Conn.Close()
+	stopCancel := context.AfterFunc(ctx, func() { _ = client.Conn.Close() })
+	defer stopCancel()
 
 	ctx, err = observability.RunBusinessOperation(ctx, "recorder.xiaomi.start_media", func(context.Context) error {
-		return client.StartMedia("", quality)
+		return client.StartMedia("", quality, r.cfg.AudioEnabled)
 	},
 		attribute.String("nvr.camera.id", r.cfg.CameraID),
 		attribute.String("nvr.stream.id", r.cfg.CameraID),
@@ -462,7 +481,13 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 	r.audioCodecID = 0
 
 	var lastTimestamp uint64
-	firstPacket := true
+	videoReceived := false
+	var videoTimedOut atomic.Bool
+	firstVideoTimer := time.AfterFunc(r.cfg.FirstVideoTimeout, func() {
+		videoTimedOut.Store(true)
+		_ = client.Conn.Close()
+	})
+	defer firstVideoTimer.Stop()
 
 	for {
 		select {
@@ -474,8 +499,14 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 
 		pkt, err := client.ReadPacket()
 		if err != nil {
-			// If timeout on first packet with HD, try SD fallback.
-			if firstPacket && quality == "hd" && isTimeoutError(err) {
+			if ctx.Err() != nil {
+				return ctx.Err(), videoReceived
+			}
+			if !videoReceived && videoTimedOut.Load() {
+				err = fmt.Errorf("no media data: no video within %v", r.cfg.FirstVideoTimeout)
+			}
+			// Audio-only traffic must not suppress the first-video deadline.
+			if !videoReceived && quality == "hd" && (videoTimedOut.Load() || isTimeoutError(err)) {
 				xiaomiLogger.Warn("no HD data from camera, trying SD fallback",
 					"camera_id", r.cfg.CameraID, "model", r.cfg.Model)
 				client.Conn.Close()
@@ -483,10 +514,8 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 				return r.connectAndRecordWithQuality(ctx, missURL, "sd")
 			}
 			r.closeCurrentSegment()
-			return fmt.Errorf("miss read: %w", err), false
+			return fmt.Errorf("miss read: %w", err), videoReceived
 		}
-
-		firstPacket = false
 
 		// Handle audio packets when AudioEnabled.
 		if pkt.CodecID >= 1024 {
@@ -501,6 +530,10 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 			continue
 		}
 
+		if !videoReceived {
+			firstVideoTimer.Stop()
+			videoReceived = true
+		}
 		// Probe codec type from first video packet.
 		if !r.codecOK {
 			switch pkt.CodecID {
@@ -595,7 +628,7 @@ func (r *XiaomiRecorder) forwardVideo(nalu []byte) {
 		return
 	}
 
-	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
+	pts := time.Since(start).Milliseconds()
 
 	var nalus [][]byte
 	switch r.codec {
@@ -694,9 +727,14 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 
 	pts := time.Since(r.streamStart).Nanoseconds() * 90000 / int64(time.Second)
 
-	// Broadcast to HLS consumers via StreamHub
+	pt, lalPayload, hubPayload, err := missAudioPayload(codecID, payload)
+	if err != nil {
+		xiaomiLogger.Warn("invalid audio payload", "camera_id", r.cfg.CameraID, "error", err)
+		return
+	}
+	// StreamHub uses 90 kHz; lal AvPacket uses milliseconds.
 	if r.Hub != nil {
-		r.Hub.BroadcastAudio(pts, audioCodec, payload)
+		r.Hub.BroadcastAudio(pts, audioCodec, hubPayload)
 	}
 
 	r.mu.Lock()
@@ -706,24 +744,11 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 		return
 	}
 
-	var pkt base.AvPacket
-	switch audioCodec {
-	case model.AudioG711:
-		pkt = base.AvPacket{
-			PayloadType: base.AvPacketPtG711A,
-			Timestamp:   pts,
-			Pts:         pts,
-			Payload:     payload,
-		}
-	case model.AudioOpus:
-		pkt = base.AvPacket{
-			PayloadType: base.AvPacketPtOpus,
-			Timestamp:   pts,
-			Pts:         pts,
-			Payload:     payload,
-		}
-	default:
-		return
+	pkt := base.AvPacket{
+		PayloadType: pt,
+		Timestamp:   pts / 90,
+		Pts:         pts / 90,
+		Payload:     lalPayload,
 	}
 
 	if err := pub.FeedAvPacket(pkt); err != nil {

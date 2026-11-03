@@ -177,7 +177,11 @@ func (c *MISSClient) WriteCommand(data []byte) error {
 
 // StartMedia sends the video start command for the given channel and quality.
 // Quality: "auto"=0, "sd"=1, "hd"=2 (or 3 for C200/C300), default="hd".
-func (c *MISSClient) StartMedia(channel, quality string) error {
+func (c *MISSClient) StartMedia(channel, quality string, audioEnabled ...bool) error {
+	audio := 1
+	if len(audioEnabled) > 0 && !audioEnabled[0] {
+		audio = 0
+	}
 	// 0 - auto, 1 - sd, 2 - hd, default - hd
 	switch quality {
 	case "", "hd":
@@ -197,9 +201,9 @@ func (c *MISSClient) StartMedia(channel, quality string) error {
 	data := binary.BigEndian.AppendUint32(nil, missCmdVideoStart)
 	switch channel {
 	case "", "0":
-		data = fmt.Appendf(data, `{"videoquality":%s,"enableaudio":1}`, quality)
+		data = fmt.Appendf(data, `{"videoquality":%s,"enableaudio":%d}`, quality, audio)
 	default:
-		data = fmt.Appendf(data, `{"videoquality":-1,"videoquality2":%s,"enableaudio":1}`, quality)
+		data = fmt.Appendf(data, `{"videoquality":-1,"videoquality2":%s,"enableaudio":%d}`, quality, audio)
 	}
 	return c.WriteCommand(data)
 }

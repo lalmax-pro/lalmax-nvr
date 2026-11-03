@@ -64,7 +64,7 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 - **Audio**: G.711 (PCMA/PCMU) and Opus audio codecs
 - **Two-way Audio**: Send audio to camera speaker via WebSocket
 - **Dual-lens Support**: Main/secondary channel selection
-- **Auto Fallback**: HD to SD quality fallback when no HD data
+- **Auto Fallback**: HD to SD fallback when the first video frame times out, including audio-only connections
 
 ## Setup Methods
 
@@ -144,7 +144,13 @@ Xiaomi cameras support two-way audio, allowing you to send audio to the camera's
 GET /api/xiaomi/talk/ws?camera_id={camera_id}
 ```
 
-Connect via WebSocket and send binary PCMA audio data.
+After opening the WebSocket, read the server's `connected` status and `speaker_codec` before sending binary audio. Each message contains one 40 ms frame:
+
+- `1027`: 8 kHz mono PCMA, 320 bytes per message.
+- `1024`: 8 kHz mono signed PCM16LE, 640 bytes per message.
+- `1032`: 48 kHz mono raw Opus, without a WebM/Ogg container.
+
+The browser selects the encoder for the speaker codec. Opus talk requires WebCodecs AudioEncoder support; unsupported browsers show a message and release the microphone.
 
 ## Network Transport
 

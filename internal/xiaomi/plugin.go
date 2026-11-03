@@ -7,6 +7,7 @@ package xiaomi
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -25,11 +26,22 @@ func (p *XiaomiPlugin) Name() string { return "xiaomi" }
 func (p *XiaomiPlugin) Protocols() []string { return []string{"xiaomi"} }
 
 // cloudCfg stores the Xiaomi cloud credentials, set via SetCloudConfig.
-var cloudCfg XiaomiCloudConfig
+var (
+	cloudCfg   XiaomiCloudConfig
+	cloudCfgMu sync.RWMutex
+)
+
+func currentCloudConfig() XiaomiCloudConfig {
+	cloudCfgMu.RLock()
+	defer cloudCfgMu.RUnlock()
+	return cloudCfg
+}
 
 // SetCloudConfig stores the Xiaomi cloud credentials for use by recorders.
-// Must be called before any xiaomi recorder is created.
+// Existing recorders read the latest credentials on each reconnect.
 func SetCloudConfig(cfg config.XiaomiConfig) {
+	cloudCfgMu.Lock()
+	defer cloudCfgMu.Unlock()
 	cloudCfg = XiaomiCloudConfig{
 		UserID: cfg.UserID,
 		Token:  cfg.Token,
@@ -50,12 +62,13 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 	}
 
 	recCfg := XiaomiRecorderConfig{
-		CameraID:     cfg.ID,
-		DID:          did,
-		CloudCfg:     cloudCfg,
-		SegmentDur:   30 * time.Second,
-		DB:           db,
-		AudioEnabled: cfg.AudioEnabled,
+		CameraID:            cfg.ID,
+		DID:                 did,
+		CloudCfg:            currentCloudConfig(),
+		CloudConfigProvider: currentCloudConfig,
+		SegmentDur:          30 * time.Second,
+		DB:                  db,
+		AudioEnabled:        cfg.AudioEnabled,
 	}
 	return NewXiaomiRecorder(recCfg, store, opts...)
 }
@@ -67,13 +80,14 @@ func (p *XiaomiPlugin) NewRecorderWithMediaEngine(cfg config.CameraConfig, store
 	}
 
 	recCfg := XiaomiRecorderConfig{
-		CameraID:     cfg.ID,
-		DID:          did,
-		CloudCfg:     cloudCfg,
-		SegmentDur:   30 * time.Second,
-		DB:           db,
-		AudioEnabled: cfg.AudioEnabled,
-		MediaEngine:  mediaEngine,
+		CameraID:            cfg.ID,
+		DID:                 did,
+		CloudCfg:            currentCloudConfig(),
+		CloudConfigProvider: currentCloudConfig,
+		SegmentDur:          30 * time.Second,
+		DB:                  db,
+		AudioEnabled:        cfg.AudioEnabled,
+		MediaEngine:         mediaEngine,
 	}
 	return NewXiaomiRecorder(recCfg, store, opts...)
 }
