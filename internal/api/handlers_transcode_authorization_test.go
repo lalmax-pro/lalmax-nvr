@@ -54,16 +54,9 @@ func TestHomeAssistantMediaRoutesRequireSourceAuthorization(t *testing.T) {
 		path   string
 	}{
 		{"GET", "/api/settings/home-assistant"},
-		{"GET", "/api/integrations/home-assistant"},
-		{"GET", "/api/integrations/home-assistant/events"},
-		{"POST", "/api/integrations/home-assistant/streams/camera/webrtc"},
-		{"DELETE", "/api/integrations/home-assistant/streams/camera/webrtc/session"},
 		{"GET", "/api/integrations/home-assistant/streams/camera/ptz/presets"},
-		{"GET", "/api/integrations/home-assistant/streams/camera/recordings"},
-		{"GET", "/api/integrations/home-assistant/streams/camera/recordings/id"},
-		{"GET", "/api/integrations/home-assistant/streams/camera/recordings/id/file"},
-		{"HEAD", "/api/integrations/home-assistant/streams/camera/recordings/id/file"},
-		{"GET", "/api/integrations/home-assistant/streams/camera/snapshot"},
+		{"POST", "/api/integrations/home-assistant/streams/camera/ptz"},
+		{"PUT", "/api/integrations/home-assistant/streams/camera"},
         {"POST", "/api/transcoding/jobs/job/leases?generation=1"},
         {"POST", "/api/transcoding/leases/renew"},
         {"POST", "/api/transcoding/leases/release"},
@@ -76,6 +69,34 @@ func TestHomeAssistantMediaRoutesRequireSourceAuthorization(t *testing.T) {
 			viewer.Routes().ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("%s %s returned %d; want 403", tc.method, tc.path, w.Code)
+			}
+		})
+	}
+}
+
+func TestHomeAssistantReadRoutesAllowOrdinaryUser(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	viewer := TestHandler(db, store)
+	viewer.SetMultiUserAuthMW(middleware.InjectUser(&model.User{Role: model.RoleUser, Enabled: true}))
+
+	for _, tc := range []struct {
+		method string
+		path string
+	}{
+		{"GET", "/api/integrations/home-assistant"},
+		{"GET", "/api/integrations/home-assistant/streams/camera/recordings"},
+		{"GET", "/api/integrations/home-assistant/streams/camera/recordings/id"},
+		{"GET", "/api/integrations/home-assistant/streams/camera/recordings/id/file"},
+		{"HEAD", "/api/integrations/home-assistant/streams/camera/recordings/id/file"},
+		{"GET", "/api/integrations/home-assistant/streams/camera/snapshot"},
+		{"DELETE", "/api/integrations/home-assistant/streams/camera/webrtc/session"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			viewer.Routes().ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
+			if w.Code == http.StatusForbidden || w.Code == http.StatusUnauthorized {
+				t.Fatalf("%s %s returned auth denial %d for reader", tc.method, tc.path, w.Code)
 			}
 		})
 	}

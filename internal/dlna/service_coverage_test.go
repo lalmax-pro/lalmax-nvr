@@ -352,24 +352,26 @@ func TestDLNAMediaStreaming(t *testing.T) {
 	head.Body.Close()
 	require.Equal(t, http.StatusOK, head.StatusCode)
 
-	// Reserve a viewer synchronously instead of depending on another goroutine
-	// being scheduled within three seconds during the full -race ./... suite.
-	// Both the denial path and successful middleware release remain exercised.
-	limit := svc.limitMediaViewers(func(w http.ResponseWriter, _ *http.Request) {
+	// The previous streaming GET can still be releasing its viewer slot after
+	// the client has consumed the body. Test limit admission/release against
+	// an independent service to avoid racing with that HTTP handler teardown.
+	viewerGate := enabledService(repo, engine)
+	viewerGate.setViewerLimit(1)
+	limit := viewerGate.limitMediaViewers(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	require.True(t, svc.tryAcquireViewer())
+	require.True(t, viewerGate.tryAcquireViewer())
 	limited := httptest.NewRecorder()
 	limit(limited, httptest.NewRequest(http.MethodGet, "/dlna/live/cam.ts", nil))
 	require.Equal(t, http.StatusServiceUnavailable, limited.Code)
 	require.Equal(t, "5", limited.Header().Get("Retry-After"))
-	svc.releaseViewer()
+	viewerGate.releaseViewer()
 	available := httptest.NewRecorder()
 	limit(available, httptest.NewRequest(http.MethodGet, "/dlna/live/cam.ts", nil))
 	require.Equal(t, http.StatusOK, available.Code)
-	svc.viewerMu.Lock()
-	remaining := svc.viewers
-	svc.viewerMu.Unlock()
+	viewerGate.viewerMu.Lock()
+	remaining := viewerGate.viewers
+	viewerGate.viewerMu.Unlock()
 	require.Zero(t, remaining, "successful requests must release their viewer slot")
 
 	rr := httptest.NewRecorder()
