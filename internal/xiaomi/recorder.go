@@ -25,6 +25,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/observability"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
 	"github.com/q191201771/lal/pkg/base"
+	"github.com/q191201771/lal/pkg/hevc"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -94,6 +95,13 @@ type XiaomiRecorder struct {
 	done        chan struct{}
 	retryCount  int
 
+	motorMu         sync.Mutex
+	motorClient     *MISSClient
+	motorTimer      *time.Timer
+	motorGeneration uint64
+	motorActive     bool
+	motorLease      time.Duration
+
 	// lal custom pub session
 	pubSession media.CustomizePubSession
 
@@ -140,10 +148,11 @@ func NewXiaomiRecorder(cfg XiaomiRecorderConfig, store SegmentStore, opts ...*me
 		cfg.IdleTimeout = defaultIdleTimeout
 	}
 	return &XiaomiRecorder{
-		cfg:     cfg,
-		store:   store,
-		metrics: m,
-		status:  model.StatusStopped,
+		cfg:        cfg,
+		store:      store,
+		metrics:    m,
+		status:     model.StatusStopped,
+		motorLease: 2 * time.Second,
 	}
 }
 
@@ -185,6 +194,7 @@ func (r *XiaomiRecorder) Start(ctx context.Context) error {
 func (r *XiaomiRecorder) Stop() error {
 	r.lifecycleMu.Lock()
 	defer r.lifecycleMu.Unlock()
+	r.stopMotorBeforeClose()
 	r.mu.Lock()
 	if r.cancel == nil && r.pubSession == nil {
 		r.mu.Unlock()
@@ -264,7 +274,7 @@ func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
 		}
 	case model.FormatH265:
 		naluType := (nalu[0] >> 1) & 0x3F
-		if (naluType == 19 || naluType == 20) && r.vps != nil && r.sps != nil && r.pps != nil {
+		if hevc.IsIrapNalu(naluType) && r.vps != nil && r.sps != nil && r.pps != nil {
 			nalus = [][]byte{r.vps, r.sps, r.pps, nalu}
 			isIDR = true
 		} else {
@@ -491,6 +501,8 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 		_ = client.StopMedia()
 	}()
 
+	r.attachMotorClient(client)
+	defer r.detachMotorClient(client)
 	r.setStatus(model.StatusRecording)
 
 	// Reset codec probe state for each new connection.
@@ -662,7 +674,7 @@ func (r *XiaomiRecorder) forwardVideo(nalu []byte) {
 		}
 	case model.FormatH265:
 		naluType := (nalu[0] >> 1) & 0x3F
-		if (naluType == 19 || naluType == 20) && r.vps != nil && r.sps != nil && r.pps != nil {
+		if hevc.IsIrapNalu(naluType) && r.vps != nil && r.sps != nil && r.pps != nil {
 			nalus = [][]byte{r.vps, r.sps, r.pps, nalu}
 		} else {
 			nalus = [][]byte{nalu}

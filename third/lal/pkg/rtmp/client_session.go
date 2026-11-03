@@ -42,6 +42,9 @@ type ClientSession struct {
 	hc            IHandshakeClient
 
 	conn                  connection.Connection
+	connMu                sync.Mutex
+	connectCtx            context.Context
+	cancelConnect         context.CancelFunc
 	doResultChan          chan struct{}
 	errChan               chan error
 	hasNotifyDoResultSucc bool
@@ -126,7 +129,10 @@ func NewClientSession(sessionType base.SessionType, modOptions ...ModClientSessi
 	cc := NewChunkComposer()
 	cc.SetReuseBufferFlag(option.ReuseReadMessageBufferFlag)
 
+	connectCtx, cancelConnect := context.WithCancel(context.Background())
 	s := &ClientSession{
+		connectCtx:                 connectCtx,
+		cancelConnect:              cancelConnect,
 		onDoResult:                 defaultOnPullResult,
 		onReadRtmpAvMsg:            defaultOnReadRtmpAvMsg,
 		option:                     option,
@@ -167,18 +173,26 @@ func (s *ClientSession) Do(rawUrl string) error {
 }
 
 func (s *ClientSession) Write(msg []byte) error {
-	if s.conn == nil {
+	conn := s.connection()
+	if conn == nil {
 		return base.ErrSessionNotStarted
 	}
-	_, err := s.conn.Write(msg)
+	_, err := conn.Write(msg)
 	return err
 }
 
 func (s *ClientSession) Flush() error {
-	if s.conn == nil {
+	conn := s.connection()
+	if conn == nil {
 		return base.ErrSessionNotStarted
 	}
-	return s.conn.Flush()
+	return conn.Flush()
+}
+
+func (s *ClientSession) connection() connection.Connection {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	return s.conn
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -192,7 +206,7 @@ func (s *ClientSession) Dispose() error {
 
 // WaitChan 文档请参考： IClientSessionLifecycle interface
 func (s *ClientSession) WaitChan() <-chan error {
-	return s.conn.Done()
+	return s.connection().Done()
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -220,14 +234,20 @@ func (s *ClientSession) UniqueKey() string {
 // ----- ISessionStat --------------------------------------------------------------------------------------------------
 
 func (s *ClientSession) GetStat() base.StatSession {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
 	return s.sessionStat.GetStatWithConn(s.conn)
 }
 
 func (s *ClientSession) UpdateStat(intervalSec uint32) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
 	s.sessionStat.UpdateStatWitchConn(s.conn, intervalSec)
 }
 
 func (s *ClientSession) IsAlive() (readAlive, writeAlive bool) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
 	return s.sessionStat.IsAliveWitchConn(s.conn)
 }
 
@@ -260,6 +280,9 @@ func (s *ClientSession) connect() {
 }
 
 func (s *ClientSession) doContext(ctx context.Context) error {
+	if err := s.connectCtx.Err(); err != nil {
+		return err
+	}
 	go s.connect()
 
 	select {
@@ -301,19 +324,30 @@ func (s *ClientSession) tcpConnect() error {
 	Log.Infof("[%s] > tcp connect.", s.UniqueKey())
 	var err error
 
+	s.connMu.Lock()
 	s.sessionStat.SetRemoteAddr(s.urlCtx.HostWithPort)
+	s.connMu.Unlock()
 
 	var conn net.Conn
 	if s.urlCtx.Scheme == "rtmps" {
-		if conn, err = tls.Dial("tcp", s.urlCtx.HostWithPort, s.option.TlsConfig); err != nil {
+		dialer := tls.Dialer{Config: s.option.TlsConfig}
+		if conn, err = dialer.DialContext(s.connectCtx, "tcp", s.urlCtx.HostWithPort); err != nil {
 			return err
 		}
 	} else {
-		if conn, err = net.Dial("tcp", s.urlCtx.HostWithPort); err != nil {
+		if conn, err = (&net.Dialer{}).DialContext(s.connectCtx, "tcp", s.urlCtx.HostWithPort); err != nil {
 			return err
 		}
 	}
 
+	// Publish the socket atomically with respect to disposal. A socket that
+	// finishes dialing after disposal must never become the active connection.
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if err := s.connectCtx.Err(); err != nil {
+		_ = conn.Close()
+		return err
+	}
 	s.conn = connection.New(conn, func(option *connection.Option) {
 		option.ReadBufSize = s.option.ReadBufSize
 		option.WriteChanFullBehavior = connection.WriteChanFullBehaviorBlock
@@ -682,11 +716,15 @@ func (s *ClientSession) dispose(err error) error {
 	var retErr error
 	s.disposeOnce.Do(func() {
 		Log.Infof("[%s] lifecycle dispose rtmp ClientSession. err=%+v", s.UniqueKey(), err)
-		if s.conn == nil {
+		s.connMu.Lock()
+		s.cancelConnect()
+		conn := s.conn
+		s.connMu.Unlock()
+		if conn == nil {
 			retErr = base.ErrSessionNotStarted
 			return
 		}
-		retErr = s.conn.Close()
+		retErr = conn.Close()
 	})
 	return retErr
 }

@@ -2,53 +2,58 @@
   import { ptzMove, ptzStop, getPTZPresets, goToPTZPreset, buildPTZContinuousMove } from '$lib/api';
   import type { PTZPreset, PTZDirection } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { PtzHold } from '$lib/ptzHold';
   import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-svelte';
 
-  let { cameraId, enabled = false }: { cameraId: string; enabled?: boolean } = $props();
+  let { cameraId, enabled = false, protocol = '' }: { cameraId: string; enabled?: boolean; protocol?: string } = $props();
+  let isXiaomi = $derived(protocol === 'xiaomi');
+  let speed = $state(0.5);
+  let controller: PtzHold | null = null;
 
   let moving = $state<string | null>(null);
-  let moveInFlight = $state(false);
+  let stopping = $state(false);
   let error = $state('');
   let presets = $state<PTZPreset[]>([]);
   let selectedPreset = $state('');
   let goingToPreset = $state(false);
 
-  function onPointerDown(direction: PTZDirection, speed?: number) {
-    moving = direction;
+  $effect(() => {
+    const id = cameraId;
+    const renewMs = isXiaomi ? 500 : 0;
+    moving = null;
+    stopping = false;
     error = '';
-    moveInFlight = true;
-    ptzMove(cameraId, buildPTZContinuousMove(direction, speed ?? 0.5))
-      .catch((e) => {
-        error = e instanceof Error ? e.message : t('ptz.failed');
-        moving = null;
-      })
-      .finally(() => {
-        moveInFlight = false;
-      });
+    if (!enabled || !id) return;
+    const hold = new PtzHold(
+      request => ptzMove(id, request),
+      () => ptzStop(id),
+      e => { error = e instanceof Error ? e.message : t('ptz.failed'); moving = null; },
+      renewMs,
+    );
+    controller = hold;
+    if (!isXiaomi) void loadPresets();
+    else presets = [];
+    return () => {
+      void hold.dispose();
+      if (controller === hold) controller = null;
+    };
+  });
+
+  function onPointerDown(direction: PTZDirection, overrideSpeed?: number) {
+    if (stopping || !controller) return;
+    if (controller.start(buildPTZContinuousMove(direction, overrideSpeed ?? speed))) {
+      moving = direction;
+      error = '';
+    }
   }
 
   function onPointerUp() {
-    if (!moving) return;
+    if (!moving || !controller) return;
     moving = null;
-    const sendStop = () => {
-      ptzStop(cameraId).catch((e) => {
-        error = e instanceof Error ? e.message : t('ptz.failed');
-      });
-    };
-    // Let the move request finish before stop to avoid overlapping SOAP on the device.
-    if (moveInFlight) {
-      setTimeout(sendStop, 40);
-    } else {
-      sendStop();
-    }
+    stopping = true;
+    const hold = controller;
+    void hold.stop().finally(() => { if (controller === hold) stopping = false; });
   }
-
-  // Load presets when enabled
-  $effect(() => {
-    if (enabled && cameraId) {
-      loadPresets();
-    }
-  });
 
   async function loadPresets() {
     try {
@@ -72,9 +77,18 @@
   }
 </script>
 
+<svelte:window onpointerup={onPointerUp} onpointercancel={onPointerUp} onblur={onPointerUp} />
+
 {#if enabled}
   <div class="ptz-panel">
     <div class="ptz-label">{t('ptz.control')}</div>
+    {#if isXiaomi}
+      <select aria-label={t('ptz.speed')} bind:value={speed} class="ptz-preset-select" disabled={!!moving || stopping}>
+        <option value={0.25}>{t('ptz.speedLow')}</option>
+        <option value={0.5}>{t('ptz.speedMedium')}</option>
+        <option value={1}>{t('ptz.speedHigh')}</option>
+      </select>
+    {/if}
 
     {#if error}
       <div class="ptz-error">{error}</div>
@@ -89,6 +103,8 @@
         onpointerdown={() => onPointerDown('up')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
+        disabled={stopping}
         aria-label={t('ptz.up')}
       >
         <ChevronUp size={18} />
@@ -101,6 +117,8 @@
         onpointerdown={() => onPointerDown('left')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
+        disabled={stopping}
         aria-label={t('ptz.left')}
       >
         <ChevronLeft size={18} />
@@ -116,6 +134,8 @@
         onpointerdown={() => onPointerDown('right')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
+        disabled={stopping}
         aria-label={t('ptz.right')}
       >
         <ChevronRight size={18} />
@@ -128,6 +148,8 @@
         onpointerdown={() => onPointerDown('down')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
+        disabled={stopping}
         aria-label={t('ptz.down')}
       >
         <ChevronDown size={18} />
@@ -135,6 +157,7 @@
       <div class="ptz-cell"></div>
     </div>
 
+    {#if !isXiaomi}
     <!-- Zoom controls -->
     <div class="ptz-zoom-row">
       <button
@@ -143,6 +166,8 @@
         onpointerdown={() => onPointerDown('zoom_in', 0.5)}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
+        disabled={stopping}
         aria-label={t('ptz.zoomIn')}
       >
         <ZoomIn size={16} />
@@ -154,12 +179,15 @@
         onpointerdown={() => onPointerDown('zoom_out', 0.5)}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
+        disabled={stopping}
         aria-label={t('ptz.zoomOut')}
       >
         <ZoomOut size={16} />
         <span class="ptz-btn-label">{t('ptz.zoomOut')}</span>
       </button>
     </div>
+    {/if}
     <!-- Preset quick-access -->
     {#if presets.length > 0}
       <div class="ptz-presets">

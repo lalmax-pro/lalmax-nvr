@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -190,6 +192,47 @@ func (c *MISSClient) WriteCommand(data []byte) error {
 		return err
 	}
 	return c.Conn.WriteCommand(missCmdEncoded, data)
+}
+
+var ErrNotConnected = errors.New("xiaomi: camera control session is not connected")
+
+// MotorControlContext sends a direction and native motor speed on the current
+// session. A stop always uses speed zero.
+func (c *MISSClient) MotorControlContext(ctx context.Context, direction string, speed int) error {
+	switch direction {
+	case "left", "right", "up", "down":
+		if speed < 1 || speed > 100 {
+			return fmt.Errorf("motor speed must be between 1 and 100")
+		}
+	case "stop":
+		if speed != 0 {
+			return fmt.Errorf("stop requires speed zero")
+		}
+	default:
+		return fmt.Errorf("unsupported motor direction %q", direction)
+	}
+	body, err := json.Marshal(struct {
+		Direction string `json:"direction"`
+		Speed     int    `json:"speed"`
+	}{direction, speed})
+	if err != nil {
+		return err
+	}
+	command := binary.BigEndian.AppendUint32(nil, missCmdMotorReq)
+	command = append(command, body...)
+	encoded, err := Encode(command, c.key)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if conn, ok := c.Conn.(interface {
+		WriteCommandContext(context.Context, uint32, []byte) error
+	}); ok {
+		return conn.WriteCommandContext(ctx, missCmdEncoded, encoded)
+	}
+	return c.Conn.WriteCommand(missCmdEncoded, encoded)
 }
 
 // StartMedia sends the video start command for the given channel and quality.

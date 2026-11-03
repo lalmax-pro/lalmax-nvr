@@ -15,7 +15,6 @@ import (
 	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -58,15 +57,72 @@ type CS2Conn struct {
 	isTCP       bool
 	idleTimeout time.Duration
 
-	mu     sync.Mutex
-	err    error
-	seqCh0 uint16
-	seqCh3 uint16
+	closeOnce sync.Once
+	closeErr  error
+	mu        sync.Mutex
+	err       error
+	seqCh0    uint16
+	seqCh3    uint16
 
 	channels [4]*cs2DataChannel
 
-	cmdMu  sync.Mutex
-	cmdAck func()
+	cmdMu      sync.Mutex
+	writeMu    sync.Mutex
+	packetMu   sync.Mutex
+	ackMu      sync.Mutex
+	pendingAck *cs2CommandAck
+	initOnce   sync.Once
+	done       chan struct{}
+}
+
+type cs2CommandAck struct {
+	seq  uint16
+	done chan struct{}
+	once sync.Once
+}
+
+// writeFrame owns the write deadline while holding writeMu. Cancellation of
+// one command cannot leave an expired deadline on a later control frame.
+func (c *CS2Conn) writeFrame(ctx context.Context, frame []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	deadline := time.Now().Add(time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = c.Conn.SetWriteDeadline(deadline)
+	canceled := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() { _ = c.Conn.SetWriteDeadline(time.Now()); close(canceled) })
+	defer func() {
+		if !stopCancel() {
+			<-canceled
+		}
+		_ = c.Conn.SetWriteDeadline(time.Time{})
+	}()
+	n, err := c.Conn.Write(frame)
+	if ctx.Err() != nil {
+		return n, ctx.Err()
+	}
+	if err == nil && n != len(frame) {
+		err = io.ErrShortWrite
+	}
+	return n, err
+}
+
+func (c *CS2Conn) Close() error {
+	c.closeOnce.Do(func() {
+		if c.Conn != nil {
+			c.closeErr = c.Conn.Close()
+		}
+	})
+	return c.closeErr
+}
+
+func (c *CS2Conn) initSignals() {
+	c.initOnce.Do(func() { c.done = make(chan struct{}) })
 }
 
 const (
@@ -146,19 +202,18 @@ func cs2HandshakeContext(ctx context.Context, host, transport string) (net.Conn,
 }
 
 func (c *CS2Conn) worker() {
+	c.initSignals()
+	defer close(c.done)
+	defer c.Close()
+	defer func() { c.channels[0].Close(); c.channels[2].Close() }()
 	defer c.workerExitGuard()
-
-	defer func() {
-		c.channels[0].Close()
-		c.channels[2].Close()
-	}()
 
 	const (
 		pingInterval = 1 * time.Second
 	)
 	var keepaliveTS time.Time // only for TCP
 	lastData := time.Now()
-	buf := make([]byte, 1200)
+	buf := make([]byte, 65535)
 
 	for {
 		// Set a short read deadline for TCP to wake up and send keepalive pings.
@@ -174,7 +229,7 @@ func (c *CS2Conn) worker() {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				// TCP: send keepalive ping on each timeout wakeup.
 				if c.isTCP && time.Now().After(keepaliveTS) {
-					_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPing, 0, 0})
+					_, _ = c.writeFrame(context.Background(), []byte{cs2Magic, cs2MsgPing, 0, 0})
 					keepaliveTS = time.Now().Add(pingInterval)
 				}
 
@@ -189,14 +244,30 @@ func (c *CS2Conn) worker() {
 			return
 		}
 
+		if n < 4 || buf[0] != cs2Magic {
+			continue
+		}
+		if int(binary.BigEndian.Uint16(buf[2:4])) > n-4 {
+			continue
+		}
 		lastData = time.Now()
-		if c.isTCP {
+		// Keepalive cadence is independent of incoming media traffic.
+		if c.isTCP && time.Now().After(keepaliveTS) {
+			if _, err := c.writeFrame(context.Background(), []byte{cs2Magic, cs2MsgPing, 0, 0}); err != nil {
+				c.setErr(err)
+				return
+			}
 			keepaliveTS = time.Now().Add(pingInterval)
 		}
-
 		switch buf[1] {
 		case cs2MsgDrw:
+			if n < 8 || buf[4] != cs2MagicDrw {
+				continue
+			}
 			ch := buf[5]
+			if int(ch) >= len(c.channels) || c.channels[ch] == nil {
+				continue
+			}
 			channel := c.channels[ch]
 
 			if c.isTCP {
@@ -211,7 +282,7 @@ func (c *CS2Conn) worker() {
 				if pushed >= 0 {
 					// For UDP we should send ACK.
 					ack := []byte{cs2Magic, cs2MsgDrwAck, 0, 6, cs2MagicDrw, ch, 0, 1, seqHI, seqLO}
-					_, _ = c.Conn.Write(ack)
+					_, _ = c.writeFrame(context.Background(), ack)
 				}
 			}
 
@@ -221,21 +292,23 @@ func (c *CS2Conn) worker() {
 			}
 
 		case cs2MsgPing:
+			if _, err := c.writeFrame(context.Background(), []byte{cs2Magic, cs2MsgPong, 0, 0}); err != nil {
+				c.setErr(err)
+				return
+			}
 		case cs2MsgPong:
 		case cs2MsgP2PRdyUDP, cs2MsgP2PRdyTCP:
 			xiaomiLogger.Info("cs2: received ready message", "type", fmt.Sprintf("0x%02x", buf[1]))
 		case cs2MsgClose:
 			xiaomiLogger.Info("cs2: received close message", "type", fmt.Sprintf("0x%02x", buf[1]))
 			// Send close ACK before exiting
-			_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgCloseAck, 0, 0})
+			_, _ = c.writeFrame(context.Background(), []byte{cs2Magic, cs2MsgCloseAck, 0, 0})
 			c.setErr(fmt.Errorf("cs2: received close from camera"))
 			return
 		case cs2MsgCloseAck:
 			xiaomiLogger.Info("cs2: received close ACK", "type", fmt.Sprintf("0x%02x", buf[1]))
 		case cs2MsgDrwAck: // only for UDP
-			if c.cmdAck != nil {
-				c.cmdAck()
-			}
+			c.acceptCommandACK(buf[:n])
 		default:
 			xiaomiLogger.Info("cs2: received unknown message", "type", fmt.Sprintf("0x%02x", buf[1]), "len", n)
 		}
@@ -296,48 +369,83 @@ func (c *CS2Conn) ReadCommand() (cmd uint32, data []byte, err error) {
 		}
 		return 0, nil, fmt.Errorf("cs2: no command data for %v", cs2ReadTimeout)
 	}
+	if len(buf) < 4 {
+		return 0, nil, fmt.Errorf("cs2: command header too short: %d", len(buf))
+	}
 	cmd = binary.LittleEndian.Uint32(buf)
 	data = buf[4:]
 	return
 }
 
+// acceptCommandACK matches channel and sequence so unrelated or late ACKs
+// cannot acknowledge the current command.
+func (c *CS2Conn) acceptCommandACK(frame []byte) {
+	if len(frame) < 8 || frame[4] != cs2MagicDrw || frame[5] != 0 {
+		return
+	}
+	count := int(binary.BigEndian.Uint16(frame[6:8]))
+	if count == 0 || count > (len(frame)-8)/2 {
+		return
+	}
+	c.ackMu.Lock()
+	defer c.ackMu.Unlock()
+	pending := c.pendingAck
+	if pending == nil {
+		return
+	}
+	for i := 0; i < count; i++ {
+		if binary.BigEndian.Uint16(frame[8+2*i:]) == pending.seq {
+			pending.once.Do(func() { close(pending.done) })
+			return
+		}
+	}
+}
+
 // WriteCommand sends a command on channel 0 with ACK retry for UDP.
 func (c *CS2Conn) WriteCommand(cmd uint32, data []byte) error {
-	c.cmdMu.Lock()
-	defer c.cmdMu.Unlock()
+	return c.WriteCommandContext(context.Background(), cmd, data)
+}
 
-	req := cs2MarshalCmd(0, c.seqCh0, cmd, data)
-	c.seqCh0++
-
-	if c.isTCP {
-		_, err := c.Conn.Write(req)
+func (c *CS2Conn) WriteCommandContext(ctx context.Context, cmd uint32, data []byte) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	var repeat atomic.Int32
-	repeat.Store(5)
-
-	timeout := time.NewTicker(time.Second)
-	defer timeout.Stop()
-
-	c.cmdAck = func() {
-		repeat.Store(0)
-		timeout.Reset(1)
+	c.cmdMu.Lock()
+	defer c.cmdMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
-	for {
-		if _, err := c.Conn.Write(req); err != nil {
+	c.initSignals()
+	seq := c.seqCh0
+	req := cs2MarshalCmd(0, seq, cmd, data)
+	c.seqCh0++
+	if c.isTCP {
+		_, err := c.writeFrame(ctx, req)
+		return err
+	}
+	pending := &cs2CommandAck{seq: seq, done: make(chan struct{})}
+	c.ackMu.Lock()
+	c.pendingAck = pending
+	c.ackMu.Unlock()
+	defer func() { c.ackMu.Lock(); c.pendingAck = nil; c.ackMu.Unlock() }()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for attempt := 0; attempt < 5; attempt++ {
+		if _, err := c.writeFrame(ctx, req); err != nil {
 			return err
 		}
-		<-timeout.C
-		r := repeat.Add(-1)
-		if r < 0 {
+		select {
+		case <-pending.done:
 			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.done:
+			return c.Error()
+		case <-timer.C:
 		}
-		if r == 0 {
-			return fmt.Errorf("cs2: can't send command %d", cmd)
-		}
+		timer.Reset(time.Second)
 	}
+	return fmt.Errorf("cs2: command %d was not acknowledged", cmd)
 }
 
 // ReadPacket reads a media packet from channel 2.
@@ -349,11 +457,16 @@ func (c *CS2Conn) ReadPacket() (hdr, payload []byte, err error) {
 		}
 		return nil, nil, fmt.Errorf("cs2: no media data for %v", cs2ReadTimeout)
 	}
+	if len(data) < cs2HdrSize {
+		return nil, nil, fmt.Errorf("cs2: media header too short: %d", len(data))
+	}
 	return data[:cs2HdrSize], data[cs2HdrSize:], nil
 }
 
 // WritePacket writes a media packet on channel 3.
 func (c *CS2Conn) WritePacket(hdr, payload []byte) error {
+	c.packetMu.Lock()
+	defer c.packetMu.Unlock()
 	const offset = 12
 
 	n := cs2HdrSize + uint32(len(payload))
@@ -370,7 +483,7 @@ func (c *CS2Conn) WritePacket(hdr, payload []byte) error {
 	copy(req[offset:], hdr)
 	copy(req[offset+cs2HdrSize:], payload)
 
-	_, err := c.Conn.Write(req)
+	_, err := c.writeFrame(context.Background(), req)
 	return err
 }
 
@@ -427,7 +540,7 @@ func (c *cs2UDPConn) Read(b []byte) (n int, err error) {
 			return 0, err
 		}
 
-		if string(addr.IP) == string(c.addr.IP) || n >= 8 {
+		if addr.IP.Equal(c.addr.IP) && addr.Port == c.addr.Port {
 			return
 		}
 	}
@@ -548,10 +661,13 @@ type cs2DataChannel struct {
 func (c *cs2DataChannel) Push(b []byte) error {
 	c.waitData = append(c.waitData, b...)
 
-	for len(c.waitData) > 4 {
+	for c.waitSize > 0 || len(c.waitData) >= 4 {
 		// Every new data starts with size. There can be several data inside one packet.
 		if c.waitSize == 0 {
 			c.waitSize = int(binary.BigEndian.Uint32(c.waitData))
+			if c.waitSize == 0 || c.waitSize > 8<<20 {
+				return fmt.Errorf("cs2: invalid payload size %d", c.waitSize)
+			}
 			c.waitData = c.waitData[4:]
 		}
 		if c.waitSize > len(c.waitData) {
