@@ -21,7 +21,9 @@ This project was inspired by MiBeeNVR, and has since been developed into a dedic
 
 **Home Assistant integration is supported.** Publish selected NVR streams as HA camera entities with live video, snapshots and availability, plus detection events and automations, recording browsing/playback, PTZ controls and optional WebRTC. HA connects to the NVR; camera credentials stay in the NVR.
 
-In HACS, add `https://github.com/lalmax-pro/lalmax-nvr` as an **Integration** custom repository, download the latest stable release, then restart Home Assistant (2026.10.2 or newer). HACS installs the HA integration only; run the NVR separately. In the NVR, select streams under **Settings → Home Assistant**, then add **lalmax-nvr** under HA **Settings → Devices & services**. HTTP and RTSP credentials are configured separately. [Setup, playback, events and PTZ guide](docs/en/home-assistant.md) · [中文](docs/zh/home-assistant.md).
+In HACS, search for **lalmax-nvr**, open it and download the latest stable release, then restart Home Assistant (2026.10.2 or newer). HACS installs the HA integration only; run the NVR separately. In the NVR, select streams under **Settings → Home Assistant**, then add **lalmax-nvr** under HA **Settings → Devices & services**. HTTP and RTSP credentials are configured separately. [Setup, playback, events and PTZ guide](docs/en/home-assistant.md) · [中文](docs/zh/home-assistant.md).
+
+If **lalmax-nvr** is not yet visible in your HACS catalog, use **⋮ → Custom repositories** to add `https://github.com/lalmax-pro/lalmax-nvr` with type **Integration** as a fallback, then download it and restart HA.
 
 H.264/H.265 playback depends on client codec support; HEVC WebRTC requires an NVR build after V1.0.2. Use HLS for AAC audio. PTZ depends on the device's supported commands; no automatic transcoding is performed.
 
