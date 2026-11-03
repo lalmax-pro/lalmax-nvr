@@ -58,7 +58,7 @@ sequenceDiagram
 - **音频**：支持 G.711 (PCMA/PCMU) 和 Opus 音频编码
 - **对讲**：支持通过 WebSocket 向摄像头扬声器发送音频
 - **双摄支持**：支持主/副镜头切换
-- **自动回退**：HD 画质无数据时自动切换到 SD
+- **自动回退**：HD 画质在首视频帧期限内无视频时自动切换到 SD（仅收到音频也会回退）
 
 ## 设置步骤
 
@@ -128,7 +128,13 @@ cameras:
 GET /api/xiaomi/talk/ws?camera_id={camera_id}
 ```
 
-通过 WebSocket 连接，发送二进制 PCMA 音频数据。
+建立 WebSocket 后，先读取服务端的 `connected` 状态和 `speaker_codec`，再发送对应编码的二进制音频。每个消息为一个 40ms 音频包：
+
+- `1027`：8kHz 单声道 PCMA，每包 320 字节。
+- `1024`：8kHz 单声道有符号 PCM16LE，每包 640 字节。
+- `1032`：48kHz 单声道原始 Opus 包，不包含 WebM/Ogg 容器。
+
+浏览器端按摄像头编码选择编码器；Opus 对讲需要浏览器支持 WebCodecs AudioEncoder，不支持时会显示提示并释放麦克风。
 
 ## 网络传输
 

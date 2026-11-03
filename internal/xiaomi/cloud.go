@@ -385,11 +385,8 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 		return "", fmt.Errorf("parse miss_get_vendor response: %w", err)
 	}
 
-	// Map vendor ID to name (CS2=4).
-	vendorName := "cs2"
-	if resp.Vendor.ID == 1 {
-		vendorName = "tutk"
-	}
+	// Preserve the vendor identity even when its transport is unsupported.
+	vendorName := missVendorName(resp.Vendor.ID)
 
 	// Build MISS URL with device LAN IP as host (CS2 P2P connects directly to this IP).
 	missURL := &url.URL{
@@ -417,6 +414,21 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 	cloudLogger.Info("resolved xiaomi MISS URL", "did", did, "ip", deviceIP, "vendor", vendorName, "model", model)
 
 	return missURL.String(), nil
+}
+
+func missVendorName(id byte) string {
+	switch id {
+	case 1:
+		return "tutk"
+	case 3:
+		return "agora"
+	case 4:
+		return "cs2"
+	case 6:
+		return "mtp"
+	default:
+		return strconv.Itoa(int(id))
+	}
 }
 
 // --- Internal cloud client ---
@@ -463,6 +475,12 @@ func (c *Cloud) Login(username, password string) error {
 		"user":     {username},
 	}
 	cookies := "deviceId=" + randString(16)
+
+	// Continue the same captcha challenge with both the answer and its cookie.
+	if c.auth != nil && c.auth["captcha_code"] != "" {
+		form.Set("captCode", c.auth["captcha_code"])
+		cookies += "; ick=" + c.auth["ick"]
+	}
 
 	req := cloudRequest{
 		Method:     "POST",

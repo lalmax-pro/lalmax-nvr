@@ -266,11 +266,11 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if vendor == "tutk" {
+	if vendor != "cs2" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"vendor":     "tutk",
+			"vendor":     vendor,
 			"compatible": false,
-			"message":    "This device uses TUTK protocol which is not supported by lalmax-nvr. Only CS2 protocol cameras are supported.",
+			"message":    fmt.Sprintf("This device uses unsupported transport %q. Only CS2 protocol cameras are supported.", vendor),
 		})
 		return
 	}

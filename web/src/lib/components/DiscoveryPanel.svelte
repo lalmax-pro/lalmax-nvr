@@ -58,6 +58,7 @@
 
   // TUTK vendor check dialog
   let tutkWarningDevice = $state<XiaomiDevice | null>(null);
+  let warningVendor = $state('tutk');
 
   // Expose scan state for parent
   export function isScanning(): boolean {
@@ -231,6 +232,7 @@
           const result = await checkVendor(device.did);
           if (!result.compatible) {
             tutkWarningDevice = device;
+            warningVendor = result.vendor;
             xiaomiAddingDid = null;
             return;
           }
@@ -627,7 +629,7 @@
               {t('cameras.tutkInterceptTitle')}
             </h3>
             <p class="text-sm th-text-secondary">
-              {t('cameras.tutkInterceptMessage', { name: tutkWarningDevice.name })}
+              {t('cameras.unsupportedVendorMessage', { name: tutkWarningDevice.name, vendor: warningVendor })}
             </p>
           </div>
         </div>
