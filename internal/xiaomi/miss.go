@@ -384,6 +384,9 @@ func (c *MISSClient) StartSpeaker() error {
 	if c.legacy {
 		return errors.New("xiaomi: legacy audio control is not supported")
 	}
+	if conn, ok := c.Conn.(interface{ SupportsAudioOutput() bool }); ok && !conn.SupportsAudioOutput() {
+		return errors.New("xiaomi: audio output is not supported by this transport version")
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdSpeakerStartReq)
 	return c.WriteCommand(data)
 }

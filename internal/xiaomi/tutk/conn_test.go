@@ -104,3 +104,18 @@ func TestQueuedCommandCancellation(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestAudioOutputCapability(t *testing.T) {
+	c := &Conn{}
+	if c.SupportsAudioOutput() {
+		t.Fatal("uninitialized connection must not claim audio output")
+	}
+	c.session = NewSession16(discardConn{}, make([]byte, 8))
+	if !c.SupportsAudioOutput() {
+		t.Fatal("version 16 audio output is available")
+	}
+	c.session = NewSession25(discardConn{}, make([]byte, 8))
+	if c.SupportsAudioOutput() {
+		t.Fatal("version 25 audio output is not implemented")
+	}
+}

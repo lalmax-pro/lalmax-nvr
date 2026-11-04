@@ -235,6 +235,14 @@ func (c *Conn) ReadPacket() (hdr, payload []byte, err error) {
 	return c.session.RecvFrameDataTimeout(c.idleTimeout)
 }
 
+func (c *Conn) SupportsAudioOutput() bool {
+	if c.session == nil {
+		return false
+	}
+	_, unsupported := c.session.(*Session25)
+	return !unsupported
+}
+
 func (c *Conn) WritePacket(hdr, payload []byte) error {
 	if len(hdr) != 32 || len(payload) > 65400 {
 		return fmt.Errorf("tutk: invalid audio packet size")
