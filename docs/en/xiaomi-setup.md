@@ -55,7 +55,7 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 | **Loock V2** | `loock.cateye.v02` | H264 | PCMA | Smart doorbell camera |
 | **Dafang** | `isa.camera.df3` | - | - | MISS or legacy firmware may work; hardware verification is required |
 
-**Important**: MISS devices using CS2 or TUTK transport and some legacy login and video formats are supported experimentally. Legacy AAC supports ADTS framing; legacy PTZ and talk are not supported. TUTK and legacy models require hardware verification.
+**Important**: MISS devices using CS2 or TUTK transport and some legacy login and video formats are supported experimentally. Legacy AAC supports ADTS framing without CRC; legacy PTZ and talk are not supported. TUTK and legacy models require hardware verification.
 
 ## Features
 

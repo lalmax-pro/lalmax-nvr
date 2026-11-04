@@ -49,7 +49,7 @@ sequenceDiagram
 | Loock V2 | `loock.cateye.v02` | H264 | PCMA | 智能门铃 |
 | 大方摄像头 | `isa.camera.df3` | - | - | MISS 或旧版固件可尝试，需实机验证 |
 
-**注意**：支持 CS2 和 TUTK 传输的 MISS 设备，并尝试兼容部分旧版设备的登录和视频。旧版设备的云台和对讲尚未支持；AAC 音频支持 ADTS 封装，相关型号和 TUTK 连接仍需实机验证。
+**注意**：支持 CS2 和 TUTK 传输的 MISS 设备，并尝试兼容部分旧版设备的登录和视频。旧版设备的云台和对讲尚未支持；AAC 音频支持不带 CRC 的 ADTS 封装，相关型号和 TUTK 连接仍需实机验证。
 
 ## 功能特性
 
