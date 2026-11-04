@@ -114,3 +114,29 @@ func (r *XiaomiRecorder) stopMotorLocked() {
 	}
 	r.motorActive = false
 }
+
+type MotorProfile struct {
+	Model          string `json:"model"`
+	Control        string `json:"control"`
+	Source         string `json:"source"`
+	DeviceVerified bool   `json:"device_verified"`
+}
+
+func MotorProfileForModel(model string) MotorProfile {
+	profile := MotorProfile{Model: model, Control: "unknown", Source: "unknown"}
+	switch model {
+	case ModelCW400, ModelCW500:
+		profile.Control = "fixed_step"
+		profile.Source = "model"
+	}
+	return profile
+}
+
+func (r *XiaomiRecorder) MotorModel() string {
+	r.motorMu.Lock()
+	defer r.motorMu.Unlock()
+	if r.motorClient == nil {
+		return ""
+	}
+	return r.motorClient.model
+}

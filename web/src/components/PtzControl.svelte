@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ptzMove, ptzStop, getPTZPresets, goToPTZPreset, buildPTZContinuousMove } from '$lib/api';
+  import { ptzMove, ptzStop, getXiaomiMotorProfile, getPTZPresets, goToPTZPreset, buildPTZContinuousMove } from '$lib/api';
   import type { PTZPreset, PTZDirection } from '$lib/api';
   import { t } from '$lib/i18n';
   import { PtzHold } from '$lib/ptzHold';
@@ -7,6 +7,7 @@
 
   let { cameraId, enabled = false, protocol = '' }: { cameraId: string; enabled?: boolean; protocol?: string } = $props();
   let isXiaomi = $derived(protocol === 'xiaomi');
+  let motorControl = $state<'fixed_step' | 'unknown'>('unknown');
   let speed = $state(0.5);
   let controller: PtzHold | null = null;
 
@@ -37,6 +38,17 @@
       void hold.dispose();
       if (controller === hold) controller = null;
     };
+  });
+
+  $effect(() => {
+    const id = cameraId;
+    motorControl = 'unknown';
+    if (!enabled || !id || !isXiaomi) return;
+    const controller = new AbortController();
+    void getXiaomiMotorProfile(id, controller.signal).then(profile => {
+      if (!controller.signal.aborted) motorControl = profile.control;
+    }).catch(() => {});
+    return () => controller.abort();
   });
 
   function onPointerDown(direction: PTZDirection, overrideSpeed?: number) {
@@ -82,7 +94,10 @@
 {#if enabled}
   <div class="ptz-panel">
     <div class="ptz-label">{t('ptz.control')}</div>
-    {#if isXiaomi}
+    {#if isXiaomi && motorControl === 'fixed_step'}
+      <div class="ptz-label">{t('ptz.fixedStep')}</div>
+    {:else if isXiaomi}
+      <div class="ptz-label">{t('ptz.capabilityUnknown')}</div>
       <select aria-label={t('ptz.speed')} bind:value={speed} class="ptz-preset-select" disabled={!!moving || stopping}>
         <option value={0.25}>{t('ptz.speedLow')}</option>
         <option value={0.5}>{t('ptz.speedMedium')}</option>

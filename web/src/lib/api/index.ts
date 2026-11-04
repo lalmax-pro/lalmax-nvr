@@ -85,6 +85,7 @@ export {
   updateMergeConfig,
   getRecordingDays,
   deleteCameraMergeConfig,
+  getXiaomiMotorProfile,
   ptzMove,
   ptzStop,
   getPTZStatus,
