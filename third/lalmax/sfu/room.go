@@ -9,6 +9,7 @@ import (
 )
 
 var (
+	ErrInvalidWatchBuffer   = errors.New("sfu: invalid watch buffer")
 	ErrInvalidID            = errors.New("sfu: empty identifier")
 	ErrRoomExists           = errors.New("sfu: room already exists")
 	ErrRoomNotFound         = errors.New("sfu: room not found")
@@ -32,6 +33,7 @@ type Participant struct{ ID, Name string }
 type Snapshot struct {
 	Key           Key
 	Generation    string
+	Sequence      uint64
 	Participants  []Participant
 	Closed        bool
 	Publications  []Publication
@@ -98,6 +100,8 @@ type Room struct {
 	participants  map[string]Participant
 	publications  map[string]Publication
 	subscriptions map[subscriptionKey]Subscription
+	sequence      uint64
+	watchers      map[chan Event]struct{}
 }
 
 func (r *Room) Join(p Participant) error {
@@ -116,6 +120,7 @@ func (r *Room) Join(p Participant) error {
 		return ErrRoomFull
 	}
 	r.participants[p.ID] = p
+	r.notify("participant_joined")
 	return nil
 }
 func (r *Room) Leave(id string) error {
@@ -138,12 +143,17 @@ func (r *Room) Leave(id string) error {
 			r.removePublication(pubID)
 		}
 	}
+	r.notify("participant_left")
 	return nil
 }
 func (r *Room) Snapshot() Snapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	s := Snapshot{Key: r.key, Generation: r.generation, Closed: r.closed, Participants: make([]Participant, 0, len(r.participants))}
+	return r.snapshotLocked()
+}
+
+func (r *Room) snapshotLocked() Snapshot {
+	s := Snapshot{Key: r.key, Generation: r.generation, Sequence: r.sequence, Closed: r.closed, Participants: make([]Participant, 0, len(r.participants))}
 	for _, p := range r.participants {
 		s.Participants = append(s.Participants, p)
 	}
@@ -162,4 +172,9 @@ func (r *Room) close() {
 	clear(r.participants)
 	clear(r.publications)
 	clear(r.subscriptions)
+	r.notify("room_closed")
+	for ch := range r.watchers {
+		close(ch)
+		delete(r.watchers, ch)
+	}
 }
