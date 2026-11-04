@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"sync"
+
+	"github.com/q191201771/lalmax/sfu/rtpforward"
 )
 
 var (
@@ -115,18 +117,20 @@ func (m *Manager) Close(key Key, generation string) error {
 }
 
 type Room struct {
-	mu            sync.Mutex
-	key           Key
-	generation    string
-	limit         int
-	limits        RoomLimits
-	closed        bool
-	participants  map[string]Participant
-	sessions      map[string]string
-	publications  map[string]Publication
-	subscriptions map[subscriptionKey]Subscription
-	sequence      uint64
-	watchers      map[chan Event]struct{}
+	mu               sync.Mutex
+	key              Key
+	generation       string
+	limit            int
+	limits           RoomLimits
+	closed           bool
+	participants     map[string]Participant
+	sessions         map[string]string
+	publications     map[string]Publication
+	subscriptions    map[subscriptionKey]Subscription
+	sequence         uint64
+	watchers         map[chan Event]struct{}
+	rtpPublications  map[string]*rtpforward.Fanout
+	rtpSubscriptions map[subscriptionKey]*rtpforward.Subscriber
 }
 
 // Join adds a participant. Connection handlers should use JoinSession and
@@ -195,6 +199,7 @@ func (r *Room) leaveLocked(id, session string, checkSession bool) error {
 	delete(r.participants, id)
 	for key := range r.subscriptions {
 		if key.participantID == id {
+			r.closeRTPSubscriptionLocked(key)
 			delete(r.subscriptions, key)
 		}
 	}
@@ -229,6 +234,11 @@ func (r *Room) close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
+	for _, fanout := range r.rtpPublications {
+		fanout.Close()
+	}
+	clear(r.rtpPublications)
+	clear(r.rtpSubscriptions)
 	clear(r.participants)
 	clear(r.sessions)
 	clear(r.publications)

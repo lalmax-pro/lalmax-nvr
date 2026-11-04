@@ -95,9 +95,14 @@ func (r *Room) unpublish(participantID, session, publicationID string, check boo
 
 // removePublication requires the room lock.
 func (r *Room) removePublication(id string) {
+	if f := r.rtpPublications[id]; f != nil {
+		f.Close()
+		delete(r.rtpPublications, id)
+	}
 	delete(r.publications, id)
 	for key := range r.subscriptions {
 		if key.publicationID == id {
+			r.closeRTPSubscriptionLocked(key)
 			delete(r.subscriptions, key)
 		}
 	}
@@ -165,6 +170,7 @@ func (r *Room) unsubscribe(participantID, session, publicationID string, check b
 	if _, ok := r.subscriptions[key]; !ok {
 		return ErrSubscriptionNotFound
 	}
+	r.closeRTPSubscriptionLocked(key)
 	delete(r.subscriptions, key)
 	r.notify("subscription_changed")
 	return nil
