@@ -630,3 +630,14 @@ func TestMISSNewClientTUTKRequiresUID(t *testing.T) {
 	_, err = NewMISSClient(rawURL, time.Second)
 	require.ErrorContains(t, err, "TUTK UID is required")
 }
+
+type noAudioOutputConn struct{ *mockMISSConn }
+
+func (c noAudioOutputConn) SupportsAudioOutput() bool { return false }
+
+func TestSpeakerStartRejectsUnsupportedTransportBeforeCommand(t *testing.T) {
+	conn := &mockMISSConn{}
+	client := &MISSClient{Conn: noAudioOutputConn{conn}, key: make([]byte, 32)}
+	require.ErrorContains(t, client.StartSpeaker(), "audio output is not supported")
+	require.Empty(t, conn.writtenCmds)
+}
