@@ -1,0 +1,134 @@
+// Package sfu contains the media-independent state of SFU rooms.
+package sfu
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"sync"
+)
+
+var (
+	ErrInvalidID           = errors.New("sfu: empty identifier")
+	ErrRoomExists          = errors.New("sfu: room already exists")
+	ErrRoomNotFound        = errors.New("sfu: room not found")
+	ErrRoomClosed          = errors.New("sfu: room closed")
+	ErrParticipantExists   = errors.New("sfu: participant already exists")
+	ErrParticipantNotFound = errors.New("sfu: participant not found")
+	ErrRoomFull            = errors.New("sfu: room full")
+)
+
+// Key identifies a room within a namespace.
+type Key struct{ Namespace, ID string }
+
+// Participant contains identity supplied by the authorized caller.
+type Participant struct{ ID, Name string }
+
+// Snapshot is an independent copy of room membership at one instant.
+type Snapshot struct {
+	Key          Key
+	Generation   string
+	Participants []Participant
+	Closed       bool
+}
+
+// Manager owns room instances. Authentication is the caller's responsibility.
+type Manager struct {
+	mu    sync.Mutex
+	rooms map[Key]*Room
+}
+
+func NewManager() *Manager { return &Manager{rooms: make(map[Key]*Room)} }
+
+// Create atomically creates a room. A positive limit bounds its membership;
+// zero means unlimited.
+func (m *Manager) Create(key Key, limit int) (*Room, error) {
+	if key.Namespace == "" || key.ID == "" || limit < 0 {
+		return nil, ErrInvalidID
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.rooms == nil {
+		m.rooms = make(map[Key]*Room)
+	}
+	if _, ok := m.rooms[key]; ok {
+		return nil, ErrRoomExists
+	}
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return nil, err
+	}
+	r := &Room{key: key, generation: hex.EncodeToString(id[:]), limit: limit, participants: make(map[string]Participant)}
+	m.rooms[key] = r
+	return r, nil
+}
+func (m *Manager) Get(key Key) (*Room, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rooms[key]
+	return r, ok
+}
+
+// Close removes and closes only the specified instance, protecting a newly
+// created room from delayed cleanup of an older generation.
+func (m *Manager) Close(key Key, generation string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rooms[key]
+	if !ok || r.generation != generation {
+		return ErrRoomNotFound
+	}
+	r.close()
+	delete(m.rooms, key)
+	return nil
+}
+
+type Room struct {
+	mu           sync.Mutex
+	key          Key
+	generation   string
+	limit        int
+	closed       bool
+	participants map[string]Participant
+}
+
+func (r *Room) Join(p Participant) error {
+	if p.ID == "" {
+		return ErrInvalidID
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return ErrRoomClosed
+	}
+	if _, ok := r.participants[p.ID]; ok {
+		return ErrParticipantExists
+	}
+	if r.limit > 0 && len(r.participants) >= r.limit {
+		return ErrRoomFull
+	}
+	r.participants[p.ID] = p
+	return nil
+}
+func (r *Room) Leave(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return ErrRoomClosed
+	}
+	if _, ok := r.participants[id]; !ok {
+		return ErrParticipantNotFound
+	}
+	delete(r.participants, id)
+	return nil
+}
+func (r *Room) Snapshot() Snapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := Snapshot{Key: r.key, Generation: r.generation, Closed: r.closed, Participants: make([]Participant, 0, len(r.participants))}
+	for _, p := range r.participants {
+		s.Participants = append(s.Participants, p)
+	}
+	return s
+}
+func (r *Room) close() { r.mu.Lock(); defer r.mu.Unlock(); r.closed = true; clear(r.participants) }

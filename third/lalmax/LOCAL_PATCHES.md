@@ -7,6 +7,13 @@ This file records local changes made to `third/lalmax` for lalmax-nvr.
 
 ## Current patches
 
+### sfu-room-foundation
+
+- Reason: Start the standalone SFU room model for issue #93.
+- Files: `sfu/`.
+- Scope: In-memory room membership and generation; signaling and media routing are not implemented yet.
+- Test: `go test -race ./sfu`.
+
 ### embed-lifecycle
 
 - Reason: lalmax-nvr embeds lalmax as an in-process media engine and needs explicit start, readiness and shutdown hooks.
