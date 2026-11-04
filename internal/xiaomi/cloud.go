@@ -423,6 +423,10 @@ func resolveMISSWithSession(ctx context.Context, session *CloudSession, did, mod
 		userID:    session.UserID,
 	}
 
+	if legacyModel(model) {
+		return resolveLegacyWithCloud(c, deviceIP, did, model, clientPublic, clientPrivate)
+	}
+
 	result, err := c.Request(
 		getAPIBaseURL(session.Region),
 		"/v2/device/miss_get_vendor",
@@ -430,6 +434,9 @@ func resolveMISSWithSession(ctx context.Context, session *CloudSession, did, mod
 		nil,
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "no available vendor support") && (model == legacyMijia || model == ModelDafang) {
+			return resolveLegacyWithCloud(c, deviceIP, did, model, clientPublic, clientPrivate)
+		}
 		return "", fmt.Errorf("miss_get_vendor API: %w", err)
 	}
 

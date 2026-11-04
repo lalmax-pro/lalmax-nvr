@@ -86,9 +86,10 @@ type MISSConn interface {
 
 // MISSClient wraps a MISSConn with encryption and protocol logic.
 type MISSClient struct {
-	Conn  MISSConn
-	key   []byte
-	model string
+	Conn   MISSConn
+	key    []byte
+	model  string
+	legacy bool
 }
 
 // MISSPacket is a decoded media packet from a Xiaomi camera.
@@ -124,6 +125,9 @@ func NewMISSClientContext(ctx context.Context, rawURL string, idleTimeout time.D
 		return nil, err
 	}
 
+	if u.Query().Get("vendor") == "legacy" {
+		return newLegacyClient(ctx, u, idleTimeout)
+	}
 	// 1. Calculate shared encryption key.
 	query := u.Query()
 	key, err := CalcSharedKey(query.Get("device_public"), query.Get("client_private"))
@@ -216,6 +220,9 @@ var ErrNotConnected = errors.New("xiaomi: camera control session is not connecte
 // MotorControlContext sends a direction and native motor speed on the current
 // session. A stop always uses speed zero.
 func (c *MISSClient) MotorControlContext(ctx context.Context, direction string, speed int) error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy PTZ is not supported")
+	}
 	switch direction {
 	case "left", "right", "up", "down":
 		if speed < 1 || speed > 100 {
@@ -269,6 +276,13 @@ func (c *MISSClient) writeMotorBody(ctx context.Context, payload any) error {
 // StartMedia sends the video start command for the given channel and quality.
 // Quality: "auto"=0, "sd"=1, "hd"=2 (or 3 for C200/C300), default="hd".
 func (c *MISSClient) StartMedia(channel, quality string, audioEnabled ...bool) error {
+	if c.legacy {
+		if channel != "" && channel != "0" {
+			return errors.New("xiaomi: legacy camera channel is not supported")
+		}
+		audio := len(audioEnabled) == 0 || audioEnabled[0]
+		return c.startLegacyMedia(quality, audio)
+	}
 	if channel != "" && channel != "0" && channel != "1" && channel != "2" {
 		return fmt.Errorf("unsupported camera channel %q", channel)
 	}
@@ -309,30 +323,45 @@ func (c *MISSClient) StartMedia(channel, quality string, audioEnabled ...bool) e
 
 // StopMedia sends the video stop command.
 func (c *MISSClient) StopMedia() error {
+	if c.legacy {
+		return errors.Join(c.Conn.WriteCommand(0x2ff, []byte(`{}`)), c.Conn.WriteCommand(0x2ff, make([]byte, 8)))
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdVideoStop)
 	return c.WriteCommand(data)
 }
 
 // StartAudio sends the audio start command (receive audio from camera).
 func (c *MISSClient) StartAudio() error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy audio control is not supported")
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdAudioStart)
 	return c.WriteCommand(data)
 }
 
 // StopAudio sends the audio stop command.
 func (c *MISSClient) StopAudio() error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy audio control is not supported")
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdAudioStop)
 	return c.WriteCommand(data)
 }
 
 // StartSpeaker sends the speaker start command (send audio to camera).
 func (c *MISSClient) StartSpeaker() error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy audio control is not supported")
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdSpeakerStartReq)
 	return c.WriteCommand(data)
 }
 
 // StopSpeaker sends the speaker stop command.
 func (c *MISSClient) StopSpeaker() error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy audio control is not supported")
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdSpeakerStop)
 	return c.WriteCommand(data)
 }
@@ -350,6 +379,9 @@ func (c *MISSClient) SpeakerCodec() uint32 {
 
 // WriteAudio encrypts and sends an audio packet to the camera via CS2 channel 3.
 func (c *MISSClient) WriteAudio(codecID uint32, payload []byte) error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy talk is not supported")
+	}
 	payload, err := Encode(payload, c.key)
 	if err != nil {
 		return err
@@ -370,6 +402,9 @@ func (c *MISSClient) ReadPacket() (*MISSPacket, error) {
 		return nil, fmt.Errorf("miss: read media: %w", err)
 	}
 
+	if c.legacy {
+		return c.readLegacyPacket(hdr, payload)
+	}
 	if len(hdr) < missHdrSize {
 		return nil, fmt.Errorf("miss: packet header too small")
 	}
