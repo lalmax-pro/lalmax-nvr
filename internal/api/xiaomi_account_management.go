@@ -102,7 +102,13 @@ func (h *Handler) updateXiaomiNamedAccount(ctx context.Context, id string, accou
 		if _, ok := candidate.Xiaomi.Accounts[id]; !ok {
 			return errors.New("Xiaomi account not found")
 		}
-		for _, camera := range h.config.Cameras {
+		var cameras []config.CameraConfig
+		if h.camMgr != nil {
+			cameras = h.camMgr.ListCameraConfigs()
+		} else {
+			cameras = h.config.Cameras
+		}
+		for _, camera := range cameras {
 			u, err := url.Parse(camera.URL)
 			if camera.Protocol == "xiaomi" && err == nil && u.Query().Get("account") == id {
 				return fmt.Errorf("Xiaomi account is used by camera %q", camera.ID)
