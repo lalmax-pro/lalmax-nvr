@@ -122,10 +122,18 @@ type MotorProfile struct {
 	DeviceVerified bool   `json:"device_verified"`
 }
 
+func fixedStepMotorModel(model string) bool {
+	switch model {
+	case ModelCW400, ModelCW500, ModelMJSXJ10CM, ModelMi3602K, ModelC01A01:
+		return true
+	default:
+		return false
+	}
+}
+
 func MotorProfileForModel(model string) MotorProfile {
 	profile := MotorProfile{Model: model, Control: "unknown", Source: "unknown"}
-	switch model {
-	case ModelCW400, ModelCW500:
+	if fixedStepMotorModel(model) {
 		profile.Control = "fixed_step"
 		profile.Source = "model"
 	}

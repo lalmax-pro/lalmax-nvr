@@ -142,7 +142,7 @@ cameras:
 
 大方摄像头（`isa.camera.df3`）的 MISS 固件使用连续云台控制，释放方向键或租约到期时发送停止命令；旧固件的云台命令尚未实现。
 
-CW400（`isa.camera.hlc8a`）和 CW500（`isa.camera.500dh`）使用固定步长的云台指令；步长由摄像头决定，速度设置不会改变步长。`GET /api/cameras/{id}/ptz/capabilities` 返回基于型号的控制方式；其他型号返回 `unknown`。该结果不代表设备已验证支持云台，仍需实机测试。
+CW400（`isa.camera.hlc8a`）、CW500（`isa.camera.500dh`）、`chuangmi.camera.026c05`、`chuangmi.camera.029a02` 和 `xiaomi.camera.c01a01` 使用固定步长的云台指令；步长由摄像头决定，速度设置不会改变步长。`GET /api/cameras/{id}/ptz/capabilities` 返回基于型号的控制方式；其他型号返回 `unknown`。该结果不代表设备已验证支持云台，仍需实机测试。
 
 录制器最多缓存云会话 10 分钟、设备列表 30 秒；凭据变化或解析失败会使会话失效，每次连接仍会获取新的设备授权。门铃型号连接前会发送唤醒请求。
 
