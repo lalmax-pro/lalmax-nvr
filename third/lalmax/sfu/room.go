@@ -9,6 +9,7 @@ import (
 )
 
 var (
+	ErrStaleSession         = errors.New("sfu: stale participant session")
 	ErrInvalidWatchBuffer   = errors.New("sfu: invalid watch buffer")
 	ErrInvalidLimits        = errors.New("sfu: invalid room limits")
 	ErrPublicationLimit     = errors.New("sfu: publication limit reached")
@@ -88,7 +89,7 @@ func (m *Manager) CreateWithLimits(key Key, limits RoomLimits) (*Room, error) {
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, err
 	}
-	r := &Room{key: key, generation: hex.EncodeToString(id[:]), limit: limits.MaxParticipants, limits: limits, participants: make(map[string]Participant), publications: make(map[string]Publication), subscriptions: make(map[subscriptionKey]Subscription)}
+	r := &Room{key: key, generation: hex.EncodeToString(id[:]), limit: limits.MaxParticipants, limits: limits, participants: make(map[string]Participant), sessions: make(map[string]string), publications: make(map[string]Publication), subscriptions: make(map[subscriptionKey]Subscription)}
 	m.rooms[key] = r
 	return r, nil
 }
@@ -121,40 +122,76 @@ type Room struct {
 	limits        RoomLimits
 	closed        bool
 	participants  map[string]Participant
+	sessions      map[string]string
 	publications  map[string]Publication
 	subscriptions map[subscriptionKey]Subscription
 	sequence      uint64
 	watchers      map[chan Event]struct{}
 }
 
+// Join adds a participant. Connection handlers should use JoinSession and
+// LeaveSession to protect a replacement from stale disconnect callbacks.
 func (r *Room) Join(p Participant) error {
+	_, err := r.JoinSession(p)
+	return err
+}
+
+// JoinSession returns a unique local generation for conditional cleanup. It is
+// not an authentication credential and must not be used to authorize actions.
+func (r *Room) JoinSession(p Participant) (string, error) {
 	if p.ID == "" {
-		return ErrInvalidID
+		return "", ErrInvalidID
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
-		return ErrRoomClosed
+		return "", ErrRoomClosed
 	}
 	if _, ok := r.participants[p.ID]; ok {
-		return ErrParticipantExists
+		return "", ErrParticipantExists
 	}
 	if r.limit > 0 && len(r.participants) >= r.limit {
-		return ErrRoomFull
+		return "", ErrRoomFull
 	}
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", err
+	}
+	session := hex.EncodeToString(id[:])
+	r.sessions[p.ID] = session
 	r.participants[p.ID] = p
 	r.notify("participant_joined")
-	return nil
+	return session, nil
 }
+
+// Leave unconditionally removes the current participant. Connection callbacks should use LeaveSession.
 func (r *Room) Leave(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.leaveLocked(id, "", false)
+}
+
+// LeaveSession removes only the participant generation returned by JoinSession.
+func (r *Room) LeaveSession(id, session string) error {
+	if session == "" {
+		return ErrInvalidID
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.leaveLocked(id, session, true)
+}
+
+func (r *Room) leaveLocked(id, session string, checkSession bool) error {
 	if r.closed {
 		return ErrRoomClosed
 	}
 	if _, ok := r.participants[id]; !ok {
 		return ErrParticipantNotFound
 	}
+	if checkSession && r.sessions[id] != session {
+		return ErrStaleSession
+	}
+	delete(r.sessions, id)
 	delete(r.participants, id)
 	for key := range r.subscriptions {
 		if key.participantID == id {
@@ -193,6 +230,7 @@ func (r *Room) close() {
 	defer r.mu.Unlock()
 	r.closed = true
 	clear(r.participants)
+	clear(r.sessions)
 	clear(r.publications)
 	clear(r.subscriptions)
 	r.notify("room_closed")
