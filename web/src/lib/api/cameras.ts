@@ -995,7 +995,7 @@ export async function takeSnapshot(
 
 export interface XiaomiMotorProfile {
   model: string;
-  control: 'fixed_step' | 'unknown';
+  control: 'fixed_step' | 'continuous' | 'unknown';
   source: 'model' | 'unknown';
   device_verified: boolean;
 }

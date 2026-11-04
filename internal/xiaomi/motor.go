@@ -140,3 +140,16 @@ func (r *XiaomiRecorder) MotorModel() string {
 	}
 	return r.motorClient.model
 }
+
+func (r *XiaomiRecorder) MotorProfile() MotorProfile {
+	r.motorMu.Lock()
+	defer r.motorMu.Unlock()
+	if r.motorClient == nil {
+		return MotorProfileForModel("")
+	}
+	profile := MotorProfileForModel(r.motorClient.model)
+	if r.motorClient.model == ModelDafang && !r.motorClient.legacy {
+		profile.Control, profile.Source = "continuous", "model"
+	}
+	return profile
+}

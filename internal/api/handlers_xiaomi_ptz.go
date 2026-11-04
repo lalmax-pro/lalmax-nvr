@@ -107,9 +107,10 @@ func (h *Handler) handleXiaomiPTZCapabilities(w http.ResponseWriter, r *http.Req
 	}
 	model := camera.Model
 	if h.camMgr != nil {
-		if recorder, ok := h.camMgr.GetRecorder(id).(interface{ MotorModel() string }); ok {
-			if activeModel := recorder.MotorModel(); activeModel != "" {
-				model = activeModel
+		if recorder, ok := h.camMgr.GetRecorder(id).(interface{ MotorProfile() xiaomi.MotorProfile }); ok {
+			if profile := recorder.MotorProfile(); profile.Model != "" {
+				writeJSON(w, http.StatusOK, profile)
+				return
 			}
 		}
 	}

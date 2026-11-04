@@ -147,6 +147,8 @@ The live-view control pad provides four directions and three speed settings. Hol
 
 Controls reuse the active streaming connection. Disconnected or reconnecting cameras return `503`. Motor compatibility still requires testing on the specific model.
 
+Dafang (`isa.camera.df3`) running MISS firmware uses continuous PTZ movement; releasing the control or expiry of the movement lease sends a stop. Legacy firmware PTZ commands are not yet implemented.
+
 CW400 (`isa.camera.hlc8a`) and CW500 (`isa.camera.500dh`) use fixed-step motor commands; their step size is determined by the camera and the speed setting does not alter it. `GET /api/cameras/{id}/ptz/capabilities` reports the model-based control mode; other models remain unknown. This is not confirmation from the device.
 
 The recorder keeps an authenticated cloud session for up to 10 minutes and the device list for up to 30 seconds. A credential change or failed resolution invalidates the cached session; each connection still obtains a fresh device authorization. Doorbell models are sent a wakeup request before connection.

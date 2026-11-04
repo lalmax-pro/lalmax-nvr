@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -235,6 +236,28 @@ func (c *MISSClient) MotorControlContext(ctx context.Context, direction string, 
 	default:
 		return fmt.Errorf("unsupported motor direction %q", direction)
 	}
+	if c.model == ModelDafang {
+		var horizontal, vertical byte
+		switch direction {
+		case "left":
+			horizontal = 1
+		case "right":
+			horizontal = 2
+		case "up":
+			vertical = 2
+		case "down":
+			vertical = 1
+		}
+		motorSpeed := byte(min(speed, 9))
+		if direction == "stop" {
+			motorSpeed = 5
+		}
+		payload := tutk.ICAM(0xff2404, horizontal, vertical, motorSpeed)
+		command := make([]byte, 4+hex.EncodedLen(len(payload)))
+		copy(command, []byte{0x7f, 0xff, 0xff, 0xff})
+		hex.Encode(command[4:], payload)
+		return c.writeEncodedCommandContext(ctx, command)
+	}
 	if c.model == ModelCW400 || c.model == ModelCW500 {
 		// Each command is one step; these models stop on their own.
 		if direction == "stop" {
@@ -258,6 +281,10 @@ func (c *MISSClient) writeMotorBody(ctx context.Context, payload any) error {
 	}
 	command := binary.BigEndian.AppendUint32(nil, missCmdMotorReq)
 	command = append(command, body...)
+	return c.writeEncodedCommandContext(ctx, command)
+}
+
+func (c *MISSClient) writeEncodedCommandContext(ctx context.Context, command []byte) error {
 	encoded, err := Encode(command, c.key)
 	if err != nil {
 		return err
