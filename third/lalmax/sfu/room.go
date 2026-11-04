@@ -10,6 +10,10 @@ import (
 
 var (
 	ErrInvalidWatchBuffer   = errors.New("sfu: invalid watch buffer")
+	ErrInvalidLimits        = errors.New("sfu: invalid room limits")
+	ErrPublicationLimit     = errors.New("sfu: publication limit reached")
+	ErrSubscriptionLimit    = errors.New("sfu: subscription limit reached")
+	ErrWatcherLimit         = errors.New("sfu: watcher limit reached")
 	ErrInvalidID            = errors.New("sfu: empty identifier")
 	ErrRoomExists           = errors.New("sfu: room already exists")
 	ErrRoomNotFound         = errors.New("sfu: room not found")
@@ -48,11 +52,29 @@ type Manager struct {
 
 func NewManager() *Manager { return &Manager{rooms: make(map[Key]*Room)} }
 
-// Create atomically creates a room. A positive limit bounds its membership;
-// zero means unlimited.
+// RoomLimits specifies per-room resource limits. Zero means unlimited.
+type RoomLimits struct {
+	MaxParticipants               int
+	MaxPublicationsPerParticipant int
+	MaxSubscriptions              int
+	MaxWatchers                   int
+}
+
+// Create atomically creates a room with a participant limit.
 func (m *Manager) Create(key Key, limit int) (*Room, error) {
-	if key.Namespace == "" || key.ID == "" || limit < 0 {
+	if limit < 0 {
 		return nil, ErrInvalidID
+	}
+	return m.CreateWithLimits(key, RoomLimits{MaxParticipants: limit})
+}
+
+// CreateWithLimits creates a room with atomic limits; zero means unlimited.
+func (m *Manager) CreateWithLimits(key Key, limits RoomLimits) (*Room, error) {
+	if key.Namespace == "" || key.ID == "" {
+		return nil, ErrInvalidID
+	}
+	if limits.MaxParticipants < 0 || limits.MaxPublicationsPerParticipant < 0 || limits.MaxSubscriptions < 0 || limits.MaxWatchers < 0 {
+		return nil, ErrInvalidLimits
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -66,7 +88,7 @@ func (m *Manager) Create(key Key, limit int) (*Room, error) {
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, err
 	}
-	r := &Room{key: key, generation: hex.EncodeToString(id[:]), limit: limit, participants: make(map[string]Participant), publications: make(map[string]Publication), subscriptions: make(map[subscriptionKey]Subscription)}
+	r := &Room{key: key, generation: hex.EncodeToString(id[:]), limit: limits.MaxParticipants, limits: limits, participants: make(map[string]Participant), publications: make(map[string]Publication), subscriptions: make(map[subscriptionKey]Subscription)}
 	m.rooms[key] = r
 	return r, nil
 }
@@ -96,6 +118,7 @@ type Room struct {
 	key           Key
 	generation    string
 	limit         int
+	limits        RoomLimits
 	closed        bool
 	participants  map[string]Participant
 	publications  map[string]Publication

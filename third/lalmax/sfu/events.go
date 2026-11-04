@@ -20,6 +20,9 @@ func (r *Room) Watch(buffer int) (Snapshot, <-chan Event, func(), error) {
 	if r.closed {
 		return Snapshot{}, nil, nil, ErrRoomClosed
 	}
+	if r.limits.MaxWatchers > 0 && len(r.watchers) >= r.limits.MaxWatchers {
+		return Snapshot{}, nil, nil, ErrWatcherLimit
+	}
 	if r.watchers == nil {
 		r.watchers = make(map[chan Event]struct{})
 	}
