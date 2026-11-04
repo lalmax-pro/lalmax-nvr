@@ -118,6 +118,9 @@ type XiaomiRecorder struct {
 
 	// Audio state (probed from first audio packet)
 	audioNormalizer missAudioNormalizer
+	audioInfoMu     sync.RWMutex
+	audioInfoCodec  string
+	audioInfoConfig []byte
 	audioCodecID    uint32 // MISS codec ID for audio (0 = not detected yet)
 
 	Hub         *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
@@ -532,6 +535,9 @@ func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missUR
 	// Reset codec probe state for each new connection.
 	r.resetCodec()
 	r.audioCodecID = 0
+	r.audioInfoMu.Lock()
+	r.audioInfoCodec, r.audioInfoConfig = "", nil
+	r.audioInfoMu.Unlock()
 	r.audioNormalizer = missAudioNormalizer{}
 
 	var lastTimestamp uint64
@@ -775,6 +781,8 @@ func missCodecToAudio(codecID uint32) (model.AudioCodec, bool) {
 		return model.AudioG711, true
 	case missCodecOPUS:
 		return model.AudioOpus, true
+	case missCodecAAC:
+		return model.AudioAAC, true
 	default:
 		return "", false
 	}
@@ -787,6 +795,10 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte, sampleRate
 		rate = sampleRates[0]
 	}
 	if !r.cfg.AudioEnabled {
+		return
+	}
+	if codecID == missCodecAAC {
+		r.forwardLegacyAAC(payload)
 		return
 	}
 	audioCodec, ok := missCodecToAudio(codecID)
@@ -814,6 +826,12 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte, sampleRate
 	if err != nil {
 		xiaomiLogger.Warn("invalid audio payload", "camera_id", r.cfg.CameraID, "error", err)
 		return
+	}
+	if audioCodec == model.AudioG711 {
+		r.audioInfoMu.Lock()
+		r.audioInfoCodec = "g711"
+		r.audioInfoConfig = []byte{0, 0, 0, 0x1f, 0x40}
+		r.audioInfoMu.Unlock()
 	}
 	// StreamHub uses 90 kHz; lal AvPacket uses milliseconds.
 	if r.Hub != nil {

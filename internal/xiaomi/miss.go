@@ -53,6 +53,7 @@ const (
 	missCodecPCMU = 1026
 	missCodecPCMA = 1027
 	missCodecOPUS = 1032
+	missCodecAAC  = 1033
 )
 
 // Known Xiaomi camera model identifiers.
