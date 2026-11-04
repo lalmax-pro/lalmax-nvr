@@ -32,6 +32,7 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Region   string `json:"region,omitempty"`
+		Account  string `json:"account,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -42,6 +43,17 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	account := normalizeXiaomiAccount(req.Account)
+	if err := validXiaomiAccount(account); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if account != "default" {
+		if _, ok := h.cloudProxy.(xiaomiFullConfigProxy); !ok {
+			writeError(w, http.StatusNotImplemented, "named account management unavailable")
+			return
+		}
+	}
 	region := req.Region
 	if region == "" {
 		region = "cn"
@@ -54,12 +66,13 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if verification != nil {
+		h.rememberXiaomiChallenge(verification, account)
 		writeJSON(w, http.StatusAccepted, verificationToResponse(verification))
 		return
 	}
 
 	// Store token in config
-	if err := h.saveXiaomiToken(r.Context(), result); err != nil {
+	if err := h.saveXiaomiAccountToken(r.Context(), account, result); err != nil {
 		logger.Error("failed to save Xiaomi credentials", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to save Xiaomi credentials")
 		return
@@ -82,6 +95,7 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SessionID   string `json:"session_id"`
 		CaptchaCode string `json:"captcha_code"`
+		Account     string `json:"account,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -92,6 +106,11 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	account, err := h.challengeAccount(req.SessionID, req.Account)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	result, verification, err := h.cloudProxy.SubmitCaptcha(r.Context(), req.SessionID, req.CaptchaCode)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, fmt.Sprintf("captcha verification failed: %v", err))
@@ -99,16 +118,19 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if verification != nil {
+		h.rememberXiaomiChallenge(verification, account)
 		writeJSON(w, http.StatusAccepted, verificationToResponse(verification))
 		return
 	}
 
 	// Store token in config
-	if err := h.saveXiaomiToken(r.Context(), result); err != nil {
+	if err := h.saveXiaomiAccountToken(r.Context(), account, result); err != nil {
 		logger.Error("failed to save Xiaomi credentials", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to save Xiaomi credentials")
 		return
 	}
+
+	delete(h.xiaomiChallenges, req.SessionID)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -127,6 +149,7 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SessionID string `json:"session_id"`
 		Ticket    string `json:"ticket"`
+		Account   string `json:"account,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -137,6 +160,11 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	account, err := h.challengeAccount(req.SessionID, req.Account)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	result, verification, err := h.cloudProxy.SubmitVerify(r.Context(), req.SessionID, req.Ticket)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, fmt.Sprintf("verification failed: %v", err))
@@ -144,16 +172,19 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if verification != nil {
+		h.rememberXiaomiChallenge(verification, account)
 		writeJSON(w, http.StatusAccepted, verificationToResponse(verification))
 		return
 	}
 
 	// Store token in config
-	if err := h.saveXiaomiToken(r.Context(), result); err != nil {
+	if err := h.saveXiaomiAccountToken(r.Context(), account, result); err != nil {
 		logger.Error("failed to save Xiaomi credentials", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to save Xiaomi credentials")
 		return
 	}
+
+	delete(h.xiaomiChallenges, req.SessionID)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -172,11 +203,26 @@ func (h *Handler) handleXiaomiStatus(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleXiaomiLogout(w http.ResponseWriter, r *http.Request) {
 	h.xiaomiAuthMu.Lock()
 	defer h.xiaomiAuthMu.Unlock()
+	account := normalizeXiaomiAccount(r.URL.Query().Get("account"))
+	if err := validXiaomiAccount(account); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if account != "default" {
+		if err := h.removeXiaomiAccount(r.Context(), account); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.cancelXiaomiChallenges(account)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
 	if err := h.saveXiaomiConfig(r.Context(), config.XiaomiConfig{}); err != nil {
 		logger.Error("failed to clear Xiaomi credentials", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to clear Xiaomi credentials")
 		return
 	}
+	h.cancelXiaomiChallenges("default")
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 

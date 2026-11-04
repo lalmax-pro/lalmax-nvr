@@ -51,6 +51,9 @@
   let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
   let xiaomiLoggedIn = $state(false);
   let xiaomiAccount = $state('default');
+  let xiaomiAddingAccount = $state(false);
+  let xiaomiNewAccount = $state('');
+  let xiaomiLoginAccount = $state('default');
   let xiaomiAccountList = $state<XiaomiAccountInfo[]>([]);
   let xiaomiAddingDid = $state<string | null>(null);
   let xiaomiCaptchaImage = $state('');
@@ -168,7 +171,10 @@
     xiaomiVerifyTarget = '';
     xiaomiVerifyType = '';
     try {
-      const result = await xiaomiAuth(xiaomiUsername, xiaomiPassword, xiaomiRegion);
+      xiaomiLoginAccount = xiaomiAddingAccount ? xiaomiNewAccount.trim() : xiaomiAccount;
+      if (!xiaomiLoginAccount || (xiaomiAddingAccount && xiaomiLoginAccount === 'default')) throw new Error(t('xiaomi.invalidAccountId'));
+      if (xiaomiAddingAccount && xiaomiAccountList.some(a => a.id === xiaomiLoginAccount)) throw new Error(t('xiaomi.accountExists'));
+      const result = await xiaomiAuth(xiaomiUsername, xiaomiPassword, xiaomiRegion, undefined, xiaomiLoginAccount);
       await handleAuthResult(result);
     } catch (e: any) {
       xiaomiError = e.message || t('xiaomi.authFailed');
@@ -204,8 +210,12 @@
     xiaomiVerifyTarget = '';
     xiaomiVerifyType = '';
     xiaomiPassword = '';
+    xiaomiAccount = xiaomiLoginAccount;
+    xiaomiAddingAccount = false;
+    xiaomiNewAccount = '';
+    const loggedIn = { id: xiaomiAccount, authenticated: true, region: xiaomiRegion };
+    xiaomiAccountList = [...xiaomiAccountList.filter(a => a.id !== xiaomiAccount), loggedIn];
     xiaomiLoggedIn = true;
-    xiaomiAccountList = xiaomiAccountList.map(a => a.id === 'default' ? { ...a, authenticated: true, region: xiaomiRegion } : a);
     await refreshXiaomiDevices();
   }
 
@@ -214,7 +224,7 @@
     xiaomiLoading = true;
     xiaomiError = '';
     try {
-      const result = await xiaomiCaptcha(xiaomiCaptchaSessionId, xiaomiCaptchaCode.trim());
+      const result = await xiaomiCaptcha(xiaomiCaptchaSessionId, xiaomiCaptchaCode.trim(), undefined, xiaomiLoginAccount);
       await handleAuthResult(result);
     } catch (e: any) {
       xiaomiError = e.message || t('xiaomi.authFailed');
@@ -229,7 +239,7 @@
     xiaomiLoading = true;
     xiaomiError = '';
     try {
-      const result = await xiaomiVerify(xiaomiVerifySessionId, xiaomiVerifyTicket.trim());
+      const result = await xiaomiVerify(xiaomiVerifySessionId, xiaomiVerifyTicket.trim(), undefined, xiaomiLoginAccount);
       await handleAuthResult(result);
     } catch (e: any) {
       xiaomiError = e.message || t('xiaomi.authFailed');
@@ -315,10 +325,15 @@
     xiaomiLoading = true;
     xiaomiError = '';
     try {
-      await xiaomiLogout();
-      xiaomiAccountList = xiaomiAccountList.map(a => a.id === 'default' ? { ...a, authenticated: false } : a);
-      xiaomiLoggedIn = false;
+      const removed = xiaomiAccount;
+      await xiaomiLogout(undefined, removed);
+      xiaomiAccountList = removed === 'default'
+        ? xiaomiAccountList.map(a => a.id === 'default' ? { ...a, authenticated: false } : a)
+        : xiaomiAccountList.filter(a => a.id !== removed);
+      xiaomiAccount = 'default';
+      xiaomiLoggedIn = xiaomiAccountList.find(a => a.id === 'default')?.authenticated ?? false;
       xiaomiDeviceList = [];
+      if (xiaomiLoggedIn) await refreshXiaomiDevices();
       xiaomiUsername = '';
       xiaomiPassword = '';
       xiaomiCaptchaImage = '';
@@ -336,7 +351,19 @@
     }
   }
 
+  function resetXiaomiVerification() {
+    xiaomiCaptchaImage = '';
+    xiaomiCaptchaSessionId = '';
+    xiaomiCaptchaCode = '';
+    xiaomiVerifySessionId = '';
+    xiaomiVerifyTicket = '';
+    xiaomiVerifyTarget = '';
+    xiaomiVerifyType = '';
+  }
+
   async function selectXiaomiAccount() {
+    resetXiaomiVerification();
+    xiaomiAddingAccount = false;
     xiaomiDeviceList = [];
     xiaomiLoggedIn = xiaomiAccountList.find(a => a.id === xiaomiAccount)?.authenticated ?? false;
     xiaomiError = '';
@@ -540,10 +567,19 @@
         </select>
       {/if}
 
+      {#if !xiaomiAddingAccount}
+        <button type="button" class="btn btn-ghost btn-sm mb-3" disabled={xiaomiLoading} onclick={() => { resetXiaomiVerification(); xiaomiAddingAccount = true; xiaomiLoggedIn = false; xiaomiError = ''; }}>{t('xiaomi.addAccount')}</button>
+      {/if}
+
       {#if !xiaomiLoggedIn}
         <!-- Login form -->
         <form onsubmit={(e) => { e.preventDefault(); handleXiaomiLogin(); }} class="space-y-3">
           <p class="text-sm th-text-secondary">{t('xiaomi.signInHint')}</p>
+          {#if xiaomiAddingAccount}
+            <label class="input-label text-xs" for="xiaomi-account-id">{t('xiaomi.accountId')}</label>
+            <input id="xiaomi-account-id" type="text" class="input py-1 text-sm" bind:value={xiaomiNewAccount} maxlength="64" required disabled={xiaomiLoading} />
+            <button type="button" class="btn btn-ghost btn-sm" onclick={() => { resetXiaomiVerification(); xiaomiAddingAccount = false; xiaomiLoggedIn = xiaomiAccountList.find(a => a.id === xiaomiAccount)?.authenticated ?? false; xiaomiError = ''; }}>{t('common.cancel')}</button>
+          {/if}
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label class="input-label text-xs" for="xiaomi-account">{t('xiaomi.account')}</label>
@@ -680,11 +716,9 @@
             {/each}
           </div>
         {/if}
-        {#if xiaomiAccount === 'default'}
         <div class="mt-4 flex justify-end">
           <button class="btn btn-ghost btn-sm" onclick={handleXiaomiLogout} disabled={xiaomiLoading || syncing || xiaomiAddingDid !== null}>{t('xiaomi.signOut')}</button>
         </div>
-        {/if}
       {/if}
       {#if xiaomiError}
         <p class="th-color-danger text-sm" role="alert">{xiaomiError}</p>

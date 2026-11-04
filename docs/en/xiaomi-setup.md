@@ -95,7 +95,7 @@ A wrong verification code or temporary network failure can be retried in the cur
 
 ### Manual Configuration
 
-Named accounts can be configured in the YAML file and selected in device discovery:
+Named accounts can be added in device discovery or configured in YAML:
 
 ```yaml
 xiaomi:
@@ -109,7 +109,7 @@ xiaomi:
       region: "sg"
 ```
 
-Named account credentials are currently added and updated in the configuration file. Use `xiaomi://device-id?account=home` to bind a camera to that account; omitting `account` selects the default account. Named user IDs and tokens use the existing configuration encryption mechanism when enabled.
+Named accounts can be signed in and selected in device discovery. Remove cameras bound to a named account before signing it out. Use `xiaomi://device-id?account=home` to bind a camera to that account; omitting `account` selects the default account. Named user IDs and tokens use the existing configuration encryption mechanism when enabled.
 
 Edit the configuration file:
 
