@@ -21,6 +21,14 @@ type subscriptionKey struct{ participantID, publicationID string }
 
 // Publish registers a track. The caller must enforce room-scoped authorization.
 func (r *Room) Publish(participantID, kind, source, codec string) (Publication, error) {
+	return r.publish(participantID, "", false, kind, source, codec)
+}
+
+// PublishSession rejects operations from a replaced participant session. It does not perform authorization.
+func (r *Room) PublishSession(participantID, session, kind, source, codec string) (Publication, error) {
+	return r.publish(participantID, session, true, kind, source, codec)
+}
+func (r *Room) publish(participantID, session string, check bool, kind, source, codec string) (Publication, error) {
 	if (kind != "audio" && kind != "video") || (source != "camera" && source != "microphone" && source != "screen") || codec == "" || (source == "camera" && kind != "video") || (source == "microphone" && kind != "audio") {
 		return Publication{}, ErrInvalidTrack
 	}
@@ -31,6 +39,11 @@ func (r *Room) Publish(participantID, kind, source, codec string) (Publication, 
 	}
 	if _, ok := r.participants[participantID]; !ok {
 		return Publication{}, ErrParticipantNotFound
+	}
+	if check {
+		if err := r.checkSessionLocked(participantID, session); err != nil {
+			return Publication{}, err
+		}
 	}
 	if r.limits.MaxPublicationsPerParticipant > 0 {
 		count := 0
@@ -53,10 +66,23 @@ func (r *Room) Publish(participantID, kind, source, codec string) (Publication, 
 	return p, nil
 }
 func (r *Room) Unpublish(participantID, publicationID string) error {
+	return r.unpublish(participantID, "", publicationID, false)
+}
+
+// UnpublishSession rejects operations from a replaced session; caller authorization remains required.
+func (r *Room) UnpublishSession(participantID, session, publicationID string) error {
+	return r.unpublish(participantID, session, publicationID, true)
+}
+func (r *Room) unpublish(participantID, session, publicationID string, check bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
 		return ErrRoomClosed
+	}
+	if check {
+		if err := r.checkSessionLocked(participantID, session); err != nil {
+			return err
+		}
 	}
 	p, ok := r.publications[publicationID]
 	if !ok || p.ParticipantID != participantID {
@@ -77,10 +103,23 @@ func (r *Room) removePublication(id string) {
 	}
 }
 func (r *Room) Subscribe(participantID, publicationID string) error {
+	return r.subscribe(participantID, "", publicationID, false)
+}
+
+// SubscribeSession rejects operations from a replaced session; caller authorization remains required.
+func (r *Room) SubscribeSession(participantID, session, publicationID string) error {
+	return r.subscribe(participantID, session, publicationID, true)
+}
+func (r *Room) subscribe(participantID, session, publicationID string, check bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
 		return ErrRoomClosed
+	}
+	if check {
+		if err := r.checkSessionLocked(participantID, session); err != nil {
+			return err
+		}
 	}
 	if _, ok := r.participants[participantID]; !ok {
 		return ErrParticipantNotFound
@@ -104,10 +143,23 @@ func (r *Room) Subscribe(participantID, publicationID string) error {
 	return nil
 }
 func (r *Room) Unsubscribe(participantID, publicationID string) error {
+	return r.unsubscribe(participantID, "", publicationID, false)
+}
+
+// UnsubscribeSession rejects operations from a replaced session; caller authorization remains required.
+func (r *Room) UnsubscribeSession(participantID, session, publicationID string) error {
+	return r.unsubscribe(participantID, session, publicationID, true)
+}
+func (r *Room) unsubscribe(participantID, session, publicationID string, check bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
 		return ErrRoomClosed
+	}
+	if check {
+		if err := r.checkSessionLocked(participantID, session); err != nil {
+			return err
+		}
 	}
 	key := subscriptionKey{participantID, publicationID}
 	if _, ok := r.subscriptions[key]; !ok {
@@ -115,5 +167,20 @@ func (r *Room) Unsubscribe(participantID, publicationID string) error {
 	}
 	delete(r.subscriptions, key)
 	r.notify("subscription_changed")
+	return nil
+}
+
+// checkSessionLocked validates freshness, not identity or authorization.
+func (r *Room) checkSessionLocked(participantID, session string) error {
+	if session == "" {
+		return ErrInvalidID
+	}
+	current, ok := r.sessions[participantID]
+	if !ok {
+		return ErrParticipantNotFound
+	}
+	if current != session {
+		return ErrStaleSession
+	}
 	return nil
 }
