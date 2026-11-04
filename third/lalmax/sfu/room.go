@@ -9,13 +9,17 @@ import (
 )
 
 var (
-	ErrInvalidID           = errors.New("sfu: empty identifier")
-	ErrRoomExists          = errors.New("sfu: room already exists")
-	ErrRoomNotFound        = errors.New("sfu: room not found")
-	ErrRoomClosed          = errors.New("sfu: room closed")
-	ErrParticipantExists   = errors.New("sfu: participant already exists")
-	ErrParticipantNotFound = errors.New("sfu: participant not found")
-	ErrRoomFull            = errors.New("sfu: room full")
+	ErrInvalidID            = errors.New("sfu: empty identifier")
+	ErrRoomExists           = errors.New("sfu: room already exists")
+	ErrRoomNotFound         = errors.New("sfu: room not found")
+	ErrRoomClosed           = errors.New("sfu: room closed")
+	ErrParticipantExists    = errors.New("sfu: participant already exists")
+	ErrParticipantNotFound  = errors.New("sfu: participant not found")
+	ErrRoomFull             = errors.New("sfu: room full")
+	ErrPublicationNotFound  = errors.New("sfu: publication not found")
+	ErrSubscriptionExists   = errors.New("sfu: subscription already exists")
+	ErrSubscriptionNotFound = errors.New("sfu: subscription not found")
+	ErrOwnPublication       = errors.New("sfu: cannot subscribe to own publication")
 )
 
 // Key identifies a room within a namespace.
@@ -26,10 +30,12 @@ type Participant struct{ ID, Name string }
 
 // Snapshot is an independent copy of room membership at one instant.
 type Snapshot struct {
-	Key          Key
-	Generation   string
-	Participants []Participant
-	Closed       bool
+	Key           Key
+	Generation    string
+	Participants  []Participant
+	Closed        bool
+	Publications  []Publication
+	Subscriptions []Subscription
 }
 
 // Manager owns room instances. Authentication is the caller's responsibility.
@@ -58,7 +64,7 @@ func (m *Manager) Create(key Key, limit int) (*Room, error) {
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, err
 	}
-	r := &Room{key: key, generation: hex.EncodeToString(id[:]), limit: limit, participants: make(map[string]Participant)}
+	r := &Room{key: key, generation: hex.EncodeToString(id[:]), limit: limit, participants: make(map[string]Participant), publications: make(map[string]Publication), subscriptions: make(map[subscriptionKey]Subscription)}
 	m.rooms[key] = r
 	return r, nil
 }
@@ -84,12 +90,14 @@ func (m *Manager) Close(key Key, generation string) error {
 }
 
 type Room struct {
-	mu           sync.Mutex
-	key          Key
-	generation   string
-	limit        int
-	closed       bool
-	participants map[string]Participant
+	mu            sync.Mutex
+	key           Key
+	generation    string
+	limit         int
+	closed        bool
+	participants  map[string]Participant
+	publications  map[string]Publication
+	subscriptions map[subscriptionKey]Subscription
 }
 
 func (r *Room) Join(p Participant) error {
@@ -120,6 +128,16 @@ func (r *Room) Leave(id string) error {
 		return ErrParticipantNotFound
 	}
 	delete(r.participants, id)
+	for key := range r.subscriptions {
+		if key.participantID == id {
+			delete(r.subscriptions, key)
+		}
+	}
+	for pubID, p := range r.publications {
+		if p.ParticipantID == id {
+			r.removePublication(pubID)
+		}
+	}
 	return nil
 }
 func (r *Room) Snapshot() Snapshot {
@@ -129,6 +147,19 @@ func (r *Room) Snapshot() Snapshot {
 	for _, p := range r.participants {
 		s.Participants = append(s.Participants, p)
 	}
+	for _, p := range r.publications {
+		s.Publications = append(s.Publications, p)
+	}
+	for _, sub := range r.subscriptions {
+		s.Subscriptions = append(s.Subscriptions, sub)
+	}
 	return s
 }
-func (r *Room) close() { r.mu.Lock(); defer r.mu.Unlock(); r.closed = true; clear(r.participants) }
+func (r *Room) close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	clear(r.participants)
+	clear(r.publications)
+	clear(r.subscriptions)
+}
