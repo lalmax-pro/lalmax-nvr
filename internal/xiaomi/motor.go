@@ -122,10 +122,18 @@ type MotorProfile struct {
 	DeviceVerified bool   `json:"device_verified"`
 }
 
+func fixedStepMotorModel(model string) bool {
+	switch model {
+	case ModelCW400, ModelCW500, ModelMJSXJ10CM, ModelMi3602K, ModelC01A01:
+		return true
+	default:
+		return false
+	}
+}
+
 func MotorProfileForModel(model string) MotorProfile {
 	profile := MotorProfile{Model: model, Control: "unknown", Source: "unknown"}
-	switch model {
-	case ModelCW400, ModelCW500:
+	if fixedStepMotorModel(model) {
 		profile.Control = "fixed_step"
 		profile.Source = "model"
 	}
@@ -139,4 +147,17 @@ func (r *XiaomiRecorder) MotorModel() string {
 		return ""
 	}
 	return r.motorClient.model
+}
+
+func (r *XiaomiRecorder) MotorProfile() MotorProfile {
+	r.motorMu.Lock()
+	defer r.motorMu.Unlock()
+	if r.motorClient == nil {
+		return MotorProfileForModel("")
+	}
+	profile := MotorProfileForModel(r.motorClient.model)
+	if r.motorClient.model == ModelDafang && !r.motorClient.legacy {
+		profile.Control, profile.Source = "continuous", "model"
+	}
+	return profile
 }

@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,14 +59,17 @@ const (
 
 // Known Xiaomi camera model identifiers.
 const (
-	ModelDafang   = "isa.camera.df3"
-	ModelLoockV2  = "loock.cateye.v02"
-	ModelC200     = "chuangmi.camera.046c04"
-	ModelC300     = "chuangmi.camera.72ac1"
-	ModelXiaofang = "isa.camera.isc5c1"
-	ModelHLC8     = "isa.camera.hlc8"
-	ModelCW400    = "isa.camera.hlc8a"
-	ModelCW500    = "isa.camera.500dh"
+	ModelDafang    = "isa.camera.df3"
+	ModelLoockV2   = "loock.cateye.v02"
+	ModelC200      = "chuangmi.camera.046c04"
+	ModelC300      = "chuangmi.camera.72ac1"
+	ModelXiaofang  = "isa.camera.isc5c1"
+	ModelHLC8      = "isa.camera.hlc8"
+	ModelCW400     = "isa.camera.hlc8a"
+	ModelCW500     = "isa.camera.500dh"
+	ModelMJSXJ10CM = "chuangmi.camera.026c05"
+	ModelMi3602K   = "chuangmi.camera.029a02"
+	ModelC01A01    = "xiaomi.camera.c01a01"
 )
 
 // missHdrSize is the size of a MISS media packet header.
@@ -236,7 +240,29 @@ func (c *MISSClient) MotorControlContext(ctx context.Context, direction string, 
 	default:
 		return fmt.Errorf("unsupported motor direction %q", direction)
 	}
-	if c.model == ModelCW400 || c.model == ModelCW500 {
+	if c.model == ModelDafang {
+		var horizontal, vertical byte
+		switch direction {
+		case "left":
+			horizontal = 1
+		case "right":
+			horizontal = 2
+		case "up":
+			vertical = 2
+		case "down":
+			vertical = 1
+		}
+		motorSpeed := byte(min(speed, 9))
+		if direction == "stop" {
+			motorSpeed = 5
+		}
+		payload := tutk.ICAM(0xff2404, horizontal, vertical, motorSpeed)
+		command := make([]byte, 4+hex.EncodedLen(len(payload)))
+		copy(command, []byte{0x7f, 0xff, 0xff, 0xff})
+		hex.Encode(command[4:], payload)
+		return c.writeEncodedCommandContext(ctx, command)
+	}
+	if fixedStepMotorModel(c.model) {
 		// Each command is one step; these models stop on their own.
 		if direction == "stop" {
 			return ctx.Err()
@@ -259,6 +285,10 @@ func (c *MISSClient) writeMotorBody(ctx context.Context, payload any) error {
 	}
 	command := binary.BigEndian.AppendUint32(nil, missCmdMotorReq)
 	command = append(command, body...)
+	return c.writeEncodedCommandContext(ctx, command)
+}
+
+func (c *MISSClient) writeEncodedCommandContext(ctx context.Context, command []byte) error {
 	encoded, err := Encode(command, c.key)
 	if err != nil {
 		return err

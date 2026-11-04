@@ -7,7 +7,7 @@
 
   let { cameraId, enabled = false, protocol = '' }: { cameraId: string; enabled?: boolean; protocol?: string } = $props();
   let isXiaomi = $derived(protocol === 'xiaomi');
-  let motorControl = $state<'fixed_step' | 'unknown'>('unknown');
+  let motorControl = $state<'fixed_step' | 'continuous' | 'unknown'>('unknown');
   let speed = $state(0.5);
   let controller: PtzHold | null = null;
 
@@ -97,7 +97,7 @@
     {#if isXiaomi && motorControl === 'fixed_step'}
       <div class="ptz-label">{t('ptz.fixedStep')}</div>
     {:else if isXiaomi}
-      <div class="ptz-label">{t('ptz.capabilityUnknown')}</div>
+      <div class="ptz-label">{t(motorControl === 'continuous' ? 'ptz.continuous' : 'ptz.capabilityUnknown')}</div>
       <select aria-label={t('ptz.speed')} bind:value={speed} class="ptz-preset-select" disabled={!!moving || stopping}>
         <option value={0.25}>{t('ptz.speedLow')}</option>
         <option value={0.5}>{t('ptz.speedMedium')}</option>

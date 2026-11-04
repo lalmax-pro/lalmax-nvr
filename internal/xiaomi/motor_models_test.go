@@ -10,8 +10,9 @@ import (
 )
 
 func TestStepMotorCommands(t *testing.T) {
-	for _, model := range []string{ModelCW400, ModelCW500} {
+	for _, model := range []string{ModelCW400, ModelCW500, ModelMJSXJ10CM, ModelMi3602K, ModelC01A01} {
 		t.Run(model, func(t *testing.T) {
+			require.Equal(t, "fixed_step", MotorProfileForModel(model).Control)
 			client, conn := newTestMISSClient()
 			client.model = model
 			for _, tc := range []struct {

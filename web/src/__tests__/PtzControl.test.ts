@@ -31,6 +31,13 @@ describe('PTZ controls', () => {
     await vi.waitFor(() => expect(ui.getByText('ptz.fixedStep')).toBeTruthy());
     expect(ui.queryByRole('combobox', { name: 'ptz.speed' })).toBeNull();
   });
+  it('shows continuous control for a recognized active camera', async () => {
+    const ui = fixture();
+    api.profile.mockResolvedValue({ control: 'continuous' });
+    await ui.rerender({ cameraId: 'next', enabled: true, protocol: 'xiaomi' });
+    await vi.waitFor(() => expect(ui.getByText('ptz.continuous')).toBeTruthy());
+    expect(ui.getByRole('combobox', { name: 'ptz.speed' })).toBeTruthy();
+  });
   it('retains zoom controls for other protocols', () => {
     const ui = fixture('onvif');
     expect(ui.getByRole('button', { name: 'ptz.zoomIn' })).toBeTruthy();
