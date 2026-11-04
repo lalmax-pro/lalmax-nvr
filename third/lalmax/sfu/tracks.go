@@ -32,6 +32,17 @@ func (r *Room) Publish(participantID, kind, source, codec string) (Publication, 
 	if _, ok := r.participants[participantID]; !ok {
 		return Publication{}, ErrParticipantNotFound
 	}
+	if r.limits.MaxPublicationsPerParticipant > 0 {
+		count := 0
+		for _, existing := range r.publications {
+			if existing.ParticipantID == participantID {
+				count++
+			}
+		}
+		if count >= r.limits.MaxPublicationsPerParticipant {
+			return Publication{}, ErrPublicationLimit
+		}
+	}
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return Publication{}, err
@@ -84,6 +95,9 @@ func (r *Room) Subscribe(participantID, publicationID string) error {
 	key := subscriptionKey{participantID, publicationID}
 	if _, ok := r.subscriptions[key]; ok {
 		return ErrSubscriptionExists
+	}
+	if r.limits.MaxSubscriptions > 0 && len(r.subscriptions) >= r.limits.MaxSubscriptions {
+		return ErrSubscriptionLimit
 	}
 	r.subscriptions[key] = Subscription{participantID, publicationID}
 	r.notify("subscription_changed")
