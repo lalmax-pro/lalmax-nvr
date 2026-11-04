@@ -219,8 +219,10 @@ func (c *MISSClient) readLegacyPacket(hdr, payload []byte) (*MISSPacket, error) 
 		codec = missCodecPCMU
 	case tutk.CodecPCML:
 		codec = missCodecPCM
+	case tutk.CodecAACLATM:
+		codec = missCodecAAC
 	default:
-		codec = 1033
+		codec = 1099
 	}
 	return &MISSPacket{CodecID: codec, Payload: payload, Timestamp: uint64(time.Now().UnixMilli())}, nil
 }
