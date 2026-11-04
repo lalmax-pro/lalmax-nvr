@@ -326,6 +326,23 @@ func (c *MISSClient) StartMedia(channel, quality string, audioEnabled ...bool) e
 	if len(audioEnabled) > 0 && !audioEnabled[0] {
 		audio = 0
 	}
+	if c.model == ModelDafang || c.model == ModelXiaofang {
+		if channel != "" && channel != "0" {
+			return errors.New("xiaomi: camera channel is not supported by this model")
+		}
+		var q byte
+		switch quality {
+		case "", "auto", "hd", "0":
+		case "sd", "1":
+			q = 1
+		default:
+			return fmt.Errorf("xiaomi: unsupported quality %q for this model", quality)
+		}
+		if err := c.writeDafangMediaCommand(0xff07d5, q); err != nil {
+			return err
+		}
+		return c.writeDafangMediaCommand(0xff07d8, 1, byte(audio))
+	}
 	// 0 - auto, 1 - sd, 2 - hd, default - hd
 	switch quality {
 	case "", "hd":
@@ -349,6 +366,14 @@ func (c *MISSClient) StartMedia(channel, quality string, audioEnabled ...bool) e
 	default:
 		data = fmt.Appendf(data, `{"videoquality":-1,"videoquality2":%s,"enableaudio":%d}`, quality, audio)
 	}
+	return c.WriteCommand(data)
+}
+
+func (c *MISSClient) writeDafangMediaCommand(cmd uint32, args ...byte) error {
+	payload := tutk.ICAM(cmd, args...)
+	data := make([]byte, 4+hex.EncodedLen(len(payload)))
+	copy(data, []byte{0x7f, 0xff, 0xff, 0xff})
+	hex.Encode(data[4:], payload)
 	return c.WriteCommand(data)
 }
 
