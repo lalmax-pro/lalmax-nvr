@@ -32,11 +32,11 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 
 ## Overview
 
-- **Protocol**: CS2 P2P (Xiaomi's proprietary cloud protocol)
+- **Protocol**: CS2 and TUTK P2P (Xiaomi's proprietary cloud protocol)
 - **Authentication**: Xiaomi cloud services with token-based auth
-- **Supported Models**: CS2-based cameras (see table below)
+- **Supported Models**: MISS cameras (see table below)
 - **Features**: Live streaming, recording, two-way audio, directional PTZ
-- **Transport**: UDP and TCP, including camera keepalive responses
+- **Transport**: CS2 over UDP or TCP, and TUTK over UDP
 
 ## Prerequisites
 
@@ -53,9 +53,9 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 | **Xiaofang** | `isa.camera.isc5c1` | H264 | PCM | Pan/tilt dome camera |
 | **Xiaomi HLC8** | `isa.camera.hlc8` | H265 | PCMA | Dual-lens camera |
 | **Loock V2** | `loock.cateye.v02` | H264 | PCMA | Smart doorbell camera |
-| **Dafang** | `isa.camera.df3` | - | - | ❌ Not Supported (TUTK protocol) |
+| **Dafang** | `isa.camera.df3` | - | - | MISS firmware may work; legacy firmware is not supported |
 
-**Important**: Only CS2 protocol cameras are supported. Dafang cameras use the TUTK protocol which is not implemented.
+**Important**: MISS devices using CS2 or TUTK transport are supported. Legacy login and media protocols are not yet supported. TUTK requires hardware verification.
 
 ## Features
 
@@ -210,7 +210,7 @@ The system uses **UDP transport** by default for CS2 P2P communication and handl
 ### Common Issues
 
 #### "Unsupported vendor" Error
-- **Cause**: Camera uses TUTK protocol
+- **Cause**: Camera uses an unsupported transport
 - **Solution**: Ensure your camera model is in the supported list
 
 #### "Authentication Failed" Error

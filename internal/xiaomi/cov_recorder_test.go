@@ -415,7 +415,7 @@ func TestCovMISSNewClientErrors(t *testing.T) {
 	require.Error(t, err)
 
 	// Unsupported vendor.
-	_, err = NewMISSClient("miss://127.0.0.1:1?vendor=tutk", 0)
+	_, err = NewMISSClient("miss://127.0.0.1:1?vendor=unrecognized", 0)
 	require.ErrorContains(t, err, "unsupported vendor")
 
 	// Rejected login response closes the connection.
@@ -429,7 +429,7 @@ func TestCovXiaomiRecorderVendorReporting(t *testing.T) {
 	r := makeTestRecorder(t)
 
 	// No reporter configured.
-	r.reportVendorError(errors.New(`miss: unsupported vendor "tutk"`))
+	r.reportVendorError(errors.New(`miss: unsupported vendor "mtp"`))
 
 	reporter := &covErrorReporter{}
 	r.SetErrorReporter(reporter)
@@ -440,12 +440,12 @@ func TestCovXiaomiRecorderVendorReporting(t *testing.T) {
 	detail, _ := reporter.get()
 	require.Nil(t, detail)
 
-	// TUTK incompatibility is reported.
-	r.reportVendorError(errors.New(`miss: unsupported vendor "tutk"`))
+	// Unsupported vendor is reported.
+	r.reportVendorError(errors.New(`miss: unsupported vendor "mtp"`))
 	detail, camera := reporter.get()
 	require.NotNil(t, detail)
-	require.Equal(t, "tutk_incompatible", detail.Type)
-	require.Contains(t, detail.Message, "tutk")
+	require.Equal(t, "unsupported_vendor", detail.Type)
+	require.Contains(t, detail.Message, "mtp")
 	require.Equal(t, r.cfg.CameraID, camera)
 
 	// Quoted value extraction edge cases.
