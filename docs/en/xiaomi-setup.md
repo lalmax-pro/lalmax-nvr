@@ -53,9 +53,9 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 | **Xiaofang** | `isa.camera.isc5c1` | H264 | PCM | Pan/tilt dome camera |
 | **Xiaomi HLC8** | `isa.camera.hlc8` | H265 | PCMA | Dual-lens camera |
 | **Loock V2** | `loock.cateye.v02` | H264 | PCMA | Smart doorbell camera |
-| **Dafang** | `isa.camera.df3` | - | - | MISS firmware may work; legacy firmware is not supported |
+| **Dafang** | `isa.camera.df3` | - | - | MISS or legacy firmware may work; hardware verification is required |
 
-**Important**: MISS devices using CS2 or TUTK transport are supported. Legacy login and media protocols are not yet supported. TUTK requires hardware verification.
+**Important**: MISS devices using CS2 or TUTK transport and some legacy login and video formats are supported experimentally. Legacy AAC audio, PTZ and talk are not supported. TUTK and legacy models require hardware verification.
 
 ## Features
 

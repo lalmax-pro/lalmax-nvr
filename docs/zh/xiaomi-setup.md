@@ -47,9 +47,9 @@ sequenceDiagram
 | 小方摄像头 | `isa.camera.isc5c1` | H264 | PCM | 云台摄像头 |
 | 小米 HLC8 | `isa.camera.hlc8` | H265 | PCMA | 双摄摄像头 |
 | Loock V2 | `loock.cateye.v02` | H264 | PCMA | 智能门铃 |
-| 大方摄像头 | `isa.camera.df3` | - | - | MISS 固件可尝试，旧版固件暂不支持 |
+| 大方摄像头 | `isa.camera.df3` | - | - | MISS 或旧版固件可尝试，需实机验证 |
 
-**注意**：支持 CS2 和 TUTK 传输的 MISS 设备；旧版设备专用登录和媒体协议暂不支持。TUTK 设备仍需实机验证。
+**注意**：支持 CS2 和 TUTK 传输的 MISS 设备，并尝试兼容部分旧版设备的登录和视频。旧版设备的 AAC 音频、云台和对讲尚未支持，相关型号和 TUTK 连接仍需实机验证。
 
 ## 功能特性
 
