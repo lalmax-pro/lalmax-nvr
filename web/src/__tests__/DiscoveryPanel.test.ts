@@ -80,7 +80,7 @@ describe('Xiaomi account discovery', () => {
     await fireEvent.input(ui.getByLabelText('xiaomi.password'), { target: { value: 'password' } });
     await fireEvent.change(region, { target: { value: regionCode } });
     await fireEvent.submit(ui.container.querySelector('form')!);
-    await waitFor(() => expect(api.auth).toHaveBeenCalledWith('account', 'password', regionCode));
+    await waitFor(() => expect(api.auth).toHaveBeenCalledWith('account', 'password', regionCode, undefined, 'default'));
     expect(await ui.findByRole('button', { name: 'xiaomi.signOut' })).toBeTruthy();
   });
 });

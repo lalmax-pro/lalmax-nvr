@@ -157,6 +157,7 @@ type Handler struct {
 	voipSettingsMu        sync.Mutex
 	xiaomiMu              sync.Mutex
 	xiaomiAuthMu          sync.Mutex
+	xiaomiChallenges      map[string]xiaomiChallenge
 	xiaomiMotorDispatch   func(context.Context, string, string, int) error
 	voipRestarter         VoIPRestarter
 	db                    storage.APIRepository

@@ -70,6 +70,10 @@ func loadPendingCloud(id string) *Cloud {
 	return entry.cloud
 }
 
+func CancelPendingLogin(id string) {
+	deletePendingCloud(id)
+}
+
 func deletePendingCloud(id string) {
 	pendingCloudsMu.Lock()
 	defer pendingCloudsMu.Unlock()

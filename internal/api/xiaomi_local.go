@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"strings"
 	"sync"
@@ -40,10 +41,23 @@ func (a *LocalXiaomiAuth) SetCloudConfig(ctx context.Context, userID, token, reg
 	defer a.mu.Unlock()
 	a.cfg.UserID, a.cfg.Token, a.cfg.Region = userID, token, region
 	xiaomi.SetCloudConfig(a.cfg)
-	if token == "" {
-		xiaomi.ClearPendingLogins()
-	}
 	return nil
+}
+
+func (a *LocalXiaomiAuth) SetXiaomiConfig(ctx context.Context, cfg config.XiaomiConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cfg.Accounts = maps.Clone(cfg.Accounts)
+	a.cfg = cfg
+	xiaomi.SetCloudConfig(cfg)
+	return nil
+}
+
+func (a *LocalXiaomiAuth) CancelPendingLogin(id string) {
+	xiaomi.CancelPendingLogin(id)
 }
 
 func (a *LocalXiaomiAuth) cloudConfig() config.XiaomiConfig {
