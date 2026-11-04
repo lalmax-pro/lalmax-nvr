@@ -38,6 +38,7 @@ func (r *Room) Publish(participantID, kind, source, codec string) (Publication, 
 	}
 	p := Publication{ID: hex.EncodeToString(id[:]), ParticipantID: participantID, Kind: kind, Source: source, Codec: codec}
 	r.publications[p.ID] = p
+	r.notify("track_published")
 	return p, nil
 }
 func (r *Room) Unpublish(participantID, publicationID string) error {
@@ -51,6 +52,7 @@ func (r *Room) Unpublish(participantID, publicationID string) error {
 		return ErrPublicationNotFound
 	}
 	r.removePublication(publicationID)
+	r.notify("track_unpublished")
 	return nil
 }
 
@@ -84,6 +86,7 @@ func (r *Room) Subscribe(participantID, publicationID string) error {
 		return ErrSubscriptionExists
 	}
 	r.subscriptions[key] = Subscription{participantID, publicationID}
+	r.notify("subscription_changed")
 	return nil
 }
 func (r *Room) Unsubscribe(participantID, publicationID string) error {
@@ -97,5 +100,6 @@ func (r *Room) Unsubscribe(participantID, publicationID string) error {
 		return ErrSubscriptionNotFound
 	}
 	delete(r.subscriptions, key)
+	r.notify("subscription_changed")
 	return nil
 }
