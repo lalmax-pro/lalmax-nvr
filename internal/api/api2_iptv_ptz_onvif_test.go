@@ -1534,8 +1534,23 @@ func TestApi2IOXiaomiDevicesAndVendor(t *testing.T) {
 	var tutk map[string]any
 	parseJSON(t, rr, &tutk)
 	require.Equal(t, "tutk", tutk["vendor"])
-	require.Equal(t, false, tutk["compatible"])
-	require.NotEmpty(t, tutk["message"])
+	require.Equal(t, true, tutk["compatible"])
+
+	cloud.vendor = "legacy"
+	rr = api2ioDo(t, authed, http.MethodGet, "/api/xiaomi/check-vendor?did=did-1", "")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var legacy map[string]any
+	parseJSON(t, rr, &legacy)
+	require.Equal(t, "legacy", legacy["vendor"])
+	require.Equal(t, true, legacy["compatible"])
+
+	cloud.vendor = "mtp"
+	rr = api2ioDo(t, authed, http.MethodGet, "/api/xiaomi/check-vendor?did=did-1", "")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var mtp map[string]any
+	parseJSON(t, rr, &mtp)
+	require.Equal(t, false, mtp["compatible"])
+	require.NotEmpty(t, mtp["message"])
 
 	cloud.vendor = "cs2"
 	rr = api2ioDo(t, authed, http.MethodGet, "/api/xiaomi/check-vendor?did=did-1", "")

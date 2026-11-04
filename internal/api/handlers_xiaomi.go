@@ -414,17 +414,17 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if vendor != "cs2" {
+	if vendor != "cs2" && vendor != "tutk" && vendor != "legacy" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"vendor":     vendor,
 			"compatible": false,
-			"message":    fmt.Sprintf("This device uses unsupported transport %q. Only CS2 protocol cameras are supported.", vendor),
+			"message":    fmt.Sprintf("This device uses unsupported transport %q. Supported transports are CS2, TUTK and legacy.", vendor),
 		})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"vendor":     "cs2",
+		"vendor":     vendor,
 		"compatible": true,
 	})
 }
