@@ -52,6 +52,7 @@ type Session struct {
 	scope      Request
 	generation string
 	closed     bool
+	incoming   map[string]*incomingBinding
 }
 
 // JoinRoom checks policy before allocating a participant. The policy must be
@@ -114,7 +115,15 @@ func (s *Session) Publish(ctx context.Context, kind, source, codec string) (sfu.
 	return p, err
 }
 func (s *Session) Unpublish(ctx context.Context, id string) error {
-	return s.withPolicy(ctx, Request{Operation: Unpublish, PublicationID: id}, func() error { return s.room.UnpublishSession(s.scope.ParticipantID, s.generation, id) })
+	return s.withPolicy(ctx, Request{Operation: Unpublish, PublicationID: id}, func() error {
+		err := s.room.UnpublishSession(s.scope.ParticipantID, s.generation, id)
+		if err == nil {
+			if binding := s.incoming[id]; binding != nil {
+				binding.cancel()
+			}
+		}
+		return err
+	})
 }
 func (s *Session) Subscribe(ctx context.Context, id string) error {
 	return s.withPolicy(ctx, Request{Operation: Subscribe, PublicationID: id}, func() error { return s.room.SubscribeSession(s.scope.ParticipantID, s.generation, id) })
@@ -131,6 +140,9 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
+	for _, binding := range s.incoming {
+		binding.cancel()
+	}
 	err := s.room.LeaveSession(s.scope.ParticipantID, s.generation)
 	if errors.Is(err, sfu.ErrRoomClosed) || errors.Is(err, sfu.ErrParticipantNotFound) || errors.Is(err, sfu.ErrStaleSession) {
 		return nil
