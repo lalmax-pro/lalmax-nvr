@@ -12,6 +12,12 @@ import (
 )
 
 type signalResult struct {
+	Snapshot *struct {
+		Publications []struct {
+			ID       string
+			RTPReady bool
+		}
+	} `json:"snapshot"`
 	Type        string               `json:"type"`
 	ID          string               `json:"id"`
 	Error       string               `json:"error"`
@@ -145,6 +151,24 @@ func TestDemoServerOpusThroughTwoPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer viewer.Close()
+	_ = viewer.SetReadDeadline(time.Now().Add(8 * time.Second))
+	for {
+		var state signalResult
+		if err = viewer.ReadJSON(&state); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		if state.Snapshot != nil {
+			for _, p := range state.Snapshot.Publications {
+				if p.ID == published.Publication.ID && p.RTPReady {
+					found = true
+				}
+			}
+		}
+		if found {
+			break
+		}
+	}
 	if err = viewer.WriteJSON(map[string]any{"id": "subscribe", "type": "subscribe", "publication_id": published.Publication.ID}); err != nil {
 		t.Fatal(err)
 	}

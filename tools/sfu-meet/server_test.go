@@ -89,7 +89,7 @@ func TestDemoLoginAndWebSocket(t *testing.T) {
 	if snapshot["type"] != "snapshot" {
 		t.Fatalf("snapshot: %+v", snapshot)
 	}
-	if err = conn.WriteJSON(map[string]any{"id": "v", "type": "publish", "kind": "video", "source": "camera", "codec": "video/H264", "track_id": "video"}); err != nil {
+	if err = conn.WriteJSON(map[string]any{"id": "v", "type": "publish", "kind": "video", "source": "camera", "codec": "video/VP8", "track_id": "video"}); err != nil {
 		t.Fatal(err)
 	}
 	for {
@@ -148,5 +148,45 @@ func TestEmbeddedWebAssets(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("directory status %d", resp.StatusCode)
+	}
+}
+
+func TestDemoAllowsMicrophoneCameraAndScreen(t *testing.T) {
+	_, origin := setup(t)
+	resp := login(t, origin, testSecret, origin)
+	conn, _, err := dial(t, origin, origin, resp.Cookies()[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tracks := []struct{ kind, source, codec string }{
+		{"audio", "microphone", "audio/opus"},
+		{"video", "camera", "video/H264"},
+		{"video", "screen", "video/H264"},
+	}
+	var screenID string
+	for _, track := range tracks {
+		if err := conn.WriteJSON(map[string]any{"id": track.source, "type": "publish", "kind": track.kind, "source": track.source, "codec": track.codec, "track_id": track.source}); err != nil {
+			t.Fatal(err)
+		}
+		result := readResult(t, conn, track.source)
+		if result.Error != "" || result.Publication == nil {
+			t.Fatalf("publish %s: %+v", track.source, result)
+		}
+		if track.source == "screen" {
+			screenID = result.Publication.ID
+		}
+	}
+	if err := conn.WriteJSON(map[string]any{"id": "unpublish", "type": "unpublish", "publication_id": screenID}); err != nil {
+		t.Fatal(err)
+	}
+	if result := readResult(t, conn, "unpublish"); result.Error != "" {
+		t.Fatalf("unpublish screen: %+v", result)
+	}
+	if err := conn.WriteJSON(map[string]any{"id": "republish", "type": "publish", "kind": "video", "source": "screen", "codec": "video/H264", "track_id": "screen-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if result := readResult(t, conn, "republish"); result.Error != "" || result.Publication == nil {
+		t.Fatalf("republish screen: %+v", result)
 	}
 }
