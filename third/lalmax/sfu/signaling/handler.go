@@ -1,4 +1,4 @@
-// Package signaling provides a control-only WebSocket handler for SFU rooms.
+// Package signaling provides an opt-in WebSocket handler for SFU rooms.
 package signaling
 
 import (
@@ -24,12 +24,21 @@ type Authenticate func(*http.Request) (Identity, error)
 // It is called for the initial snapshot and every subsequent update.
 type Filter func(context.Context, Identity, sfu.Snapshot) (sfu.Snapshot, error)
 
+// Negotiator is owned by one WebSocket session and must be closed on exit.
+// Implementations are trusted to enforce the server media policy.
+type Negotiator interface {
+	Answer(context.Context, string) (string, error)
+	Close() error
+}
+type NegotiatorFactory func(context.Context, Identity) (Negotiator, error)
+
 type Handler struct {
-	Rooms        *sfu.Manager
-	Policy       access.Authorizer
-	Authenticate Authenticate
-	Filter       Filter
-	CheckOrigin  func(*http.Request) bool
+	Rooms         *sfu.Manager
+	Policy        access.Authorizer
+	Authenticate  Authenticate
+	Filter        Filter
+	CheckOrigin   func(*http.Request) bool
+	NewNegotiator NegotiatorFactory
 }
 type command struct {
 	ID            string `json:"id"`
@@ -38,6 +47,7 @@ type command struct {
 	Source        string `json:"source"`
 	Codec         string `json:"codec"`
 	PublicationID string `json:"publication_id"`
+	SDP           string `json:"sdp"`
 }
 type response struct {
 	Type        string           `json:"type"`
@@ -45,10 +55,11 @@ type response struct {
 	Error       string           `json:"error,omitempty"`
 	Publication *sfu.Publication `json:"publication,omitempty"`
 	Snapshot    *sfu.Snapshot    `json:"snapshot,omitempty"`
+	SDP         string           `json:"sdp,omitempty"`
 }
 
 // ServeHTTP requires explicit authentication, authorization, visibility filter
-// and origin policy. It never creates rooms and does not negotiate media.
+// and origin policy. It never creates rooms. SDP negotiation is opt-in.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.Rooms == nil || h.Policy == nil || h.Authenticate == nil || h.Filter == nil || h.CheckOrigin == nil {
 		http.Error(w, "signaling unavailable", http.StatusServiceUnavailable)
@@ -97,7 +108,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	conn.SetReadLimit(16384)
+	conn.SetReadLimit(131072)
+	var negotiator Negotiator
+	defer func() {
+		if negotiator != nil {
+			_ = negotiator.Close()
+		}
+	}()
 	responses := make(chan response, 32)
 	done := make(chan struct{})
 	go func() {
@@ -148,6 +165,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reply.Error = "invalid_request"
 		} else {
 			switch c.Type {
+			case "offer":
+				if h.NewNegotiator == nil {
+					reply.Error = "unsupported_command"
+					break
+				}
+				if c.SDP == "" || len(c.SDP) > 65536 {
+					reply.Error = "invalid_request"
+					break
+				}
+				if negotiator == nil {
+					negotiator, err = h.NewNegotiator(ctx, identity)
+					if err == nil && negotiator == nil {
+						err = errors.New("nil negotiator")
+					}
+				}
+				if err == nil {
+					offerCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+					reply.SDP, err = negotiator.Answer(offerCtx, c.SDP)
+					stop()
+				}
 			case "publish":
 				p, e := session.Publish(ctx, c.Kind, c.Source, c.Codec)
 				err = e
