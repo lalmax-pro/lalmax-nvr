@@ -159,4 +159,28 @@ delivered:
 	if len(room.Snapshot().Subscriptions) != 0 {
 		t.Fatal("subscription retained")
 	}
+	if err = viewerWS.WriteJSON(command{ID: "resubscribe", Type: "subscribe", PublicationID: pub.Publication.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if r := readType(t, viewerWS, "result"); r.Error != "" {
+		t.Fatal(r.Error)
+	}
+	if _, err = viewer.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
+		t.Fatal(err)
+	}
+	negotiateWS(t, viewerWS, viewer)
+	deadline = time.After(10 * time.Second)
+	for {
+		select {
+		case payload := <-received:
+			if !bytes.Equal(payload, []byte{0x65, 0x01, 0x02}) {
+				t.Fatalf("wrong resubscribed RTP %x", payload)
+			}
+			return
+		case <-ticker.C:
+			send()
+		case <-deadline:
+			t.Fatal("resubscription received no RTP")
+		}
+	}
 }

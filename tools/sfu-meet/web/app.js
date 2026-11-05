@@ -123,11 +123,16 @@
   share.addEventListener('click',async()=>{
     const c=current;if(!c||!c.negotiated)return;
     if(c.screenPublication){share.disabled=true;try{await enqueue(c,()=>removeTrack(c,c.screenPublication));c.screenPublication='';c.screen=null;share.textContent='▣ 共享屏幕';}catch{}finally{if(current===c)share.disabled=false;}return;}
+    share.disabled=true;
     try {
       if(!navigator.mediaDevices?.getDisplayMedia)throw new Error('当前浏览器不支持屏幕共享');
       const stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});if(current!==c){stream.getTracks().forEach(t=>t.stop());return;}
-      const track=stream.getVideoTracks()[0];if(!track){stream.getTracks().forEach(t=>t.stop());throw new Error('未获得屏幕画面');}c.screen=stream;share.disabled=true;
-      await enqueue(c,async()=>{const id=await publishTrack(c,track,'screen');c.screenPublication=id;track.onended=()=>{if(current===c&&c.screenPublication===id){void enqueue(c,async()=>{await removeTrack(c,id);c.screenPublication='';c.screen=null;share.textContent='▣ 共享屏幕';}).catch(()=>{});}};await negotiate(c);});share.textContent='▣ 停止共享';
+      const track=stream.getVideoTracks()[0];if(!track){stream.getTracks().forEach(t=>t.stop());throw new Error('未获得屏幕画面');}c.screen=stream;
+      let id='', ended=track.readyState==='ended';
+      const stopScreen=async()=>{if(c.screenPublication!==id)return;await removeTrack(c,id);c.screenPublication='';c.screen=null;share.textContent='▣ 共享屏幕';};
+      track.onended=()=>{ended=true;if(current===c&&id)void enqueue(c,stopScreen).catch(()=>{});};
+      await enqueue(c,async()=>{if(ended){c.screen=null;return;}id=await publishTrack(c,track,'screen');c.screenPublication=id;if(ended){await stopScreen();return;}await negotiate(c);});
+      if(current===c&&c.screenPublication&&!ended)share.textContent='▣ 停止共享';
     }catch(err){if(current===c){c.screen?.getTracks().forEach(t=>t.stop());c.screen=null;showError(err.message||'屏幕共享失败');}}finally{if(current===c)share.disabled=false;}
   });
   $('enable-audio').addEventListener('click',()=>{for(const audio of audioContainer.querySelectorAll('audio'))void audio.play();$('enable-audio').hidden=true;});
