@@ -1,0 +1,5 @@
+# SFU bridge media adapters
+
+`H264` converts one authorized, sequential packetization-mode 1 H.264 RTP stream to Annex-B `base.AvPacket` values. The output can be passed to a lal custom publisher configured with `VideoFormat = base.AvPacketStreamVideoFormatAnnexb`. Parameter sets are cached and prepended to IDR access units; output waits for SPS, PPS and an IDR. Packet gaps, malformed frames and parameter changes force another IDR before output resumes. Duplicate and late packets are dropped. Sequence and timestamp wrap are handled.
+
+The embedding application must authorize and own the Room subscription, validate the negotiated codec and source identity, request keyframes and manage the custom publisher. `H264` is single-threaded and accepts only one SSRC. It assumes a no-B-frame stream and maps PTS and DTS to the same 90 kHz-derived millisecond clock. It does not synchronize audio, recover reordered packets, transcode, create a Group, or start a bridge. Timestamp regression and SSRC changes are errors; callers should terminate the binding and establish a new one. This component alone does not complete the GroupBridge integration.
