@@ -55,6 +55,7 @@ func (s *Session) StartIncoming(ctx context.Context, publicationID string, remot
 			s.mu.Lock()
 			if s.incoming[publicationID] == binding {
 				delete(s.incoming, publicationID)
+				s.forgetPublicationMappingLocked(publicationID)
 				_ = s.room.UnpublishSession(s.scope.ParticipantID, s.generation, publicationID)
 			}
 			s.mu.Unlock()

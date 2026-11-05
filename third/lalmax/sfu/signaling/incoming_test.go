@@ -28,7 +28,7 @@ func TestAuthorizedInboundTrackThroughRoom(t *testing.T) {
 				started <- errors.New("mismatched codec accepted")
 				return
 			}
-			done, err := session.StartIncoming(ctx, pair.audio, track, 2, 16)
+			done, err := session.StartMappedIncoming(ctx, track, 2, 16)
 			if err == nil {
 				ended <- done
 			}
@@ -44,7 +44,7 @@ func TestAuthorizedInboundTrackThroughRoom(t *testing.T) {
 	}
 	defer ws.Close()
 	_ = readType(t, ws, "snapshot")
-	if err = ws.WriteJSON(command{ID: "publish", Type: "publish", Kind: "audio", Source: "microphone", Codec: "audio/opus"}); err != nil {
+	if err = ws.WriteJSON(command{ID: "publish", Type: "publish", Kind: "audio", Source: "microphone", Codec: "audio/opus", TrackID: "audio"}); err != nil {
 		t.Fatal(err)
 	}
 	published := readType(t, ws, "result")
