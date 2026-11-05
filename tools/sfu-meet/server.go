@@ -1,18 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lalmax/sfu"
@@ -21,6 +23,9 @@ import (
 )
 
 const cookieName = "sfu_demo_session"
+
+//go:embed web/index.html web/app.js web/style.css
+var webAssets embed.FS
 
 var demoRoom = sfu.Key{Namespace: "local", ID: "demo"}
 
@@ -130,12 +135,31 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 	})
 	mux.Handle("/ws", ws)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		names := map[string]string{"/": "web/index.html", "/app.js": "web/app.js", "/style.css": "web/style.css"}
+		name, ok := names[r.URL.Path]
+		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = fmt.Fprintln(w, "SFU local demo signaling is running. Web UI is not included yet.")
+		data, err := webAssets.ReadFile(name)
+		if err != nil {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		if name == "web/app.js" {
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		}
+		if name == "web/style.css" {
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws:; media-src 'self' blob:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+		http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(data))
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != u.Host {

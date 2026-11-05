@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -118,5 +119,34 @@ func TestRejectsNonLoopbackAndSpoofedHost(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatal(resp.StatusCode)
+	}
+}
+
+func TestEmbeddedWebAssets(t *testing.T) {
+	_, origin := setup(t)
+	for _, tc := range []struct{ path, contentType, contains string }{{"/", "text/html", "SFU Meet"}, {"/app.js", "text/javascript", "RTCPeerConnection"}, {"/style.css", "text/css", ".layout"}} {
+		resp, err := http.Get(origin + tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), tc.contentType) || !strings.Contains(string(body), tc.contains) {
+			t.Fatalf("asset %s status=%d type=%q", tc.path, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+		if strings.Contains(string(body), testSecret) {
+			t.Fatal("secret exposed in asset")
+		}
+	}
+	resp, err := http.Get(origin + "/web/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("directory status %d", resp.StatusCode)
 	}
 }
