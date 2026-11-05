@@ -32,13 +32,17 @@ type Negotiator interface {
 }
 type NegotiatorFactory func(context.Context, Identity) (Negotiator, error)
 
+// SessionNegotiatorFactory may bind media through the authorized session.
+type SessionNegotiatorFactory func(context.Context, Identity, *access.Session) (Negotiator, error)
+
 type Handler struct {
-	Rooms         *sfu.Manager
-	Policy        access.Authorizer
-	Authenticate  Authenticate
-	Filter        Filter
-	CheckOrigin   func(*http.Request) bool
-	NewNegotiator NegotiatorFactory
+	Rooms                *sfu.Manager
+	Policy               access.Authorizer
+	Authenticate         Authenticate
+	Filter               Filter
+	CheckOrigin          func(*http.Request) bool
+	NewNegotiator        NegotiatorFactory
+	NewSessionNegotiator SessionNegotiatorFactory
 }
 type command struct {
 	ID            string `json:"id"`
@@ -166,7 +170,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			switch c.Type {
 			case "offer":
-				if h.NewNegotiator == nil {
+				if h.NewNegotiator == nil && h.NewSessionNegotiator == nil {
 					reply.Error = "unsupported_command"
 					break
 				}
@@ -175,7 +179,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 				if negotiator == nil {
-					negotiator, err = h.NewNegotiator(ctx, identity)
+					if h.NewSessionNegotiator != nil {
+						negotiator, err = h.NewSessionNegotiator(ctx, identity, session)
+					} else {
+						negotiator, err = h.NewNegotiator(ctx, identity)
+					}
 					if err == nil && negotiator == nil {
 						err = errors.New("nil negotiator")
 					}
