@@ -249,3 +249,17 @@ func (r *Room) close() {
 		delete(r.watchers, ch)
 	}
 }
+
+// SnapshotSession atomically validates a participant generation and captures
+// room state. This internal snapshot is not visibility-filtered or authorized.
+func (r *Room) SnapshotSession(participantID, session string) (Snapshot, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return Snapshot{}, ErrRoomClosed
+	}
+	if err := r.checkSessionLocked(participantID, session); err != nil {
+		return Snapshot{}, err
+	}
+	return r.snapshotLocked(), nil
+}
