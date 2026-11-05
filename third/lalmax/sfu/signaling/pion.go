@@ -8,15 +8,16 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-var ErrNegotiationUsed = errors.New("signaling: SDP negotiation already attempted")
+// ErrNegotiationUsed means an earlier offer failed and this peer must reconnect.
+var ErrNegotiationUsed = errors.New("signaling: negotiation unavailable after failure")
 
-// PionNegotiator answers one non-trickle SDP offer. The caller creates and
+// PionNegotiator answers serialized non-trickle SDP offers. The caller creates and
 // configures the PeerConnection, including codecs, transport policy, OnTrack,
 // authorization and RTCP handling; this type does not bind Room media.
 type PionNegotiator struct {
-	mu   sync.Mutex
-	pc   *webrtc.PeerConnection
-	used bool
+	mu     sync.Mutex
+	pc     *webrtc.PeerConnection
+	failed bool
 }
 
 func NewPionNegotiator(pc *webrtc.PeerConnection) (*PionNegotiator, error) {
@@ -31,10 +32,16 @@ func (n *PionNegotiator) Answer(ctx context.Context, offer string) (string, erro
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.used {
+	if n.failed {
 		return "", ErrNegotiationUsed
 	}
-	n.used = true
+	success := false
+	defer func() {
+		if !success {
+			n.failed = true
+			_ = n.pc.Close()
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -58,6 +65,7 @@ func (n *PionNegotiator) Answer(ctx context.Context, offer string) (string, erro
 	if local == nil {
 		return "", errors.New("signaling: missing local description")
 	}
+	success = true
 	return local.SDP, nil
 }
 func (n *PionNegotiator) Close() error { n.mu.Lock(); defer n.mu.Unlock(); return n.pc.Close() }

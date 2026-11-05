@@ -160,9 +160,14 @@ func TestRoomFactoryRejectsCodecMismatchAndClosesPeer(t *testing.T) {
 	factory := &RoomFactory{NewPeer: func(context.Context, Identity) (*webrtc.PeerConnection, error) { return peer, nil }, Codec: func(sfu.Publication) (webrtc.RTPCodecCapability, error) {
 		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000}, nil
 	}, MaxSubscribers: 2, QueueSize: 4}
-	if _, err = factory.NewNegotiator(ctx, Identity{Principal: "viewer"}, viewer); err == nil {
+	negotiator, err := factory.NewNegotiator(ctx, Identity{Principal: "viewer"}, viewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = negotiator.Answer(ctx, "invalid offer"); err == nil {
 		t.Fatal("mismatched codec accepted")
 	}
+
 	if peer.ConnectionState() != webrtc.PeerConnectionStateClosed {
 		t.Fatalf("peer not closed: %s", peer.ConnectionState())
 	}

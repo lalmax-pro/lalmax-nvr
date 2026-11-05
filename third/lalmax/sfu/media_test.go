@@ -119,3 +119,32 @@ func TestRoomRTPParticipantLeaveClosesOnlyAssociatedMedia(t *testing.T) {
 		t.Fatal(b.Err())
 	}
 }
+
+func TestPublicationRTPReadinessEvent(t *testing.T) {
+	m := NewManager()
+	r, _ := m.Create(Key{Namespace: "n", ID: "r"}, 0)
+	session, _ := r.JoinSession(Participant{ID: "p"})
+	pub, _ := r.PublishSession("p", session, "video", "camera", "video/H264")
+	snap, events, cancel, err := r.Watch(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	if snap.Publications[0].RTPReady {
+		t.Fatal("publication ready before media enabled")
+	}
+	if err = r.EnablePublicationRTP("p", session, pub.ID, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	event := <-events
+	if event.Type != "track_ready" || event.Snapshot.Sequence != snap.Sequence+1 || !event.Snapshot.Publications[0].RTPReady {
+		t.Fatalf("ready event: %+v", event)
+	}
+	if err = r.UnpublishSession("p", session, pub.ID); err != nil {
+		t.Fatal(err)
+	}
+	event = <-events
+	if len(event.Snapshot.Publications) != 0 {
+		t.Fatal("unpublished track retained")
+	}
+}

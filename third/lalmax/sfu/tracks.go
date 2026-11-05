@@ -15,6 +15,7 @@ type Publication struct {
 	Kind          string // audio or video
 	Source        string // camera, microphone or screen
 	Codec         string
+	RTPReady      bool // fanout is enabled; does not imply that media is decodable
 }
 type Subscription struct{ ParticipantID, PublicationID string }
 type subscriptionKey struct{ participantID, publicationID string }
