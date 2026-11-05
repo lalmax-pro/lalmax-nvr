@@ -236,6 +236,9 @@ func (bs *BroadcastSession) Stop() error {
 	bs.StopOnce.Do(func() {
 		bs.mu.Lock()
 		bs.stopped = true
+		rtpConn := bs.RTPConn
+		tcpConn := bs.TCPConn
+		tcpListener := bs.TCPListener
 		bs.mu.Unlock()
 
 		if bs.IdleTimer != nil {
@@ -248,14 +251,14 @@ func (bs *BroadcastSession) Stop() error {
 			_ = bs.Session.Bye(context.Background())
 		}
 
-		if bs.RTPConn != nil {
-			bs.RTPConn.Close()
+		if rtpConn != nil {
+			rtpConn.Close()
 		}
-		if bs.TCPConn != nil {
-			bs.TCPConn.Close()
+		if tcpConn != nil {
+			tcpConn.Close()
 		}
-		if bs.TCPListener != nil {
-			bs.TCPListener.Close()
+		if tcpListener != nil {
+			tcpListener.Close()
 		}
 
 		slog.Info("[Broadcast] session stopped", "device_id", bs.DeviceID, "channel_id", bs.ChannelID)
