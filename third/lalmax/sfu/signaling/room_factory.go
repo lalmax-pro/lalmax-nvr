@@ -20,6 +20,7 @@ type RoomFactory struct {
 	MaxSubscribers int
 	QueueSize      int
 	OnInbound      func(Identity, *webrtc.TrackRemote, error)
+	OnInboundPeer  func(context.Context, Identity, *webrtc.PeerConnection, *webrtc.TrackRemote, <-chan error, error)
 }
 
 func (f *RoomFactory) NewNegotiator(ctx context.Context, id Identity, session *access.Session) (Negotiator, error) {
@@ -39,9 +40,12 @@ func (f *RoomFactory) NewNegotiator(ctx context.Context, id Identity, session *a
 	}
 	bindCtx, cancel := context.WithCancel(ctx)
 	pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		_, err := session.StartMappedIncoming(bindCtx, track, f.MaxSubscribers, f.QueueSize)
+		done, err := session.StartMappedIncoming(bindCtx, track, f.MaxSubscribers, f.QueueSize)
 		if f.OnInbound != nil {
 			f.OnInbound(id, track, err)
+		}
+		if f.OnInboundPeer != nil {
+			f.OnInboundPeer(bindCtx, id, pc, track, done, err)
 		}
 	})
 	negotiator, err := NewPionNegotiator(pc)

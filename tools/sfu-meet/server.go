@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pion/interceptor"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/access"
@@ -42,6 +44,9 @@ func (localPolicy) Authorize(_ context.Context, r access.Request) error {
 		if r.Kind == "audio" && r.Source == "microphone" && strings.EqualFold(r.Codec, "audio/opus") {
 			return nil
 		}
+		if r.Kind == "video" && (r.Source == "camera" || r.Source == "screen") && strings.EqualFold(r.Codec, "video/h264") {
+			return nil
+		}
 	}
 	return errors.New("unauthorized")
 }
@@ -66,7 +71,7 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 		return nil, errors.New("demo requires loopback origin and secret")
 	}
 	rooms := sfu.NewManager()
-	_, err = rooms.CreateWithLimits(demoRoom, sfu.RoomLimits{MaxParticipants: 8, MaxPublicationsPerParticipant: 2, MaxSubscriptions: 48, MaxWatchers: 8})
+	_, err = rooms.CreateWithLimits(demoRoom, sfu.RoomLimits{MaxParticipants: 8, MaxPublicationsPerParticipant: 3, MaxSubscriptions: 48, MaxWatchers: 8})
 	if err != nil {
 		return nil, err
 	}
@@ -75,14 +80,50 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 		NewPeer: func(_ context.Context, _ signaling.Identity) (*webrtc.PeerConnection, error) {
 			engine := webrtc.SettingEngine{}
 			engine.SetIncludeLoopbackCandidate(true)
-			return webrtc.NewAPI(webrtc.WithSettingEngine(engine)).NewPeerConnection(webrtc.Configuration{})
+			media := &webrtc.MediaEngine{}
+			if err := media.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, PayloadType: 111}, webrtc.RTPCodecTypeAudio); err != nil {
+				return nil, err
+			}
+			if err := media.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, PayloadType: 96}, webrtc.RTPCodecTypeVideo); err != nil {
+				return nil, err
+			}
+			registry := &interceptor.Registry{}
+			if err := webrtc.RegisterDefaultInterceptors(media, registry); err != nil {
+				return nil, err
+			}
+			return webrtc.NewAPI(webrtc.WithSettingEngine(engine), webrtc.WithMediaEngine(media), webrtc.WithInterceptorRegistry(registry)).NewPeerConnection(webrtc.Configuration{})
 		},
 		Codec: func(p sfu.Publication) (webrtc.RTPCodecCapability, error) {
-			if p.Kind != "audio" || !strings.EqualFold(p.Codec, "audio/opus") {
-				return webrtc.RTPCodecCapability{}, errors.New("unsupported codec")
+			if p.Kind == "audio" && strings.EqualFold(p.Codec, "audio/opus") {
+				return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, nil
 			}
-			return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, nil
+			if p.Kind == "video" && strings.EqualFold(p.Codec, "video/h264") {
+				return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, nil
+			}
+			return webrtc.RTPCodecCapability{}, errors.New("unsupported codec")
 		}, MaxSubscribers: 8, QueueSize: 64,
+		OnInboundPeer: func(ctx context.Context, _ signaling.Identity, pc *webrtc.PeerConnection, track *webrtc.TrackRemote, done <-chan error, err error) {
+			if err != nil || track.Kind() != webrtc.RTPCodecTypeVideo {
+				return
+			}
+			// Demo fallback until subscriber PLI/FIR feedback is wired upstream.
+			go func() {
+				ticker := time.NewTicker(2 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-done:
+						return
+					case <-ticker.C:
+						if pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())}}) != nil {
+							return
+						}
+					}
+				}
+			}()
+		},
 	}
 	ws := &signaling.Handler{Rooms: rooms, Policy: localPolicy{}, CheckOrigin: sameOrigin, NewSessionNegotiator: factory.NewNegotiator,
 		Authenticate: func(r *http.Request) (signaling.Identity, error) {
