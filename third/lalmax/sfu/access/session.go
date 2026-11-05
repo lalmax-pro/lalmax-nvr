@@ -46,14 +46,15 @@ type Authorizer interface {
 	Authorize(context.Context, Request) error
 }
 type Session struct {
-	mu         sync.Mutex
-	room       *sfu.Room
-	policy     Authorizer
-	scope      Request
-	generation string
-	closed     bool
-	incoming   map[string]*incomingBinding
-	outgoing   map[string]*outgoingBinding
+	mu            sync.Mutex
+	room          *sfu.Room
+	policy        Authorizer
+	scope         Request
+	generation    string
+	closed        bool
+	incoming      map[string]*incomingBinding
+	outgoing      map[string]*outgoingBinding
+	trackMappings map[string]string
 }
 
 // JoinRoom checks policy before allocating a participant. The policy must be
@@ -119,6 +120,7 @@ func (s *Session) Unpublish(ctx context.Context, id string) error {
 	return s.withPolicy(ctx, Request{Operation: Unpublish, PublicationID: id}, func() error {
 		err := s.room.UnpublishSession(s.scope.ParticipantID, s.generation, id)
 		if err == nil {
+			s.forgetPublicationMappingLocked(id)
 			if binding := s.incoming[id]; binding != nil {
 				binding.cancel()
 			}
@@ -150,6 +152,7 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
+	clear(s.trackMappings)
 	for _, binding := range s.incoming {
 		binding.cancel()
 	}

@@ -51,6 +51,7 @@ type command struct {
 	Source        string `json:"source"`
 	Codec         string `json:"codec"`
 	PublicationID string `json:"publication_id"`
+	TrackID       string `json:"track_id"`
 	SDP           string `json:"sdp"`
 }
 type response struct {
@@ -194,7 +195,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					stop()
 				}
 			case "publish":
-				p, e := session.Publish(ctx, c.Kind, c.Source, c.Codec)
+				var p sfu.Publication
+				var e error
+				if c.TrackID != "" {
+					p, e = session.PublishMapped(ctx, c.Kind, c.Source, c.Codec, c.TrackID)
+				} else {
+					p, e = session.Publish(ctx, c.Kind, c.Source, c.Codec)
+				}
 				err = e
 				if err == nil {
 					reply.Publication = &p
