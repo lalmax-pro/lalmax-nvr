@@ -20,8 +20,9 @@
     </section>
     <aside class="sidebar"><div class="card"><div class="card-top"><span class="card-symbol" aria-hidden="true">↗</span><span>01 / 连接设置</span></div><h2>加入会议</h2><p class="card-intro">使用终端启动服务时显示的访问口令。</p>
       <form id="join-form"><label for="token">访问口令</label><input id="token" type="password" autocomplete="off" placeholder="粘贴启动口令" required><label class="check"><input id="microphone" type="checkbox" checked><span><strong>启用麦克风</strong><small>关闭后以仅收听模式加入</small></span></label><label class="check"><input id="camera" type="checkbox"><span><strong>启用摄像头</strong><small>加入前可选择是否开启画面</small></span></label><button class="join-button" id="join" type="submit">加入 Demo Room <span>→</span></button></form><p id="error" class="error" role="alert" hidden></p>
-      <div class="card-divider"></div><div class="info-line"><span>◌</span><div><strong>测试提示</strong><p>用同一浏览器打开多个标签页，新发布的媒体会自动加入。</p></div></div></div>
-      <div class="small-card"><span class="eyebrow">CURRENT CAPABILITIES</span><div class="cap"><span>●</span> 麦克风 / 摄像头</div><div class="cap"><span>●</span> 屏幕共享</div><div class="cap"><span>●</span> 动态 Track 订阅</div><p>当前为本机联调版，视频采用 H.264。</p></div>
+      <div class="card-divider"></div><div class="info-line"><span>◌</span><div><strong>测试提示</strong><p>用同一浏览器打开多个标签页，新发布的媒体会自动加入，也可以手动控制订阅。</p></div></div></div>
+      <div class="small-card tracks-card" aria-labelledby="tracks-title"><span class="eyebrow">REMOTE TRACKS</span><h2 id="tracks-title">远端轨道</h2><p>默认自动订阅，可逐条取消或恢复。</p><div id="track-list" class="track-list" aria-live="polite"><p class="track-empty">加入会议后显示远端轨道。</p></div></div>
+      <div class="small-card capabilities-card"><span class="eyebrow">CURRENT CAPABILITIES</span><div class="cap"><span>●</span> 麦克风 / 摄像头</div><div class="cap"><span>●</span> 屏幕共享</div><div class="cap"><span>●</span> 动态 Track 订阅</div><p>当前为本机联调版，视频采用 H.264。</p></div>
       <div class="side-foot">LALMAX NVR <span> / </span> SFU EXPERIMENT</div></aside>
   </main><footer><span>BUILT FOR REAL-TIME CONNECTION</span><span>仅限本机 · 不用于生产</span></footer>
 </div>

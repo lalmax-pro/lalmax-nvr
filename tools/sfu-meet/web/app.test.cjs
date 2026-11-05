@@ -64,3 +64,52 @@ test('screen stopped during publication is removed without leaving the room', as
   assert.equal(socket.readyState, Socket.OPEN);
   element('leave').listeners.click();
 });
+
+test('remote tracks can be unsubscribed and resubscribed without reconnecting', async () => {
+  class Element {
+    constructor(id = '') { this.id=id; this.children=[]; this.listeners={}; this.attributes={}; this.disabled=false; this.hidden=true; this.checked=false; this.value=''; this.textContent=''; this.classList={ toggle() {} }; }
+    addEventListener(type, fn) { this.listeners[type]=fn; }
+    setAttribute(name, value) { this.attributes[name]=value; }
+    querySelector() { return new Element(); }
+    replaceChildren(...children) { this.children=children; }
+    append(...children) { this.children.push(...children); }
+    remove() {}
+  }
+  const elements=new Map();
+  const element=id=>{ if(!elements.has(id))elements.set(id,new Element(id)); return elements.get(id); };
+  const commands=[]; let socket, peers=0;
+  class Socket {
+    static OPEN=1;
+    constructor() { socket=this; this.readyState=1; setImmediate(()=>this.snapshot([])); }
+    snapshot(publications) { this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[{ID:'remote',Name:'远端'}],Publications:publications}})}); }
+    send(data) { const msg=JSON.parse(data);commands.push(msg);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})})); }
+    close() { this.readyState=3; }
+  }
+  class Peer {
+    constructor() { peers++;this.iceGatheringState='complete';this.connectionState='connected'; }
+    createDataChannel() {} async createOffer() { return {sdp:'offer'}; }
+    async setLocalDescription() { this.localDescription={sdp:'offer'}; } async setRemoteDescription() {}
+    addTransceiver() { return {stop() {}}; } close() {}
+  }
+  const context={document:{getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'http:',host:'127.0.0.1'},navigator:{},fetch:async()=>({ok:true}),WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},setTimeout,clearTimeout,Map,Set,Promise,Error};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'app.js'),'utf8'),context);
+  element('join-form').listeners.submit({preventDefault(){}});
+  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  await waitFor(()=>!element('share').disabled);
+  const publication={ID:'remote-video-id',ParticipantID:'remote',Source:'camera',Kind:'video',Codec:'video/H264',RTPReady:true};
+  socket.snapshot([publication]);
+  await waitFor(()=>commands.filter(c=>c.type==='subscribe').length===1 && commands.filter(c=>c.type==='offer').length===2);
+  let button=element('track-list').children[0].children[1];
+  assert.equal(button.textContent,'取消订阅');
+  button.listeners.click();
+  await waitFor(()=>commands.filter(c=>c.type==='unsubscribe').length===1 && commands.filter(c=>c.type==='offer').length===3);
+  button=element('track-list').children[0].children[1];
+  assert.equal(button.textContent,'订阅');
+  socket.snapshot([publication]);
+  await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(commands.filter(c=>c.type==='subscribe').length,1,'snapshot must respect the user preference');
+  button=element('track-list').children[0].children[1];button.listeners.click();
+  await waitFor(()=>commands.filter(c=>c.type==='subscribe').length===2 && commands.filter(c=>c.type==='offer').length===4);
+  assert.equal(peers,1,'switching subscriptions must not reconnect');
+  element('leave').listeners.click();
+});

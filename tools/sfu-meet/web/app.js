@@ -4,7 +4,7 @@
   const form = $('join-form'), token = $('token'), micOption = $('microphone'), cameraOption = $('camera');
   const status = $('status-text'), badge = $('connection-badge'), dot = $('status-dot');
   const join = $('join'), leave = $('leave'), mute = $('mute'), cameraToggle = $('camera-toggle'), share = $('share'), error = $('error');
-  const tiles = $('tiles'), audioContainer = $('audio-container');
+  const tiles = $('tiles'), audioContainer = $('audio-container'), trackList = $('track-list');
   let current = null;
 
   function state(text, connected = false) {
@@ -18,12 +18,32 @@
       for (const pending of c.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('连接已关闭')); }
       c.pending.clear(); c.ws?.close(); c.pc?.close(); c.stream?.getTracks().forEach(t => t.stop()); c.screen?.getTracks().forEach(t => t.stop());
     }
-    audioContainer.replaceChildren(); $('enable-audio').hidden = true; $('refresh-notice').hidden = true;
+    audioContainer.replaceChildren(); trackList.replaceChildren(); const empty=document.createElement('p');empty.className='track-empty';empty.textContent='加入会议后显示远端轨道。';trackList.append(empty); $('enable-audio').hidden = true; $('refresh-notice').hidden = true;
     leave.disabled = true; mute.disabled = true; cameraToggle.disabled = true; share.disabled = true;
     mute.textContent = '◉ 静音'; mute.setAttribute('aria-pressed', 'false'); cameraToggle.textContent = '◈ 关闭摄像头'; cameraToggle.setAttribute('aria-pressed', 'false'); share.textContent = '▣ 共享屏幕'; join.disabled = false;
   }
+  function renderTracks(snapshot, c) {
+    const members = new Map((snapshot.Participants || []).map((p, index) => [p.ID, p.Name || `成员 ${index + 1}`]));
+    const tracks = (snapshot.Publications || []).filter(p => !c.own.has(p.ID));
+    trackList.replaceChildren();
+    if (!tracks.length) { const empty=document.createElement('p');empty.className='track-empty';empty.textContent='暂无远端轨道。';trackList.append(empty);return; }
+    for (const p of tracks) {
+      const row=document.createElement('div');row.className='track-row';
+      const info=document.createElement('div');info.className='track-info';
+      const title=document.createElement('strong');const source=p.Source==='screen'?'屏幕共享':p.Source==='camera'?'摄像头':'麦克风';
+      title.textContent=`${members.get(p.ParticipantID)||'远端成员'} · ${source}`;
+      const detail=document.createElement('small');detail.textContent=`${p.Codec} · ${p.ID.slice(0,8)}`;info.append(title,detail);
+      const button=document.createElement('button');button.type='button';button.className='track-toggle';
+      const enabled=!c.disabledTracks.has(p.ID);button.setAttribute('aria-pressed',String(enabled));
+      button.setAttribute('aria-label',`${enabled?'取消订阅':'订阅'} ${title.textContent} ${p.ID.slice(0,8)}`);
+      button.textContent=enabled?'取消订阅':'订阅';button.disabled=!c.negotiated;
+      button.addEventListener('click',()=>{if(current!==c)return;if(c.disabledTracks.has(p.ID))c.disabledTracks.delete(p.ID);else c.disabledTracks.add(p.ID);renderTracks(c.snapshot,c);scheduleSync(c);});
+      row.append(info,button);trackList.append(row);
+    }
+  }
   function render(snapshot, c) {
     const members = snapshot.Participants || [], publications = snapshot.Publications || [];
+    renderTracks(snapshot,c);
     $('member-count').textContent = `${members.length} 人在线`;
     tiles.replaceChildren();
     if (!members.length) { const empty=document.createElement('div');empty.className='empty-state';empty.textContent='当前没有成员';tiles.append(empty);return; }
@@ -45,7 +65,7 @@
       const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);c.ws=ws;let initialized=false;
       const timeout=setTimeout(()=>{if(!initialized){ws.close();reject(new Error('连接超时'));}},10000);
       ws.onmessage=event=>{let msg;try{msg=JSON.parse(event.data);}catch{return;}if(current!==c)return;
-        if(msg.type==='snapshot'&&msg.snapshot){c.snapshot=msg.snapshot;render(msg.snapshot,c);if(!initialized){initialized=true;clearTimeout(timeout);resolve(msg.snapshot);}else scheduleSync(c);}
+        if(msg.type==='snapshot'&&msg.snapshot){c.snapshot=msg.snapshot;const ids=new Set((msg.snapshot.Publications||[]).map(p=>p.ID));for(const id of c.disabledTracks)if(!ids.has(id))c.disabledTracks.delete(id);render(msg.snapshot,c);if(!initialized){initialized=true;clearTimeout(timeout);resolve(msg.snapshot);}else scheduleSync(c);}
         else if(msg.type==='result'){const p=c.pending.get(msg.id);if(!p)return;clearTimeout(p.timer);c.pending.delete(msg.id);if(msg.error)p.reject(new Error(msg.error==='forbidden'?'操作未获授权':`服务返回：${msg.error}`));else p.resolve(msg);}
       };
       ws.onerror=()=>{if(!initialized){clearTimeout(timeout);reject(new Error('无法连接信令服务'));}};
@@ -83,7 +103,7 @@
     void enqueue(c,async()=>{while(c.syncPending&&current===c){c.syncPending=false;await syncSubscriptions(c);}}).finally(()=>{c.syncRunning=false;if(c.syncPending&&current===c)scheduleSync(c);}).catch(()=>{});
   }
   async function syncSubscriptions(c) {
-    const desired=new Map((c.snapshot?.Publications||[]).filter(p=>p.RTPReady && !c.own.has(p.ID)).map(p=>[p.ID,p]));let changed=false;
+    const desired=new Map((c.snapshot?.Publications||[]).filter(p=>p.RTPReady && !c.own.has(p.ID) && !c.disabledTracks.has(p.ID)).map(p=>[p.ID,p]));let changed=false;
     for(const [id,entry] of c.subscribed){if(!desired.has(id)){try{await request(c,'unsubscribe',{publication_id:id});}catch(err){if((c.snapshot?.Publications||[]).some(p=>p.ID===id))throw err;}entry.transceiver.stop();c.subscribed.delete(id);const media=c.media.get(id);if(media){media.remove();c.media.delete(id);}changed=true;}}
     if(changed)await negotiate(c);
     for(const [id,p] of desired){if(c.subscribed.has(id))continue;await request(c,'subscribe',{publication_id:id});const transceiver=c.pc.addTransceiver(p.Kind,{direction:'recvonly'});if(p.Kind==='video')preferH264(transceiver);c.subscribed.set(id,{transceiver});await negotiate(c);}if(c.snapshot)render(c.snapshot,c);
@@ -98,7 +118,7 @@
   }
   async function connect() {
     closeCurrent();error.hidden=true;join.disabled=true;state('正在连接');
-    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false};current=c;
+    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false};current=c;
     try {
       const login=await fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token.value})});if(!login.ok)throw new Error('访问口令无效，请检查终端中的口令');
       if(micOption.checked||cameraOption.checked){if(!navigator.mediaDevices?.getUserMedia)throw new Error('当前浏览器无法访问媒体设备');c.stream=await navigator.mediaDevices.getUserMedia({audio:micOption.checked,video:cameraOption.checked});if(current!==c){c.stream.getTracks().forEach(t=>t.stop());return;}}
@@ -112,7 +132,7 @@
       };
       if(c.stream){for(const track of c.stream.getTracks())await publishTrack(c,track,track.kind==='audio'?'microphone':'camera');}
       if(!c.stream?.getTracks().length)pc.createDataChannel('control');
-      await negotiate(c);if(current!==c)return;c.negotiated=true;leave.disabled=false;mute.disabled=!c.stream?.getAudioTracks().length;cameraToggle.disabled=!c.stream?.getVideoTracks().length;share.disabled=false;state(pc.connectionState==='connected'?'媒体连接正常':'正在建立媒体连接',pc.connectionState==='connected');scheduleSync(c);
+      await negotiate(c);if(current!==c)return;c.negotiated=true;if(c.snapshot)render(c.snapshot,c);leave.disabled=false;mute.disabled=!c.stream?.getAudioTracks().length;cameraToggle.disabled=!c.stream?.getVideoTracks().length;share.disabled=false;state(pc.connectionState==='connected'?'媒体连接正常':'正在建立媒体连接',pc.connectionState==='connected');scheduleSync(c);
     } catch(err){fail(c,err);}
   }
   form.addEventListener('submit',event=>{event.preventDefault();void connect();});
