@@ -53,6 +53,7 @@ type Session struct {
 	generation string
 	closed     bool
 	incoming   map[string]*incomingBinding
+	outgoing   map[string]*outgoingBinding
 }
 
 // JoinRoom checks policy before allocating a participant. The policy must be
@@ -129,7 +130,16 @@ func (s *Session) Subscribe(ctx context.Context, id string) error {
 	return s.withPolicy(ctx, Request{Operation: Subscribe, PublicationID: id}, func() error { return s.room.SubscribeSession(s.scope.ParticipantID, s.generation, id) })
 }
 func (s *Session) Unsubscribe(ctx context.Context, id string) error {
-	return s.withPolicy(ctx, Request{Operation: Unsubscribe, PublicationID: id}, func() error { return s.room.UnsubscribeSession(s.scope.ParticipantID, s.generation, id) })
+	return s.withPolicy(ctx, Request{Operation: Unsubscribe, PublicationID: id}, func() error {
+		err := s.room.UnsubscribeSession(s.scope.ParticipantID, s.generation, id)
+		if err == nil {
+			if binding := s.outgoing[id]; binding != nil {
+				delete(s.outgoing, id)
+				binding.cancel()
+			}
+		}
+		return err
+	})
 }
 
 // Close always permits cleanup even if authorization has been revoked.
@@ -141,6 +151,9 @@ func (s *Session) Close() error {
 	}
 	s.closed = true
 	for _, binding := range s.incoming {
+		binding.cancel()
+	}
+	for _, binding := range s.outgoing {
 		binding.cancel()
 	}
 	err := s.room.LeaveSession(s.scope.ParticipantID, s.generation)
