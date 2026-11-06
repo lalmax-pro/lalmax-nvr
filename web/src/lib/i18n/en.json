@@ -887,6 +887,7 @@
   "onvif.resolution": "Resolution",
   "ptz.control": "PTZ Control",
   "ptz.fixedStep": "Fixed step (speed is not adjustable); verify on device",
+  "ptz.fixedStepVerified": "Device verified: fixed step (speed is not adjustable)",
   "ptz.continuous": "Continuous movement; release to stop; verify on device",
   "ptz.capabilityUnknown": "PTZ capability unknown; verify on device",
   "ptz.speed": "PTZ speed",
