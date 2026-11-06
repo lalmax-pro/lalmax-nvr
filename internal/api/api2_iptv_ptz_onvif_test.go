@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1393,9 +1394,11 @@ func TestApi2IOXiaomiUnavailable(t *testing.T) {
 }
 
 func TestApi2IOXiaomiAuthValidation(t *testing.T) {
+	t.Helper()
 	cloud := &api2ioCloud{}
 	cfg := &config.Config{}
 	h, _, _, _ := api2ioNewHandler(t, cfg, cloud)
+	h.configPath = filepath.Join(t.TempDir(), "nvr.yaml")
 
 	for _, tc := range []struct{ path, body string }{
 		{"/api/xiaomi/auth", `{`},
@@ -1531,8 +1534,23 @@ func TestApi2IOXiaomiDevicesAndVendor(t *testing.T) {
 	var tutk map[string]any
 	parseJSON(t, rr, &tutk)
 	require.Equal(t, "tutk", tutk["vendor"])
-	require.Equal(t, false, tutk["compatible"])
-	require.NotEmpty(t, tutk["message"])
+	require.Equal(t, true, tutk["compatible"])
+
+	cloud.vendor = "legacy"
+	rr = api2ioDo(t, authed, http.MethodGet, "/api/xiaomi/check-vendor?did=did-1", "")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var legacy map[string]any
+	parseJSON(t, rr, &legacy)
+	require.Equal(t, "legacy", legacy["vendor"])
+	require.Equal(t, true, legacy["compatible"])
+
+	cloud.vendor = "mtp"
+	rr = api2ioDo(t, authed, http.MethodGet, "/api/xiaomi/check-vendor?did=did-1", "")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var mtp map[string]any
+	parseJSON(t, rr, &mtp)
+	require.Equal(t, false, mtp["compatible"])
+	require.NotEmpty(t, mtp["message"])
 
 	cloud.vendor = "cs2"
 	rr = api2ioDo(t, authed, http.MethodGet, "/api/xiaomi/check-vendor?did=did-1", "")
@@ -1649,10 +1667,11 @@ func TestApi2IOXiaomiSyncEdgeCases(t *testing.T) {
 }
 
 func TestApi2IOXiaomiAuthWithoutConfig(t *testing.T) {
+	t.Helper()
 	cloud := &api2ioCloud{signInResult: &CloudAuthResult{UserID: "user-1", PassToken: "token-1"}}
 	h, _, _, _ := api2ioNewHandler(t, nil, cloud)
 	rr := api2ioDo(t, h, http.MethodPost, "/api/xiaomi/auth", `{"username":"u","password":"p"}`)
-	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Equal(t, http.StatusInternalServerError, rr.Code, rr.Body.String())
 }
 
 // --- IPTV endpoints ---

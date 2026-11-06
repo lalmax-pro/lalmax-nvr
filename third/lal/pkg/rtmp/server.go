@@ -11,6 +11,7 @@ package rtmp
 import (
 	"crypto/tls"
 	"net"
+	"sync"
 
 	"github.com/q191201771/lal/pkg/base"
 )
@@ -39,7 +40,9 @@ type IServerObserver interface {
 type Server struct {
 	addr     string
 	observer IServerObserver
+	mu       sync.Mutex
 	ln       net.Listener
+	disposed bool
 }
 
 func NewServer(addr string, observer IServerObserver) *Server {
@@ -49,9 +52,27 @@ func NewServer(addr string, observer IServerObserver) *Server {
 	}
 }
 
+func (server *Server) installListener(ln net.Listener) error {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.disposed {
+		return net.ErrClosed
+	}
+	if server.ln != nil {
+		return net.ErrClosed
+	}
+	server.ln = ln
+	return nil
+}
+
 func (server *Server) Listen() (err error) {
-	if server.ln, err = net.Listen("tcp", server.addr); err != nil {
+	ln, err := net.Listen("tcp", server.addr)
+	if err != nil {
 		return
+	}
+	if err = server.installListener(ln); err != nil {
+		_ = ln.Close()
+		return err
 	}
 	Log.Infof("start rtmp server listen. addr=%s", server.addr)
 	return
@@ -64,17 +85,28 @@ func (server *Server) ListenWithTLS(certFile, keyFile string) (err error) {
 		return
 	}
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
-	if server.ln, err = tls.Listen("tcp", server.addr, tlsConfig); err != nil {
+	ln, err := tls.Listen("tcp", server.addr, tlsConfig)
+	if err != nil {
 		Log.Errorf("start rtmps server listen failed. addr=%s, err=%+v", server.addr, err)
 		return
+	}
+	if err = server.installListener(ln); err != nil {
+		_ = ln.Close()
+		return err
 	}
 	Log.Infof("start rtmps server listen. addr=%s", server.addr)
 	return
 }
 
 func (server *Server) RunLoop() error {
+	server.mu.Lock()
+	ln := server.ln
+	server.mu.Unlock()
+	if ln == nil {
+		return net.ErrClosed
+	}
 	for {
-		conn, err := server.ln.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			return err
 		}
@@ -83,10 +115,15 @@ func (server *Server) RunLoop() error {
 }
 
 func (server *Server) Dispose() {
-	if server.ln == nil {
+	server.mu.Lock()
+	server.disposed = true
+	ln := server.ln
+	server.ln = nil
+	server.mu.Unlock()
+	if ln == nil {
 		return
 	}
-	if err := server.ln.Close(); err != nil {
+	if err := ln.Close(); err != nil {
 		Log.Error(err)
 	}
 }

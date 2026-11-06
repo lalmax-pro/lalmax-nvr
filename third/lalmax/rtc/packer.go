@@ -28,13 +28,17 @@ func NewPacker(mimeType string, codec []byte) *Packer {
 
 	switch mimeType {
 	case PacketH264:
-		p.enc = NewH264RtpEncoder(codec)
+		if enc := NewH264RtpEncoder(codec); enc != nil {
+			p.enc = enc
+		}
 	case PacketPCMA:
 		p.enc = NewG711RtpEncoder(8)
 	case PacketPCMU:
 		p.enc = NewG711RtpEncoder(0)
 	case PacketHEVC:
-		p.enc = NewHevcRtpEncoder(codec)
+		if enc := NewHevcRtpEncoder(codec); enc != nil {
+			p.enc = enc
+		}
 	case PacketOPUS:
 		p.enc = NewOpusRtpEncoder(111)
 	}
@@ -45,6 +49,12 @@ func (p *Packer) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error) {
 	if p == nil || p.enc == nil {
 		return nil, fmt.Errorf("packer encoder is nil")
 	}
+	switch enc := p.enc.(type) {
+	case *H264RtpEncoder:
+		if enc == nil { return nil, fmt.Errorf("packer encoder is nil") }
+	case *HevcRtpEncoder:
+		if enc == nil { return nil, fmt.Errorf("packer encoder is nil") }
+	}
 	return p.enc.Encode(msg)
 }
 
@@ -53,12 +63,12 @@ func (p *Packer) UpdateVideoCodec(vps, sps, pps []byte) {
 		return
 	}
 
-	if h264Encoder, ok := p.enc.(*H264RtpEncoder); ok {
+	if h264Encoder, ok := p.enc.(*H264RtpEncoder); ok && h264Encoder != nil {
 		h264Encoder.UpdateVideoCodec(vps, sps, pps)
 		return
 	}
 
-	if hevcEncoder, ok := p.enc.(*HevcRtpEncoder); ok {
+	if hevcEncoder, ok := p.enc.(*HevcRtpEncoder); ok && hevcEncoder != nil {
 		hevcEncoder.UpdateVideoCodec(vps, sps, pps)
 	}
 }
@@ -198,7 +208,7 @@ type HevcRtpEncoder struct {
 }
 
 func NewHevcRtpEncoder(codec []byte) *HevcRtpEncoder {
-	vps, sps, pps, err := hevc.ParseVpsSpsPpsFromSeqHeader(codec)
+	vps, sps, pps, err := hevc.ParseVpsSpsPpsFromEnhancedSeqHeader(codec)
 	if err != nil {
 		nazalog.Error(err)
 		return nil
@@ -216,9 +226,36 @@ func NewHevcRtpEncoder(codec []byte) *HevcRtpEncoder {
 	}
 }
 
+func hevcNALPayload(msg base.RtmpMsg) ([]byte, error) {
+	if len(msg.Payload) < 6 {
+		return nil, fmt.Errorf("HEVC packet payload too short: %d", len(msg.Payload))
+	}
+	index := msg.GetEnchanedHevcNaluIndex()
+	if index == 0 {
+		// Legacy HEVC RTMP packets keep the three-byte composition time
+		// at bytes 2..4, so their AVCC NAL data also starts at byte 5.
+		index = 5
+	}
+	if index >= len(msg.Payload) {
+		return nil, fmt.Errorf("HEVC packet has no NAL payload: index=%d payload_len=%d", index, len(msg.Payload))
+	}
+	return msg.Payload[index:], nil
+}
+
 func (enc *HevcRtpEncoder) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error) {
+	nalPayload, err := hevcNALPayload(msg)
+	if err != nil {
+		return nil, err
+	}
 	var out []byte
-	err := avc.IterateNaluAvcc(msg.Payload[5:], func(nal []byte) {
+	naluCount := 0
+	var malformedNAL int
+	err = avc.IterateNaluAvcc(nalPayload, func(nal []byte) {
+		naluCount++
+		if len(nal) < 2 {
+			malformedNAL++
+			return
+		}
 		t := hevc.ParseNaluType(nal[0])
 		if t == hevc.NaluTypeSei || t == hevc.NaluTypeSeiSuffix {
 			return
@@ -238,11 +275,14 @@ func (enc *HevcRtpEncoder) Encode(msg base.RtmpMsg) ([]*rtp.Packet, error) {
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("Packetize failed")
+		return nil, fmt.Errorf("HEVC AVCC NAL parse failed: %w (payload_len=%d nals=%d)", err, len(msg.Payload), naluCount)
 	}
 
+	if malformedNAL != 0 {
+		return nil, fmt.Errorf("HEVC AVCC contained %d malformed NAL units", malformedNAL)
+	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("Packetize failed")
+		return nil, fmt.Errorf("HEVC AVCC contained no video NAL units: payload_len=%d nals=%d", len(msg.Payload), naluCount)
 	}
 
 	avpacket := base.AvPacket{

@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"net/url"
+	"sort"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -17,6 +21,8 @@ import (
 // --- Xiaomi cloud endpoints ---
 
 func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
+	h.xiaomiAuthMu.Lock()
+	defer h.xiaomiAuthMu.Unlock()
 	if h.cloudProxy == nil {
 		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
@@ -26,6 +32,7 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Region   string `json:"region,omitempty"`
+		Account  string `json:"account,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -36,6 +43,17 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	account := normalizeXiaomiAccount(req.Account)
+	if err := validXiaomiAccount(account); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if account != "default" {
+		if _, ok := h.cloudProxy.(xiaomiFullConfigProxy); !ok {
+			writeError(w, http.StatusNotImplemented, "named account management unavailable")
+			return
+		}
+	}
 	region := req.Region
 	if region == "" {
 		region = "cn"
@@ -48,12 +66,17 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if verification != nil {
+		h.rememberXiaomiChallenge(verification, account)
 		writeJSON(w, http.StatusAccepted, verificationToResponse(verification))
 		return
 	}
 
 	// Store token in config
-	h.saveXiaomiToken(result)
+	if err := h.saveXiaomiAccountToken(r.Context(), account, result); err != nil {
+		logger.Error("failed to save Xiaomi credentials", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save Xiaomi credentials")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -62,6 +85,8 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
+	h.xiaomiAuthMu.Lock()
+	defer h.xiaomiAuthMu.Unlock()
 	if h.cloudProxy == nil {
 		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
@@ -70,6 +95,7 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SessionID   string `json:"session_id"`
 		CaptchaCode string `json:"captcha_code"`
+		Account     string `json:"account,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -80,6 +106,11 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	account, err := h.challengeAccount(req.SessionID, req.Account)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	result, verification, err := h.cloudProxy.SubmitCaptcha(r.Context(), req.SessionID, req.CaptchaCode)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, fmt.Sprintf("captcha verification failed: %v", err))
@@ -87,12 +118,19 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if verification != nil {
+		h.rememberXiaomiChallenge(verification, account)
 		writeJSON(w, http.StatusAccepted, verificationToResponse(verification))
 		return
 	}
 
 	// Store token in config
-	h.saveXiaomiToken(result)
+	if err := h.saveXiaomiAccountToken(r.Context(), account, result); err != nil {
+		logger.Error("failed to save Xiaomi credentials", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save Xiaomi credentials")
+		return
+	}
+
+	delete(h.xiaomiChallenges, req.SessionID)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -101,6 +139,8 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
+	h.xiaomiAuthMu.Lock()
+	defer h.xiaomiAuthMu.Unlock()
 	if h.cloudProxy == nil {
 		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
@@ -109,6 +149,7 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SessionID string `json:"session_id"`
 		Ticket    string `json:"ticket"`
+		Account   string `json:"account,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -119,6 +160,11 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	account, err := h.challengeAccount(req.SessionID, req.Account)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	result, verification, err := h.cloudProxy.SubmitVerify(r.Context(), req.SessionID, req.Ticket)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, fmt.Sprintf("verification failed: %v", err))
@@ -126,17 +172,58 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if verification != nil {
+		h.rememberXiaomiChallenge(verification, account)
 		writeJSON(w, http.StatusAccepted, verificationToResponse(verification))
 		return
 	}
 
 	// Store token in config
-	h.saveXiaomiToken(result)
+	if err := h.saveXiaomiAccountToken(r.Context(), account, result); err != nil {
+		logger.Error("failed to save Xiaomi credentials", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save Xiaomi credentials")
+		return
+	}
+
+	delete(h.xiaomiChallenges, req.SessionID)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
 		"user_id": result.UserID,
 	})
+}
+
+func (h *Handler) handleXiaomiStatus(w http.ResponseWriter, r *http.Request) {
+	cfg := h.xiaomiConfig()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"authenticated": cfg.UserID != "" && cfg.Token != "",
+		"region":        cfg.Region,
+	})
+}
+
+func (h *Handler) handleXiaomiLogout(w http.ResponseWriter, r *http.Request) {
+	h.xiaomiAuthMu.Lock()
+	defer h.xiaomiAuthMu.Unlock()
+	account := normalizeXiaomiAccount(r.URL.Query().Get("account"))
+	if err := validXiaomiAccount(account); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if account != "default" {
+		if err := h.removeXiaomiAccount(r.Context(), account); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.cancelXiaomiChallenges(account)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
+	if err := h.saveXiaomiConfig(r.Context(), config.XiaomiConfig{}); err != nil {
+		logger.Error("failed to clear Xiaomi credentials", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to clear Xiaomi credentials")
+		return
+	}
+	h.cancelXiaomiChallenges("default")
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
@@ -146,23 +233,57 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get stored token from config
-	if h.config == nil || h.config.Xiaomi.Token == "" {
+	accountID := r.URL.Query().Get("account")
+	account, exists := h.xiaomiConfig().Account(accountID)
+	if !exists || account.UserID == "" || account.Token == "" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"devices": []CloudDeviceInfo{},
-			"message": "not authenticated",
+			"authenticated": false,
+			"devices":       []CloudDeviceInfo{},
+			"message":       "not authenticated",
 		})
 		return
 	}
 
-	devices, err := h.cloudProxy.ListDevices(r.Context())
+	devices, err := h.listXiaomiDevices(r.Context(), accountID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 		return
 	}
+	if devices == nil {
+		devices = []CloudDeviceInfo{}
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"devices": devices,
+		"authenticated": true,
+		"devices":       devices,
 	})
+}
+
+func (h *Handler) listXiaomiDevices(ctx context.Context, id string) ([]CloudDeviceInfo, error) {
+	if id == "" || id == "default" {
+		return h.cloudProxy.ListDevices(ctx)
+	}
+	if proxy, ok := h.cloudProxy.(interface {
+		ListDevicesForAccount(context.Context, string) ([]CloudDeviceInfo, error)
+	}); ok {
+		return proxy.ListDevicesForAccount(ctx, id)
+	}
+	return nil, errors.New("named Xiaomi accounts unavailable")
+}
+
+func (h *Handler) handleXiaomiAccounts(w http.ResponseWriter, r *http.Request) {
+	cfg := h.xiaomiConfig()
+	type accountInfo struct {
+		ID            string `json:"id"`
+		Region        string `json:"region"`
+		Authenticated bool   `json:"authenticated"`
+	}
+	accounts := []accountInfo{{ID: "default", Region: cfg.Region, Authenticated: cfg.UserID != "" && cfg.Token != ""}}
+	for id, account := range cfg.Accounts {
+		accounts = append(accounts, accountInfo{ID: id, Region: account.Region, Authenticated: account.UserID != "" && account.Token != ""})
+	}
+	sort.Slice(accounts[1:], func(i, j int) bool { return accounts[i+1].ID < accounts[j+1].ID })
+	writeJSON(w, http.StatusOK, map[string]any{"accounts": accounts})
 }
 
 // handleXiaomiSync syncs Xiaomi cloud device info (name, model, MAC) to NVR camera config.
@@ -173,7 +294,9 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
-	if h.config == nil || h.config.Xiaomi.Token == "" {
+	accountID := r.URL.Query().Get("account")
+	account, exists := h.xiaomiConfig().Account(accountID)
+	if !exists || account.Token == "" {
 		writeError(w, http.StatusUnauthorized, "xiaomi cloud not authenticated")
 		return
 	}
@@ -182,7 +305,7 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	devices, err := h.cloudProxy.ListDevices(r.Context())
+	devices, err := h.listXiaomiDevices(r.Context(), accountID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 		return
@@ -199,6 +322,19 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 		cam := &h.config.Cameras[i]
 		if cam.Protocol != "xiaomi" {
 			continue
+		}
+		if source, err := url.Parse(cam.URL); err == nil {
+			cameraAccount := source.Query().Get("account")
+			if cameraAccount == "default" {
+				cameraAccount = ""
+			}
+			selectedAccount := accountID
+			if selectedAccount == "default" {
+				selectedAccount = ""
+			}
+			if cameraAccount != selectedAccount {
+				continue
+			}
 		}
 
 		did := cam.DID
@@ -242,7 +378,9 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if h.config == nil || h.config.Xiaomi.Token == "" {
+	accountID := r.URL.Query().Get("account")
+	account, exists := h.xiaomiConfig().Account(accountID)
+	if !exists || account.Token == "" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"vendor":     "unknown",
 			"compatible": true,
@@ -256,7 +394,17 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vendor, err := h.cloudProxy.CheckVendor(r.Context(), did)
+	var vendor string
+	var err error
+	if accountID == "" || accountID == "default" {
+		vendor, err = h.cloudProxy.CheckVendor(r.Context(), did)
+	} else if proxy, ok := h.cloudProxy.(interface {
+		CheckVendorForAccount(context.Context, string, string) (string, error)
+	}); ok {
+		vendor, err = proxy.CheckVendorForAccount(r.Context(), accountID, did)
+	} else {
+		err = errors.New("named Xiaomi accounts unavailable")
+	}
 	if err != nil {
 		// For errors, return unknown/compatible (don't block on uncertainty)
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -266,37 +414,66 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if vendor == "tutk" {
+	if vendor != "cs2" && vendor != "tutk" && vendor != "legacy" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"vendor":     "tutk",
+			"vendor":     vendor,
 			"compatible": false,
-			"message":    "This device uses TUTK protocol which is not supported by lalmax-nvr. Only CS2 protocol cameras are supported.",
+			"message":    fmt.Sprintf("This device uses unsupported transport %q. Supported transports are CS2, TUTK and legacy.", vendor),
 		})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"vendor":     "cs2",
+		"vendor":     vendor,
 		"compatible": true,
 	})
 }
 
-// saveXiaomiToken persists auth result to config file.
-func (h *Handler) saveXiaomiToken(result *CloudAuthResult) {
-	if h.config == nil || result == nil {
-		return
+func (h *Handler) xiaomiConfig() config.XiaomiConfig {
+	h.xiaomiMu.Lock()
+	defer h.xiaomiMu.Unlock()
+	if h.config == nil {
+		return config.XiaomiConfig{}
 	}
-	h.config.Xiaomi.UserID = result.UserID
-	h.config.Xiaomi.Token = result.PassToken
-	h.config.Xiaomi.Region = result.Region
-	if err := config.Save(h.configPath, h.config); err != nil {
-		logger.Warn("failed to save xiaomi config", "error", err)
-	}
+	return h.config.Xiaomi
+}
 
-	// Also push to the cloud proxy so it has the latest credentials
-	if h.cloudProxy != nil {
-		_ = h.cloudProxy.SetCloudConfig(context.Background(), result.UserID, result.PassToken, result.Region)
+// saveXiaomiToken persists a candidate before publishing it to running cameras.
+// Failed writes leave both the in-memory config and cloud credentials unchanged.
+func (h *Handler) saveXiaomiToken(ctx context.Context, result *CloudAuthResult) error {
+	if result == nil || result.UserID == "" || result.PassToken == "" {
+		return errors.New("missing Xiaomi auth result")
 	}
+	return h.saveXiaomiConfig(ctx, config.XiaomiConfig{UserID: result.UserID, Token: result.PassToken, Region: result.Region})
+}
+
+func (h *Handler) saveXiaomiConfig(ctx context.Context, credentials config.XiaomiConfig) error {
+	h.xiaomiMu.Lock()
+	defer h.xiaomiMu.Unlock()
+	if h.config == nil {
+		return errors.New("missing Xiaomi configuration")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	previous := h.config.Xiaomi
+	candidate := *h.config
+	candidate.Xiaomi = credentials
+	candidate.Xiaomi.Accounts = maps.Clone(previous.Accounts)
+	if err := config.Save(h.configPath, &candidate); err != nil {
+		return err
+	}
+	if h.cloudProxy != nil {
+		if err := h.cloudProxy.SetCloudConfig(ctx, credentials.UserID, credentials.Token, credentials.Region); err != nil {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			restoreErr := h.cloudProxy.SetCloudConfig(rollbackCtx, previous.UserID, previous.Token, previous.Region)
+			candidate.Xiaomi = previous
+			return errors.Join(err, restoreErr, config.Save(h.configPath, &candidate))
+		}
+	}
+	h.config.Xiaomi = candidate.Xiaomi
+	return nil
 }
 
 // verificationToResponse converts a CloudVerificationRequired to an API response map.
@@ -360,24 +537,34 @@ func (h *Handler) handleXiaomiTalkWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cloudCfg := xiaomi.XiaomiCloudConfig{
-		UserID: h.config.Xiaomi.UserID,
-		Token:  h.config.Xiaomi.Token,
-		Region: h.config.Xiaomi.Region,
+	cfg := h.xiaomiConfig()
+	accountID := ""
+	if source, err := url.Parse(cam.URL); err == nil {
+		accountID = source.Query().Get("account")
 	}
-	missURL, err := xiaomi.ResolveMISSURL(cloudCfg, did, "")
+	account, ok := cfg.Account(accountID)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "xiaomi account not found")
+		return
+	}
+	cloudCfg := xiaomi.XiaomiCloudConfig{
+		UserID: account.UserID, Token: account.Token, Region: account.Region,
+	}
+	missURL, err := xiaomi.ResolveMISSURLContext(r.Context(), cloudCfg, did, "")
 	if err != nil {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to resolve MISS URL: %v", err))
 		return
 	}
 
 	// Connect to camera
-	client, err := xiaomi.NewMISSClient(missURL, 30*time.Second)
+	client, err := xiaomi.NewMISSClientContext(r.Context(), missURL, 30*time.Second)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to connect to camera: %v", err))
 		return
 	}
 	defer client.Conn.Close()
+	stopCancel := context.AfterFunc(r.Context(), func() { _ = client.Conn.Close() })
+	defer stopCancel()
 
 	// Start speaker
 	if err := client.StartSpeaker(); err != nil {

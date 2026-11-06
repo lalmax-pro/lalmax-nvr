@@ -414,7 +414,7 @@ func (m *mockCS2Conn) SetDeadline(t time.Time) error      { return nil }
 func (m *mockCS2Conn) SetReadDeadline(t time.Time) error  { return nil }
 func (m *mockCS2Conn) SetWriteDeadline(t time.Time) error { return nil }
 
-func TestCS2WorkerNoPongOnPing(t *testing.T) {
+func TestCS2WorkerRepliesPongOnPing(t *testing.T) {
 	t.Parallel()
 
 	// Simulate a PING packet as the camera would send it.
@@ -451,12 +451,15 @@ func TestCS2WorkerNoPongOnPing(t *testing.T) {
 	require.Error(t, cerr)
 	require.Contains(t, cerr.Error(), "mock read error")
 
-	// Verify no PONG was written in response to PING.
+	// A camera liveness probe must receive a PONG.
+	found := false
 	for _, w := range mock.writes {
-		if len(w) >= 2 && w[1] == cs2MsgPong {
-			t.Errorf("worker wrote unexpected PONG on PING: %x", w)
+		if len(w) >= 4 && w[1] == cs2MsgPong {
+			found = true
 		}
 	}
+	require.True(t, found)
+
 }
 
 // newTestCS2Conn creates a CS2Conn suitable for unit tests.

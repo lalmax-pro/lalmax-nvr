@@ -255,6 +255,9 @@ func ParseVpsSpsPpsFromSeqHeaderWithoutMalloc(payload []byte) (vps, sps, pps []b
 }
 
 func parseVpsSpsPpsFromRecord(payload []byte) (vps, sps, pps []byte, err error) {
+	if len(payload) < 28 {
+		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
+	}
 	index := 27
 	if numOfArrays := payload[index]; numOfArrays != 3 && numOfArrays != 4 {
 		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)

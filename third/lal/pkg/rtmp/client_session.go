@@ -46,6 +46,8 @@ type ClientSession struct {
 	// Disposal before Dial completes must also close the late connection.
 	connMu                sync.RWMutex
 	connDisposed          bool
+	connectCtx            context.Context
+	cancelConnect         context.CancelFunc
 	doResultChan          chan struct{}
 	errChan               chan error
 	hasNotifyDoResultSucc bool
@@ -130,7 +132,10 @@ func NewClientSession(sessionType base.SessionType, modOptions ...ModClientSessi
 	cc := NewChunkComposer()
 	cc.SetReuseBufferFlag(option.ReuseReadMessageBufferFlag)
 
+	connectCtx, cancelConnect := context.WithCancel(context.Background())
 	s := &ClientSession{
+		connectCtx:                 connectCtx,
+		cancelConnect:              cancelConnect,
 		onDoResult:                 defaultOnPullResult,
 		onReadRtmpAvMsg:            defaultOnReadRtmpAvMsg,
 		option:                     option,
@@ -191,6 +196,10 @@ func (s *ClientSession) Flush() error {
 		return base.ErrSessionNotStarted
 	}
 	return conn.Flush()
+}
+
+func (s *ClientSession) connection() connection.Connection {
+	return s.connSnapshot()
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -280,6 +289,9 @@ func (s *ClientSession) connect() {
 }
 
 func (s *ClientSession) doContext(ctx context.Context) error {
+	if err := s.connectCtx.Err(); err != nil {
+		return err
+	}
 	go s.connect()
 
 	select {
@@ -321,19 +333,30 @@ func (s *ClientSession) tcpConnect() error {
 	Log.Infof("[%s] > tcp connect.", s.UniqueKey())
 	var err error
 
+	s.connMu.Lock()
 	s.sessionStat.SetRemoteAddr(s.urlCtx.HostWithPort)
+	s.connMu.Unlock()
 
 	var conn net.Conn
 	if s.urlCtx.Scheme == "rtmps" {
-		if conn, err = tls.Dial("tcp", s.urlCtx.HostWithPort, s.option.TlsConfig); err != nil {
+		dialer := tls.Dialer{Config: s.option.TlsConfig}
+		if conn, err = dialer.DialContext(s.connectCtx, "tcp", s.urlCtx.HostWithPort); err != nil {
+			if s.isDisposed() {
+				return base.ErrSessionNotStarted
+			}
 			return err
 		}
 	} else {
-		if conn, err = net.Dial("tcp", s.urlCtx.HostWithPort); err != nil {
+		if conn, err = (&net.Dialer{}).DialContext(s.connectCtx, "tcp", s.urlCtx.HostWithPort); err != nil {
+			if s.isDisposed() {
+				return base.ErrSessionNotStarted
+			}
 			return err
 		}
 	}
 
+	// Publish the socket atomically with respect to disposal. A socket that
+	// finishes dialing after disposal must never become the active connection.
 	newConn := connection.New(conn, func(option *connection.Option) {
 		option.ReadBufSize = s.option.ReadBufSize
 		option.WriteChanFullBehavior = connection.WriteChanFullBehaviorBlock
@@ -344,9 +367,21 @@ func (s *ClientSession) tcpConnect() error {
 		_ = newConn.Close()
 		return base.ErrSessionNotStarted
 	}
+	if err := s.connectCtx.Err(); err != nil {
+		s.connMu.Unlock()
+		_ = newConn.Close()
+		return err
+	}
 	s.conn = newConn
 	s.connMu.Unlock()
 	return nil
+}
+
+
+func (s *ClientSession) isDisposed() bool {
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	return s.connDisposed
 }
 
 func (s *ClientSession) handshake() error {
@@ -712,6 +747,7 @@ func (s *ClientSession) dispose(err error) error {
 		Log.Infof("[%s] lifecycle dispose rtmp ClientSession. err=%+v", s.UniqueKey(), err)
 		s.connMu.Lock()
 		s.connDisposed = true
+		s.cancelConnect()
 		conn := s.conn
 		s.connMu.Unlock()
 		if conn == nil {

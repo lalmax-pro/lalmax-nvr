@@ -149,29 +149,33 @@ type snapshotCache struct {
 
 type Handler struct {
 	isInternalMediaStream func(string) bool
-	transcodePlayback derivedPlaybackProvider
-	transcodeService *transcode.Service
-	derivedRecorder *recorder.TaskManager
-	transcodeProbe *transcode.ProbeService
-	homeAssistantMu sync.Mutex
-	homeAssistantWHEPKey []byte
-	voipSettingsMu     sync.Mutex
-	voipRestarter      VoIPRestarter
-	db                 storage.APIRepository
-	store              *storage.Manager
-	authMW             func(http.Handler) http.Handler
-	multiUserMW        func(http.Handler) http.Handler
-	config             *config.Config
-	configWatcher      *config.Watcher
-	restartFunc        func()
-	restartOnce        sync.Once
-	camMgr             *camera.CameraManager
-	recPlanner         *recorder.RecordingPlanner
-	reconcileRecording func(context.Context)
-	mediaEngine        media.Engine
-	mediaProxy         *http.Client
-	wsMgr              media.WS
-	groupStreamSource  interface {
+	transcodePlayback     derivedPlaybackProvider
+	transcodeService      *transcode.Service
+	derivedRecorder       *recorder.TaskManager
+	transcodeProbe        *transcode.ProbeService
+	homeAssistantMu       sync.Mutex
+	homeAssistantWHEPKey  []byte
+	voipSettingsMu        sync.Mutex
+	xiaomiMu              sync.Mutex
+	xiaomiAuthMu          sync.Mutex
+	xiaomiChallenges      map[string]xiaomiChallenge
+	xiaomiMotorDispatch   func(context.Context, string, string, int) error
+	voipRestarter         VoIPRestarter
+	db                    storage.APIRepository
+	store                 *storage.Manager
+	authMW                func(http.Handler) http.Handler
+	multiUserMW           func(http.Handler) http.Handler
+	config                *config.Config
+	configWatcher         *config.Watcher
+	restartFunc           func()
+	restartOnce           sync.Once
+	camMgr                *camera.CameraManager
+	recPlanner            *recorder.RecordingPlanner
+	reconcileRecording    func(context.Context)
+	mediaEngine           media.Engine
+	mediaProxy            *http.Client
+	wsMgr                 media.WS
+	groupStreamSource     interface {
 		StreamInfo(string) (model.Format, []byte, []byte, []byte, *model.StreamHub, bool)
 	}
 	configPath        string
@@ -448,6 +452,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/protocols", h.handleCameraProtocols)
 				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
 				r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
+				r.Get("/ptz/capabilities", h.handleXiaomiPTZCapabilities)
 				r.Post("/ptz/move", h.handlePTZMove)
 				r.Post("/ptz/stop", h.handlePTZStop)
 				r.Get("/ptz/status", h.handlePTZStatus)
@@ -661,6 +666,10 @@ func (h *Handler) Routes() http.Handler {
 		})
 		// Xiaomi cloud auth and device discovery
 		r.Route("/api/xiaomi", func(r chi.Router) {
+			r.Get("/status", h.handleXiaomiStatus)
+			r.With(middleware.RequireOperatePermission()).Post("/logout", h.handleXiaomiLogout)
+
+			r.Get("/accounts", h.handleXiaomiAccounts)
 			r.Post("/auth", h.handleXiaomiAuth)
 			r.Post("/captcha", h.handleXiaomiCaptcha)
 			r.Post("/verify", h.handleXiaomiVerify)

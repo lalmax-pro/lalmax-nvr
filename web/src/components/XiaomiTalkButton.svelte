@@ -4,144 +4,111 @@
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { getAuthToken } from '$lib/api/client';
+  import { createTalkAudioEncoder, type TalkAudioEncoder } from '$lib/xiaomiTalkAudio';
 
   let { cameraId }: { cameraId: string } = $props();
-
   let isTalking = $state(false);
   let isConnecting = $state(false);
   let ws: WebSocket | null = null;
   let audioContext: AudioContext | null = null;
   let mediaStream: MediaStream | null = null;
   let processor: ScriptProcessorNode | null = null;
+  let encoder: TalkAudioEncoder | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let generation = 0;
 
-  const SAMPLE_RATE = 8000;
-  const BUFFER_SIZE = 1024;
+  function fail(error?: Error) {
+    showToast(t(error?.message === 'unsupported_codec' ? 'live.talk.unsupportedCodec' : 'live.talk.error'), 'error');
+    stopTalk();
+  }
 
   async function startTalk() {
     if (isTalking || isConnecting) return;
     isConnecting = true;
-
+    const session = ++generation;
     try {
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: false,
       });
-
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      if (session !== generation) { stream.getTracks().forEach(track => track.stop()); return; }
+      mediaStream = stream;
       const params = new URLSearchParams({ camera_id: cameraId });
-      const authToken = getAuthToken();
-      if (authToken) params.set('token', authToken);
-      const wsUrl = `${protocol}//${window.location.host}/api/xiaomi/talk/ws?${params.toString()}`;
-
-      ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = () => {
-        startAudioCapture();
-        isTalking = true;
-        isConnecting = false;
-        showToast(t('live.talk.started') || '对讲已开始', 'success');
+      const token = getAuthToken();
+      if (token) params.set('token', token);
+      const socket = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/xiaomi/talk/ws?${params}`);
+      ws = socket;
+      socket.binaryType = 'arraybuffer';
+      let initializing = false;
+      // The server must tell us the speaker codec before microphone capture starts.
+      socket.onmessage = async (event) => {
+        if (session !== generation || initializing || typeof event.data !== 'string') return;
+        try {
+          const status = JSON.parse(event.data);
+          if (status.status !== 'connected') return;
+          initializing = true;
+          const audio = await createTalkAudioEncoder(status.speaker_codec, (packet) => {
+            if (session !== generation || socket.readyState !== WebSocket.OPEN) return;
+            if (socket.bufferedAmount > 64000) { fail(); return; }
+            socket.send(packet);
+          }, (error) => { if (session === generation) fail(error); });
+          if (session !== generation) { audio.close(); return; }
+          encoder = audio;
+          audioContext = new AudioContext({ sampleRate: audio.sampleRate });
+          if (audioContext.sampleRate !== audio.sampleRate) throw new Error('unsupported_codec');
+          await audioContext.resume();
+          if (session !== generation) return;
+          const source = audioContext.createMediaStreamSource(stream);
+          processor = audioContext.createScriptProcessor(1024, 1, 1);
+          processor.onaudioprocess = (event) => {
+            try { audio.push(event.inputBuffer.getChannelData(0)); }
+            catch (error) { if (session === generation) fail(error as Error); }
+          };
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+          if (timer) { clearTimeout(timer); timer = null; }
+          isTalking = true;
+          isConnecting = false;
+          showToast(t('live.talk.started'), 'success');
+        } catch (error) { if (session === generation) fail(error as Error); }
       };
-
-      ws.onerror = () => {
-        showToast(t('live.talk.error') || '对讲连接失败', 'error');
+      socket.onerror = () => { if (session === generation) fail(); };
+      socket.onclose = () => {
+        if (session !== generation) return;
+        showToast(t(isTalking ? 'live.talk.stopped' : 'live.talk.error'), isTalking ? 'info' : 'error');
         stopTalk();
       };
-
-      ws.onclose = () => {
-        if (isTalking) {
-          showToast(t('live.talk.stopped') || '对讲已停止', 'info');
-        }
-        stopTalk();
-      };
-
-      setTimeout(() => {
-        if (isConnecting) {
-          showToast(t('live.talk.timeout') || '连接超时', 'error');
+      timer = setTimeout(() => {
+        if (session === generation && isConnecting) {
+          showToast(t('live.talk.timeout'), 'error');
           stopTalk();
         }
-      }, 10000);
-    } catch (e) {
-      if (e instanceof DOMException) {
-        if (e.name === 'NotAllowedError') {
-          showToast(t('live.talk.permissionDenied') || '麦克风权限被拒绝', 'error');
-        } else if (e.name === 'NotFoundError') {
-          showToast(t('live.talk.noMicrophone') || '未检测到麦克风设备', 'error');
-        } else {
-          showToast(t('live.talk.error') || '启动对讲失败', 'error');
-        }
-      }
-      isConnecting = false;
+      }, 45000);
+    } catch (error) {
+      if (session !== generation) return;
+      const name = error instanceof DOMException ? error.name : '';
+      showToast(t(name === 'NotAllowedError' ? 'live.talk.permissionDenied' : name === 'NotFoundError' ? 'live.talk.noMicrophone' : 'live.talk.error'), 'error');
       stopTalk();
     }
   }
 
-  function startAudioCapture() {
-    if (!mediaStream || !ws) return;
-
-    audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-    const source = audioContext.createMediaStreamSource(mediaStream);
-
-    processor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
-    processor.onaudioprocess = (e) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      const inputData = e.inputBuffer.getChannelData(0);
-      const pcmData = float32ToPCMA(inputData);
-      ws.send(pcmData);
-    };
-
-    source.connect(processor);
-    processor.connect(audioContext.destination);
-  }
-
-  function float32ToPCMA(float32Array: Float32Array): ArrayBuffer {
-    const buffer = new ArrayBuffer(float32Array.length);
-    const view = new Uint8Array(buffer);
-    for (let i = 0; i < float32Array.length; i++) {
-      let sample = Math.max(-1, Math.min(1, float32Array[i]));
-      const pcm = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-      view[i] = linearToALaw(pcm);
-    }
-    return buffer;
-  }
-
-  function linearToALaw(sample: number): number {
-    const ALAW_MAX = 0x7fff;
-    let pcm = Math.trunc(sample);
-    let mask: number;
-    if (pcm >= 0) { mask = 0xd5; } else { mask = 0x55; pcm = -pcm - 1; if (pcm < 0) pcm = 0; }
-    if (pcm > ALAW_MAX) pcm = ALAW_MAX;
-    let compressed: number;
-    if (pcm < 256) {
-      compressed = pcm >> 4;
-    } else {
-      let exponent = 7;
-      for (let expMask = 0x4000; (pcm & expMask) === 0 && exponent > 0; expMask >>= 1) { exponent--; }
-      compressed = (exponent << 4) | ((pcm >> (exponent + 3)) & 0x0f);
-    }
-    return (compressed ^ mask) & 0xff;
-  }
-
   function stopTalk() {
+    generation++;
     isTalking = false;
     isConnecting = false;
-    if (processor) { processor.disconnect(); processor = null; }
-    if (audioContext) { audioContext.close(); audioContext = null; }
-    if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-    if (ws) { ws.close(); ws = null; }
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (processor) { processor.onaudioprocess = null; processor.disconnect(); processor = null; }
+    if (encoder) { encoder.close(); encoder = null; }
+    if (audioContext) { void audioContext.close(); audioContext = null; }
+    if (mediaStream) { mediaStream.getTracks().forEach(track => track.stop()); mediaStream = null; }
+    if (ws) { ws.onmessage = null; ws.onclose = null; ws.onerror = null; ws.close(); ws = null; }
   }
 
   function toggleTalk() {
-    if (isTalking) { stopTalk(); showToast(t('live.talk.stopped') || '对讲已停止', 'info'); }
-    else { startTalk(); }
+    if (isTalking) { stopTalk(); showToast(t('live.talk.stopped'), 'info'); }
+    else { void startTalk(); }
   }
-
-  onDestroy(() => { stopTalk(); });
+  onDestroy(stopTalk);
 </script>
 
 <button

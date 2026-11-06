@@ -7,6 +7,14 @@ This file records local changes made to `third/lalmax` for lalmax-nvr.
 
 ## Current patches
 
+### sfu-room-foundation
+
+- Reason: Start the standalone SFU room model for issue #93.
+- Files: `sfu/`.
+- Scope: Room state, RTP routing foundations and opt-in control-only WebSocket signaling; full conference signaling is not implemented.
+- Dependencies: `github.com/gorilla/websocket` for the optional control handler.
+- Test: `go test -race ./sfu`.
+
 ### embed-lifecycle
 
 - Reason: lalmax-nvr embeds lalmax as an in-process media engine and needs explicit start, readiness and shutdown hooks.

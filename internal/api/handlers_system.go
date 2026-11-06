@@ -1219,7 +1219,7 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Encodings:    []string{"h264", "h265"},
 			BuiltIn:      true,
 			Addable:      true,
-			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": true, "auth": true},
+			Capabilities: map[string]bool{"hls": true, "ptz": true, "snapshot": false, "discovery": true, "auth": true},
 		},
 		{
 			ID:           "rtmp-pull",

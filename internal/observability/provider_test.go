@@ -73,7 +73,7 @@ func TestProviderExportsTracesMetricsAndPropagatesContext(t *testing.T) {
 		slog.SetDefault(previousSlogLogger)
 	})
 
-	requests := make(chan capturedOTLPRequest, 4)
+	requests := make(chan capturedOTLPRequest, 64)
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
