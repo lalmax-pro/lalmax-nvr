@@ -22,8 +22,18 @@ type bridgeBinding struct{ cancel context.CancelFunc }
 // on the returned channel; a successful return only means the binding was queued.
 // External policy revocation requires the embedding service to stop the binding.
 func (s *Session) StartH264Bridge(ctx context.Context, publicationID, target string, publisher bridge.Publisher) (<-chan error, error) {
-	if ctx == nil || publicationID == "" || target == "" || publisher == nil {
+	return s.StartH264BridgeWithContexts(ctx, ctx, publicationID, target, publisher)
+}
+
+// StartH264BridgeWithContexts separates the short-lived authorization request
+// from the bridge lifetime. Both contexts must be valid during setup. The
+// caller must cancel lifetimeCtx on shutdown or permission revocation.
+func (s *Session) StartH264BridgeWithContexts(authCtx, lifetimeCtx context.Context, publicationID, target string, publisher bridge.Publisher) (<-chan error, error) {
+	if authCtx == nil || lifetimeCtx == nil || publicationID == "" || target == "" || publisher == nil {
 		return nil, ErrInvalid
+	}
+	if err := lifetimeCtx.Err(); err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -50,11 +60,14 @@ func (s *Session) StartH264Bridge(ctx context.Context, publicationID, target str
 	req := s.scope
 	req.PublicationID, req.Kind, req.Source, req.Codec, req.TargetGroup = publication.ID, publication.Kind, publication.Source, publication.Codec, target
 	req.Operation = Subscribe
-	if err = authorize(ctx, s.policy, req); err != nil {
+	if err = authorize(authCtx, s.policy, req); err != nil {
 		return nil, err
 	}
 	req.Operation = ManageBridge
-	if err = authorize(ctx, s.policy, req); err != nil {
+	if err = authorize(authCtx, s.policy, req); err != nil {
+		return nil, err
+	}
+	if err = lifetimeCtx.Err(); err != nil {
 		return nil, err
 	}
 	if s.bridges[publicationID] != nil {
@@ -64,7 +77,7 @@ func (s *Session) StartH264Bridge(ctx context.Context, publicationID, target str
 	if err != nil {
 		return nil, err
 	}
-	bindingCtx, cancel := context.WithCancel(ctx)
+	bindingCtx, cancel := context.WithCancel(lifetimeCtx)
 	binding := &bridgeBinding{cancel: cancel}
 	if s.bridges == nil {
 		s.bridges = make(map[string]*bridgeBinding)
