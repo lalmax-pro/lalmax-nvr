@@ -20,11 +20,12 @@ var (
 type Operation string
 
 const (
-	Join        Operation = "join"
-	Publish     Operation = "publish"
-	Unpublish   Operation = "unpublish"
-	Subscribe   Operation = "subscribe"
-	Unsubscribe Operation = "unsubscribe"
+	Join         Operation = "join"
+	Publish      Operation = "publish"
+	Unpublish    Operation = "unpublish"
+	Subscribe    Operation = "subscribe"
+	Unsubscribe  Operation = "unsubscribe"
+	ManageBridge Operation = "manage_bridge"
 )
 
 // Request carries server-side identity and scope to a trusted policy provider.
@@ -39,6 +40,7 @@ type Request struct {
 	Kind           string
 	Source         string
 	Codec          string
+	TargetGroup    string
 }
 
 // Authorizer must fail closed and is called on every control operation.
@@ -54,6 +56,7 @@ type Session struct {
 	closed        bool
 	incoming      map[string]*incomingBinding
 	outgoing      map[string]*outgoingBinding
+	bridges       map[string]*bridgeBinding
 	trackMappings map[string]string
 }
 
@@ -135,6 +138,10 @@ func (s *Session) Unsubscribe(ctx context.Context, id string) error {
 	return s.withPolicy(ctx, Request{Operation: Unsubscribe, PublicationID: id}, func() error {
 		err := s.room.UnsubscribeSession(s.scope.ParticipantID, s.generation, id)
 		if err == nil {
+			if binding := s.bridges[id]; binding != nil {
+				delete(s.bridges, id)
+				binding.cancel()
+			}
 			if binding := s.outgoing[id]; binding != nil {
 				delete(s.outgoing, id)
 				binding.cancel()
@@ -157,6 +164,9 @@ func (s *Session) Close() error {
 		binding.cancel()
 	}
 	for _, binding := range s.outgoing {
+		binding.cancel()
+	}
+	for _, binding := range s.bridges {
 		binding.cancel()
 	}
 	err := s.room.LeaveSession(s.scope.ParticipantID, s.generation)
