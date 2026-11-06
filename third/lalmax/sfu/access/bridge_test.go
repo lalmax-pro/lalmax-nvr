@@ -85,3 +85,55 @@ func TestBridgeChecksBothPoliciesAndCleansUp(t *testing.T) {
 		t.Fatal("publisher not closed")
 	}
 }
+
+func TestBridgeLifetimeOutlivesAuthorizationRequest(t *testing.T) {
+	manager := sfu.NewManager()
+	room, _ := manager.Create(sfu.Key{Namespace: "tenant", ID: "lifetime"}, 0)
+	gen, _ := room.JoinSession(sfu.Participant{ID: "source"})
+	pub, _ := room.PublishSession("source", gen, "video", "camera", "video/H264")
+	if err := room.EnablePublicationRTP("source", gen, pub.ID, 1, 8); err != nil {
+		t.Fatal(err)
+	}
+	auth := &policy{deny: map[Operation]bool{}}
+	session, err := JoinRoom(context.Background(), room, auth, "alice", sfu.Participant{ID: "bridge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if err = session.Subscribe(context.Background(), pub.ID); err != nil {
+		t.Fatal(err)
+	}
+	publisher := &bridgeTestPublisher{opened: make(chan string, 1), closed: make(chan struct{})}
+	request, finishRequest := context.WithCancel(context.Background())
+	lifetime, stop := context.WithCancel(context.Background())
+	defer stop()
+	done, err := session.StartH264BridgeWithContexts(request, lifetime, pub.ID, "target", publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-publisher.opened:
+	case <-time.After(3 * time.Second):
+		t.Fatal("publisher not opened")
+	}
+	finishRequest()
+	select {
+	case err := <-done:
+		t.Fatalf("request cancellation stopped bridge: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	stop()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("bridge did not stop")
+	}
+	select {
+	case <-publisher.closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("publisher not closed")
+	}
+}
