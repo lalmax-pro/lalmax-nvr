@@ -136,7 +136,11 @@ jobs:
       - name: Display coverage
         run: go tool cover -func=coverage.out
 
-      - name: Upload coverage to Codecov
+      - name: Upload coverage to Codecov (upstream repository)
+        # The upstream repository uses Codecov OIDC. A fork which has not
+        # been registered on Codecov gets "Repository not found"; local
+        # coverage thresholds are still mandatory on every PR and main build.
+        if: ${{ github.repository == 'lalmax-pro/lalmax-nvr' }}
         uses: codecov/codecov-action@v7.1.1
         with:
           use_oidc: true
@@ -145,6 +149,11 @@ jobs:
           flags: go
           name: go-unit
           fail_ci_if_error: true
+
+      - name: Document Codecov fork limitation
+        if: ${{ github.repository != 'lalmax-pro/lalmax-nvr' }}
+        run: |
+          echo "::notice title=Codecov not registered for fork::External Codecov upload only runs upstream; 85 percent local coverage gate remains required."
 
       - name: Check coverage threshold
         run: |
