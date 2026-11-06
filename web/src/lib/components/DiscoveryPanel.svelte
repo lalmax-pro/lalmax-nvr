@@ -10,6 +10,7 @@
     xiaomiCaptcha,
     xiaomiVerify,
     createCamera,
+    updateCamera,
     xiaomiSync,
     checkVendor
   } from '$lib/api';
@@ -249,18 +250,51 @@
     }
   }
 
-  function isXiaomiDeviceAdded(did: string): boolean {
-    return cameras.some(c => {
-      if (c.protocol !== 'xiaomi') return false;
-      try {
-        const source = new URL(c.url);
-        return source.hostname === did && (source.searchParams.get('account') || 'default') === xiaomiAccount;
-      } catch { return false; }
-    });
+  function xiaomiChannels(device: XiaomiDevice): number[] {
+    // The dual-camera model exposes its fixed and motorized lenses as channels 0 and 2.
+    return device.model.toLowerCase() === 'xiaomi.camera.082ac1' ? [0, 2] : [0];
+  }
+
+  function xiaomiCameraChannel(camera: Camera, did: string): number | null {
+    if (camera.protocol !== 'xiaomi') return null;
+    try {
+      const source = new URL(camera.url);
+      if (source.hostname !== did || (source.searchParams.get('account') || 'default') !== xiaomiAccount) return null;
+      const channel = Number(source.searchParams.get('channel') || '0');
+      return Number.isInteger(channel) && channel >= 0 ? channel : null;
+    } catch { return null; }
+  }
+
+  function existingXiaomiChannels(did: string): Set<number> {
+    const channels = new Set<number>();
+    for (const camera of cameras) {
+      const channel = xiaomiCameraChannel(camera, did);
+      if (channel !== null) channels.add(channel);
+    }
+    return channels;
+  }
+
+  function xiaomiChannelName(name: string, channel: number): string {
+    const baseName = name.replace(/\s+-\s+通道\s+\d+$/, '').trim();
+    return `${baseName} - 通道 ${channel}`;
+  }
+
+  function missingXiaomiChannels(device: XiaomiDevice): number[] {
+    const existing = existingXiaomiChannels(device.did);
+    return xiaomiChannels(device).filter(channel => !existing.has(channel));
+  }
+
+  function xiaomiChannelURL(device: XiaomiDevice, channel: number): string {
+    const query = new URLSearchParams();
+    if (channel !== 0 || xiaomiChannels(device).length > 1) query.set('channel', String(channel));
+    if (xiaomiAccount !== 'default') query.set('account', xiaomiAccount);
+    const suffix = query.toString();
+    return `xiaomi://${device.did}${suffix ? `?${suffix}` : ''}`;
   }
 
   async function addXiaomiDevice(device: XiaomiDevice, skipVendorCheck = false) {
     xiaomiAddingDid = device.did;
+    let changed = false;
     try {
       // Check vendor compatibility before adding
       if (!skipVendorCheck) {
@@ -278,17 +312,34 @@
         }
       }
 
-      await createCamera({
-        name: device.name,
-        protocol: 'xiaomi',
-        encoding: 'h264',
-        url: `xiaomi://${device.did}${xiaomiAccount === 'default' ? '' : `?account=${encodeURIComponent(xiaomiAccount)}`}`,
-        enabled: true,
-      });
+      const channels = missingXiaomiChannels(device);
+      if (xiaomiChannels(device).length > 1) {
+        for (const camera of cameras) {
+          const channel = xiaomiCameraChannel(camera, device.did);
+          if (channel !== null && xiaomiChannels(device).includes(channel)) {
+            const name = xiaomiChannelName(camera.name, channel);
+            if (name !== camera.name) {
+              await updateCamera(camera.id, { name });
+              changed = true;
+            }
+          }
+        }
+      }
+      for (const channel of channels) {
+        const isDualChannel = xiaomiChannels(device).length > 1;
+        await createCamera({
+          name: isDualChannel ? xiaomiChannelName(device.name, channel) : device.name,
+          protocol: 'xiaomi',
+          encoding: 'h264',
+          url: xiaomiChannelURL(device, channel),
+          enabled: true,
+        });
+        changed = true;
+      }
       showToast(t('cameras.cameraAdded'), 'success');
-      oncameraadded?.();
     } catch (e) { console.warn('Failed to add Xiaomi device:', e); showToast(t('cameras.failedAdd'), 'error'); } finally {
       xiaomiAddingDid = null;
+      if (changed) oncameraadded?.();
     }
   }
 
@@ -684,6 +735,7 @@
         {:else}
           <div class="space-y-3">
             {#each xiaomiDeviceList as device (device.did)}
+              {@const missingChannels = missingXiaomiChannels(device)}
               <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
                 <div class="min-w-0 flex-1 mr-4">
                   <div class="font-medium th-text-primary truncate">{device.name}</div>
@@ -692,13 +744,13 @@
                     {device.isOnline ? t('xiaomi.online') : t('xiaomi.offline')}
                   </div>
                 </div>
-                {#if isXiaomiDeviceAdded(device.did)}
+                {#if missingChannels.length === 0}
                   <button
                     type="button"
                     class="btn btn-sm shrink-0 opacity-50 cursor-not-allowed"
                     disabled
                   >
-                    {t('xiaomi.added')}
+                    {device.model.toLowerCase() === 'xiaomi.camera.082ac1' ? t('xiaomi.channelsAdded') : t('xiaomi.added')}
                   </button>
                 {:else}
                   <button
@@ -709,7 +761,11 @@
                     {#if xiaomiAddingDid === device.did}
                       <span class="spinner mr-1"></span>
                     {/if}
-                    {t('onvif.addCamera')}
+                    {device.model.toLowerCase() === 'xiaomi.camera.082ac1'
+                      ? (missingChannels.length === 2
+                        ? t('xiaomi.addChannels')
+                        : t('xiaomi.addChannel', { channel: missingChannels[0] }))
+                      : t('onvif.addCamera')}
                   </button>
                 {/if}
               </div>
