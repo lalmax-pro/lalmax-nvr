@@ -10,7 +10,7 @@ import (
 )
 
 // VideoSink receives video frames sequentially. It must return when ctx is
-// canceled; RunH264 waits for the current call before releasing its subscriber.
+// canceled when possible; RunH264 waits for the current call before releasing its subscriber.
 // A sink retaining packet data after returning must take its own copy.
 type VideoSink func(ctx context.Context, packet *base.AvPacket) error
 
