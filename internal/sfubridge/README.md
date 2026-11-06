@@ -1,0 +1,7 @@
+# NVR SFU bridge service
+
+This trusted service creates a dedicated Room participant and an H.264 bridge for each output. It generates the target stream ID and separate random publish/playback credentials, reserves the internal output before starting, and revokes it after the bridge has actually stopped. The existing Room policy checks join, subscription and `manage_bridge` for the generated target. A required source validator must verify the actual negotiated codec profile, packetization mode and no-B-frame constraint; the publication MIME type is not enough. A maximum concurrent bridge count is required.
+
+`Start` accepts an authenticated principal from server-side state and an authorization request context. The returned handle represents queued work, not successful lal registration; `Done` provides the terminal error. The caller must keep handles and playback credentials in a server-side registry and authorize every status/stop/playback operation. Never expose a handle as a public capability. `Close` rejects new starts and waits for cleanup up to its context deadline; a blocked synchronous lal write can delay resource release. On policy revocation the owning service must stop the affected handles. An internal grant is revoked only after the publisher exits.
+
+This package is not wired to the NVR application, HTTP API, SFU signaling, or a player. It does not validate H.264 itself or implement audio and A/V synchronization.

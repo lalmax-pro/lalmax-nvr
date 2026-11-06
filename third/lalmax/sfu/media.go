@@ -38,6 +38,9 @@ func (r *Room) EnablePublicationRTP(participantID, session, publicationID string
 		r.rtpPublications = make(map[string]*rtpforward.Fanout)
 	}
 	r.rtpPublications[publicationID] = f
+	p.RTPReady = true
+	r.publications[publicationID] = p
+	r.notify("track_ready")
 	return nil
 }
 

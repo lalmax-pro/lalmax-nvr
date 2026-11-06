@@ -75,8 +75,22 @@ func TestPionNegotiator(t *testing.T) {
 	if err = client.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = n.Answer(ctx, client.LocalDescription().SDP); !errors.Is(err, ErrNegotiationUsed) {
-		t.Fatalf("second offer: %v", err)
+	if _, err = client.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
+		t.Fatal(err)
+	}
+	nextOffer, err := client.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.SetLocalDescription(nextOffer); err != nil {
+		t.Fatal(err)
+	}
+	nextAnswer, err := n.Answer(ctx, client.LocalDescription().SDP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: nextAnswer}); err != nil {
+		t.Fatal(err)
 	}
 	deadline := time.After(5 * time.Second)
 	ticker := time.NewTicker(20 * time.Millisecond)
@@ -152,12 +166,22 @@ func TestWebSocketOfferAnswerAndCleanup(t *testing.T) {
 	if err = client.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: reply.SDP}); err != nil {
 		t.Fatal(err)
 	}
+	nextOffer, err := client.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.SetLocalDescription(nextOffer); err != nil {
+		t.Fatal(err)
+	}
 	if err = ws.WriteJSON(command{ID: "offer-2", Type: "offer", SDP: client.LocalDescription().SDP}); err != nil {
 		t.Fatal(err)
 	}
 	reply = readType(t, ws, "result")
-	if reply.ID != "offer-2" || reply.Error != "operation_failed" {
+	if reply.ID != "offer-2" || reply.Error != "" || reply.SDP == "" {
 		t.Fatalf("second offer: %+v", reply)
+	}
+	if err = client.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: reply.SDP}); err != nil {
+		t.Fatal(err)
 	}
 	if err = ws.Close(); err != nil {
 		t.Fatal(err)

@@ -39,6 +39,12 @@ func TestCLIStartsAndStopsOnSignal(t *testing.T) {
 	cfg := autoInitConfig(cfgPath)
 	addr := freeTCPAddr(t)
 	cfg.Server.Listen = addr
+	// This test exercises the CLI shutdown path, not embedded lal startup.
+	// The embedded RTSP server has a startup/Dispose race when SIGTERM arrives
+	// as soon as the HTTP listener becomes reachable.
+	cfg.Media.Mode = "http"
+	cfg.Media.LalmaxHTTPAddr = "http://127.0.0.1:8080"
+	cfg.Media.LalmaxPublicURL = "http://127.0.0.1:8080"
 	// Keep the child's FTP listener disabled: its dependency races on
 	// start/stop, which the race-enabled test binary would report.
 	ftpDisabled := false
@@ -58,6 +64,12 @@ func TestCLIStartsAndStopsOnSignal(t *testing.T) {
 	cmd.Stdout = capture
 	cmd.Stderr = capture
 	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
 
 	waitForTCP(t, addr)
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))

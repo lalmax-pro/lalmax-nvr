@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark"><title>SFU Meet · 本地音视频会议</title>
+  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+<div class="app">
+  <header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><div><strong>SFU Meet</strong><span>本地会议实验室</span></div></div><div class="top-right"><span class="local-pill"><i></i> 本机联调</span><span class="version">VIDEO PREVIEW</span></div></header>
+  <main class="layout">
+    <section class="stage" aria-labelledby="stage-title">
+      <div class="stage-head"><div><div class="eyebrow">LOCAL / DEMO ROOM</div><h1 id="stage-title">让彼此连接起来<span>.</span></h1><p>一个用于验证 SFU 实时音视频转发的本地会议空间。</p></div><span id="connection-badge" class="badge"><i></i><span>未连接</span></span></div>
+      <div class="room-panel"><div class="room-meta"><span class="room-icon" aria-hidden="true">⌁</span><div><strong>Demo Room</strong><small>固定本地房间 · Opus / H.264</small></div><span id="member-count" class="member-count">0 人在线</span></div>
+        <div id="tiles" class="tiles"><div class="empty-state"><div class="soundmark"><span></span><span></span><span></span><span></span><span></span></div><strong>准备好加入了吗？</strong><p>在右侧输入启动口令，进入本地会议。</p></div></div>
+        <div id="refresh-notice" class="notice" hidden>房间中的音轨已变化。点击“重新连接”以更新订阅。<button id="refresh" type="button">重新连接 ↗</button></div>
+      </div>
+      <div class="control-strip"><div class="status-copy"><span class="status-dot" id="status-dot"></span><span id="status-text" role="status" aria-live="polite">等待加入</span></div><div class="controls"><button id="enable-audio" class="control-button" type="button" hidden>启用声音</button><button id="mute" class="control-button" type="button" disabled aria-pressed="false"><span aria-hidden="true">◉</span> 静音</button><button id="camera-toggle" class="control-button" type="button" disabled aria-pressed="false">◈ 关闭摄像头</button><button id="share" class="control-button" type="button" disabled>▣ 共享屏幕</button><button id="leave" class="control-button leave" type="button" disabled>离开会议</button></div></div>
+      <div id="audio-container" class="audios"></div>
+    </section>
+    <aside class="sidebar"><div class="card"><div class="card-top"><span class="card-symbol" aria-hidden="true">↗</span><span>01 / 连接设置</span></div><h2>加入会议</h2><p class="card-intro">使用终端启动服务时显示的访问口令。</p>
+      <form id="join-form"><label for="token">访问口令</label><input id="token" type="password" autocomplete="off" placeholder="粘贴启动口令" required><label class="check"><input id="microphone" type="checkbox" checked><span><strong>启用麦克风</strong><small>关闭后以仅收听模式加入</small></span></label><label class="check"><input id="camera" type="checkbox"><span><strong>启用摄像头</strong><small>加入前可选择是否开启画面</small></span></label><button class="join-button" id="join" type="submit">加入 Demo Room <span>→</span></button></form><p id="error" class="error" role="alert" hidden></p>
+      <div class="card-divider"></div><div class="info-line"><span>◌</span><div><strong>测试提示</strong><p>用同一浏览器打开多个标签页，新发布的媒体会自动加入，也可以手动控制订阅。</p></div></div></div>
+      <div class="small-card tracks-card" aria-labelledby="tracks-title"><span class="eyebrow">REMOTE TRACKS</span><h2 id="tracks-title">远端轨道</h2><p>默认自动订阅，可逐条取消或恢复。</p><div id="track-list" class="track-list" aria-live="polite"><p class="track-empty">加入会议后显示远端轨道。</p></div></div>
+      <div class="small-card capabilities-card"><span class="eyebrow">CURRENT CAPABILITIES</span><div class="cap"><span>●</span> 麦克风 / 摄像头</div><div class="cap"><span>●</span> 屏幕共享</div><div class="cap"><span>●</span> 动态 Track 订阅</div><p>当前为本机联调版，视频采用 H.264。</p></div>
+      <div class="side-foot">LALMAX NVR <span> / </span> SFU EXPERIMENT</div></aside>
+  </main><footer><span>BUILT FOR REAL-TIME CONNECTION</span><span>仅限本机 · 不用于生产</span></footer>
+</div>
+</body></html>
