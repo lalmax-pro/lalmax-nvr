@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
 	"github.com/q191201771/lalmax/sfu"
@@ -146,6 +148,43 @@ func (a *nvrSFURoomAdmin) closeAll() error {
 			result = err
 		}
 		delete(a.entries, id)
+	}
+	return result
+}
+
+// collectIdle excludes the compatibility room. The manager decides whether a
+// join or collection wins under the room lock; bridge cleanup follows removal.
+func (a *nvrSFURoomAdmin) collectIdle(ctx context.Context, ttl time.Duration) error {
+	if ttl <= 0 {
+		return sfu.ErrInvalidIdleTimeout
+	}
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return sfubridge.ErrClosed
+	}
+	var removed []*sfu.Room
+	var result error
+	for id, room := range a.entries {
+		if id == "default" {
+			continue
+		}
+		snap := room.Snapshot()
+		collected, err := a.manager.CloseIfIdle(snap.Key, snap.Generation, ttl)
+		if err != nil {
+			result = errors.Join(result, err)
+			continue
+		}
+		if collected {
+			delete(a.entries, id)
+			removed = append(removed, room)
+		}
+	}
+	a.mu.Unlock()
+	for _, room := range removed {
+		if a.bridges != nil {
+			result = errors.Join(result, a.bridges.remove(ctx, room))
+		}
 	}
 	return result
 }

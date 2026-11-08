@@ -134,6 +134,29 @@ func (m *Manager) CollectIdle(ttl time.Duration) ([]CollectedRoom, error) {
 	return m.collectIdleAt(time.Now(), ttl), nil
 }
 
+// CloseIfIdle atomically checks the exact room generation and removes it only
+// after it has had no participants for ttl. A concurrent join either succeeds
+// first, keeping the room alive, or observes a closed room.
+func (m *Manager) CloseIfIdle(key Key, generation string, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		return false, ErrInvalidIdleTimeout
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rooms[key]
+	if !ok || r.generation != generation {
+		return false, ErrRoomNotFound
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || len(r.participants) != 0 || r.idleSince.IsZero() || time.Since(r.idleSince) < ttl {
+		return false, nil
+	}
+	r.closeLocked()
+	delete(m.rooms, key)
+	return true, nil
+}
+
 func (m *Manager) collectIdleAt(now time.Time, ttl time.Duration) []CollectedRoom {
 	m.mu.Lock()
 	defer m.mu.Unlock()

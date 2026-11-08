@@ -147,3 +147,63 @@ func TestNVRSFURoomAdministration(t *testing.T) {
 		t.Fatal("room survived shutdown")
 	}
 }
+
+func TestNVRSFURoomIdleCleanupPreservesDefaultAndActive(t *testing.T) {
+	ctx := context.Background()
+	manager := sfu.NewManager()
+	defaultRoom, err := manager.CreateWithLimits(nvrSFURoom, nvrSFURoomLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := newNVRSFURoomAdmin(manager, defaultRoom, nil)
+	router := newNVRSFUBridgeRouter(func(context.Context, string) error { return nil })
+	admin.bridges = router
+	for _, id := range []string{"default", "idle", "active"} {
+		var room *sfu.Room
+		if id == "default" {
+			room = defaultRoom
+		} else {
+			room, err = manager.CreateWithLimits(sfu.Key{Namespace: "nvr", ID: id}, nvrSFURoomLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			admin.entries[id] = room
+		}
+		if err = router.add(room, &fakeRoomBridge{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active := admin.entries["active"]
+	if err = active.Join(sfu.Participant{ID: "member"}); err != nil {
+		t.Fatal(err)
+	}
+	old := admin.entries["idle"]
+	router.mu.Lock()
+	oldRegistry := router.entries[old].registry.(*fakeRoomBridge)
+	router.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+	if err = admin.collectIdle(ctx, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := admin.resolve("idle"); ok {
+		t.Fatal("idle room survived")
+	}
+	if _, _, ok := admin.resolve("default"); !ok {
+		t.Fatal("default room collected")
+	}
+	if _, _, ok := admin.resolve("active"); !ok {
+		t.Fatal("active room collected")
+	}
+	oldRegistry.mu.Lock()
+	closed := oldRegistry.closed
+	oldRegistry.mu.Unlock()
+	if !closed {
+		t.Fatal("idle bridge registry survived")
+	}
+	if err = admin.closeAll(); err != nil {
+		t.Fatal(err)
+	}
+	if err = router.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

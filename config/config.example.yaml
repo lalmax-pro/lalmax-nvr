@@ -76,9 +76,12 @@ media:
   #   lal (port 11935):   RTMP, when rtmp.enabled is true
   #   lal (port 15544):   RTSP  (rtsp://{lalmax_public_url host}:15544/live/{camera_id})
 
-# Experimental single-room SFU and browser meeting (embedded media mode only).
+# Experimental SFU and browser meeting (embedded media mode only).
 # sfu:
 #   enabled: false
+#   # Optional: collect non-default rooms after this idle duration (e.g. 10m).
+#   # Empty disables automatic collection; active bridges keep their room alive.
+#   idle_timeout: ""
 #   # Optional STUN/TURN for SFU peers and the browser; TURN credentials are
 #   # delivered to authenticated meeting administrators. Use HTTPS and scoped
 #   # credentials. The lalmax WHEP server has its own ICE configuration.
