@@ -10,4 +10,5 @@
 #microphone-device,#camera-device { width: 100%; border: 1px solid #3b453d; background: #101511; color: #fff; border-radius: 9px; padding: 11px; }
 
 .room-actions{display:flex;gap:8px;margin-top:8px}.room-actions input{min-width:0;flex:1}.room-actions button{background:#27332a;color:#d9e6d6;border:1px solid #455349;border-radius:9px;padding:9px 12px;white-space:nowrap}#nvr-room-status{font-size:12px;color:#aebcab;min-height:1em}
+#bridge-management .track-info small{overflow-wrap:anywhere}#bridge-management-status{font-size:12px;color:#aebcab;min-height:1em}
 #nvr-room,#nvr-room-new{width:100%;border:1px solid #3b453d;background:#101511;color:#fff;border-radius:9px;padding:11px;outline:none}#nvr-room:focus,#nvr-room-new:focus{border-color:#c3ed7d}

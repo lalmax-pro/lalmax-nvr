@@ -263,6 +263,85 @@ test('NVR room controls create, join and close the selected generation', async (
   assert.equal(calls.filter(c=>c.url==='/api/sfu/rooms/' && c.options.method==='POST').length,1);
 });
 
+test('NVR bridge management lists, stops and removes only after terminal state', async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(name,value){this.attributes[name]=value;}
+    querySelector(){return new Element();}querySelectorAll(tag){return tag==='button'?this.children.flatMap(row=>row.children.filter(child=>child.type==='button')):[];}
+    replaceChildren(...children){this.children=children;}append(...children){this.children.push(...children);}remove(){}
+  }
+  const elements=new Map(), element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  let state='pending', present=true, failList=false;const calls=[];
+  const fetch=async(url,options={})=>{
+    calls.push({url,method:options.method||'GET'});
+    assert.equal(options.headers.Authorization,'Basic encoded');
+    if(url==='/api/sfu/bridges/' && !options.method){if(failList)return{ok:false,status:503,json:async()=>({error:'暂不可用'})};return{ok:true,status:200,json:async()=>present?[{id:'bridge/1',publication_id:'pub-1',state}]:[]};}
+    if(url==='/api/sfu/bridges/bridge%2F1/stop' && options.method==='POST'){state='stopping';return{ok:true,status:204};}
+    if(url==='/api/sfu/bridges/bridge%2F1' && options.method==='DELETE'){assert.equal(state,'stopped');present=false;return{ok:true,status:204};}
+    throw new Error(`unexpected request ${url}`);
+  };
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:class{},RTCPeerConnection:class{},MediaStream:class{},AbortController,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  assert.equal(element('bridge-management').hidden,false);assert.equal(calls.length,0);
+  element('bridge-management-refresh').listeners.click();await waitFor(()=>element('bridge-management-list').children.length===1);
+  let row=element('bridge-management-list').children[0],button=row.children[1];
+  assert.match(row.children[0].children[0].textContent,/bridge\/1/);assert.equal(button.textContent,'停止桥接');
+  button.listeners.click();await waitFor(()=>state==='stopping' && !element('bridge-management-refresh').disabled);
+  assert.match(element('bridge-management-status').textContent,/稍后刷新/);
+  assert.ok(!calls.some(call=>call.method==='DELETE'));
+  state='stopped';element('bridge-management-refresh').listeners.click();
+  await waitFor(()=>element('bridge-management-list').children[0].children[1].textContent==='删除记录');
+  button=element('bridge-management-list').children[0].children[1];button.listeners.click();
+  await waitFor(()=>!present && element('bridge-management-list').children.length===0);
+  assert.equal(element('bridge-management-status').textContent,'没有可管理的桥接。');
+  failList=true;element('bridge-management-refresh').listeners.click();
+  await waitFor(()=>element('bridge-management-status').textContent==='暂不可用');
+  assert.equal(element('bridge-management-refresh').disabled,false);
+});
+
+test('stopping a bridge in management also closes its local player', async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(name,value){this.attributes[name]=value;}querySelector(){return new Element();}
+    querySelectorAll(tag){return tag==='button'?this.children.flatMap(row=>row.children.filter(child=>child.type==='button')):[];}
+    replaceChildren(...children){this.children=children;}append(...children){this.children.push(...children);}remove(){}play(){return Promise.resolve();}
+  }
+  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const peers=[];let socket, bridgeState='pending', whepPending=false;
+  class Socket {
+    static OPEN=1;
+    constructor(){socket=this;this.readyState=1;setImmediate(()=>this.snapshot([]));}
+    snapshot(publications){this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[{ID:'remote'}],Publications:publications}})});}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';peers.push(this);}createDataChannel(){}
+    addTransceiver(){return{stop(){}};}async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){this.closed=true;}
+  }
+  const fetch=async(url,options={})=>{
+    if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'ticket',ice_servers:[]})};
+    if(url==='/api/sfu/bridges/' && options.method==='POST')return{ok:true,status:202,json:async()=>({id:'bridge-1'})};
+    if(url==='/api/sfu/bridges/' && !options.method)return{ok:true,status:200,json:async()=>[{id:'bridge-1',publication_id:'pub-1',state:bridgeState}]};
+    if(url==='/api/sfu/bridges/bridge-1/stop'){bridgeState='stopping';return{ok:true,status:204};}
+    if(url==='/api/sfu/bridges/bridge-1/whep'){whepPending=true;return await new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(new Error('aborted'))));}
+    throw new Error(`unexpected request ${url}`);
+  };
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  socket.snapshot([{ID:'pub-1',ParticipantID:'remote',Source:'microphone',Kind:'audio',Codec:'audio/opus',RTPReady:true}]);
+  element('bridge-list').children[0].children[1].listeners.click();await waitFor(()=>whepPending);
+  const player=peers[1];element('bridge-management-refresh').listeners.click();await waitFor(()=>element('bridge-management-list').children.length===1);
+  element('bridge-management-list').children[0].children[1].listeners.click();
+  await waitFor(()=>bridgeState==='stopping' && player.closed && !element('bridge-management-refresh').disabled);
+  assert.equal(element('bridge-video').hidden,true);
+  assert.equal(element('bridge-list').children[0].children[1].textContent,'桥接并播放');
+  element('leave').listeners.click();
+});
+
 test('NVR reconnects with a new ticket, preserves muted capture and cancels on leave', async () => {
   class Element {
     constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
