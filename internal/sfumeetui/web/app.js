@@ -6,6 +6,7 @@
   const status = $('status-text'), badge = $('connection-badge'), dot = $('status-dot');
   const join = $('join'), leave = $('leave'), mute = $('mute'), cameraToggle = $('camera-toggle'), share = $('share'), error = $('error');
   const tiles = $('tiles'), audioContainer = $('audio-container'), trackList = $('track-list');
+  const networkPanel=$('network-stats'), networkStatus=$('network-status');
   const nvrMode = document.documentElement?.dataset?.mode === 'nvr';
   if (nvrMode) { token.required=false; token.hidden=true; $('token-label').hidden=true; $('back-nvr').hidden=false; $('bridge-panel').hidden=false; $('bridge-management').hidden=false; $('nvr-room-controls').hidden=false; $('join').textContent='加入会议 →'; $('mode-pill').textContent='NVR 会议'; $('mode-instructions').textContent='使用 NVR 管理员账号加入。'; $('nvr-login').hidden=!!sessionStorage.getItem('nvr_auth'); $('room-description').textContent='默认房间 · Opus / H.264'; $('mode-footer').textContent='NVR SFU'; }
   let current = null;
@@ -76,8 +77,59 @@
     if(current?.stream!==r.stream)r.stream?.getTracks().forEach(t=>t.stop());
     if(nvrMode)updateRoomControls();
   }
+  let networkTimer=null, networkGeneration=0, networkPrevious=new Map();
+  function clearNetworkStats(message='加入会议后可查看。') {
+    networkGeneration++;clearTimeout(networkTimer);networkTimer=null;networkPrevious=new Map();
+    for(const id of ['network-send','network-receive','network-loss','network-rtt'])$(id).textContent='—';
+    networkStatus.textContent=message;
+  }
+  function networkRate(kbps) { return kbps>=1000?`${(kbps/1000).toFixed(2)} Mbps`:`${kbps.toFixed(0)} kbps`; }
+  function updateNetworkStats(report) {
+    const previous=networkPrevious, next=new Map(), all=new Map();let sent=0,received=0,sentKnown=false,receivedKnown=false,lost=0,packets=0,lossKnown=false,hasMedia=false,rtt;
+    report.forEach(item=>all.set(item.id,item));
+    for(const item of all.values()) {
+      if(item.type==='transport' && item.selectedCandidatePairId) {
+        const pair=all.get(item.selectedCandidatePairId);
+        if(Number.isFinite(pair?.currentRoundTripTime) && pair.currentRoundTripTime>=0)rtt=pair.currentRoundTripTime;
+      }
+      if(item.type!=='inbound-rtp' && item.type!=='outbound-rtp')continue;
+      if(item.isRemote || (item.kind && item.kind!=='audio' && item.kind!=='video'))continue;
+      hasMedia=true;next.set(item.id,item);const old=previous.get(item.id);
+      if(!old || !Number.isFinite(item.timestamp) || !Number.isFinite(old.timestamp))continue;
+      const elapsed=item.timestamp-old.timestamp;if(elapsed<=0)continue;
+      const key=item.type==='outbound-rtp'?'bytesSent':'bytesReceived';
+      if(Number.isFinite(item[key]) && Number.isFinite(old[key]) && item[key]>=old[key]) {
+        const value=(item[key]-old[key])*8/elapsed;
+        if(item.type==='outbound-rtp'){sent+=value;sentKnown=true;}else{received+=value;receivedKnown=true;}
+      }
+      if(item.type==='inbound-rtp' && Number.isFinite(item.packetsReceived) && Number.isFinite(old.packetsReceived) && Number.isFinite(item.packetsLost) && Number.isFinite(old.packetsLost) && item.packetsReceived>=old.packetsReceived) {
+        const got=item.packetsReceived-old.packetsReceived, missing=Math.max(0,item.packetsLost-old.packetsLost);
+        lost+=missing;packets+=got+missing;lossKnown=true;
+      }
+    }
+    if(rtt===undefined)for(const item of all.values())if(item.type==='candidate-pair' && item.selected===true && Number.isFinite(item.currentRoundTripTime) && item.currentRoundTripTime>=0){rtt=item.currentRoundTripTime;break;}
+    networkPrevious=next;
+    $('network-send').textContent=sentKnown?networkRate(sent):'—';$('network-receive').textContent=receivedKnown?networkRate(received):'—';
+    $('network-loss').textContent=lossKnown&&packets>0?`${(lost*100/packets).toFixed(1)}%`:'—';$('network-rtt').textContent=rtt===undefined?'—':`${(rtt*1000).toFixed(0)} ms`;
+    networkStatus.textContent=hasMedia?'每 2 秒更新 · 丢包率为接收方向':'暂无媒体流';
+  }
+  function startNetworkStats(c) {
+    clearNetworkStats(c?'正在获取统计…':'加入会议后可查看。');
+    if(!networkPanel.open || !c?.pc)return;
+    if(typeof c.pc.getStats!=='function'){networkStatus.textContent='当前浏览器不支持网络统计。';return;}
+    const generation=networkGeneration;
+    const collect=async()=>{
+      if(generation!==networkGeneration || current!==c || !networkPanel.open)return;
+      try {const report=await c.pc.getStats();if(generation!==networkGeneration || current!==c || !networkPanel.open)return;updateNetworkStats(report);}
+      catch(_){if(generation!==networkGeneration || current!==c || !networkPanel.open)return;networkPrevious=new Map();for(const id of ['network-send','network-receive','network-loss','network-rtt'])$(id).textContent='—';networkStatus.textContent='暂时无法获取统计。';}
+      networkTimer=setTimeout(collect,2000);
+    };
+    void collect();
+  }
+  networkPanel.addEventListener('toggle',()=>{if(networkPanel.open)startNetworkStats(current);else clearNetworkStats();});
+
   function closeCurrent() {
-    const c = current; current = null;
+    const c = current; current = null;clearNetworkStats();
     if (c) {
       for (const pending of c.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('连接已关闭')); }
       if(nvrMode) for(const bridge of c.bridges.values()) { bridge.closeRequested=true; if(bridge.id) void stopBridge(c,bridge,true); }
@@ -385,7 +437,7 @@
       if(nvrMode){const auth=nvrAuth();const roomID=retry?.roomID||$('nvr-room').value||'default';c.roomID=roomID;const generation=retry?.generation||roomGenerations.get(roomID);const ticket=await nvrRequest('/api/sfu/ticket',{method:'POST',body:JSON.stringify({room_id:roomID,...(generation?{room_generation:generation}:{})})});if(current!==c)return;$('room-title').textContent=roomID;$('room-description').textContent='NVR 房间 · Opus / H.264';sessionStorage.setItem('nvr_auth',auth.slice(6));$('nvr-password').value='';$('nvr-login').hidden=true;c.ticket=ticket.ticket;c.iceServers=ticket.ice_servers||[];}
       await openSocket(c);if(current!==c)return;
       if(retry && c.snapshot.Generation!==retry.generation){const err=new Error('房间已关闭或重新创建');err.terminal=true;throw err;}
-      const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});c.pc=pc;
+      const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});c.pc=pc;if(networkPanel.open)startNetworkStats(c);
       pc.onconnectionstatechange=()=>{if(current!==c)return;if(pc.connectionState==='connected')state('媒体连接正常',true);else if(pc.connectionState==='failed')fail(c,new Error('媒体连接失败'),true);else if(pc.connectionState==='disconnected')state('媒体连接中断');};
       pc.ontrack=event=>{if(current!==c)return;const id=[...c.subscribed].find(([,entry])=>entry.transceiver===event.transceiver)?.[0];if(!id)return;
         if(event.track.kind==='audio'){const audio=document.createElement('audio');audio.autoplay=true;audio.srcObject=new MediaStream([event.track]);audioContainer.append(audio);c.media.set(id,audio);audio.play().catch(()=>{showError('浏览器阻止自动播放，请点击“启用声音”。');$('enable-audio').hidden=false;});}
