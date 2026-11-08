@@ -338,6 +338,34 @@ receive:
 	if ok, err := db.IsSFUBridgeOutput(ctx, stream); err != nil || !ok {
 		t.Fatal("bridge output was not persisted")
 	}
+	// Another authorized administrator must neither discover nor control this
+	// owner's bridge, including the endpoint that returns playback credentials.
+	other := &model.User{Username: "bob", PasswordHash: "hash", Role: model.RoleSuperAdmin, Enabled: true, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := db.CreateUser(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	otherHandler := api.NewHandler(nil, nil, noop, nil, nil, "", nil, nil)
+	otherHandler.SetMultiUserAuthMW(middleware.InjectUser(other))
+	otherHandler.SetSFUBridgeRegistry(bridges)
+	for _, request := range []struct{ method, path string }{
+		{http.MethodGet, "/api/sfu/bridges/" + status.ID},
+		{http.MethodGet, "/api/sfu/bridges/" + status.ID + "/playback"},
+		{http.MethodPost, "/api/sfu/bridges/" + status.ID + "/stop"},
+		{http.MethodDelete, "/api/sfu/bridges/" + status.ID},
+	} {
+		response := httptest.NewRecorder()
+		otherRequest := httptest.NewRequest(request.method, request.path, strings.NewReader(`{}`))
+		otherRequest.Header.Set("Content-Type", "application/json")
+		otherHandler.Routes().ServeHTTP(response, otherRequest)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("other administrator %s %s: %d", request.method, request.path, response.Code)
+		}
+	}
+	otherList := httptest.NewRecorder()
+	otherHandler.Routes().ServeHTTP(otherList, httptest.NewRequest(http.MethodGet, "/api/sfu/bridges/", nil))
+	if otherList.Code != http.StatusOK || strings.TrimSpace(otherList.Body.String()) != "[]" {
+		t.Fatalf("other administrator bridge list: %d %s", otherList.Code, otherList.Body.String())
+	}
 	stopReq := httptest.NewRequest(http.MethodPost, "/api/sfu/bridges/"+status.ID+"/stop", strings.NewReader(`{}`))
 	stopReq.Header.Set("Content-Type", "application/json")
 	stopped := httptest.NewRecorder()
