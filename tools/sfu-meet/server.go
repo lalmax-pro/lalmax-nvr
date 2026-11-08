@@ -91,6 +91,9 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 				return nil, err
 			}
 			registry := &interceptor.Registry{}
+			if err := webrtc.ConfigureTWCCHeaderExtensionSender(media, registry); err != nil {
+				return nil, err
+			}
 			if err := webrtc.RegisterDefaultInterceptors(media, registry); err != nil {
 				return nil, err
 			}
