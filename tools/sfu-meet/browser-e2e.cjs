@@ -26,6 +26,15 @@ const assert = require('node:assert/strict');
       if (!process.env.LK_DEMO_LOCAL) await page.fill('#nvr-username','admin');
       await page.fill('#nvr-password',process.env.LK_DEMO_LOCAL ? process.env.LK_DEMO_SECRET : 'test-password');
     }
+    if (!process.env.LK_DEMO_LOCAL) {
+      await viewer.fill('#room', 'managed-demo');
+      await viewer.click('#room-create');
+      const managed = viewer.locator('#room-list .track-row').filter({hasText:'managed-demo'});
+      await managed.waitFor({timeout:15000});
+      await managed.getByRole('button', {name:'关闭'}).click();
+      await managed.waitFor({state:'detached',timeout:15000});
+      await viewer.fill('#room', 'default');
+    }
     await publisher.check('#microphone'); await publisher.check('#camera');
     await publisher.click('#join'); await publisher.waitForFunction(() => document.querySelector('#status-text').textContent==='已连接', null, {timeout:20000});
     await viewer.click('#join'); await viewer.waitForFunction(() => document.querySelector('#status-text').textContent==='已连接', null, {timeout:20000});
@@ -111,6 +120,11 @@ const assert = require('node:assert/strict');
     await publisher.click('#share');
     await viewer.waitForFunction(() => document.querySelectorAll('#track-list .track-row').length===2, null, {timeout:20000});
     await viewer.click('#leave'); await publisher.click('#leave');
+    if (!process.env.LK_DEMO_LOCAL) {
+      const refreshed = viewer.waitForResponse(response => response.url().endsWith('/api/sfu/rooms/') && response.request().method() === 'GET');
+      await viewer.click('#room-refresh');
+      assert.equal((await refreshed).status(), 200);
+    }
     assert.deepEqual(errors, []);
     console.log(`PASS: browser synthetic camera/microphone, dynamic subscriptions, synthetic screen video/audio${process.env.LK_BRIDGE_TEST ? ', Group WHEP audio/video and bridge cleanup' : ''}, and leave`);
   } finally { await context.close(); await browser.close(); }

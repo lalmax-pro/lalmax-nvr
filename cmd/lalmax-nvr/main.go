@@ -992,6 +992,7 @@ func (a *App) buildRouter() http.Handler {
 	}
 	if a.liveKitRuntime != nil {
 		handler.SetLiveKitJoinIssuer(a.liveKitRuntime)
+		handler.SetSFURoomManager(&nvrLiveKitRoomAdmin{runtime: a.liveKitRuntime})
 		if a.liveKitRuntime.bridges != nil {
 			handler.SetSFUBridgeRegistry(a.liveKitRuntime.bridges)
 		}

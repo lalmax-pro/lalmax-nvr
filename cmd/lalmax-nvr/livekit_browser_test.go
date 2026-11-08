@@ -96,6 +96,7 @@ func TestLiveKitBrowser(t *testing.T) {
 	h := api.NewHandler(nil, nil, func(next http.Handler) http.Handler { return next }, cfg, nil, "", nil, nil)
 	h.SetMultiUserAuthMW(middleware.InjectUser(user))
 	h.SetLiveKitJoinIssuer(runtime)
+	h.SetSFURoomManager(&nvrLiveKitRoomAdmin{runtime: runtime})
 	h.SetSFUBridgeRegistry(runtime.bridges)
 	h.SetMediaEngine(engine)
 	svr := httptest.NewServer(h.Routes())

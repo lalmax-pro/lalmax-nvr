@@ -25,6 +25,7 @@ type nvrLiveKitRuntime struct {
 	issuer    *livekitsfu.TokenIssuer
 	policy    *nvrSFUPolicy
 	publicURL string
+	apiKey    string
 	bridges   *nvrLiveKitBridgeRegistry
 	mu        sync.Mutex
 	cancel    context.CancelFunc
@@ -58,7 +59,7 @@ func newNVRLiveKitRuntime(a *App, cfg config.SFULiveKitConfig) (*nvrLiveKitRunti
 	if err != nil {
 		return nil, errors.New("configured LiveKit API key was not found")
 	}
-	return &nvrLiveKitRuntime{config: conf, issuer: issuer, policy: &nvrSFUPolicy{app: a}, publicURL: cfg.PublicURL}, nil
+	return &nvrLiveKitRuntime{config: conf, issuer: issuer, policy: &nvrSFUPolicy{app: a}, publicURL: cfg.PublicURL, apiKey: cfg.APIKey}, nil
 }
 
 func (r *nvrLiveKitRuntime) Start(parent context.Context) error {

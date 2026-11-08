@@ -10,6 +10,7 @@
   const localMode = document.documentElement.dataset.mode === 'local';
   if (localMode) {
     $('bridge-panel').hidden = true;
+    $('rooms-panel').hidden = true;
     $('back-nvr').hidden = true;
     $('room').value = 'demo';
     $('room').readOnly = true;
@@ -37,6 +38,42 @@
       throw new Error(body.error || `操作失败 (${response.status})`);
     }
     return response.status === 204 ? null : response.json();
+  }
+  async function refreshRooms() {
+    try {
+      const rooms = await bridgeRequest('/api/sfu/rooms/');
+      const list = $('room-list');
+      list.replaceChildren();
+      for (const room of rooms) {
+        const row = document.createElement('div');
+        row.className = 'track-row';
+        const info = document.createElement('div');
+        info.className = 'track-info';
+        const name = document.createElement('strong');
+        name.textContent = room.id;
+        const detail = document.createElement('small');
+        detail.textContent = `${room.participants} 人在线`;
+        info.append(name, detail);
+        const select = document.createElement('button');
+        select.type = 'button'; select.className = 'track-toggle'; select.textContent = '选择';
+        select.disabled = !!current || joining;
+        select.addEventListener('click', () => { if (!current && !joining) $('room').value = room.id; });
+        row.append(info, select);
+        if (room.id !== 'default') {
+          const close = document.createElement('button');
+          close.type = 'button'; close.className = 'track-toggle'; close.textContent = '关闭';
+          close.addEventListener('click', async () => {
+            close.disabled = true;
+            try {
+              await bridgeRequest(`/api/sfu/rooms/${encodeURIComponent(room.id)}?generation=${encodeURIComponent(room.generation)}`, { method: 'DELETE' });
+              showError(''); await refreshRooms();
+            } catch (error) { showError(error.message); close.disabled = false; }
+          });
+          row.append(close);
+        }
+        list.append(row);
+      }
+    } catch (error) { showError(error.message); }
   }
   function closeBridgePlayer(state) {
     const player = state?.bridgePlayer;
@@ -188,13 +225,14 @@
   function basicAuth() {
     const user = $('nvr-username').value;
     const password = $('nvr-password').value;
-    if (user || password) {
+    if (password) {
       if (!user || !password) throw new Error('请输入完整的 NVR 用户名和密码');
       const bytes = new TextEncoder().encode(`${user}:${password}`);
       return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''));
     }
     const saved = sessionStorage.getItem('nvr_auth');
     if (!saved) throw new Error('请输入 NVR 用户名和密码');
+    if (user && sessionStorage.getItem('nvr_auth_user') !== user) throw new Error('请输入完整的 NVR 用户名和密码');
     return saved;
   }
   async function joinCredentials(room, authorization) {
@@ -394,6 +432,7 @@
       await room.connect(credentials.url, credentials.token, { autoSubscribe: true });
       if (current !== state || attempt !== generation) { await room.disconnect(); return; }
       sessionStorage.setItem('nvr_auth', auth);
+      sessionStorage.setItem('nvr_auth_user', $('nvr-username').value);
       $('nvr-password').value = '';
       $('room-title').textContent = credentials.room;
       joining = false;
@@ -401,6 +440,7 @@
       render(state);
       if (!localMode) {
         refreshBridges(state);
+        refreshRooms();
         state.bridgeTimer = setInterval(() => refreshBridges(state), 5000);
       }
       const failures = [];
@@ -439,6 +479,16 @@
   $('share').addEventListener('click', () => action((room) => room.localParticipant.setScreenShareEnabled(!room.localParticipant.isScreenShareEnabled, { audio: $('screen-audio').checked })));
   $('enable-audio').addEventListener('click', () => action((room) => room.startAudio()));
   $('leave').addEventListener('click', () => { const state = current; if (state) { cleanup(state, '已离开'); state.room.disconnect().catch(() => {}); } });
+  $('room-refresh').addEventListener('click', refreshRooms);
+  $('room-create').addEventListener('click', async () => {
+    const button = $('room-create');
+    button.disabled = true;
+    try {
+      await bridgeRequest('/api/sfu/rooms/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: $('room').value }) });
+      showError(''); await refreshRooms();
+    } catch (error) { showError(error.message); }
+    finally { button.disabled = false; }
+  });
   $('bridge-player-close').addEventListener('click', () => closeBridgePlayer(current));
   $('bridge-create').addEventListener('click', async () => {
     const state = current;

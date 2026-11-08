@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
+	"github.com/q191201771/lalmax/sfu"
 )
 
 type liveKitBridgeHook struct{ messages chan base.RtmpMsg }
@@ -101,6 +103,34 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 		}
 	})
 	principal := fmt.Sprintf("user:%d", user.ID)
+	roomAdmin := &nvrLiveKitRoomAdmin{runtime: runtime}
+	createdRoom, err := roomAdmin.CreateRoom(ctx, principal, "managed")
+	if err != nil || createdRoom.Generation == "" {
+		t.Fatalf("create room: %+v %v", createdRoom, err)
+	}
+	if _, err := roomAdmin.CreateRoom(ctx, principal, "managed"); !errors.Is(err, sfu.ErrRoomExists) {
+		t.Fatalf("duplicate room: %v", err)
+	}
+	roomSnapshots, err := roomAdmin.ListRooms(ctx, principal)
+	if err != nil || len(roomSnapshots) != 1 || roomSnapshots[0].Generation != createdRoom.Generation {
+		t.Fatalf("list rooms: %+v %v", roomSnapshots, err)
+	}
+	if err := roomAdmin.CloseRoom(ctx, principal, "managed", "RM_stale"); !errors.Is(err, sfu.ErrRoomNotFound) {
+		t.Fatalf("stale room close: %v", err)
+	}
+	if err := roomAdmin.CloseRoom(ctx, principal, "managed", createdRoom.Generation); err != nil {
+		t.Fatal(err)
+	}
+	secondRoom, err := roomAdmin.CreateRoom(ctx, principal, "managed")
+	if err != nil || secondRoom.Generation == createdRoom.Generation {
+		t.Fatalf("recreate room: %+v %v", secondRoom, err)
+	}
+	if err := roomAdmin.CloseRoom(ctx, principal, "managed", createdRoom.Generation); !errors.Is(err, sfu.ErrRoomNotFound) {
+		t.Fatalf("old generation closed replacement: %v", err)
+	}
+	if err := roomAdmin.CloseRoom(ctx, principal, "managed", secondRoom.Generation); err != nil {
+		t.Fatal(err)
+	}
 	lalManager := logic.NewServerManager(func(o *logic.Option) {
 		o.ConfRawContent = []byte(`{"hls":{"enable":true,"on_demand":true,"url_pattern":"/hls/"}}`)
 	})
@@ -116,6 +146,7 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 	handler := api.NewHandler(nil, nil, noop, nil, nil, "", nil, nil)
 	handler.SetMultiUserAuthMW(middleware.InjectUser(user))
 	handler.SetLiveKitJoinIssuer(runtime)
+	handler.SetSFURoomManager(roomAdmin)
 	handler.SetSFUBridgeRegistry(bridges)
 	req := httptest.NewRequest(http.MethodPost, "/api/sfu/livekit/join", strings.NewReader(`{"room":"front-door"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -295,6 +326,12 @@ receive:
 	}
 	if _, err := runtime.IssueLiveKitJoin(ctx, principal, "front-door"); err == nil {
 		t.Fatal("demoted user accepted")
+	}
+	if _, err := roomAdmin.ListRooms(ctx, principal); err == nil {
+		t.Fatal("demoted user listed rooms")
+	}
+	if _, err := roomAdmin.CreateRoom(ctx, principal, "forbidden"); err == nil {
+		t.Fatal("demoted user created a room")
 	}
 	user.Role = model.RoleSuperAdmin
 	if err := db.UpdateUser(ctx, user); err != nil {
