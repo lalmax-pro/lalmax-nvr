@@ -22,23 +22,30 @@ import (
 )
 
 func sfuOfferSupportsOpus(offer []byte) bool {
+	return sfuSDPSupports(offer, "audio", "opus/48000/2", false)
+}
+
+func sfuSDPSupports(offer []byte, kind, codec string, answer bool) bool {
 	var description sdp.SessionDescription
 	if description.Unmarshal(offer) != nil {
 		return false
 	}
 	for _, media := range description.MediaDescriptions {
-		if media.MediaName.Media != "audio" || media.MediaName.Port.Value == 0 {
+		if media.MediaName.Media != kind || media.MediaName.Port.Value == 0 {
 			continue
 		}
 		if _, inactive := media.Attribute("inactive"); inactive {
 			continue
 		}
-		if _, sendonly := media.Attribute("sendonly"); sendonly {
+		if _, sendonly := media.Attribute("sendonly"); sendonly && !answer {
+			continue
+		}
+		if _, recvonly := media.Attribute("recvonly"); recvonly && answer {
 			continue
 		}
 		for _, a := range media.Attributes {
 			fields := strings.Fields(a.Value)
-			if a.Key != "rtpmap" || len(fields) != 2 || !strings.EqualFold(fields[1], "opus/48000/2") {
+			if a.Key != "rtpmap" || len(fields) != 2 || !strings.EqualFold(fields[1], codec) {
 				continue
 			}
 			for _, format := range media.MediaName.Formats {
@@ -129,9 +136,18 @@ func (h *Handler) createSFUBridgeWHEP(w http.ResponseWriter, r *http.Request) {
 		sfuBridgeError(w, err)
 		return
 	}
+	status, err := registry.Get(r.Context(), principal, bridgeID)
+	if err != nil {
+		sfuBridgeError(w, err)
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil || len(body) == 0 || (!homeAssistantOfferSupportsCodec(body, "H264") && !sfuOfferSupportsOpus(body)) {
 		writeError(w, 400, "invalid H.264 or Opus SDP offer")
+		return
+	}
+	if status.AudioPublicationID != "" && (!homeAssistantOfferSupportsCodec(body, "H264") || !sfuOfferSupportsOpus(body)) {
+		writeError(w, 400, "combined playback requires H.264 and Opus")
 		return
 	}
 	upstream, err := h.sfuWHEPURL(r.Context(), stream, token)
@@ -185,6 +201,10 @@ func (h *Handler) createSFUBridgeWHEP(w http.ResponseWriter, r *http.Request) {
 	answer, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	if err != nil || len(answer) > 1<<20 || !strings.HasPrefix(string(answer), "v=0") {
 		writeError(w, 502, "invalid SDP answer")
+		return
+	}
+	if status.AudioPublicationID != "" && (!sfuSDPSupports(answer, "video", "H264/90000", true) || !sfuSDPSupports(answer, "audio", "opus/48000/2", true)) {
+		writeError(w, 503, "combined bridge media not ready")
 		return
 	}
 	session := h.sealSFUWHEPSession(sfuWHEPSession{Principal: principal, BridgeID: bridgeID, StreamID: stream, ID: id, Expires: time.Now().Add(24 * time.Hour).Unix()})

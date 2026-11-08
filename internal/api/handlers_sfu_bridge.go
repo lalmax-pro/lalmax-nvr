@@ -28,6 +28,10 @@ type SFUBridgeRegistry interface {
 	Remove(context.Context, string, string) error
 }
 
+type sfuAVBridgeRegistry interface {
+	CreateAV(context.Context, string, string, string) (sfubridge.Status, error)
+}
+
 // SetSFUBridgeRegistry must be called before serving requests.
 func (h *Handler) SetSFUBridgeRegistry(registry SFUBridgeRegistry) { h.sfuBridges = registry }
 
@@ -145,14 +149,15 @@ func sfuBridgeError(w http.ResponseWriter, err error) {
 }
 
 type sfuBridgeStatusResponse struct {
-	ID            string          `json:"id"`
-	PublicationID string          `json:"publication_id"`
-	StreamID      string          `json:"stream_id"`
-	State         sfubridge.State `json:"state"`
+	ID                 string          `json:"id"`
+	PublicationID      string          `json:"publication_id"`
+	AudioPublicationID string          `json:"audio_publication_id,omitempty"`
+	StreamID           string          `json:"stream_id"`
+	State              sfubridge.State `json:"state"`
 }
 
 func sfuStatus(s sfubridge.Status) sfuBridgeStatusResponse {
-	return sfuBridgeStatusResponse{ID: s.ID, PublicationID: s.PublicationID, StreamID: s.StreamID, State: s.State}
+	return sfuBridgeStatusResponse{ID: s.ID, PublicationID: s.PublicationID, AudioPublicationID: s.AudioPublicationID, StreamID: s.StreamID, State: s.State}
 }
 func (h *Handler) createSFUBridge(w http.ResponseWriter, r *http.Request) {
 	registry, principal, ok := h.sfuBridgeRequest(w, r)
@@ -160,7 +165,8 @@ func (h *Handler) createSFUBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		PublicationID string `json:"publication_id"`
+		PublicationID      string `json:"publication_id"`
+		AudioPublicationID string `json:"audio_publication_id,omitempty"`
 	}
 	if !sfuDecodeJSON(w, r, &input) {
 		return
@@ -169,7 +175,22 @@ func (h *Handler) createSFUBridge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid publication ID")
 		return
 	}
-	status, err := registry.Create(r.Context(), principal, input.PublicationID)
+	var status sfubridge.Status
+	var err error
+	if input.AudioPublicationID == "" {
+		status, err = registry.Create(r.Context(), principal, input.PublicationID)
+	} else {
+		if len(input.AudioPublicationID) > 256 || strings.TrimSpace(input.AudioPublicationID) != input.AudioPublicationID || input.AudioPublicationID == input.PublicationID {
+			writeError(w, http.StatusBadRequest, "invalid audio publication ID")
+			return
+		}
+		combined, ok := registry.(sfuAVBridgeRegistry)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "combined bridge unavailable")
+			return
+		}
+		status, err = combined.CreateAV(r.Context(), principal, input.PublicationID, input.AudioPublicationID)
+	}
 	if err != nil {
 		sfuBridgeError(w, err)
 		return

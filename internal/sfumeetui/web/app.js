@@ -118,21 +118,24 @@
       const title=document.createElement('strong');title.textContent=`${p.Source==='screen'?'屏幕':p.Source==='microphone'?'麦克风':'摄像头'} · ${p.ID.slice(0,8)}`;
       const detail=document.createElement('small');const b=c.bridges.get(p.ID);detail.textContent=b?b.label:(p.RTPReady?'已就绪':'源已结束');info.append(title,detail);
       const button=document.createElement('button');button.type='button';button.className='track-toggle';button.disabled=!!b?.busy||(!b&&(!p.RTPReady||c.bridges.size>0));button.textContent=b?'停止桥接':'桥接并播放';
-      button.addEventListener('click',()=>{if(current!==c)return;if(b)void stopBridge(c,b,false);else void startBridge(c,p);});row.append(info,button);list.append(row);
+      button.addEventListener('click',()=>{if(current!==c)return;if(b)void stopBridge(c,b,false);else void startBridge(c,p);});row.append(info,button);
+      const audio=(snapshot.Publications||[]).find(track=>track.Kind==='audio'&&track.ParticipantID===p.ParticipantID&&track.RTPReady);
+      if(p.Kind==='video'&&audio&&!b){const av=document.createElement('button');av.type='button';av.className='track-toggle';av.textContent='音视频桥接';av.disabled=!p.RTPReady||c.bridges.size>0;av.addEventListener('click',()=>{if(current===c)void startBridge(c,p,audio);});row.append(av);}
+      list.append(row);
     }
   }
   async function wait(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
-  async function startBridge(c,p) {
+  async function startBridge(c,p,audio) {
     const bridge={publication:p.ID,source:p.Source,label:'正在创建',busy:true,pc:null,location:'',abort:new AbortController()};
     c.bridges.set(p.ID,bridge);renderBridgeTracks(c.snapshot,c);
     try {
-      const result=await nvrRequest('/api/sfu/bridges/',{method:'POST',body:JSON.stringify({publication_id:p.ID})});
+      const result=await nvrRequest('/api/sfu/bridges/',{method:'POST',body:JSON.stringify({publication_id:p.ID,...(audio?{audio_publication_id:audio.ID}:{})})});
       bridge.id=result.id;
       if(current!==c||bridge.closeRequested||bridge.abort.signal.aborted){await stopBridge(c,bridge,true);return;}
       bridge.label='等待媒体';bridge.busy=false;renderBridgeTracks(c.snapshot,c);
-      const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});bridge.pc=pc;const transceiver=pc.addTransceiver(p.Kind,{direction:'recvonly'});if(p.Kind==='video')preferH264(transceiver);
-      const video=$('bridge-video');video.muted=p.Kind!=='audio';video.controls=p.Kind==='audio';video.hidden=false;video.onplaying=()=>{if(current===c){if(error.textContent==='浏览器阻止了播放，请使用播放器控件重试。')error.hidden=true;bridge.label='播放中';$('bridge-status').textContent='WHEP 播放中';renderBridgeTracks(c.snapshot,c);}};
-      pc.ontrack=event=>{if(current!==c)return;video.srcObject=new MediaStream([event.track]);void video.play().catch(err=>{if(current===c&&err.name!=='AbortError'&&video.paused)showError('浏览器阻止了播放，请使用播放器控件重试。');});};
+      const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});bridge.pc=pc;const transceiver=pc.addTransceiver(p.Kind,{direction:'recvonly'});if(p.Kind==='video')preferH264(transceiver);if(audio)pc.addTransceiver('audio',{direction:'recvonly'});
+      const video=$('bridge-video');video.muted=p.Kind!=='audio'&&!audio;video.controls=p.Kind==='audio'||!!audio;video.hidden=false;video.onplaying=()=>{if(current===c){if(error.textContent==='浏览器阻止了播放，请使用播放器控件重试。')error.hidden=true;bridge.label='播放中';$('bridge-status').textContent='WHEP 播放中';renderBridgeTracks(c.snapshot,c);}};
+      const media=new MediaStream();pc.ontrack=event=>{if(current!==c)return;media.addTrack(event.track);video.srcObject=media;void video.play().catch(err=>{if(current===c&&err.name!=='AbortError'&&video.paused)showError('浏览器阻止了播放，请使用播放器控件重试。');});};
       const offer=await pc.createOffer();await pc.setLocalDescription(offer);await gather(pc);
       let response;
       for(let attempt=0;attempt<10;attempt++){
@@ -168,7 +171,8 @@
     } catch(err){bridge.stopping=false;bridge.busy=false;bridge.label='停止失败，可重试';if(current===c&&!quiet){$('bridge-status').textContent=err.message||'停止失败';renderBridgeTracks(c.snapshot,c);}}
   }
   function render(snapshot, c) {
-    const members = [...(snapshot.Participants || [])].sort((a,b)=>a.ID.localeCompare(b.ID));
+    // NVR bridge workers use reserved IDs and are not meeting participants.
+    const members = [...(snapshot.Participants || [])].filter(p=>!nvrMode||!p.ID.startsWith('bridge_')).sort((a,b)=>a.ID.localeCompare(b.ID));
     const publications = [...(snapshot.Publications || [])].sort((a,b)=>a.ID.localeCompare(b.ID));
     renderTracks(snapshot,c);
     if(nvrMode) renderBridgeTracks(snapshot,c);
