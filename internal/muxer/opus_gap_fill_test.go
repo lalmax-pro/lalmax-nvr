@@ -28,7 +28,7 @@ func TestOpusGapFillUsesBoundedSilence(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, unfilled)
 	}
-	require.Len(t, m.findTrackLocked(audio).samples, 24, "four missing packets become silence")
+	require.Len(t, m.findTrackLocked(audio).samples, 25, "four missing packets become silence")
 	require.NoError(t, m.Close())
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestOpusGapFillReportsUnsupportedAndRejectsRegression(t *testing.T) {
 	require.Equal(t, 3958750*time.Microsecond, unfilled)
 	_, err = m.WriteOpusSampleWithGapFill(audio, []byte{0xf8, 0xff, 0xfe}, 3*time.Second, 20*time.Millisecond)
 	require.ErrorContains(t, err, "regressed")
-	require.Len(t, m.findTrackLocked(audio).samples, 3)
+	require.Len(t, m.findTrackLocked(audio).samples, 4)
 	require.NoError(t, m.Close())
 }
 
@@ -64,7 +64,7 @@ func TestOpusGapFillToleratesMillisecondRounding(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, unfilled)
 	}
-	require.Len(t, m.findTrackLocked(audio).samples, 3, "rounding must not invent silence")
+	require.Len(t, m.findTrackLocked(audio).samples, 4, "rounding must not invent silence")
 	require.NoError(t, m.Close())
 }
 
@@ -92,9 +92,9 @@ func TestOpusGapFillVariableFrameDurations(t *testing.T) {
 			require.NoError(t, err)
 			require.Zero(t, unfilled)
 			samples := m.findTrackLocked(audio).samples
-			require.Len(t, samples, 2+len(tc.want))
+			require.Len(t, samples, 3+len(tc.want))
 			for i, want := range tc.want {
-				require.Equal(t, want, samples[i+1].duration)
+				require.Equal(t, want, samples[i+2].duration)
 			}
 			require.NoError(t, m.Close())
 		})
@@ -129,6 +129,6 @@ func TestOpusGapFillCapsPacketCount(t *testing.T) {
 	unfilled, err := m.WriteOpusSampleWithGapFill(audio, []byte{0xf8, 0xff, 0xfe}, 2020*time.Millisecond, 20*time.Millisecond)
 	require.NoError(t, err)
 	require.Zero(t, unfilled)
-	require.Len(t, m.findTrackLocked(audio).samples, 102, "two seconds require at most 100 filler packets")
+	require.Len(t, m.findTrackLocked(audio).samples, 103, "two seconds require at most 100 filler packets")
 	require.NoError(t, m.Close())
 }

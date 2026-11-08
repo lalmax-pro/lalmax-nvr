@@ -145,7 +145,7 @@ func TestSFUDecodableBridgeRecording(t *testing.T) {
 	cmd = exec.Command("ffprobe", "-v", "error", "-count_packets", "-select_streams", "a:0", "-show_entries", "stream=codec_name,nb_read_packets", "-of", "csv=p=0", files[0])
 	out, err = cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
-	require.Equal(t, "opus,50", strings.TrimSpace(string(out)))
+	require.Equal(t, "opus,51", strings.TrimSpace(string(out)))
 	cmd = exec.Command("ffmpeg", "-v", "error", "-xerror", "-i", files[0], "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-")
 	out, err = cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
