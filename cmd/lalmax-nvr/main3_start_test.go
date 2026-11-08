@@ -1,8 +1,10 @@
 package main
 
 import (
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ func TestMain3StartAllOptionalSubsystems(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	cfg, cfgPath := testConfig(t)
+	isolateEmbeddedMedia(t, cfg)
 	addr := freeTCPAddr(t)
 	cfg.Server.Listen = addr
 	cfg.JT808.Enabled = false
@@ -54,6 +57,9 @@ func TestMain3StartAllOptionalSubsystems(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- app.Start() }()
 	waitForTCP(t, addr)
+	// The NVR HTTP listener can become ready before lal has finished setting
+	// up RTMP. Wait for its listener before exercising graceful shutdown.
+	waitForTCP(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.RTMP.Port)))
 
 	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGTERM))
 	select {
