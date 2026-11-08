@@ -411,7 +411,7 @@ func TestCovEventManager_EventModeAndStop(t *testing.T) {
 	require.Zero(t, paused)
 
 	// A capped window uses maxDur instead of postRoll.
-	short := NewEventManager(time.Hour, time.Millisecond, nil, nil, nil)
+	short := NewEventManager(time.Hour, time.Minute, nil, nil, nil)
 	short.Trigger("cam", "motion")
 	require.True(t, short.IsActive("cam"))
 	short.Stop()

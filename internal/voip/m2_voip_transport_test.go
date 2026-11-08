@@ -227,7 +227,9 @@ func TestM2VoipWebSocketBranches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := client.LocalAddr().String()
+	// The server concurrently registers the real client address; use a separate
+	// key so it cannot replace the deliberately closed test connection.
+	key := "closed-test-connection"
 	transport.connections.Store(key, &websocketConnection{conn: client, remoteAddr: key, lastActive: time.Now()})
 	_ = client.UnderlyingConn().Close()
 	if err := transport.Send([]byte("x"), TransportAddr{Type: TransportWS, Addr: key}); err == nil {
