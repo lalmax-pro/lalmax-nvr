@@ -36,11 +36,8 @@ func TestOpusPrimingPreservesSourceStart(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(out, &source))
 	require.Greater(t, len(source.Packets), 25)
-	path := filepath.Join(dir, "recorded.mp4")
-	m := NewMP4Muxer(path)
-	audio, err := m.AddAudioTrack("opus", nil)
-	require.NoError(t, err)
-	for i, packet := range source.Packets {
+	var packets [][]byte
+	for _, packet := range source.Packets {
 		var data []byte
 		for _, line := range strings.Split(strings.TrimSpace(packet.Data), "\n") {
 			parts := strings.SplitN(line, ":", 2)
@@ -50,27 +47,50 @@ func TestOpusPrimingPreservesSourceStart(t *testing.T) {
 			require.NoError(t, err)
 			data = append(data, chunk...)
 		}
-		require.NoError(t, m.WriteAudioSample(audio, data, time.Duration(i)*20*time.Millisecond, 20*time.Millisecond))
+		packets = append(packets, data)
 	}
-	require.NoError(t, m.Close())
-	cmd = exec.Command("ffmpeg", "-v", "error", "-i", path, "-map", "0:a:0", "-f", "f32le", "-acodec", "pcm_f32le", "-")
-	out, err = cmd.Output()
-	require.NoError(t, err)
-	const rate, channels = 48000, 2
-	windowPeak := func(start, end time.Duration) float64 {
-		from := int(start.Seconds()*rate) * channels * 4
-		to := int(end.Seconds()*rate) * channels * 4
-		require.GreaterOrEqual(t, len(out), to)
-		var peak float64
-		for i := from; i < to; i += 4 {
-			value := math.Abs(float64(math.Float32frombits(binary.LittleEndian.Uint32(out[i:]))))
-			if value > peak {
-				peak = value
+	for _, tc := range []struct {
+		name string
+		gap  time.Duration
+	}{{"continuous", 0}, {"long_gap", 2400 * time.Millisecond}} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "recorded.mp4")
+			m := NewMP4Muxer(path)
+			audio, err := m.AddAudioTrack("opus", nil)
+			require.NoError(t, err)
+			for i, data := range packets {
+				pts := time.Duration(i) * 20 * time.Millisecond
+				if i >= 15 {
+					pts += tc.gap
+				}
+				unfilled, err := m.WriteOpusSampleWithGapFill(audio, data, pts, 20*time.Millisecond)
+				require.NoError(t, err)
+				require.Zero(t, unfilled)
 			}
-		}
-		return peak
+			require.NoError(t, m.Close())
+			cmd := exec.Command("ffmpeg", "-v", "error", "-i", path, "-map", "0:a:0", "-f", "f32le", "-acodec", "pcm_f32le", "-")
+			out, err := cmd.Output()
+			require.NoError(t, err)
+			const rate, channels = 48000, 2
+			windowPeak := func(start, end time.Duration) float64 {
+				from := int(start.Seconds()*rate) * channels * 4
+				to := int(end.Seconds()*rate) * channels * 4
+				require.GreaterOrEqual(t, len(out), to)
+				var peak float64
+				for i := from; i < to; i += 4 {
+					value := math.Abs(float64(math.Float32frombits(binary.LittleEndian.Uint32(out[i:]))))
+					if value > peak {
+						peak = value
+					}
+				}
+				return peak
+			}
+			require.Less(t, windowPeak(0, 10*time.Millisecond), 0.05, "source silence before the first signal must remain")
+			require.Greater(t, windowPeak(20*time.Millisecond, 60*time.Millisecond), 0.05, "first signal must survive Opus priming")
+			if tc.gap > 0 {
+				require.Less(t, windowPeak(time.Second, 1100*time.Millisecond), 0.05, "gap must decode as silence")
+			}
+			require.Greater(t, windowPeak(500*time.Millisecond+tc.gap, 540*time.Millisecond+tc.gap), 0.05, "later signal must stay on the source timeline")
+		})
 	}
-	require.Less(t, windowPeak(0, 10*time.Millisecond), 0.05, "source silence before the first signal must remain")
-	require.Greater(t, windowPeak(20*time.Millisecond, 60*time.Millisecond), 0.05, "first signal must survive Opus priming")
-	require.Greater(t, windowPeak(500*time.Millisecond, 540*time.Millisecond), 0.05, "later signal must stay on the same timeline")
 }
