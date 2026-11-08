@@ -30,6 +30,22 @@ import (
 
 // This opt-in test uses synthesized images and audio, and does not open any media device.
 func TestSFUBridgeRecordingKeepsEncodedAVMarkersAligned(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		audioOffset time.Duration
+		pace        time.Duration
+	}{
+		{"aligned", 0, 3 * time.Millisecond},
+		{"audio_200ms_later_fast", 200 * time.Millisecond, 3 * time.Millisecond},
+		{"audio_200ms_earlier_fast", -200 * time.Millisecond, 3 * time.Millisecond},
+		{"audio_200ms_later_realtime", 200 * time.Millisecond, 20 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testSFUEncodedAVMarkers(t, tc.audioOffset, tc.pace) })
+	}
+}
+
+func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration) {
+	t.Helper()
 	if os.Getenv("SFU_AV_SYNC_TEST") != "1" {
 		t.Skip("set SFU_AV_SYNC_TEST=1 to use FFmpeg and libx264/libopus")
 	}
@@ -107,6 +123,15 @@ func TestSFUBridgeRecordingKeepsEncodedAVMarkersAligned(t *testing.T) {
 		},
 	}, store)
 	rec.Hub = model.NewStreamHub()
+	var videoReceived atomic.Int32
+	require.NoError(t, rec.Hub.Subscribe("video-test", func(_ int64, units [][]byte) {
+		for _, unit := range units {
+			if len(unit) > 0 && (unit[0]&31 == 1 || unit[0]&31 == 5) {
+				videoReceived.Add(1)
+			}
+		}
+	}))
+	t.Cleanup(func() { rec.Hub.Unsubscribe("video-test") })
 	var received atomic.Int32
 	require.NoError(t, rec.Hub.SubscribeAudio("test", func(_ int64, codec model.AudioCodec, _ []byte) {
 		if codec == model.AudioOpus {
@@ -130,7 +155,13 @@ func TestSFUBridgeRecordingKeepsEncodedAVMarkersAligned(t *testing.T) {
 	video, err := videoFan.Subscribe("video")
 	require.NoError(t, err)
 	publisher := &bridgeRecordingPublisher{group: group, ready: make(chan struct{})}
-	refs := bridge.AVReferences{Audio: bridge.ClockReference{NTP: 100 << 32, RTP: 48000, Rate: 48000}, Video: bridge.ClockReference{NTP: 100 << 32, RTP: 90000, Rate: 90000}, AudioSSRC: 42, VideoSSRC: 42}
+	audioNTP, videoNTP := uint64(100)<<32, uint64(100)<<32
+	if audioOffset >= 0 {
+		audioNTP += uint64(audioOffset) * uint64(1<<32) / uint64(time.Second)
+	} else {
+		videoNTP += uint64(-audioOffset) * uint64(1<<32) / uint64(time.Second)
+	}
+	refs := bridge.AVReferences{Audio: bridge.ClockReference{NTP: audioNTP, RTP: 48000, Rate: 48000}, Video: bridge.ClockReference{NTP: videoNTP, RTP: 90000, Rate: 90000}, AudioSSRC: 42, VideoSSRC: 42}
 	bridgeCtx, stopBridge := context.WithCancel(ctx)
 	defer stopBridge()
 	done := make(chan error, 1)
@@ -160,9 +191,15 @@ func TestSFUBridgeRecordingKeepsEncodedAVMarkersAligned(t *testing.T) {
 			sendVideo(frames[i/2], 90000+uint32(i*1800))
 		}
 		require.NoError(t, audioFan.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: uint16(i + 1), Timestamp: 48000 + uint32(i*960), Marker: true}, Payload: payload}))
-		time.Sleep(3 * time.Millisecond)
+		time.Sleep(pace)
 	}
-	require.Eventually(t, func() bool { return received.Load() == 100 }, 3*time.Second, time.Millisecond)
+	expectedAudio := int32(100)
+	if audioOffset < 0 {
+		// The segment starts at the first video keyframe, so earlier audio is not recorded.
+		expectedAudio -= int32((-audioOffset) / (20 * time.Millisecond))
+	}
+	require.Eventually(t, func() bool { return received.Load() == expectedAudio }, 3*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return videoReceived.Load() == 50 }, 3*time.Second, time.Millisecond, "all video frames must reach the recorder before stopping")
 	require.NoError(t, rec.Stop())
 	stopBridge()
 	select {
@@ -174,7 +211,7 @@ func TestSFUBridgeRecordingKeepsEncodedAVMarkersAligned(t *testing.T) {
 	files, err := store.ListFiles(key.StreamName)
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
-	cmd = exec.Command("ffmpeg", "-v", "error", "-xerror", "-i", files[0], "-map", "0:v:0", "-pix_fmt", "gray", "-f", "rawvideo", "-")
+	cmd = exec.Command("ffmpeg", "-v", "error", "-xerror", "-i", files[0], "-map", "0:v:0", "-fps_mode", "passthrough", "-pix_fmt", "gray", "-f", "rawvideo", "-")
 	videoPixels, err := cmd.Output()
 	require.NoError(t, err)
 	const width, height = 160, 96
@@ -211,7 +248,7 @@ func TestSFUBridgeRecordingKeepsEncodedAVMarkersAligned(t *testing.T) {
 	}
 	require.Len(t, signalTimes, 2)
 	for i := range flashTimes {
-		require.InDelta(t, flashTimes[i], signalTimes[i], .03, "audio and visual markers must remain within 30 ms")
+		require.InDelta(t, flashTimes[i]+audioOffset.Seconds(), signalTimes[i], .03, "audio and visual markers must remain within 30 ms")
 	}
 	t.Logf("decoded marker times: video=%v audio=%v", flashTimes, signalTimes)
 }

@@ -114,7 +114,7 @@ func RunAVToLal(ctx context.Context, audio, video *rtpforward.Subscriber, publis
 		}
 		frame.Timestamp = int64(mapped / time.Millisecond)
 		frame.Pts = frame.Timestamp
-		return queue.push(*frame, time.Now())
+		return queue.push(*frame, time.Now(), isVideo)
 	}
 	for {
 		select {

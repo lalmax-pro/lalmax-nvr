@@ -74,6 +74,15 @@ func testSFUAVBridgeThroughGroupToRecording(t *testing.T, sourceTime, audioGap b
 		},
 	}, store)
 	rec.Hub = model.NewStreamHub()
+	var videoReceived atomic.Int32
+	require.NoError(t, rec.Hub.Subscribe("video-test", func(_ int64, units [][]byte) {
+		for _, unit := range units {
+			if len(unit) > 0 && (unit[0]&31 == 1 || unit[0]&31 == 5) {
+				videoReceived.Add(1)
+			}
+		}
+	}))
+	t.Cleanup(func() { rec.Hub.Unsubscribe("video-test") })
 	var received atomic.Int32
 	require.NoError(t, rec.Hub.SubscribeAudio("test", func(_ int64, codec model.AudioCodec, _ []byte) {
 		if codec == model.AudioOpus {
@@ -129,6 +138,7 @@ func testSFUAVBridgeThroughGroupToRecording(t *testing.T, sourceTime, audioGap b
 		time.Sleep(5 * time.Millisecond)
 	}
 	require.Eventually(t, func() bool { return received.Load() == 20 }, 3*time.Second, time.Millisecond, "Opus did not traverse the bridge and recorder")
+	require.Eventually(t, func() bool { return videoReceived.Load() == int32(videoFrames+1) }, 3*time.Second, time.Millisecond, "all video frames must reach the recorder before stopping")
 	require.NoError(t, rec.Stop())
 	stopBridge()
 	select {
