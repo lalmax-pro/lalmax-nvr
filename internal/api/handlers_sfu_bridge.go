@@ -42,6 +42,10 @@ type SFUTicketIssuer interface {
 	Issue(context.Context, *model.User) (string, error)
 }
 
+type sfuRoomTicketIssuer interface {
+	IssueForRoom(context.Context, *model.User, string) (string, error)
+}
+
 func (h *Handler) SetSFUTicketIssuer(issuer SFUTicketIssuer) { h.sfuTickets = issuer }
 
 func (h *Handler) handleSFUSignaling(w http.ResponseWriter, r *http.Request) {
@@ -63,12 +67,27 @@ func (h *Handler) createSFUTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "SFU signaling unavailable")
 		return
 	}
-	var input struct{}
+	var input struct {
+		RoomID string `json:"room_id,omitempty"`
+	}
 	if !sfuDecodeJSON(w, r, &input) {
 		return
 	}
-	ticket, err := h.sfuTickets.Issue(r.Context(), user)
+	var ticket string
+	var err error
+	if input.RoomID == "" || input.RoomID == "default" {
+		ticket, err = h.sfuTickets.Issue(r.Context(), user)
+	} else if issuer, ok := h.sfuTickets.(sfuRoomTicketIssuer); ok {
+		ticket, err = issuer.IssueForRoom(r.Context(), user, input.RoomID)
+	} else {
+		writeError(w, http.StatusNotFound, "room not found")
+		return
+	}
 	if err != nil {
+		if errors.Is(err, sfu.ErrRoomNotFound) {
+			writeError(w, http.StatusNotFound, "room not found")
+			return
+		}
 		writeError(w, http.StatusServiceUnavailable, "SFU ticket unavailable")
 		return
 	}
