@@ -33,7 +33,7 @@ func TestMP4TrackEditPreservesLateOpusOffset(t *testing.T) {
 	require.Equal(t, uint32(280), binary.BigEndian.Uint32(elst[8:12]), "200 ms track offset plus 80 ms Opus priming")
 	require.Equal(t, uint32(0xffffffff), binary.BigEndian.Uint32(elst[12:16]), "first edit must be empty")
 	require.Equal(t, uint32(120), binary.BigEndian.Uint32(elst[20:24]))
-	require.Equal(t, uint32(80), binary.BigEndian.Uint32(elst[24:28]))
+	require.Equal(t, uint32(3840), binary.BigEndian.Uint32(elst[24:28]), "Opus media time uses a 48 kHz clock")
 	if artifact := os.Getenv("SFU_OFFSET_TEST_MP4"); artifact != "" {
 		require.NoError(t, os.WriteFile(artifact, data, 0o600))
 	}
