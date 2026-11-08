@@ -3,6 +3,7 @@ package main
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
@@ -41,7 +42,7 @@ func TestSFUBWEPassThroughConcurrentLifecycle(t *testing.T) {
 			for j := 0; j < 1000; j++ {
 				p.AddStream(1, writer)
 				_, _ = p.Write(&rtp.Header{Version: 2, SSRC: 1}, []byte{1}, nil)
-				p.remove(1)
+				p.RemoveStream(1)
 			}
 		}()
 	}
@@ -67,4 +68,46 @@ func TestSFUBWEFactoryUsesIndependentPeerState(t *testing.T) {
 	n, err := firstPacer.Write(&rtp.Header{Version: 2, SSRC: 1}, []byte{1}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
+}
+
+func TestSFUPacingIsolatesSlowPeer(t *testing.T) {
+	factory := &sfuBWEFactory{onEstimate: func(int) {}, pacing: true}
+	slow, err := factory.NewInterceptor("slow")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = slow.Close() })
+	fast, err := factory.NewInterceptor("fast")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = fast.Close() })
+	slowPacer := slow.(*sfuBWEInterceptor).pacer
+	fastPacer := fast.(*sfuBWEInterceptor).pacer
+	entered, release := make(chan struct{}), make(chan struct{})
+	slowPacer.AddStream(1, interceptor.RTPWriterFunc(func(_ *rtp.Header, payload []byte, _ interceptor.Attributes) (int, error) {
+		close(entered)
+		<-release
+		return len(payload), nil
+	}))
+	fastPacer.AddStream(1, interceptor.RTPWriterFunc(func(_ *rtp.Header, payload []byte, _ interceptor.Attributes) (int, error) { return len(payload), nil }))
+	done := make(chan error, 1)
+	go func() { _, err := slowPacer.Write(&rtp.Header{Version: 2, SSRC: 1}, []byte{1}, nil); done <- err }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("slow writer did not start")
+	}
+	fastDone := make(chan error, 1)
+	go func() { _, err := fastPacer.Write(&rtp.Header{Version: 2, SSRC: 1}, []byte{1}, nil); fastDone <- err }()
+	select {
+	case err := <-fastDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("slow peer blocked another peer")
+	}
+	close(release)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("slow writer did not stop")
+	}
 }
