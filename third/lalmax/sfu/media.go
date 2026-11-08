@@ -2,19 +2,36 @@ package sfu
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/pion/rtp"
 	"github.com/q191201771/lalmax/sfu/rtpforward"
 )
 
 var (
-	ErrMediaAlreadyEnabled = errors.New("sfu: publication RTP already enabled")
-	ErrMediaNotEnabled     = errors.New("sfu: publication RTP not enabled")
+	ErrMediaAlreadyEnabled    = errors.New("sfu: publication RTP already enabled")
+	ErrMediaNotEnabled        = errors.New("sfu: publication RTP not enabled")
+	ErrInvalidNegotiatedCodec = errors.New("sfu: invalid negotiated codec")
 )
 
 // EnablePublicationRTP enables one bounded fanout for a publication owned by
 // the current session. The caller must perform authorization separately.
 func (r *Room) EnablePublicationRTP(participantID, session, publicationID string, maxSubscribers, queueSize int) error {
+	return r.enablePublicationRTP(participantID, session, publicationID, maxSubscribers, queueSize, NegotiatedCodec{})
+}
+
+// EnablePublicationRTPWithCodec atomically publishes transport codec metadata
+// with RTP readiness. Only trusted transports may supply these values; the
+// Room enforces ownership and the declared MIME type but cannot validate SDP
+// or bitstream conformance. Negotiation data is discarded on unpublish.
+func (r *Room) EnablePublicationRTPWithCodec(participantID, session, publicationID string, maxSubscribers, queueSize int, codec NegotiatedCodec) error {
+	if codec.MimeType == "" || len(codec.MimeType) > 128 || codec.ClockRate == 0 || len(codec.FMTP) > 4096 || strings.ContainsAny(codec.MimeType+codec.FMTP, "\r\n\x00") {
+		return ErrInvalidNegotiatedCodec
+	}
+	return r.enablePublicationRTP(participantID, session, publicationID, maxSubscribers, queueSize, codec)
+}
+
+func (r *Room) enablePublicationRTP(participantID, session, publicationID string, maxSubscribers, queueSize int, codec NegotiatedCodec) error {
 	f, err := rtpforward.New(maxSubscribers, queueSize)
 	if err != nil {
 		return err
@@ -31,6 +48,9 @@ func (r *Room) EnablePublicationRTP(participantID, session, publicationID string
 	if !ok || p.ParticipantID != participantID {
 		return ErrPublicationNotFound
 	}
+	if codec.MimeType != "" && !strings.EqualFold(codec.MimeType, p.Codec) {
+		return ErrInvalidNegotiatedCodec
+	}
 	if r.rtpPublications[publicationID] != nil {
 		return ErrMediaAlreadyEnabled
 	}
@@ -39,6 +59,7 @@ func (r *Room) EnablePublicationRTP(participantID, session, publicationID string
 	}
 	r.rtpPublications[publicationID] = f
 	p.RTPReady = true
+	p.Negotiated = codec
 	r.publications[publicationID] = p
 	r.notify("track_ready")
 	return nil

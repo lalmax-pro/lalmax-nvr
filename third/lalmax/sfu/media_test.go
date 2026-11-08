@@ -148,3 +148,54 @@ func TestPublicationRTPReadinessEvent(t *testing.T) {
 		t.Fatal("unpublished track retained")
 	}
 }
+
+func TestNegotiatedCodecFollowsPublicationGeneration(t *testing.T) {
+	m := NewManager()
+	r, err := m.Create(Key{"n", "codec"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := r.JoinSession(Participant{ID: "source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := r.PublishSession("source", old, "video", "camera", "video/H264")
+	if err != nil {
+		t.Fatal(err)
+	}
+	codec := NegotiatedCodec{MimeType: "video/H264", ClockRate: 90000, FMTP: "packetization-mode=1;profile-level-id=42e01f"}
+	if err = r.EnablePublicationRTPWithCodec("source", old, p.ID, 2, 4, NegotiatedCodec{MimeType: "audio/opus", ClockRate: 48000}); !errors.Is(err, ErrInvalidNegotiatedCodec) {
+		t.Fatalf("mismatch: %v", err)
+	}
+	if err = r.EnablePublicationRTPWithCodec("source", old, p.ID, 2, 4, codec); err != nil {
+		t.Fatal(err)
+	}
+	snap := r.Snapshot()
+	if got := snap.Publications[0]; !got.RTPReady || got.Negotiated != codec {
+		t.Fatalf("snapshot: %+v", got)
+	}
+	snap.Publications[0].Negotiated.FMTP = "changed"
+	if got := r.Snapshot().Publications[0].Negotiated; got != codec {
+		t.Fatalf("snapshot aliases room: %+v", got)
+	}
+	if err = r.EnablePublicationRTPWithCodec("source", old, p.ID, 2, 4, codec); !errors.Is(err, ErrMediaAlreadyEnabled) {
+		t.Fatal(err)
+	}
+	if err = r.LeaveSession("source", old); err != nil {
+		t.Fatal(err)
+	}
+	current, err := r.JoinSession(Participant{ID: "source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := r.PublishSession("source", current, "video", "camera", "video/H264")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.EnablePublicationRTPWithCodec("source", old, next.ID, 2, 4, codec); !errors.Is(err, ErrStaleSession) {
+		t.Fatalf("stale session: %v", err)
+	}
+	if got := r.Snapshot().Publications[0]; got.RTPReady || got.Negotiated != (NegotiatedCodec{}) {
+		t.Fatalf("metadata leaked to new publication: %+v", got)
+	}
+}
