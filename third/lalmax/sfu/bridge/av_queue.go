@@ -38,17 +38,20 @@ func (h *avHeap) Pop() any {
 // avQueue bounds reordering and avoids sending regressing timestamps to lal.
 // The caller periodically drains it even when only one track sends packets.
 type avQueue struct {
-	frames   avHeap
-	maxMS    int64
-	lastMS   int64
-	emitted  bool
-	sequence uint64
+	frames    avHeap
+	lastMS    int64
+	emitted   bool
+	sequence  uint64
+	audioMS   int64
+	videoMS   int64
+	audioSeen bool
+	videoSeen bool
 }
 
 const avQueueLimit = 256
-const avReorderWindow = 150 * time.Millisecond
+const avReorderWindow = 500 * time.Millisecond
 
-func (q *avQueue) push(packet base.AvPacket, now time.Time) error {
+func (q *avQueue) push(packet base.AvPacket, now time.Time, isVideo bool) error {
 	if q.emitted && packet.Timestamp < q.lastMS {
 		return nil
 	}
@@ -57,8 +60,16 @@ func (q *avQueue) push(packet base.AvPacket, now time.Time) error {
 	}
 	q.sequence++
 	heap.Push(&q.frames, queuedAV{packet: packet, arrival: now, sequence: q.sequence})
-	if packet.Timestamp > q.maxMS {
-		q.maxMS = packet.Timestamp
+	if isVideo {
+		if !q.videoSeen || packet.Timestamp > q.videoMS {
+			q.videoMS = packet.Timestamp
+		}
+		q.videoSeen = true
+	} else {
+		if !q.audioSeen || packet.Timestamp > q.audioMS {
+			q.audioMS = packet.Timestamp
+		}
+		q.audioSeen = true
 	}
 	return nil
 }
@@ -66,7 +77,11 @@ func (q *avQueue) push(packet base.AvPacket, now time.Time) error {
 func (q *avQueue) drain(now time.Time, flush bool, sink func(base.AvPacket) error) error {
 	for len(q.frames) > 0 {
 		first := q.frames[0]
-		if !flush && q.maxMS-first.packet.Timestamp < int64(avReorderWindow/time.Millisecond) && now.Sub(first.arrival) < avReorderWindow {
+		// Both per-track watermarks must pass the frame before it is safe to
+		// emit. A single leading track must not force a lagging track's valid
+		// frames to be discarded. Bound the wait when a track is missing.
+		ready := q.audioSeen && q.videoSeen && q.audioMS >= first.packet.Timestamp && q.videoMS >= first.packet.Timestamp
+		if !flush && !ready && now.Sub(first.arrival) < avReorderWindow {
 			return nil
 		}
 		heap.Pop(&q.frames)
