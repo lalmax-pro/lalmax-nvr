@@ -153,6 +153,11 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.bridges = bridges
+	// This test installs the bridge registry after the server starts, so run
+	// the same monitor that production starts during runtime initialization.
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
+	defer stopMonitor()
+	go bridges.monitor(monitorCtx)
 	noop := func(next http.Handler) http.Handler { return next }
 	handler := api.NewHandler(nil, nil, noop, nil, nil, "", nil, nil)
 	handler.SetMultiUserAuthMW(middleware.InjectUser(user))
@@ -380,7 +385,6 @@ receive:
 		t.Fatal(err)
 	}
 	beforeRevocation := watched.Load()
-	bridges.maintain(ctx, time.Now().Add(-5*time.Minute))
 	revocationDeadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(revocationDeadline) {
 		group := lalManager.GetGroup("live", revokedStream)
