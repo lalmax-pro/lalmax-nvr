@@ -144,6 +144,7 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
     if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'short-ticket',ice_servers:[{urls:['stun:example.test:3478']}]})};
     if(url==='/api/sfu/bridges/'){
       if(++createAttempts===1)throw new TypeError('response lost');
+      if(createAttempts===2)return{ok:true,status:202,json:async()=>{throw new TypeError('response body lost');}};
       return await new Promise(resolve=>{releaseCreate=()=>resolve({ok:true,status:202,json:async()=>({id:'bridge-1'})});});
     }
     if(url==='/api/sfu/bridges/bridge-1/stop')return{ok:true,status:204};
@@ -154,7 +155,7 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
   const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded-credentials',setItem() {}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
   element('join-form').listeners.submit({preventDefault(){}});
-  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  const waitFor=async predicate=>{for(let i=0;i<300;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
   await waitFor(()=>!element('share').disabled);
   assert.equal(peerConfig.iceServers[0].urls[0],'stun:example.test:3478');
   assert.equal(socket.url,'wss://nvr.test/api/sfu/ws?ticket=short-ticket');
@@ -168,10 +169,12 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
   element('bridge-list').children[0].children[1].listeners.click();
   await waitFor(()=>typeof releaseCreate==='function');
   const creates=calls.filter(c=>c.url==='/api/sfu/bridges/');
-  assert.equal(creates.length,2);
+  assert.equal(creates.length,3);
   assert.match(creates[0].options.headers['Idempotency-Key'],/^[0-9a-f]{32}$/);
   assert.equal(creates[0].options.headers['Idempotency-Key'],creates[1].options.headers['Idempotency-Key']);
+  assert.equal(creates[0].options.headers['Idempotency-Key'],creates[2].options.headers['Idempotency-Key']);
   assert.equal(creates[0].options.body,creates[1].options.body);
+  assert.equal(creates[0].options.body,creates[2].options.body);
   element('leave').listeners.click();
   assert.equal(element('bridge-list').children.length,0,'leaving must clear stale bridge tracks');
   releaseCreate();

@@ -112,12 +112,14 @@
     if(!value){const username=$('nvr-username').value, password=$('nvr-password').value;if(!username||!password)throw new Error('请输入 NVR 用户名和密码');value=btoa(`${username}:${password}`);}
     return `Basic ${value}`;
   }
-  async function nvrRequest(path,options={}) {
+  async function nvrRequest(path,options={},retryBody=false) {
     let response;const authorization=nvrAuth();
     try { response=await fetch(path,{...options,headers:{'Authorization':authorization,'Content-Type':'application/json',...(options.headers||{})},cache:'no-store'}); }
     catch (_) { const err=new Error('网络连接失败');err.network=true;throw err; }
     if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(body.error||`请求失败 (${response.status})`);}
-    return response.status===204?null:response.json();
+    if(response.status===204)return null;
+    try { return await response.json(); }
+    catch (err) { if(!retryBody)throw err;const failure=new Error('网络连接失败');failure.network=true;throw failure; }
   }
   let bridgeManagementBusy=false;
   async function manageBridges(action, id) {
@@ -218,7 +220,7 @@
   async function createBridge(p,audio) {
     const key=bridgeRequestKey(),body=JSON.stringify({publication_id:p.ID,...(audio?{audio_publication_id:audio.ID}:{})});
     for(let attempt=0;attempt<3;attempt++){
-      try { return await nvrRequest('/api/sfu/bridges/',{method:'POST',headers:{'Idempotency-Key':key},body}); }
+      try { return await nvrRequest('/api/sfu/bridges/',{method:'POST',headers:{'Idempotency-Key':key},body},true); }
       catch(err) { if(!err.network||attempt===2)throw err;await wait(attempt===0?100:500); }
     }
   }
