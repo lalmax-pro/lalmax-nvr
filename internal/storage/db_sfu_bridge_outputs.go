@@ -13,6 +13,13 @@ func (d *DB) RegisterSFUBridgeOutput(ctx context.Context, id string) error {
 	_, err := d.execContext(ctx, `INSERT INTO sfu_bridge_outputs_v1 (id) VALUES (?)`, id)
 	return err
 }
+
+// IsSFUBridgeOutput distinguishes bridge identities from other internal streams.
+func (d *DB) IsSFUBridgeOutput(ctx context.Context, id string) (bool, error) {
+	var exists bool
+	err := d.queryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sfu_bridge_outputs_v1 WHERE id = ?)`, id).Scan(&exists)
+	return exists, err
+}
 func (d *DB) ListSFUBridgeOutputIDs(ctx context.Context) ([]string, error) {
 	rows, err := d.queryContext(ctx, `SELECT id FROM sfu_bridge_outputs_v1 ORDER BY id`)
 	if err != nil {

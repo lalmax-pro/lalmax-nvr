@@ -59,3 +59,18 @@ func TestMP4TrackEditPreservesLateVideoOffset(t *testing.T) {
 	require.Equal(t, uint32(40), binary.BigEndian.Uint32(elst[20:24]))
 	require.Zero(t, binary.BigEndian.Uint32(elst[24:28]))
 }
+
+func TestSetLastVideoSampleDuration(t *testing.T) {
+	m := NewMP4Muxer(filepath.Join(t.TempDir(), "duration.mp4"))
+	video, err := m.AddH264Track([]byte{0x67, 0x42, 0, 0x0a, 0xf8, 0x41, 0xa2}, []byte{0x68, 0xce, 0x38, 0x80})
+	require.NoError(t, err)
+	audio, err := m.AddAudioTrack("opus", nil)
+	require.NoError(t, err)
+	require.Error(t, m.SetLastVideoSampleDuration(video, 20*time.Millisecond))
+	require.Error(t, m.SetLastVideoSampleDuration(audio, 20*time.Millisecond))
+	require.NoError(t, m.WriteSample(video, []byte{0x65, 0x88, 0x84, 0, 0x10}, 0, time.Millisecond))
+	require.NoError(t, m.SetLastVideoSampleDuration(video, 20*time.Millisecond))
+	require.Equal(t, 20*time.Millisecond, m.Duration())
+	require.NoError(t, m.Close())
+	require.Error(t, m.SetLastVideoSampleDuration(video, 20*time.Millisecond))
+}

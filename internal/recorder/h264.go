@@ -76,6 +76,14 @@ type H264Config struct {
 	Adaptive             *AdaptiveGate
 	// FrameSource, when set, records from in-process lalmax frames instead of RTSP.
 	FrameSource func(ctx context.Context) (media.FrameSubscription, error)
+	// PreserveSourceTimestamps requires audio and video frames to share a clock.
+	PreserveSourceTimestamps bool
+}
+
+type h264QueuedFrame struct {
+	data       []byte
+	pts        time.Duration
+	sourceTime bool
 }
 
 // H264Recorder records H.264 video from an RTSP source.
@@ -100,16 +108,19 @@ type H264Recorder struct {
 	g711MULaw        bool   // true=μ-law, false=A-law
 	g711SampleRate   int    // typically 8000
 
-	curFinalPath  string
-	curTempPath   string
-	segStart      time.Time
-	frameCount    int
-	lastFrameTime time.Time
+	curFinalPath          string
+	curTempPath           string
+	segStart              time.Time
+	segmentSourceStart    time.Duration
+	segmentUsesSourceTime bool
+	lastSourcePTS         time.Duration
+	frameCount            int
+	lastFrameTime         time.Time
 
 	sps []byte
 	pps []byte
 
-	frameCh chan []byte
+	frameCh chan h264QueuedFrame
 	dropped atomic.Int64
 	lastPTS atomic.Int64 // tracks last RTP PTS for monotonicity check
 
@@ -267,7 +278,7 @@ func (r *H264Recorder) Resume() {
 	r.setStatus(model.StatusRecording)
 	for _, data := range r.preroll.Drain() {
 		select {
-		case r.frameCh <- data:
+		case r.frameCh <- h264QueuedFrame{data: data}:
 		default:
 		}
 	}
@@ -384,7 +395,7 @@ func (r *H264Recorder) connectAndRecordFrames(ctx context.Context) (error, bool)
 	h264Logger.Info("recording via in-process lalmax frames", "camera_id", r.cfg.CameraID)
 
 	frameAlive := make(chan struct{}, 1)
-	r.frameCh = make(chan []byte, r.cfg.RingBufCap)
+	r.frameCh = make(chan h264QueuedFrame, r.cfg.RingBufCap)
 	r.dropped.Store(0)
 	writerDone := make(chan struct{})
 	go r.writeFrames(writerDone)
@@ -471,7 +482,7 @@ func (r *H264Recorder) consumeVideoFrames(ctx context.Context, sub media.FrameSu
 				r.Hub.Broadcast(frame.PTS.Milliseconds(), [][]byte{nalu}, frame.IsKey || nalutil.IsKeyframeNALU(nalu, wantCodec == "h265"))
 			}
 			select {
-			case r.frameCh <- frame.Data:
+			case r.frameCh <- h264QueuedFrame{data: frame.Data, pts: frame.PTS, sourceTime: r.cfg.PreserveSourceTimestamps}:
 			default:
 				d := r.dropped.Add(1)
 				if r.metrics != nil {
@@ -498,7 +509,7 @@ func (r *H264Recorder) handleMediaAudioFrame(frame media.MediaFrame) {
 		if r.Hub != nil {
 			r.Hub.BroadcastAudio(frame.PTS.Milliseconds(), model.AudioAAC, frame.Data)
 		}
-		r.writeMediaAudioSample(frame.Data, 1024*time.Second/44100)
+		r.writeMediaAudioSample(frame.Data, 1024*time.Second/44100, frame.PTS)
 	case "g711", "g711a", "g711u":
 		r.mu.Lock()
 		if r.audioCodec == "" {
@@ -524,7 +535,7 @@ func (r *H264Recorder) handleMediaAudioFrame(frame media.MediaFrame) {
 		if dur < time.Millisecond {
 			dur = time.Millisecond
 		}
-		r.writeMediaAudioSample(frame.Data, dur)
+		r.writeMediaAudioSample(frame.Data, dur, frame.PTS)
 	case "opus":
 		if len(frame.Data) == 0 {
 			return
@@ -550,20 +561,27 @@ func (r *H264Recorder) handleMediaAudioFrame(frame media.MediaFrame) {
 		if r.Hub != nil {
 			r.Hub.BroadcastAudio(frame.PTS.Milliseconds(), model.AudioOpus, frame.Data)
 		}
-		r.writeMediaAudioSample(frame.Data, audioDuration(audioFrame{codec: "opus", frame: frame.Data}))
+		r.writeMediaAudioSample(frame.Data, audioDuration(audioFrame{codec: "opus", frame: frame.Data}), frame.PTS)
 	}
 }
 
-func (r *H264Recorder) writeMediaAudioSample(data []byte, dur time.Duration) {
+func (r *H264Recorder) writeMediaAudioSample(data []byte, dur, sourcePTS time.Duration) {
 	r.mu.Lock()
 	m := r.muxer
 	aid := r.audioTrackID
 	start := r.segStart
+	base, sourceTime := r.segmentSourceStart, r.segmentUsesSourceTime
 	r.mu.Unlock()
 	if m == nil || aid <= 0 {
 		return
 	}
 	pts := time.Since(start)
+	if sourceTime {
+		pts = sourcePTS - base
+		if pts < 0 {
+			return
+		}
+	}
 	if err := m.WriteAudioSample(aid, data, pts, dur); err != nil && err.Error() != "muxer is closed" {
 		h264Logger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
 	}
@@ -690,7 +708,7 @@ func (r *H264Recorder) connectAndRecordRTSP(ctx context.Context) (error, bool) {
 	}
 
 	frameAlive := make(chan struct{}, 1)
-	r.frameCh = make(chan []byte, r.cfg.RingBufCap)
+	r.frameCh = make(chan h264QueuedFrame, r.cfg.RingBufCap)
 	r.dropped.Store(0)
 	writerDone := make(chan struct{})
 	go r.writeFrames(writerDone)
@@ -724,7 +742,7 @@ func (r *H264Recorder) connectAndRecordRTSP(ctx context.Context) (error, bool) {
 			copy(data, []byte{0x00, 0x00, 0x00, 0x01})
 			copy(data[4:], nalu)
 			select {
-			case r.frameCh <- data:
+			case r.frameCh <- h264QueuedFrame{data: data}:
 			default:
 				d := r.dropped.Add(1)
 				if r.metrics != nil {
@@ -881,7 +899,8 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 	}()
 
 	defer close(done)
-	for data := range r.frameCh {
+	for queued := range r.frameCh {
+		data := queued.data
 		// If paused, consume frames but don't write to disk
 		if r.paused.Load() {
 			if len(data) >= 5 {
@@ -922,6 +941,10 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 			continue
 		}
 		if r.sps == nil || r.pps == nil {
+			continue
+		}
+		if queued.sourceTime && r.muxer != nil && r.segmentUsesSourceTime && queued.pts < r.lastSourcePTS {
+			h264Logger.Warn("dropping regressed source timestamp", "camera_id", r.cfg.CameraID)
 			continue
 		}
 		// Rotate at IDR boundary once segment duration is reached. This avoids
@@ -966,6 +989,9 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 			r.audioTrackID = audioTrackID
 			r.muxer = m
 			r.segStart = time.Now()
+			r.segmentUsesSourceTime = queued.sourceTime
+			r.segmentSourceStart = queued.pts
+			r.lastSourcePTS = queued.pts
 			r.mu.Unlock()
 			r.curTempPath = tempPath
 			r.curFinalPath = finalPath
@@ -975,6 +1001,17 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 		now := time.Now()
 		pts := now.Sub(r.segStart)
 		duration := now.Sub(r.lastFrameTime)
+		if queued.sourceTime && r.segmentUsesSourceTime {
+			pts = queued.pts - r.segmentSourceStart
+			duration = queued.pts - r.lastSourcePTS
+			r.lastSourcePTS = queued.pts
+			if r.frameCount > 0 {
+				if err := r.muxer.SetLastVideoSampleDuration(r.trackID, duration); err != nil {
+					h264Logger.Error("failed to update source video duration", "camera_id", r.cfg.CameraID, "error", err)
+					continue
+				}
+			}
+		}
 		if duration < time.Millisecond {
 			duration = time.Millisecond
 		}

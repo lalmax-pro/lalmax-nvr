@@ -51,6 +51,18 @@ type nvrSFUPolicy struct {
 	rooms      *sfu.Manager
 }
 
+// Only registered SFU outputs use a shared RTP sender-report clock. Other
+// internal outputs, including transcodes, must keep their existing timing.
+func (a *App) sfuRecordingSourceTime(ctx context.Context, streamID string) (bool, error) {
+	if len(streamID) != 52 || !strings.HasPrefix(streamID, "sfu_") {
+		return false, nil
+	}
+	if a.db == nil {
+		return false, errors.New("SFU output registry unavailable")
+	}
+	return a.db.IsSFUBridgeOutput(ctx, streamID)
+}
+
 // The bridge is tied to the media-server instance on which it was created.
 // Never register on an unready or replacement server: changing the owner while
 // a custom session is alive could remove or feed the wrong Group.

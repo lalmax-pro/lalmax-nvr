@@ -1,6 +1,7 @@
 package recorder
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -46,6 +47,15 @@ func (p *bridgeRecordingPublisher) AddCustomizePubSession(string) (logic.ICustom
 func (*bridgeRecordingPublisher) DelCustomizePubSession(logic.ICustomizePubSessionContext) {}
 
 func TestSFUAVBridgeThroughGroupToRecording(t *testing.T) {
+	testSFUAVBridgeThroughGroupToRecording(t, false)
+}
+
+func TestSFUAVBridgeRecordingPreservesSourceTime(t *testing.T) {
+	testSFUAVBridgeThroughGroupToRecording(t, true)
+}
+
+func testSFUAVBridgeThroughGroupToRecording(t *testing.T, sourceTime bool) {
+	t.Helper()
 	groups := maxlogic.GetGroupManagerInstance()
 	key := maxlogic.NewStreamKey("live", "sfu_test_bridge_recording")
 	group, created := groups.GetOrCreateGroup(key, "sfu-bridge-recording-test", nil, 1, 128)
@@ -54,7 +64,7 @@ func TestSFUAVBridgeThroughGroupToRecording(t *testing.T) {
 	store := newTestManager(t)
 	engine := &media.EmbeddedLalmax{}
 	rec := NewH264Recorder(H264Config{
-		CameraID: key.StreamName, SegmentDur: time.Minute, AudioEnabled: true,
+		CameraID: key.StreamName, SegmentDur: time.Minute, AudioEnabled: true, PreserveSourceTimestamps: sourceTime,
 		FrameSource: func(ctx context.Context) (media.FrameSubscription, error) {
 			return engine.SubscribeFrames(ctx, media.SubscribeFramesRequest{StreamID: key.StreamName, AppName: "live"})
 		},
@@ -124,6 +134,27 @@ func TestSFUAVBridgeThroughGroupToRecording(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(data), "Opus")
 	require.Contains(t, string(data), string([]byte{0xf8, 0xff, 0xfe}))
+	if sourceTime {
+		idx := bytes.Index(data, []byte("stts"))
+		require.GreaterOrEqual(t, idx, 0)
+		payload := data[idx+4:]
+		require.GreaterOrEqual(t, len(payload), 8)
+		entries := int(binary.BigEndian.Uint32(payload[4:8]))
+		require.LessOrEqual(t, 8+entries*8, len(payload))
+		var samples, duration uint32
+		for i := 0; i < entries; i++ {
+			n := binary.BigEndian.Uint32(payload[8+i*8:])
+			d := binary.BigEndian.Uint32(payload[12+i*8:])
+			samples += n
+			duration += n * d
+		}
+		require.Equal(t, uint32(21), samples)
+		require.Equal(t, uint32(420), duration)
+		edit := bytes.Index(data, []byte("elst"))
+		require.GreaterOrEqual(t, edit, 0)
+		require.GreaterOrEqual(t, len(data), edit+16)
+		require.Equal(t, uint32(100), binary.BigEndian.Uint32(data[edit+12:edit+16]))
+	}
 	if artifact := os.Getenv("SFU_BRIDGE_TEST_MP4"); artifact != "" {
 		require.NoError(t, os.WriteFile(artifact, data, 0o600))
 	}

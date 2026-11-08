@@ -85,9 +85,9 @@ func hxFeedH265(rec *H265Recorder, nals ...[]byte) {
 
 // hxFeedH264 pushes annexB-wrapped NALUs through the H264 writer synchronously.
 func hxFeedH264(rec *H264Recorder, nals ...[]byte) {
-	rec.frameCh = make(chan []byte, len(nals))
+	rec.frameCh = make(chan h264QueuedFrame, len(nals))
 	for _, nal := range nals {
-		rec.frameCh <- annexB(nal)
+		rec.frameCh <- h264QueuedFrame{data: annexB(nal)}
 	}
 	close(rec.frameCh)
 	rec.writeFrames(make(chan struct{}))

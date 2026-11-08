@@ -1321,6 +1321,7 @@ func (a *App) wireRecordTasks() {
 			AudioEnabled: cam.AudioEnabled,
 		}
 	})
+	tasks.SetSourceTimePolicy(a.sfuRecordingSourceTime)
 	tasks.SetPlayURL(func(ctx context.Context, streamID string) string {
 		playURL, err := a.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
 			StreamID: streamID,
