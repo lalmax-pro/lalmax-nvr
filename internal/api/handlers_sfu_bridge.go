@@ -12,8 +12,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
+	"github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
-	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/access"
 )
 
@@ -93,7 +93,7 @@ func sfuDecodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 }
 func sfuBridgeError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, sfubridge.ErrNotFound), errors.Is(err, sfu.ErrPublicationNotFound):
+	case errors.Is(err, sfubridge.ErrNotFound), errors.Is(err, sfu.ErrTrackNotFound), errors.Is(err, sfu.ErrRoomNotFound):
 		writeError(w, http.StatusNotFound, "bridge or publication not found")
 	case errors.Is(err, sfubridge.ErrDenied), errors.Is(err, access.ErrDenied):
 		writeError(w, http.StatusForbidden, "operation denied")
@@ -105,7 +105,7 @@ func sfuBridgeError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "bridge has not stopped")
 	case errors.Is(err, sfubridge.ErrIdempotencyConflict):
 		writeError(w, http.StatusConflict, "idempotency key reused with different publications")
-	case errors.Is(err, sfubridge.ErrClosed), errors.Is(err, access.ErrClosed), errors.Is(err, sfu.ErrRoomClosed):
+	case errors.Is(err, sfubridge.ErrClosed), errors.Is(err, access.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, "SFU bridge service unavailable")
 	default:
 		writeError(w, http.StatusInternalServerError, "bridge operation failed")

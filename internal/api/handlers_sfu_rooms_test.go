@@ -8,19 +8,19 @@ import (
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
-	"github.com/q191201771/lalmax/sfu"
+	"github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 )
 
 type testRoomManager struct{ principal, id, generation string }
 
-func (m *testRoomManager) ListRooms(_ context.Context, p string) ([]sfu.Snapshot, error) {
+func (m *testRoomManager) ListRooms(_ context.Context, p string) ([]sfu.Room, error) {
 	m.principal = p
-	return []sfu.Snapshot{{Key: sfu.Key{ID: "room"}, Generation: "gen", Participants: []sfu.Participant{{ID: "secret"}, {ID: "bridge_worker"}}}}, nil
+	return []sfu.Room{{ID: "room", Generation: "gen", Participants: 1}}, nil
 }
-func (m *testRoomManager) CreateRoom(_ context.Context, p, id string) (sfu.Snapshot, error) {
+func (m *testRoomManager) CreateRoom(_ context.Context, p, id string) (sfu.Room, error) {
 	m.principal = p
 	m.id = id
-	return sfu.Snapshot{Key: sfu.Key{ID: id}, Generation: "gen"}, nil
+	return sfu.Room{ID: id, Generation: "gen"}, nil
 }
 func (m *testRoomManager) CloseRoom(_ context.Context, p, id, gen string) error {
 	m.principal = p

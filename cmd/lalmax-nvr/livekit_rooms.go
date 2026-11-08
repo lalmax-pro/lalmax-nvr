@@ -5,12 +5,12 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
 	"github.com/livekit/livekit-server/pkg/rtc/types"
 	"github.com/livekit/livekit-server/pkg/service"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/q191201771/lalmax/sfu"
 )
 
 // nvrLiveKitRoomAdmin delegates room state to LiveKit and applies NVR policy.
@@ -32,7 +32,7 @@ func (a *nvrLiveKitRoomAdmin) server(ctx context.Context, principal string) (*se
 	return server, nil
 }
 
-func (a *nvrLiveKitRoomAdmin) ListRooms(ctx context.Context, principal string) ([]sfu.Snapshot, error) {
+func (a *nvrLiveKitRoomAdmin) ListRooms(ctx context.Context, principal string) ([]sfu.Room, error) {
 	server, err := a.server(ctx, principal)
 	if err != nil {
 		return nil, err
@@ -42,7 +42,7 @@ func (a *nvrLiveKitRoomAdmin) ListRooms(ctx context.Context, principal string) (
 	if err != nil {
 		return nil, err
 	}
-	result := make([]sfu.Snapshot, 0, len(rooms.Rooms))
+	result := make([]sfu.Room, 0, len(rooms.Rooms))
 	for _, room := range rooms.Rooms {
 		if !validNVRSFURoomID(room.Name) {
 			continue
@@ -51,50 +51,52 @@ func (a *nvrLiveKitRoomAdmin) ListRooms(ctx context.Context, principal string) (
 		if current == nil || string(current.ID()) != room.Sid {
 			continue
 		}
-		snapshot := sfu.Snapshot{Key: sfu.Key{ID: room.Name}, Generation: room.Sid}
+		snapshot := sfu.Room{ID: room.Name, Generation: room.Sid}
 		for _, participant := range current.GetParticipants() {
-			snapshot.Participants = append(snapshot.Participants, sfu.Participant{ID: string(participant.Identity())})
+			if !participant.ToProto().GetPermission().GetHidden() {
+				snapshot.Participants++
+			}
 		}
 		result = append(result, snapshot)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Key.ID < result[j].Key.ID })
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
 }
 
-func (a *nvrLiveKitRoomAdmin) CreateRoom(ctx context.Context, principal, id string) (sfu.Snapshot, error) {
+func (a *nvrLiveKitRoomAdmin) CreateRoom(ctx context.Context, principal, id string) (sfu.Room, error) {
 	if !validNVRSFURoomID(id) {
-		return sfu.Snapshot{}, sfu.ErrInvalidID
+		return sfu.Room{}, sfu.ErrInvalidID
 	}
 	server, err := a.server(ctx, principal)
 	if err != nil {
-		return sfu.Snapshot{}, err
+		return sfu.Room{}, err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if server.RoomManager().GetRoom(ctx, livekit.RoomName(id)) != nil {
-		return sfu.Snapshot{}, sfu.ErrRoomExists
+		return sfu.Room{}, sfu.ErrRoomExists
 	}
 	marker, err := secureBridgeID()
 	if err != nil {
-		return sfu.Snapshot{}, err
+		return sfu.Room{}, err
 	}
 	created, err := server.RoomManager().CreateRoom(ctx, &livekit.CreateRoomRequest{Name: id, Metadata: marker})
 	if err != nil {
-		return sfu.Snapshot{}, err
+		return sfu.Room{}, err
 	}
 	if created.Metadata != marker {
-		return sfu.Snapshot{}, sfu.ErrRoomExists
+		return sfu.Room{}, sfu.ErrRoomExists
 	}
 	room := server.RoomManager().GetRoom(ctx, livekit.RoomName(id))
 	if room == nil || string(room.ID()) != created.Sid {
-		return sfu.Snapshot{}, sfu.ErrRoomNotFound
+		return sfu.Room{}, sfu.ErrRoomNotFound
 	}
 	room.SetMetadata("")
 	if _, err = a.server(ctx, principal); err != nil {
 		room.Close(types.RoomCloseReasonAPIDelete)
-		return sfu.Snapshot{}, err
+		return sfu.Room{}, err
 	}
-	return sfu.Snapshot{Key: sfu.Key{ID: id}, Generation: created.Sid}, nil
+	return sfu.Room{ID: id, Generation: created.Sid}, nil
 }
 
 func (a *nvrLiveKitRoomAdmin) CloseRoom(ctx context.Context, principal, id, generation string) error {

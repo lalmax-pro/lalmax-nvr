@@ -4,36 +4,20 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
-	"github.com/q191201771/lalmax/sfu"
 )
 
 type SFURoomManager interface {
-	ListRooms(context.Context, string) ([]sfu.Snapshot, error)
-	CreateRoom(context.Context, string, string) (sfu.Snapshot, error)
+	ListRooms(context.Context, string) ([]sfu.Room, error)
+	CreateRoom(context.Context, string, string) (sfu.Room, error)
 	CloseRoom(context.Context, string, string, string) error
 }
 
 func (h *Handler) SetSFURoomManager(rooms SFURoomManager) { h.sfuRooms = rooms }
 
-type sfuRoomResponse struct {
-	ID           string `json:"id"`
-	Generation   string `json:"generation"`
-	Participants int    `json:"participants"`
-}
-
-func sfuRoomStatus(s sfu.Snapshot) sfuRoomResponse {
-	participants := 0
-	for _, p := range s.Participants {
-		if !strings.HasPrefix(p.ID, "bridge_") {
-			participants++
-		}
-	}
-	return sfuRoomResponse{ID: s.Key.ID, Generation: s.Generation, Participants: participants}
-}
 func (h *Handler) sfuRoomRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
 	w.Header().Set("Cache-Control", "no-store")
 	principal, ok := sfuPrincipal(r)
@@ -75,11 +59,10 @@ func (h *Handler) listSFURooms(w http.ResponseWriter, r *http.Request) {
 		sfuRoomError(w, err)
 		return
 	}
-	out := make([]sfuRoomResponse, 0, len(rooms))
-	for _, room := range rooms {
-		out = append(out, sfuRoomStatus(room))
+	if rooms == nil {
+		rooms = []sfu.Room{}
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, rooms)
 }
 func (h *Handler) createSFURoom(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.sfuRoomRequest(w, r)
@@ -97,7 +80,7 @@ func (h *Handler) createSFURoom(w http.ResponseWriter, r *http.Request) {
 		sfuRoomError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, sfuRoomStatus(room))
+	writeJSON(w, http.StatusCreated, room)
 }
 func (h *Handler) closeSFURoom(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.sfuRoomRequest(w, r)

@@ -13,6 +13,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	nvrsfu "github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
@@ -205,6 +206,11 @@ func TestSFUBridgeRoutesRejectInvalidAndHideErrors(t *testing.T) {
 	rec = sfuRequest(router, "GET", "/api/sfu/bridges/bridge", "", "")
 	if rec.Code != 404 {
 		t.Fatalf("not found: %d", rec.Code)
+	}
+	mock.err = nvrsfu.ErrRoomNotFound
+	rec = sfuRequest(router, "GET", "/api/sfu/bridges/bridge", "", "")
+	if rec.Code != 404 {
+		t.Fatalf("stale room: %d", rec.Code)
 	}
 	missing := sfuTestRouter(&model.User{ID: 1, Role: model.RoleSuperAdmin, Enabled: true}, nil)
 	rec = sfuRequest(missing, "GET", "/api/sfu/bridges/bridge", "", "")

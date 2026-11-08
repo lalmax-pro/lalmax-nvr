@@ -21,13 +21,13 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
-	"github.com/q191201771/lalmax/sfu"
 )
 
 type liveKitBridgeHook struct{ messages chan base.RtmpMsg }
@@ -264,6 +264,10 @@ receive:
 	case <-hook.messages:
 	case <-time.After(10 * time.Second):
 		t.Fatal("bridge group did not receive audio")
+	}
+	roomSnapshots, err = roomAdmin.ListRooms(ctx, principal)
+	if err != nil || len(roomSnapshots) != 1 || roomSnapshots[0].ID != "front-door" || roomSnapshots[0].Participants != 2 {
+		t.Fatalf("hidden bridge counted as participant: %+v %v", roomSnapshots, err)
 	}
 	stream, playToken, err := bridges.Playback(ctx, principal, status.ID)
 	if err != nil || stream != status.StreamID || grants.AuthorizePlayback("webrtc", stream, playToken) != nil {

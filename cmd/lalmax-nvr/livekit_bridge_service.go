@@ -13,10 +13,10 @@ import (
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/livekitsfu"
+	"github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
 	"github.com/livekit/livekit-server/pkg/service"
 	"github.com/livekit/protocol/livekit"
-	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/bridge"
 )
 
@@ -142,7 +142,7 @@ func (s *liveKitBridgeService) start(setup context.Context, principal, first, au
 		}
 	}
 	if firstTrack == nil {
-		return nil, sfu.ErrPublicationNotFound
+		return nil, sfu.ErrTrackNotFound
 	}
 	req := livekitsfu.TrackRequest{RoomSID: s.roomSID}
 	if firstTrack.Type == livekit.TrackType_AUDIO && audio == "" {
@@ -227,7 +227,7 @@ func mapLiveKitBridgeError(err error) error {
 	case errors.Is(err, livekitsfu.ErrRoomChanged):
 		return sfu.ErrRoomNotFound
 	case errors.Is(err, livekitsfu.ErrTrackNotFound):
-		return sfu.ErrPublicationNotFound
+		return sfu.ErrTrackNotFound
 	case errors.Is(err, livekitsfu.ErrTrackCodec), errors.Is(err, livekitsfu.ErrTrackPair):
 		return sfubridge.ErrInvalid
 	default:
