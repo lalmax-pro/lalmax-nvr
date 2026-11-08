@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 type nvrRoomBridge interface {
 	Create(context.Context, string, string) (sfubridge.Status, error)
 	CreateAV(context.Context, string, string, string) (sfubridge.Status, error)
+	List(context.Context, string) ([]sfubridge.Status, error)
 	Get(context.Context, string, string) (sfubridge.Status, error)
 	Playback(context.Context, string, string) (string, string, error)
 	Stop(context.Context, string, string) error
@@ -146,6 +148,54 @@ func (r *nvrSFUBridgeRouter) Get(ctx context.Context, p, id string) (sfubridge.S
 		}
 	}
 	return sfubridge.Status{}, sfubridge.ErrNotFound
+}
+
+// List spans active rooms while keeping each registry's ownership and view
+// checks. A removed room is omitted even if its registry is still draining.
+func (r *nvrSFUBridgeRouter) List(ctx context.Context, principal string) ([]sfubridge.Status, error) {
+	if ctx == nil || principal == "" {
+		return nil, sfubridge.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.authorize(ctx, principal); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, sfubridge.ErrDenied
+	}
+	r.mu.Lock()
+	closed := r.closed
+	r.mu.Unlock()
+	if closed {
+		return nil, sfubridge.ErrClosed
+	}
+	statuses := make([]sfubridge.Status, 0)
+	for _, entry := range r.snapshot() {
+		items, err := entry.registry.List(ctx, principal)
+		r.mu.Lock()
+		valid := !r.closed && r.entries[entry.room] == entry
+		r.mu.Unlock()
+		if !valid {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		statuses = append(statuses, items...)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	closed = r.closed
+	r.mu.Unlock()
+	if closed {
+		return nil, sfubridge.ErrClosed
+	}
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].ID < statuses[j].ID })
+	return statuses, nil
 }
 func (r *nvrSFUBridgeRouter) Playback(ctx context.Context, p, id string) (string, string, error) {
 	for _, e := range r.snapshot() {

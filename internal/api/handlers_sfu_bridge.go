@@ -31,6 +31,9 @@ type SFUBridgeRegistry interface {
 type sfuAVBridgeRegistry interface {
 	CreateAV(context.Context, string, string, string) (sfubridge.Status, error)
 }
+type sfuBridgeLister interface {
+	List(context.Context, string) ([]sfubridge.Status, error)
+}
 
 // SetSFUBridgeRegistry must be called before serving requests.
 func (h *Handler) SetSFUBridgeRegistry(registry SFUBridgeRegistry) { h.sfuBridges = registry }
@@ -197,6 +200,27 @@ type sfuBridgeStatusResponse struct {
 
 func sfuStatus(s sfubridge.Status) sfuBridgeStatusResponse {
 	return sfuBridgeStatusResponse{ID: s.ID, PublicationID: s.PublicationID, AudioPublicationID: s.AudioPublicationID, StreamID: s.StreamID, State: s.State}
+}
+func (h *Handler) listSFUBridges(w http.ResponseWriter, r *http.Request) {
+	registry, principal, ok := h.sfuBridgeRequest(w, r)
+	if !ok {
+		return
+	}
+	lister, ok := registry.(sfuBridgeLister)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "SFU bridge list unavailable")
+		return
+	}
+	statuses, err := lister.List(r.Context(), principal)
+	if err != nil {
+		sfuBridgeError(w, err)
+		return
+	}
+	response := make([]sfuBridgeStatusResponse, 0, len(statuses))
+	for _, status := range statuses {
+		response = append(response, sfuStatus(status))
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 func (h *Handler) createSFUBridge(w http.ResponseWriter, r *http.Request) {
 	registry, principal, ok := h.sfuBridgeRequest(w, r)

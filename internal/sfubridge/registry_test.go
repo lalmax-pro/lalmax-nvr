@@ -55,6 +55,25 @@ func TestRegistryOwnershipAuthorizationAndLifecycle(t *testing.T) {
 	if status.State != StatePending {
 		t.Fatalf("unexpected readiness: %s", status.State)
 	}
+	items, err := registry.List(ctx, "operator")
+	if err != nil || len(items) != 1 || items[0].ID != status.ID {
+		t.Fatalf("owner list: %+v %v", items, err)
+	}
+	items, err = registry.List(ctx, "other")
+	if err != nil || len(items) != 0 {
+		t.Fatalf("cross-user list: %+v %v", items, err)
+	}
+	policy.deny(ActionView)
+	items, err = registry.List(ctx, "operator")
+	if err != nil || len(items) != 0 {
+		t.Fatalf("denied view in list: %+v %v", items, err)
+	}
+	policy.deny("")
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err = registry.List(canceled, "operator"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled list: %v", err)
+	}
 	select {
 	case <-publisher.opened:
 	case <-time.After(3 * time.Second):
@@ -203,6 +222,46 @@ func TestSlowAuthorizationDoesNotBlockStop(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("view stuck")
+	}
+}
+
+func TestRegistryListOmitsEntryRemovedDuringAuthorization(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	r := &Registry{entries: map[string]*registryEntry{
+		"bridge": {owner: "operator", status: Status{ID: "bridge", State: StateStopped}},
+	}, authorize: func(ctx context.Context, req ManagementRequest) error {
+		if req.Action == ActionView {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}}
+	type listResult struct {
+		items []Status
+		err   error
+	}
+	result := make(chan listResult, 1)
+	go func() { items, err := r.List(context.Background(), "operator"); result <- listResult{items, err} }()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("list did not reach authorization")
+	}
+	if err := r.Remove(context.Background(), "operator", "bridge"); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	select {
+	case got := <-result:
+		if got.err != nil || len(got.items) != 0 {
+			t.Fatalf("removed entry leaked: %+v, %v", got.items, got.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("list blocked after removal")
 	}
 }
 
