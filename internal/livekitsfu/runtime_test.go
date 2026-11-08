@@ -60,3 +60,21 @@ func TestRunDoesNotStartCancelledContext(t *testing.T) {
 	default:
 	}
 }
+
+func TestRunPreparedReleasesAfterCancelledContext(t *testing.T) {
+	f := &fakeRuntime{started: make(chan struct{}), ready: make(chan struct{}), stop: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() { done <- RunPrepared(ctx, f) }()
+	<-f.started
+	close(f.ready)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prepared server was not stopped")
+	}
+}

@@ -152,6 +152,7 @@ type Handler struct {
 	sfuRooms              SFURoomManager
 	sfuSignaling          http.Handler
 	sfuTickets            SFUTicketIssuer
+	liveKitJoin           LiveKitJoinIssuer
 	sfuWHEPKey            []byte
 	isInternalMediaStream func(string) bool
 	transcodePlayback     derivedPlaybackProvider
@@ -409,6 +410,7 @@ func (h *Handler) Routes() http.Handler {
 			r.Delete("/{id}", h.removeSFUBridge)
 		})
 		r.With(middleware.RequireOperatePermission()).Post("/api/sfu/ticket", h.createSFUTicket)
+		r.With(middleware.RequireOperatePermission()).Post("/api/sfu/livekit/join", h.createLiveKitJoin)
 		r.With(middleware.RequireOperatePermission()).Get("/api/sfu/bridge-requests", h.getSFUBridgeRequest)
 		r.Route("/api/sfu/rooms", func(r chi.Router) {
 			r.Use(middleware.RequireOperatePermission())

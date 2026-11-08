@@ -398,6 +398,7 @@ func resolveConfigPath(path string) string {
 //  15. HTTP server — depends on Router (which depends on all above)
 type App struct {
 	sfuRuntime       *nvrSFURuntime
+	liveKitRuntime   *nvrLiveKitRuntime
 	transcodeManager *transcode.Manager
 	transcodeService *transcode.Service
 	cfg              *config.Config
@@ -890,7 +891,13 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.dlna = dlna.NewService(cfg, a.db, a.store, a.mediaEngine)
 
 	if cfg.SFU.Enabled {
-		a.sfuRuntime, err = newNVRSFURuntime(a)
+		if err = cfg.SFU.ValidateBackend(); err == nil {
+			if cfg.SFU.Backend == "livekit" {
+				a.liveKitRuntime, err = newNVRLiveKitRuntime(a, cfg.SFU.LiveKit)
+			} else {
+				a.sfuRuntime, err = newNVRSFURuntime(a)
+			}
+		}
 		if err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("initialize SFU: %w", err)
@@ -977,6 +984,9 @@ func (a *App) buildRouter() http.Handler {
 		handler.SetSFURoomManager(a.sfuRuntime.roomAdmin)
 		handler.SetSFUSignaling(a.sfuRuntime.signal)
 		handler.SetSFUTicketIssuer(a.sfuRuntime.tickets)
+	}
+	if a.liveKitRuntime != nil {
+		handler.SetLiveKitJoinIssuer(a.liveKitRuntime)
 	}
 	// Capture runtime configuration at bootstrap; changes to executable paths or
 	// media listener settings require a restart before starting new transcodes.
@@ -1427,6 +1437,12 @@ func (a *App) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
 	a.startCtx = ctx
+	if a.liveKitRuntime != nil {
+		if err := a.liveKitRuntime.Start(ctx); err != nil {
+			cancel()
+			return fmt.Errorf("start LiveKit: %w", err)
+		}
+	}
 	if a.sfuRuntime != nil {
 		a.sfuRuntime.Start(ctx)
 	}
@@ -1694,6 +1710,11 @@ func (a *App) Stop() error {
 		if a.sfuRuntime != nil {
 			if err := a.sfuRuntime.Close(shutdownCtx); err != nil {
 				log.Warn("SFU shutdown incomplete", "error", err)
+			}
+		}
+		if a.liveKitRuntime != nil {
+			if err := a.liveKitRuntime.Close(shutdownCtx); err != nil {
+				log.Warn("LiveKit shutdown incomplete", "error", err)
 			}
 		}
 

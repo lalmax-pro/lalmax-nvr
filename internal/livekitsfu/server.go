@@ -17,6 +17,16 @@ func NewServer(yamlConfig string) (*service.LivekitServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("livekitsfu: parse configuration: %w", err)
 	}
+	return NewConfiguredServer(conf)
+}
+
+// NewConfiguredServer constructs a server from a parsed LiveKit configuration.
+// Callers that load a key file themselves may clear KeyFile after loading it to
+// ensure the signing keys and the server use the same snapshot.
+func NewConfiguredServer(conf *config.Config) (*service.LivekitServer, error) {
+	if conf == nil {
+		return nil, fmt.Errorf("livekitsfu: nil configuration")
+	}
 	if err := conf.ValidateKeys(); err != nil {
 		return nil, fmt.Errorf("livekitsfu: validate keys: %w", err)
 	}

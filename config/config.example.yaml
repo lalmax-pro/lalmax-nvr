@@ -79,6 +79,12 @@ media:
 # Experimental SFU and browser meeting (embedded media mode only).
 # sfu:
 #   enabled: false
+#   # Choose "livekit" to embed LiveKit instead of the legacy SFU.
+#   # backend: livekit
+#   # livekit:
+#   #   config_file: /etc/lalmax-nvr/livekit.yaml
+#   #   api_key: your-livekit-api-key
+#   #   public_url: wss://livekit.example.com
 #   # Optional: collect non-default rooms after this idle duration (e.g. 10m).
 #   # Empty disables automatic collection; active bridges keep their room alive.
 #   idle_timeout: ""

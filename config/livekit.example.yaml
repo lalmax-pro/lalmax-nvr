@@ -1,0 +1,12 @@
+# Native LiveKit configuration for sfu.backend: livekit.
+# Replace the key and secret, keep this file private, and set api_key in the
+# NVR configuration to the key below. The public URL belongs in NVR's config.
+port: 7880
+bind_addresses: ["0.0.0.0"]
+keys:
+  replace-with-api-key: replace-with-a-random-secret-at-least-32-characters
+rtc:
+  # Expose this UDP port to clients, and configure node_ip/use_external_ip for
+  # your network as described by the LiveKit self-hosting documentation.
+  udp_port: 7882
+  tcp_port: 7881

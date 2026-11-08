@@ -68,11 +68,35 @@ type Config struct {
 // SFUConfig configures the experimental NVR SFU runtime.
 // The runtime is opt-in and currently accepts authenticated administrators.
 type SFUConfig struct {
-	Enabled          bool           `yaml:"enabled" json:"enabled"`
-	ICEServers       []SFUICEServer `yaml:"ice_servers" json:"-"`
-	IdleTimeout      string         `yaml:"idle_timeout,omitempty" json:"idle_timeout,omitempty"`
-	ObserveBandwidth bool           `yaml:"observe_bandwidth,omitempty" json:"observe_bandwidth,omitempty"`
-	Pacing           bool           `yaml:"pacing,omitempty" json:"pacing,omitempty"`
+	Enabled          bool             `yaml:"enabled" json:"enabled"`
+	Backend          string           `yaml:"backend,omitempty" json:"backend,omitempty"`
+	LiveKit          SFULiveKitConfig `yaml:"livekit,omitempty" json:"-"`
+	ICEServers       []SFUICEServer   `yaml:"ice_servers" json:"-"`
+	IdleTimeout      string           `yaml:"idle_timeout,omitempty" json:"idle_timeout,omitempty"`
+	ObserveBandwidth bool             `yaml:"observe_bandwidth,omitempty" json:"observe_bandwidth,omitempty"`
+	Pacing           bool             `yaml:"pacing,omitempty" json:"pacing,omitempty"`
+}
+
+// SFULiveKitConfig refers to a native LiveKit configuration file. The API
+// secret stays in that file and is never returned by the NVR settings API.
+type SFULiveKitConfig struct {
+	ConfigFile string `yaml:"config_file" json:"-"`
+	APIKey     string `yaml:"api_key" json:"-"`
+	PublicURL  string `yaml:"public_url" json:"-"`
+}
+
+func (c SFUConfig) ValidateBackend() error {
+	if c.Backend != "" && c.Backend != "legacy" && c.Backend != "livekit" {
+		return fmt.Errorf("sfu: invalid backend")
+	}
+	if !c.Enabled || c.Backend != "livekit" {
+		return nil
+	}
+	u, err := url.Parse(c.LiveKit.PublicURL)
+	if c.LiveKit.ConfigFile == "" || c.LiveKit.APIKey == "" || err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ws" && u.Scheme != "wss") {
+		return fmt.Errorf("sfu: livekit requires a config file, API key, and valid public URL")
+	}
+	return nil
 }
 
 // ValidatePacing requires the bandwidth estimator when pacing is enabled.
@@ -829,6 +853,9 @@ func Save(path string, cfg *Config) error {
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
+	}
+	if err := cfg.SFU.ValidateBackend(); err != nil {
+		return err
 	}
 	if err := cfg.SFU.ValidatePacing(); err != nil {
 		return err
