@@ -9,7 +9,7 @@ go test -race ./cmd/lalmax-nvr -run 'TestNVRSFU(EmitsTransportCCAndReceivesFeedb
 go test -race ./tools/sfu-meet -run TestDemoServerOpusThroughTwoPeers -count=10
 ```
 
-本机 Pion 测试验证视频 RTP 扩展序号递增并收到 transport-cc RTCP 反馈，不协商扩展的接收端仍可收包，Meet Room 测试检查静音 Opus RTP 含扩展；测试不访问设备或播放声音。NVR 可通过配置 `sfu.observe_bandwidth: true` 启用实验性的 Pion 发送端带宽估计，并将每个连接的估计变化以 `bitrate_bps` 输出至 debug 日志（需设置 `observability.log_level: debug`）。配置默认关闭；估计按 PeerConnection 汇总，不是单条轨道或保证可用的网络容量。观测器不缓存或延迟 RTP，轨道解除绑定和连接关闭时清理引用。
+本机 Pion 测试验证视频 RTP 扩展序号递增并收到 transport-cc RTCP 反馈，不协商扩展的接收端仍可收包，Meet Room 测试检查静音 Opus RTP 含扩展；测试不访问设备或播放声音。NVR 可通过配置 `sfu.observe_bandwidth: true` 启用实验性的 Pion 发送端带宽估计，并将每个连接的估计变化以 `bitrate_bps` 输出至 debug 日志（需设置 `observability.log_level: debug`）。配置默认关闭；估计按 PeerConnection 汇总，初始值为 1 Mbps，既不是单条轨道，也不是经过测量或保证可用的网络容量。观测器不缓存或延迟 RTP，轨道解除绑定和连接关闭时清理引用。
 
 ```sh
 go test -race ./cmd/lalmax-nvr -run 'Test(SFUBWEPassThrough|NVRSFUBandwidthObserver)' -count=20

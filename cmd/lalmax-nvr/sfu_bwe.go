@@ -10,6 +10,8 @@ import (
 	"github.com/pion/rtp"
 )
 
+const sfuInitialBandwidthEstimate = 1_000_000 // bits per second; not a measured capacity
+
 var errSFUBWEUnknownStream = errors.New("sfu bandwidth observer: unknown stream")
 
 // sfuBWEPassThrough does not pace or buffer RTP. It exists to avoid Pion's
@@ -55,7 +57,7 @@ type sfuBWEFactory struct{ onEstimate func(int) }
 func (f *sfuBWEFactory) NewInterceptor(id string) (interceptor.Interceptor, error) {
 	pacer := &sfuBWEPassThrough{writers: make(map[uint32]interceptor.RTPWriter)}
 	factory, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
-		return gcc.NewSendSideBWE(gcc.SendSideBWEPacer(pacer))
+		return gcc.NewSendSideBWE(gcc.SendSideBWEPacer(pacer), gcc.SendSideBWEInitialBitrate(sfuInitialBandwidthEstimate))
 	})
 	if err != nil {
 		return nil, err
