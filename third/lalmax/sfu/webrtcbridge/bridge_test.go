@@ -13,6 +13,27 @@ import (
 	"github.com/q191201771/lalmax/sfu"
 )
 
+func TestOutboundPreservesRTPPaddingWhileRemovingExtensions(t *testing.T) {
+	for _, payload := range [][]byte{nil, {0x65, 0x88}} {
+		original := &rtp.Packet{Header: rtp.Header{Version: 2, Padding: true, PaddingSize: 23, Marker: true, SequenceNumber: 77, Timestamp: 1234}, Payload: payload}
+		if err := original.SetExtension(1, []byte{1, 2, 3}); err != nil {
+			t.Fatal(err)
+		}
+		clean := cleanOutboundRTP(original)
+		wire, err := clean.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded rtp.Packet
+		if err = decoded.Unmarshal(wire); err != nil {
+			t.Fatalf("forwarded packet is invalid: %v", err)
+		}
+		if !decoded.Padding || decoded.Header.PaddingSize != 23 || decoded.SequenceNumber != 77 || decoded.Timestamp != 1234 || !decoded.Marker || !bytes.Equal(decoded.Payload, payload) || len(decoded.GetExtensionIDs()) != 0 {
+			t.Fatalf("forwarded RTP was changed incorrectly: %+v", decoded)
+		}
+	}
+}
+
 func pc(t *testing.T) *webrtc.PeerConnection {
 	t.Helper()
 	addresses, err := net.InterfaceAddrs()

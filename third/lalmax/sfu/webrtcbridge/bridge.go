@@ -70,7 +70,8 @@ func forwardInbound(ctx context.Context, remote inboundTrack, room *sfu.Room, pa
 // ForwardOutbound writes a Room subscription into an already-negotiated Pion
 // local track and closes the subscriber on exit. It strips RTP header
 // extensions: extension IDs belong to the inbound connection and cannot be
-// reused on another connection. TrackLocalStaticRTP binds outgoing SSRC and PT.
+// reused on another connection. RTP padding is preserved so padding-only
+// bandwidth probes remain valid packets. TrackLocalStaticRTP binds outgoing SSRC and PT.
 // The caller owns SDP, RTCP feedback, codec compatibility and PC lifecycle.
 func ForwardOutbound(ctx context.Context, sub *rtpforward.Subscriber, local *webrtc.TrackLocalStaticRTP) error {
 	if ctx == nil || sub == nil || local == nil {
@@ -85,10 +86,14 @@ func ForwardOutbound(ctx context.Context, sub *rtpforward.Subscriber, local *web
 			if !ok {
 				return sub.Err()
 			}
-			clean := rtp.Packet{Header: rtp.Header{Version: 2, Marker: packet.Marker, SequenceNumber: packet.SequenceNumber, Timestamp: packet.Timestamp}, Payload: packet.Payload}
+			clean := cleanOutboundRTP(packet)
 			if err := local.WriteRTP(&clean); err != nil {
 				return fmt.Errorf("write local RTP: %w", err)
 			}
 		}
 	}
+}
+
+func cleanOutboundRTP(packet *rtp.Packet) rtp.Packet {
+	return rtp.Packet{Header: rtp.Header{Version: 2, Padding: packet.Padding, PaddingSize: packet.Header.PaddingSize, Marker: packet.Marker, SequenceNumber: packet.SequenceNumber, Timestamp: packet.Timestamp}, Payload: packet.Payload}
 }
