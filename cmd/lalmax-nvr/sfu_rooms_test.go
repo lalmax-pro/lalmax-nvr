@@ -40,6 +40,13 @@ func TestNVRSFURoomAdministration(t *testing.T) {
 	}
 	policy := &nvrSFUPolicy{app: &App{db: db, cfg: &config.Config{}}, generation: defaultRoom.Snapshot().Generation, rooms: manager}
 	admin := newNVRSFURoomAdmin(manager, defaultRoom, policy)
+	router := newNVRSFUBridgeRouter(policy.check)
+	admin.bridges = router
+	admin.newBridge = func(context.Context, *sfu.Room) (nvrRoomBridge, error) { return &fakeRoomBridge{}, nil }
+	if err := router.add(defaultRoom, &fakeRoomBridge{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = router.Close(context.Background()) })
 	tickets := newNVRSFUTickets(policy)
 	tickets.resolveRoom = admin.resolve
 	if _, err = admin.CreateRoom(ctx, "user:999999", "room"); !errors.Is(err, sfubridge.ErrDenied) {
@@ -76,6 +83,10 @@ func TestNVRSFURoomAdministration(t *testing.T) {
 	if !ok {
 		t.Fatal("missing room")
 	}
+	oldRoom, _ := manager.Get(key)
+	router.mu.Lock()
+	oldBridge := router.entries[oldRoom].registry.(*fakeRoomBridge)
+	router.mu.Unlock()
 	ticket, err := tickets.IssueForRoom(ctx, user, "room")
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +96,12 @@ func TestNVRSFURoomAdministration(t *testing.T) {
 	}
 	if err = admin.CloseRoom(ctx, principal, "room", old); err != nil {
 		t.Fatal(err)
+	}
+	oldBridge.mu.Lock()
+	closed := oldBridge.closed
+	oldBridge.mu.Unlock()
+	if !closed {
+		t.Fatal("closing room did not close its bridge registry")
 	}
 	if _, err = tickets.IssueForRoom(ctx, user, "room"); !errors.Is(err, sfu.ErrRoomNotFound) {
 		t.Fatalf("issued ticket for closed room: %v", err)
@@ -113,6 +130,15 @@ func TestNVRSFURoomAdministration(t *testing.T) {
 	req.RoomGeneration = fresh.Generation
 	if err = policy.Authorize(ctx, req); err != nil {
 		t.Fatal(err)
+	}
+	admin.newBridge = func(context.Context, *sfu.Room) (nvrRoomBridge, error) {
+		return nil, errors.New("bridge setup failed")
+	}
+	if _, err = admin.CreateRoom(ctx, principal, "setup-fails"); err == nil {
+		t.Fatal("room created after bridge setup failure")
+	}
+	if _, ok := manager.Get(sfu.Key{Namespace: nvrSFURoom.Namespace, ID: "setup-fails"}); ok {
+		t.Fatal("failed room was not rolled back")
 	}
 	if err = admin.closeAll(); err != nil {
 		t.Fatal(err)
