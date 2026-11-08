@@ -148,6 +148,7 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
+	sfuBridges            SFUBridgeRegistry
 	isInternalMediaStream func(string) bool
 	transcodePlayback     derivedPlaybackProvider
 	transcodeService      *transcode.Service
@@ -382,6 +383,14 @@ func (h *Handler) Routes() http.Handler {
 		} else {
 			r.Use(h.authMW)
 		}
+		r.Route("/api/sfu/bridges", func(r chi.Router) {
+			r.Use(middleware.RequireOperatePermission())
+			r.Post("/", h.createSFUBridge)
+			r.Get("/{id}", h.getSFUBridge)
+			r.Get("/{id}/playback", h.getSFUBridgePlayback)
+			r.Post("/{id}/stop", h.stopSFUBridge)
+			r.Delete("/{id}", h.removeSFUBridge)
+		})
 		r.Post("/api/auth/logout", h.handleLogout)
 		r.Get("/api/health/details", h.handleHealthDetails)
 		r.Route("/api/recordings", func(r chi.Router) {
