@@ -116,10 +116,14 @@
     } catch(err){bridge.stopping=false;bridge.busy=false;bridge.label='停止失败，可重试';if(current===c&&!quiet){$('bridge-status').textContent=err.message||'停止失败';renderBridgeTracks(c.snapshot,c);}}
   }
   function render(snapshot, c) {
-    const members = snapshot.Participants || [], publications = snapshot.Publications || [];
+    const members = [...(snapshot.Participants || [])].sort((a,b)=>a.ID.localeCompare(b.ID));
+    const publications = [...(snapshot.Publications || [])].sort((a,b)=>a.ID.localeCompare(b.ID));
     renderTracks(snapshot,c);
     if(nvrMode) renderBridgeTracks(snapshot,c);
     $('member-count').textContent = `${members.length} 人在线`;
+    const signature=JSON.stringify([members.map(p=>[p.ID,p.Name]),publications.map(p=>[p.ID,p.ParticipantID,p.Kind,p.Source,p.Kind==='video'&&c.media.has(p.ID),p.Kind==='video'&&c.own.has(p.ID)])]);
+    if(c.tileSignature===signature)return;
+    c.tileSignature=signature;
     tiles.replaceChildren();
     if (!members.length) { const empty=document.createElement('div');empty.className='empty-state';empty.textContent='当前没有成员';tiles.append(empty);return; }
     members.forEach((member, index) => {
@@ -132,6 +136,7 @@
         const tile=document.createElement('div');tile.className='tile video-tile';const media=c.media.get(p.ID);const own=c.own.get(p.ID);
         if (media) tile.append(media); else if (own) {const video=document.createElement('video');video.autoplay=true;video.muted=true;video.playsInline=true;video.srcObject=new MediaStream([own.track]);tile.append(video);} else {const avatar=document.createElement('div');avatar.className='avatar';avatar.textContent=String(index+1).padStart(2,'0');tile.append(avatar);}
         const label=document.createElement('span');label.className='video-label';label.textContent=`${member.Name||`成员 ${index+1}`} · ${p.Source==='screen'?'屏幕共享':'摄像头'}`;tile.append(label);tiles.append(tile);
+        if(media)void media.play().catch(()=>{});
       }
     });
   }
@@ -203,7 +208,7 @@
       pc.onconnectionstatechange=()=>{if(current!==c)return;if(pc.connectionState==='connected')state('媒体连接正常',true);else if(['failed','disconnected'].includes(pc.connectionState)){state('连接中断');showError('媒体连接中断，请重新加入。');}};
       pc.ontrack=event=>{if(current!==c)return;const id=[...c.subscribed].find(([,entry])=>entry.transceiver===event.transceiver)?.[0];if(!id)return;
         if(event.track.kind==='audio'){const audio=document.createElement('audio');audio.autoplay=true;audio.srcObject=new MediaStream([event.track]);audioContainer.append(audio);c.media.set(id,audio);audio.play().catch(()=>{showError('浏览器阻止自动播放，请点击“启用声音”。');$('enable-audio').hidden=false;});}
-        else {const video=document.createElement('video');video.autoplay=true;video.playsInline=true;video.srcObject=new MediaStream([event.track]);c.media.set(id,video);if(c.snapshot)render(c.snapshot,c);}
+        else {const video=document.createElement('video');video.autoplay=true;video.muted=true;video.playsInline=true;video.srcObject=new MediaStream([event.track]);c.media.set(id,video);if(c.snapshot)render(c.snapshot,c);}
         event.track.onended=()=>{const media=c.media.get(id);if(media){media.remove();c.media.delete(id);}if(current===c&&c.snapshot)render(c.snapshot,c);};
       };
       if(c.stream){for(const track of c.stream.getTracks())await publishTrack(c,track,track.kind==='audio'?'microphone':'camera');}
