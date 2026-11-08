@@ -15,8 +15,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNVRSFUEmitsTransportCCAndReceivesFeedback(t *testing.T) {
-	sender, err := nvrSFUNewPeer(nil)(context.Background(), signaling.Identity{})
+func TestNVRSFUEmitsTransportCCAndReceivesFeedback(t *testing.T) { testNVRSFUTWCCFeedback(t, false) }
+func TestNVRSFUBandwidthObserverReceivesEstimates(t *testing.T)  { testNVRSFUTWCCFeedback(t, true) }
+func TestNVRSFUWorksWithoutTransportCCNegotiation(t *testing.T)  { testNVRSFUWithoutTWCC(t, false) }
+func TestNVRSFUBandwidthObserverWithoutTransportCC(t *testing.T) { testNVRSFUWithoutTWCC(t, true) }
+
+func testNVRSFUTWCCFeedback(t *testing.T, observeBandwidth bool) {
+	t.Helper()
+	estimates := make(chan int, 16)
+	newPeer := nvrSFUNewPeer(nil)
+	if observeBandwidth {
+		newPeer = nvrSFUNewPeerObservingBWE(nil, func(_ signaling.Identity, bitrate int) {
+			select {
+			case estimates <- bitrate:
+			default:
+			}
+		})
+	}
+	sender, err := newPeer(context.Background(), signaling.Identity{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sender.Close() })
 	settings := webrtc.SettingEngine{}
@@ -91,11 +107,12 @@ func TestNVRSFUEmitsTransportCCAndReceivesFeedback(t *testing.T) {
 	require.Eventually(t, func() bool { return sender.ConnectionState() == webrtc.PeerConnectionStateConnected }, 5*time.Second, 10*time.Millisecond)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(12 * time.Second)
 	var sequence uint16
 	var extensionSequence []uint16
 	var gotFeedback bool
-	for len(extensionSequence) < 2 || !gotFeedback {
+	gotEstimate := !observeBandwidth
+	for len(extensionSequence) < 2 || !gotFeedback || !gotEstimate {
 		select {
 		case <-ticker.C:
 			sequence++
@@ -106,15 +123,23 @@ func TestNVRSFUEmitsTransportCCAndReceivesFeedback(t *testing.T) {
 			}
 		case <-feedback:
 			gotFeedback = true
+		case estimate := <-estimates:
+			require.Positive(t, estimate)
+			gotEstimate = true
 		case <-deadline:
-			t.Fatalf("transport-cc extensions=%v feedback=%v", extensionSequence, gotFeedback)
+			t.Fatalf("transport-cc extensions=%v feedback=%v estimate=%v", extensionSequence, gotFeedback, gotEstimate)
 		}
 	}
 	require.NotEqual(t, extensionSequence[0], extensionSequence[1], "outgoing transport sequence must advance")
 }
 
-func TestNVRSFUWorksWithoutTransportCCNegotiation(t *testing.T) {
-	sender, err := nvrSFUNewPeer(nil)(context.Background(), signaling.Identity{})
+func testNVRSFUWithoutTWCC(t *testing.T, observeBandwidth bool) {
+	t.Helper()
+	newPeer := nvrSFUNewPeer(nil)
+	if observeBandwidth {
+		newPeer = nvrSFUNewPeerObservingBWE(nil, func(signaling.Identity, int) {})
+	}
+	sender, err := newPeer(context.Background(), signaling.Identity{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sender.Close() })
 	media := &webrtc.MediaEngine{}

@@ -211,7 +211,10 @@ func nvrSFUIdentityForUser(user *model.User) (signaling.Identity, error) {
 	return signaling.Identity{Principal: principal, Room: nvrSFURoom, Participant: sfu.Participant{ID: hex.EncodeToString(id[:]), Name: user.DisplayName}}, nil
 }
 func nvrSFUNewPeer(servers []webrtc.ICEServer) func(context.Context, signaling.Identity) (*webrtc.PeerConnection, error) {
-	return func(_ context.Context, _ signaling.Identity) (*webrtc.PeerConnection, error) {
+	return nvrSFUNewPeerObservingBWE(servers, nil)
+}
+func nvrSFUNewPeerObservingBWE(servers []webrtc.ICEServer, onEstimate func(signaling.Identity, int)) func(context.Context, signaling.Identity) (*webrtc.PeerConnection, error) {
+	return func(_ context.Context, identity signaling.Identity) (*webrtc.PeerConnection, error) {
 		engine := &webrtc.MediaEngine{}
 		if err := engine.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, PayloadType: 111}, webrtc.RTPCodecTypeAudio); err != nil {
 			return nil, err
@@ -220,6 +223,9 @@ func nvrSFUNewPeer(servers []webrtc.ICEServer) func(context.Context, signaling.I
 			return nil, err
 		}
 		registry := &interceptor.Registry{}
+		if onEstimate != nil {
+			registry.Add(&sfuBWEFactory{onEstimate: func(bitrate int) { onEstimate(identity, bitrate) }})
+		}
 		if err := webrtc.ConfigureTWCCHeaderExtensionSender(engine, registry); err != nil {
 			return nil, err
 		}
@@ -279,7 +285,13 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 	for _, server := range a.cfg.SFU.ICEServers {
 		iceServers = append(iceServers, webrtc.ICEServer{URLs: append([]string(nil), server.URLs...), Username: server.Username, Credential: server.Credential, CredentialType: webrtc.ICECredentialTypePassword})
 	}
-	factory := &signaling.RoomFactory{NewPeer: nvrSFUNewPeer(iceServers), MaxSubscribers: 32, QueueSize: 64, Codec: func(p sfu.Publication) (webrtc.RTPCodecCapability, error) {
+	newPeer := nvrSFUNewPeer(iceServers)
+	if a.cfg.SFU.ObserveBandwidth {
+		newPeer = nvrSFUNewPeerObservingBWE(iceServers, func(id signaling.Identity, bitrate int) {
+			slog.Debug("sfu bandwidth estimate", "namespace", id.Room.Namespace, "room", id.Room.ID, "participant", id.Participant.ID, "bitrate_bps", bitrate)
+		})
+	}
+	factory := &signaling.RoomFactory{NewPeer: newPeer, MaxSubscribers: 32, QueueSize: 64, Codec: func(p sfu.Publication) (webrtc.RTPCodecCapability, error) {
 		if p.Kind == "audio" && strings.EqualFold(p.Codec, "audio/opus") {
 			return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, nil
 		}

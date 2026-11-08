@@ -37,7 +37,20 @@ func (c *nackLossConn) ReadFrom(buf []byte) (int, net.Addr, error) {
 }
 
 func TestNVRSFURecoversViewerPacketLossWithNACK(t *testing.T) {
-	sender, err := nvrSFUNewPeer(nil)(context.Background(), signaling.Identity{})
+	testNVRSFUNackRecovery(t, false)
+}
+
+func TestNVRSFUBandwidthObserverCoexistsWithNACK(t *testing.T) {
+	testNVRSFUNackRecovery(t, true)
+}
+
+func testNVRSFUNackRecovery(t *testing.T, observeBandwidth bool) {
+	t.Helper()
+	newPeer := nvrSFUNewPeer(nil)
+	if observeBandwidth {
+		newPeer = nvrSFUNewPeerObservingBWE(nil, func(signaling.Identity, int) {})
+	}
+	sender, err := newPeer(context.Background(), signaling.Identity{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sender.Close() })
 	engine := &webrtc.MediaEngine{}
