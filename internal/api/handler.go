@@ -382,6 +382,12 @@ func (h *Handler) Routes() http.Handler {
 	// Authentication for this WebSocket is a short-lived, single-use ticket;
 	// the signaling handler validates both the ticket and its Origin.
 	r.Get("/api/sfu/ws", h.handleSFUSignaling)
+	r.Get("/sfu-meet", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/sfu-meet/", http.StatusTemporaryRedirect)
+	})
+	r.Get("/sfu-meet/", h.serveSFUMeet)
+	r.Get("/sfu-meet/app.js", h.serveSFUMeet)
+	r.Get("/sfu-meet/style.css", h.serveSFUMeet)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {

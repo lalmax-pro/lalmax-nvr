@@ -76,6 +76,10 @@ media:
   #   lal (port 11935):   RTMP, when rtmp.enabled is true
   #   lal (port 15544):   RTSP  (rtsp://{lalmax_public_url host}:15544/live/{camera_id})
 
+# Experimental single-room SFU and browser meeting (embedded media mode only).
+# sfu:
+#   enabled: false
+
 # DLNA MediaServer — publishes live streams and recordings to trusted LAN players.
 # The LAN address is detected automatically. port is a dedicated listener,
 # separate from server.listen.

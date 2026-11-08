@@ -5,6 +5,8 @@
   const status = $('status-text'), badge = $('connection-badge'), dot = $('status-dot');
   const join = $('join'), leave = $('leave'), mute = $('mute'), cameraToggle = $('camera-toggle'), share = $('share'), error = $('error');
   const tiles = $('tiles'), audioContainer = $('audio-container'), trackList = $('track-list');
+  const nvrMode = document.documentElement?.dataset?.mode === 'nvr';
+  if (nvrMode) { token.required=false; token.hidden=true; $('token-label').hidden=true; $('back-nvr').hidden=false; $('bridge-panel').hidden=false; $('mode-pill').textContent='NVR 会议'; $('mode-instructions').textContent='使用 NVR 管理员账号加入。'; $('nvr-login').hidden=!!sessionStorage.getItem('nvr_auth'); $('room-description').textContent='默认房间 · Opus / H.264'; $('mode-footer').textContent='NVR SFU'; }
   let current = null;
 
   function state(text, connected = false) {
@@ -16,9 +18,11 @@
     const c = current; current = null;
     if (c) {
       for (const pending of c.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('连接已关闭')); }
+      if(nvrMode) for(const bridge of c.bridges.values()) { bridge.closeRequested=true; if(bridge.id) void stopBridge(c,bridge,true); }
       c.pending.clear(); c.ws?.close(); c.pc?.close(); c.stream?.getTracks().forEach(t => t.stop()); c.screen?.getTracks().forEach(t => t.stop());
     }
     audioContainer.replaceChildren(); trackList.replaceChildren(); const empty=document.createElement('p');empty.className='track-empty';empty.textContent='加入会议后显示远端轨道。';trackList.append(empty); $('enable-audio').hidden = true; $('refresh-notice').hidden = true;
+    if(nvrMode){$('bridge-list').replaceChildren();$('bridge-status').textContent='';$('bridge-video').srcObject=null;$('bridge-video').hidden=true;}
     leave.disabled = true; mute.disabled = true; cameraToggle.disabled = true; share.disabled = true;
     mute.textContent = '◉ 静音'; mute.setAttribute('aria-pressed', 'false'); cameraToggle.textContent = '◈ 关闭摄像头'; cameraToggle.setAttribute('aria-pressed', 'false'); share.textContent = '▣ 共享屏幕'; join.disabled = false;
   }
@@ -41,9 +45,79 @@
       row.append(info,button);trackList.append(row);
     }
   }
+  function nvrAuth() {
+    let value=sessionStorage.getItem('nvr_auth');
+    if(!value){const username=$('nvr-username').value, password=$('nvr-password').value;if(!username||!password)throw new Error('请输入 NVR 用户名和密码');value=btoa(`${username}:${password}`);}
+    return `Basic ${value}`;
+  }
+  async function nvrRequest(path,options={}) {
+    const response=await fetch(path,{...options,headers:{'Authorization':nvrAuth(),'Content-Type':'application/json',...(options.headers||{})},cache:'no-store'});
+    if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(body.error||`请求失败 (${response.status})`);}
+    return response.status===204?null:response.json();
+  }
+  function renderBridgeTracks(snapshot,c) {
+    const list=$('bridge-list');list.replaceChildren();
+    const tracks=(snapshot.Publications||[]).filter(p=>p.Kind==='video'&&p.RTPReady);
+    for(const [id,b] of c.bridges)if(!tracks.some(p=>p.ID===id))tracks.push({ID:id,Source:b.source,RTPReady:false});
+    if(!tracks.length){const empty=document.createElement('p');empty.className='track-empty';empty.textContent='没有可桥接的视频轨道。';list.append(empty);return;}
+    for(const p of tracks){
+      const row=document.createElement('div');row.className='track-row';
+      const info=document.createElement('div');info.className='track-info';
+      const title=document.createElement('strong');title.textContent=`${p.Source==='screen'?'屏幕':'摄像头'} · ${p.ID.slice(0,8)}`;
+      const detail=document.createElement('small');const b=c.bridges.get(p.ID);detail.textContent=b?b.label:(p.RTPReady?'已就绪':'源已结束');info.append(title,detail);
+      const button=document.createElement('button');button.type='button';button.className='track-toggle';button.disabled=!!b?.busy||(!b&&(!p.RTPReady||c.bridges.size>0));button.textContent=b?'停止桥接':'桥接并播放';
+      button.addEventListener('click',()=>{if(current!==c)return;if(b)void stopBridge(c,b,false);else void startBridge(c,p);});row.append(info,button);list.append(row);
+    }
+  }
+  async function wait(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
+  async function startBridge(c,p) {
+    const bridge={publication:p.ID,source:p.Source,label:'正在创建',busy:true,pc:null,location:'',abort:new AbortController()};
+    c.bridges.set(p.ID,bridge);renderBridgeTracks(c.snapshot,c);
+    try {
+      const result=await nvrRequest('/api/sfu/bridges/',{method:'POST',body:JSON.stringify({publication_id:p.ID})});
+      bridge.id=result.id;
+      if(current!==c||bridge.closeRequested||bridge.abort.signal.aborted){await stopBridge(c,bridge,true);return;}
+      bridge.label='等待视频';bridge.busy=false;renderBridgeTracks(c.snapshot,c);
+      const pc=new RTCPeerConnection();bridge.pc=pc;const transceiver=pc.addTransceiver('video',{direction:'recvonly'});preferH264(transceiver);
+      const video=$('bridge-video');video.hidden=false;video.onplaying=()=>{if(current===c){bridge.label='播放中';$('bridge-status').textContent='WHEP 视频播放中';renderBridgeTracks(c.snapshot,c);}};
+      pc.ontrack=event=>{if(current!==c)return;video.srcObject=new MediaStream([event.track]);void video.play().catch(()=>showError('浏览器阻止了播放，请重试。'));};
+      const offer=await pc.createOffer();await pc.setLocalDescription(offer);await gather(pc);
+      let response;
+      for(let attempt=0;attempt<10;attempt++){
+        if(bridge.abort.signal.aborted||current!==c)return;
+        response=await fetch(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/whep`,{method:'POST',headers:{'Authorization':nvrAuth(),'Content-Type':'application/sdp'},body:pc.localDescription.sdp,cache:'no-store',signal:bridge.abort.signal});
+        if(response.status!==503)break;
+        const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);
+        if(status.state==='failed'||status.state==='stopped')throw new Error('桥接已停止，未能发布视频');
+        await wait(500);
+      }
+      if(!response?.ok)throw new Error(`桥接播放暂不可用 (${response?.status||'超时'})`);
+      const locationHeader=response.headers.get('Location');const answer=await response.text();
+      if(!locationHeader||!locationHeader.startsWith(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/whep/`))throw new Error('无效的播放会话');
+      bridge.location=locationHeader;
+      if(current!==c||bridge.closeRequested||bridge.abort.signal.aborted){await stopBridge(c,bridge,true);return;}
+      await pc.setRemoteDescription({type:'answer',sdp:answer});
+      bridge.label='正在连接播放器';renderBridgeTracks(c.snapshot,c);
+    } catch(err) {
+      if(bridge.abort.signal.aborted)return;
+      bridge.label='播放失败';bridge.busy=false;if(current===c){$('bridge-status').textContent=err.message||'桥接失败';renderBridgeTracks(c.snapshot,c);}
+    }
+  }
+  async function stopBridge(c,bridge,quiet) {
+    if(bridge.stopping)return;bridge.stopping=true;bridge.busy=true;bridge.label='正在停止';bridge.abort.abort();bridge.pc?.close();
+    if(current===c){$('bridge-video').srcObject=null;$('bridge-video').hidden=true;renderBridgeTracks(c.snapshot,c);}
+    try {
+      if(bridge.location)await fetch(bridge.location,{method:'DELETE',headers:{'Authorization':nvrAuth()},keepalive:quiet,cache:'no-store'});
+      if(bridge.id){await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/stop`,{method:'POST',body:'{}',keepalive:quiet});
+        if(!quiet){for(let i=0;i<30;i++){const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);if(status.state==='stopped'||status.state==='failed')break;await wait(200);}
+          await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`,{method:'DELETE'});}}
+      c.bridges.delete(bridge.publication);if(current===c){$('bridge-status').textContent='桥接已停止';renderBridgeTracks(c.snapshot,c);}
+    } catch(err){bridge.stopping=false;bridge.busy=false;bridge.label='停止失败，可重试';if(current===c&&!quiet){$('bridge-status').textContent=err.message||'停止失败';renderBridgeTracks(c.snapshot,c);}}
+  }
   function render(snapshot, c) {
     const members = snapshot.Participants || [], publications = snapshot.Publications || [];
     renderTracks(snapshot,c);
+    if(nvrMode) renderBridgeTracks(snapshot,c);
     $('member-count').textContent = `${members.length} 人在线`;
     tiles.replaceChildren();
     if (!members.length) { const empty=document.createElement('div');empty.className='empty-state';empty.textContent='当前没有成员';tiles.append(empty);return; }
@@ -62,7 +136,7 @@
   }
   function openSocket(c) {
     return new Promise((resolve,reject)=>{
-      const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);c.ws=ws;let initialized=false;
+      const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}${nvrMode?`/api/sfu/ws?ticket=${encodeURIComponent(c.ticket)}`:'/ws'}`);c.ws=ws;let initialized=false;
       const timeout=setTimeout(()=>{if(!initialized){ws.close();reject(new Error('连接超时'));}},10000);
       ws.onmessage=event=>{let msg;try{msg=JSON.parse(event.data);}catch{return;}if(current!==c)return;
         if(msg.type==='snapshot'&&msg.snapshot){c.snapshot=msg.snapshot;const ids=new Set((msg.snapshot.Publications||[]).map(p=>p.ID));for(const id of c.disabledTracks)if(!ids.has(id))c.disabledTracks.delete(id);render(msg.snapshot,c);if(!initialized){initialized=true;clearTimeout(timeout);resolve(msg.snapshot);}else scheduleSync(c);}
@@ -118,10 +192,11 @@
   }
   async function connect() {
     closeCurrent();error.hidden=true;join.disabled=true;state('正在连接');
-    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false};current=c;
+    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(),bridges:new Map(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false};current=c;
     try {
-      const login=await fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token.value})});if(!login.ok)throw new Error('访问口令无效，请检查终端中的口令');
+      if(!nvrMode){const login=await fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token.value})});if(!login.ok)throw new Error('访问口令无效，请检查终端中的口令');}
       if(micOption.checked||cameraOption.checked){if(!navigator.mediaDevices?.getUserMedia)throw new Error('当前浏览器无法访问媒体设备');c.stream=await navigator.mediaDevices.getUserMedia({audio:micOption.checked,video:cameraOption.checked});if(current!==c){c.stream.getTracks().forEach(t=>t.stop());return;}}
+      if(nvrMode){const auth=nvrAuth();const ticket=await nvrRequest('/api/sfu/ticket',{method:'POST',body:'{}'});sessionStorage.setItem('nvr_auth',auth.slice(6));$('nvr-password').value='';$('nvr-login').hidden=true;c.ticket=ticket.ticket;}
       await openSocket(c);if(current!==c)return;
       const pc=new RTCPeerConnection();c.pc=pc;
       pc.onconnectionstatechange=()=>{if(current!==c)return;if(pc.connectionState==='connected')state('媒体连接正常',true);else if(['failed','disconnected'].includes(pc.connectionState)){state('连接中断');showError('媒体连接中断，请重新加入。');}};

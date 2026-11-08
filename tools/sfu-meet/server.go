@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
-	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/sfumeetui"
 	"github.com/pion/interceptor"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
@@ -26,8 +26,7 @@ import (
 
 const cookieName = "sfu_demo_session"
 
-//go:embed web/index.html web/app.js web/style.css
-var webAssets embed.FS
+var webAssets = sfumeetui.Assets
 
 var demoRoom = sfu.Key{Namespace: "local", ID: "demo"}
 

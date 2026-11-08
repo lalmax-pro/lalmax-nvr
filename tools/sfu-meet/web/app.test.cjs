@@ -50,7 +50,7 @@ test('screen stopped during publication is removed without leaving the room', as
     MediaStream: class { constructor(tracks) { this.tracks = tracks; } },
     setTimeout, clearTimeout, Map, Promise, Error,
   };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../../internal/sfumeetui/web/app.js'), 'utf8'), context);
   element('join-form').listeners.submit({ preventDefault() {} });
   const waitFor = async predicate => {
     for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
@@ -92,7 +92,7 @@ test('remote tracks can be unsubscribed and resubscribed without reconnecting', 
     addTransceiver() { return {stop() {}}; } close() {}
   }
   const context={document:{getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'http:',host:'127.0.0.1'},navigator:{},fetch:async()=>({ok:true}),WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},setTimeout,clearTimeout,Map,Set,Promise,Error};
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'app.js'),'utf8'),context);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
   element('join-form').listeners.submit({preventDefault(){}});
   const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
   await waitFor(()=>!element('share').disabled);
@@ -112,4 +112,48 @@ test('remote tracks can be unsubscribed and resubscribed without reconnecting', 
   await waitFor(()=>commands.filter(c=>c.type==='subscribe').length===2 && commands.filter(c=>c.type==='offer').length===4);
   assert.equal(peers,1,'switching subscriptions must not reconnect');
   element('leave').listeners.click();
+});
+
+test('NVR uses one-time ticket and cleans bridge created after leaving', async () => {
+  class Element {
+    constructor(id=''){this.id=id;this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;} setAttribute(name,value){this.attributes[name]=value;}
+    querySelector(){return new Element();} replaceChildren(...children){this.children=children;} append(...children){this.children.push(...children);} remove(){}
+  }
+  const elements=new Map();const element=id=>{if(!elements.has(id))elements.set(id,new Element(id));return elements.get(id);};
+  const calls=[];let socket,releaseCreate;
+  class Socket {
+    static OPEN=1;
+    constructor(url){socket=this;this.url=url;this.readyState=1;setImmediate(()=>this.snapshot([]));}
+    snapshot(publications){this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[{ID:'remote'}],Publications:publications}})});}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';} createDataChannel(){} async createOffer(){return{sdp:'offer'};}
+    async setLocalDescription(){this.localDescription={sdp:'offer'};} async setRemoteDescription(){} addTransceiver(){return{stop(){}};} close(){}
+  }
+  const fetch=async(url,options={})=>{
+    calls.push({url,options});
+    if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'short-ticket'})};
+    if(url==='/api/sfu/bridges/')return await new Promise(resolve=>{releaseCreate=()=>resolve({ok:true,status:202,json:async()=>({id:'bridge-1'})});});
+    if(url==='/api/sfu/bridges/bridge-1/stop')return{ok:true,status:204};
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded-credentials',setItem() {}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  element('join-form').listeners.submit({preventDefault(){}});
+  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  await waitFor(()=>!element('share').disabled);
+  assert.equal(socket.url,'wss://nvr.test/api/sfu/ws?ticket=short-ticket');
+  assert.equal(calls[0].options.headers.Authorization,'Basic encoded-credentials');
+  socket.snapshot([{ID:'video-publication',ParticipantID:'remote',Source:'camera',Kind:'video',Codec:'video/H264',RTPReady:true}]);
+  await waitFor(()=>element('bridge-list').children.length>0);
+  element('bridge-list').children[0].children[1].listeners.click();
+  await waitFor(()=>typeof releaseCreate==='function');
+  element('leave').listeners.click();
+  assert.equal(element('bridge-list').children.length,0,'leaving must clear stale bridge tracks');
+  releaseCreate();
+  await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/bridge-1/stop'));
+  assert.ok(!calls.some(c=>c.url.includes('/whep')),'closed room must not start a player');
 });
