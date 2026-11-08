@@ -645,6 +645,17 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.mediaAuth.SetPublishTokens("srt", cfg.SRT.StreamKeys)
 	a.mediaAuth.SetPublishTokens("whip", cfg.WHIP.PublishTokens)
 	a.mediaAuth.SetPlaybackTokens("media", cfg.Auth.PlaybackTokens)
+	// Restore historical bridge output identities even when SFU is disabled.
+	// Otherwise an old internal stream name could fall back to open playback
+	// after restart before the SFU runtime is enabled again.
+	bridgeOutputs, err := db.ListSFUBridgeOutputIDs(context.Background())
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("load SFU bridge output identities: %w", err)
+	}
+	for _, id := range bridgeOutputs {
+		a.mediaAuth.RestoreInternalStream(id)
+	}
 	a.banMgr = ban.NewManager(db, a.mediaAuth)
 	a.banMgr.SetRTMPPublishAuthEnabled(cfg.RTMP.RTMPPublishAuthEnabled())
 	a.banMgr.SetRTSPPublishAuthEnabled(cfg.Media.RTSPPublishTokenAuthEnabled())
