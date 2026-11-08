@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -18,6 +19,9 @@ import (
 )
 
 var taskLogger = slog.Default().With("component", "record-task")
+
+// ErrStreamCodecNotReady means the live stream has not exposed a video codec yet.
+var ErrStreamCodecNotReady = errors.New("stream video codec not ready")
 
 const (
 	ReasonPlanInactive  = "plan_inactive"
@@ -384,6 +388,9 @@ func (m *TaskManager) newRecorder(ctx context.Context, streamID string) (model.R
 				encoding = c
 			}
 		}
+	}
+	if encoding == "" {
+		return nil, fmt.Errorf("stream %q: %w", streamID, ErrStreamCodecNotReady)
 	}
 	if encoding != string(model.FormatH264) && encoding != string(model.FormatH265) {
 		return nil, fmt.Errorf("stream %q codec %q is not recordable", streamID, encoding)
