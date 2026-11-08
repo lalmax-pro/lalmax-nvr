@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -170,10 +171,15 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	received := make(chan []byte, 1)
+	var watched atomic.Int64
 	callback := lksdk.NewRoomCallback()
 	callback.OnTrackSubscribed = func(track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, _ *lksdk.RemoteParticipant) {
-		packet, _, err := track.ReadRTP()
-		if err == nil {
+		for {
+			packet, _, err := track.ReadRTP()
+			if err != nil {
+				return
+			}
+			watched.Add(1)
 			select {
 			case received <- packet.Payload:
 			default:
@@ -347,6 +353,54 @@ receive:
 	}
 	if group := lalManager.GetGroup("live", stream); group != nil && group.HasInSession() {
 		t.Fatal("group publisher not released")
+	}
+	// Demoting the owner must cancel an active bridge and its playback grant,
+	// while an independent participant keeps receiving the same source.
+	revoked, err := bridges.CreateForRoom(ctx, principal, "front-door", viewer.SID(), publication.SID(), "", "")
+	if err != nil {
+		t.Fatalf("create bridge for revocation: %v", err)
+	}
+	revokedStream, revokedToken, err := bridges.Playback(ctx, principal, revoked.ID)
+	if err != nil {
+		t.Fatalf("get playback before revocation: %v", err)
+	}
+	revocationDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(revocationDeadline) {
+		if group := lalManager.GetGroup("live", revokedStream); group != nil && group.HasInSession() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if group := lalManager.GetGroup("live", revokedStream); group == nil || !group.HasInSession() {
+		t.Fatal("revocation test bridge never became active")
+	}
+	user.Role = model.RoleUser
+	user.UpdatedAt = time.Now()
+	if err := db.UpdateUser(ctx, user); err != nil {
+		t.Fatal(err)
+	}
+	beforeRevocation := watched.Load()
+	bridges.maintain(ctx, time.Now().Add(-5*time.Minute))
+	revocationDeadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(revocationDeadline) {
+		group := lalManager.GetGroup("live", revokedStream)
+		if (group == nil || !group.HasInSession()) && grants.AuthorizePlayback("webrtc", revokedStream, revokedToken) != nil && watched.Load() > beforeRevocation {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if group := lalManager.GetGroup("live", revokedStream); group != nil && group.HasInSession() {
+		t.Fatal("demoted owner retained the bridge publisher")
+	}
+	if grants.AuthorizePlayback("webrtc", revokedStream, revokedToken) == nil {
+		t.Fatal("demoted owner retained the playback grant")
+	}
+	if watched.Load() <= beforeRevocation {
+		t.Fatal("independent viewer stopped receiving after bridge revocation")
+	}
+	user.Role = model.RoleSuperAdmin
+	if err := db.UpdateUser(ctx, user); err != nil {
+		t.Fatal(err)
 	}
 	// Completed room generations and their indexes must not exhaust the limits
 	// during a long-running deployment.
