@@ -126,7 +126,10 @@ jobs:
         run: go vet ./...
 
       - name: Check SFU Meet UI
-        run: node --check internal/sfumeetui/web/livekit-app.js
+        run: |
+          node --check internal/sfumeetui/web/livekit-app.js
+          node --check tools/sfu-meet/browser-e2e.cjs
+          node --check tools/sfu-meet/udp-loss-proxy.cjs
 
       - name: Test
         run: go test -race -timeout 30m -coverprofile=coverage.out ./...

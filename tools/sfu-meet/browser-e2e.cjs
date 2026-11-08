@@ -314,6 +314,36 @@ const assert = require('node:assert/strict');
       assert.equal(await viewer.locator('#bridge-player').isHidden(), true);
       await viewer.getByRole('button', {name:'移除', exact:true}).click();
     }
+    // Exercise a meeting in both directions after the receive-only and bridge
+    // scenarios; all tracks still come from Chrome's fake capture devices.
+    await viewer.click('#mute');
+    await viewer.waitForFunction(() => document.querySelector('#mute').textContent === '关闭麦克风', null, {timeout:15000});
+    await viewer.click('#camera-toggle');
+    await viewer.waitForFunction(() => document.querySelector('#camera-toggle').textContent === '关闭摄像头', null, {timeout:15000});
+    await publisher.locator('#tiles').scrollIntoViewIfNeeded();
+    await publisher.waitForFunction(() => {
+      const remote = [...document.querySelectorAll('#tiles .video-tile')].find(tile => !tile.textContent.includes('我 ·'));
+      return remote?.querySelector('video')?.videoWidth > 0 && document.querySelector('#audio-container audio[data-source="麦克风"]')?.srcObject;
+    }, null, {timeout:25000});
+    const remoteFrames = await publisher.evaluate(() => [...document.querySelectorAll('#tiles .video-tile')].find(tile => !tile.textContent.includes('我 ·')).querySelector('video').getVideoPlaybackQuality().totalVideoFrames);
+    await publisher.waitForFunction(previous => {
+      const remote = [...document.querySelectorAll('#tiles .video-tile')].find(tile => !tile.textContent.includes('我 ·'));
+      return remote?.querySelector('video')?.getVideoPlaybackQuality().totalVideoFrames > previous + 2;
+    }, remoteFrames, {timeout:15000});
+    await viewer.locator('#tiles').scrollIntoViewIfNeeded();
+    await viewer.waitForFunction(() => {
+      const remote = [...document.querySelectorAll('#tiles .video-tile')].find(tile => !tile.textContent.includes('我 ·'));
+      return remote?.querySelector('video')?.videoWidth > 0 && document.querySelector('#audio-container audio[data-source="麦克风"]')?.srcObject;
+    }, null, {timeout:15000});
+    const viewerRemoteFrames = await viewer.evaluate(() => [...document.querySelectorAll('#tiles .video-tile')].find(tile => !tile.textContent.includes('我 ·')).querySelector('video').getVideoPlaybackQuality().totalVideoFrames);
+    await viewer.waitForFunction(previous => {
+      const remote = [...document.querySelectorAll('#tiles .video-tile')].find(tile => !tile.textContent.includes('我 ·'));
+      return remote?.querySelector('video')?.getVideoPlaybackQuality().totalVideoFrames > previous + 2;
+    }, viewerRemoteFrames, {timeout:15000});
+    await viewer.click('#camera-toggle');
+    await viewer.waitForFunction(() => document.querySelector('#camera-toggle').textContent === '开启摄像头', null, {timeout:15000});
+    await viewer.click('#mute');
+    await viewer.waitForFunction(() => document.querySelector('#mute').textContent === '开启麦克风', null, {timeout:15000});
     await viewer.click('#leave'); await publisher.click('#leave');
     if (!process.env.LK_DEMO_LOCAL) {
       const refreshed = viewer.waitForResponse(response => response.url().endsWith('/api/sfu/rooms/') && response.request().method() === 'GET');
@@ -321,6 +351,6 @@ const assert = require('node:assert/strict');
       assert.equal((await refreshed).status(), 200);
     }
     assert.deepEqual(errors, []);
-    console.log(`PASS: browser synthetic camera/microphone, device switching, signal reconnection, dynamic subscriptions, synthetic screen video/audio${udpProxy ? ', UDP media loss and recovery' : ''}${process.env.LK_BRIDGE_TEST ? ', camera and screen Group WHEP audio/video and bridge cleanup' : ''}, and leave`);
+    console.log(`PASS: browser bidirectional synthetic camera/microphone, device switching, signal reconnection, dynamic subscriptions, synthetic screen video/audio${udpProxy ? ', UDP media loss and recovery' : ''}${process.env.LK_BRIDGE_TEST ? ', camera and screen Group WHEP audio/video and bridge cleanup' : ''}, and leave`);
   } finally { await context.close(); await browser.close(); if (udpProxy) udpProxy.close(); }
 })().catch(e => { console.error(e.stack || e.message); process.exitCode=1; });
