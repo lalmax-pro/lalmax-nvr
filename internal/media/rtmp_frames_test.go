@@ -3,6 +3,7 @@ package media
 import (
 	"encoding/binary"
 	"testing"
+	"time"
 
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,21 @@ func TestRtmpMsgToFrames_AVCNALU(t *testing.T) {
 	require.Equal(t, "h264", frames[0].Codec)
 	require.True(t, frames[0].IsKey)
 	require.Equal(t, append([]byte{0, 0, 0, 1}, nal...), frames[0].Data)
+}
+
+func TestRtmpMsgToFrames_Opus(t *testing.T) {
+	msg := base.RtmpMsg{
+		Header:  base.RtmpHeader{MsgTypeId: base.RtmpTypeIdAudio, TimestampAbs: 125},
+		Payload: []byte{base.RtmpSoundFormatOpus << 4, 0xf8, 0xff, 0xfe},
+	}
+	frames := rtmpMsgToFrames(msg)
+	require.Len(t, frames, 1)
+	require.Equal(t, FrameAudio, frames[0].Kind)
+	require.Equal(t, "opus", frames[0].Codec)
+	require.Equal(t, 125*time.Millisecond, frames[0].PTS)
+	require.Equal(t, []byte{0xf8, 0xff, 0xfe}, frames[0].Data)
+	msg.Payload[1] = 0
+	require.Equal(t, byte(0xf8), frames[0].Data[0], "frame must own its payload")
 }
 
 func TestRtmpMsgToFrames_EnhancedHEVCCRA(t *testing.T) {
