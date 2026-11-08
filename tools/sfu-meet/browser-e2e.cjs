@@ -48,6 +48,7 @@ const assert = require('node:assert/strict');
       const stream = await viewer.locator('#bridge-list .track-info strong').first().textContent();
       assert.match(stream, /^sfu_/);
       const outcome = await viewer.evaluate(async (id) => {
+        const authorization = `Basic ${sessionStorage.getItem('nvr_auth')}`;
         const pc = new RTCPeerConnection();
         pc.addTransceiver('video', {direction:'recvonly'});
         pc.addTransceiver('audio', {direction:'recvonly'});
@@ -57,7 +58,7 @@ const assert = require('node:assert/strict');
         if (pc.iceGatheringState !== 'complete') await new Promise(resolve => pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') resolve(); }));
         let response;
         for (let i=0; i<30; i++) {
-          response = await fetch(`/api/sfu/bridges/${encodeURIComponent(id)}/whep`, {method:'POST',headers:{'Content-Type':'application/sdp'},body:pc.localDescription.sdp});
+          response = await fetch(`/api/sfu/bridges/${encodeURIComponent(id)}/whep`, {method:'POST',headers:{Authorization:authorization,'Content-Type':'application/sdp'},body:pc.localDescription.sdp});
           if (response.status !== 503) break;
           await new Promise(resolve => setTimeout(resolve, 200));
         }
@@ -78,7 +79,7 @@ const assert = require('node:assert/strict');
         const audioSection = answer.split(/\r?\nm=/).find(s => s.startsWith('audio')) || '';
         const result = {width:video.videoWidth, audioBytes, inbound, tracks:media.getTracks().map(t => ({kind:t.kind, state:t.readyState, muted:t.muted})), answerAudio:audioSection.split(/\r?\n/).filter(s => /^(audio |a=(send|recv|inactive|rtpmap|mid))/.test(s))};
         pc.close(); video.remove();
-        if (location) await fetch(location, {method:'DELETE'});
+        if (location) await fetch(location, {method:'DELETE',headers:{Authorization:authorization}});
         return result;
       }, stream);
       assert.ok(outcome.width > 0 && outcome.audioBytes > 0, JSON.stringify(outcome));
@@ -87,6 +88,19 @@ const assert = require('node:assert/strict');
         const video = document.querySelector('#bridge-player');
         return video.videoWidth > 0 && video.srcObject?.getAudioTracks().some(track => track.readyState === 'live' && !track.muted);
       }, null, {timeout:25000});
+      if (process.env.LK_RECORD_TEST) {
+        const plan = await viewer.evaluate(async streamID => {
+          const response = await fetch('/api/recording-plans', {method:'POST',headers:{Authorization:`Basic ${sessionStorage.getItem('nvr_auth')}`,'Content-Type':'application/json'},body:JSON.stringify({stream_id:streamID,name:'LiveKit browser test',mode:'continuous',enabled:true})});
+          if (response.status !== 201) throw new Error(`recording plan ${response.status}: ${await response.text()}`);
+          return response.json();
+        }, stream);
+        await viewer.waitForTimeout(9000);
+        await viewer.evaluate(async id => {
+          const response = await fetch(`/api/recording-plans/${encodeURIComponent(id)}`, {method:'DELETE',headers:{Authorization:`Basic ${sessionStorage.getItem('nvr_auth')}`}});
+          if (!response.ok) throw new Error(`delete recording plan ${response.status}`);
+        }, plan.id);
+        console.log(`RECORDED_STREAM=${stream}`);
+      }
       await viewer.getByRole('button', {name:'停止', exact:true}).click();
       await viewer.getByRole('button', {name:'移除', exact:true}).waitFor({timeout:15000});
       assert.equal(await viewer.locator('#bridge-player').isHidden(), true);
