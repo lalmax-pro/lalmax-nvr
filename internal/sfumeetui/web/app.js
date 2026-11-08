@@ -276,7 +276,7 @@
   function fail(c,err,connectionLost=false) {
     if(current!==c)return;
     if((c.recovery||(c.negotiated&&c.snapshot?.Generation&&(connectionLost||c.ws?.readyState!==WebSocket.OPEN))) && !err.terminal) {
-      const r=c.recovery||{stream:c.stream,roomID:c.roomID,generation:c.snapshot.Generation,disabledTracks:new Set(c.disabledTracks),attempt:0,screenStopped:!!c.screen};
+      const r=c.recovery||{stream:c.stream,roomID:c.roomID,generation:c.snapshot.Generation,disabledTracks:new Set(c.disabledTracks),attempt:0,screenStopped:!!c.screen,hadBridge:nvrMode&&c.bridges.size>0};
       c.stream=null;closeCurrent();recovery=r;
       if(r.attempt<3){
         const delay=1000*2**r.attempt++;
@@ -332,7 +332,7 @@
       };
       if(c.stream){for(const track of c.stream.getTracks())if(track.readyState!=='ended')await publishTrack(c,track,track.kind==='audio'?'microphone':'camera');}
       if(!c.stream?.getTracks().length)pc.createDataChannel('control');
-      await negotiate(c);if(current!==c)return;c.negotiated=true;if(c.snapshot)render(c.snapshot,c);leave.disabled=false;mute.disabled=!c.stream?.getAudioTracks().length;cameraToggle.disabled=!c.stream?.getVideoTracks().length;share.disabled=false;micDevice.disabled=!c.stream?.getAudioTracks().length;cameraDevice.disabled=!c.stream?.getVideoTracks().length;for(const [button,track,on,off] of [[mute,c.stream?.getAudioTracks()[0],'◉ 静音','◎ 取消静音'],[cameraToggle,c.stream?.getVideoTracks()[0],'◈ 关闭摄像头','◈ 开启摄像头']])if(track){button.setAttribute('aria-pressed',String(!track.enabled));button.textContent=track.enabled?on:off;}if(retry){recovery=null;c.recovery=null;if(retry.screenStopped)showError('已重新连接；请重新开启屏幕共享。');}state(pc.connectionState==='connected'?'媒体连接正常':'正在建立媒体连接',pc.connectionState==='connected');scheduleSync(c);
+      await negotiate(c);if(current!==c)return;c.negotiated=true;if(c.snapshot)render(c.snapshot,c);leave.disabled=false;mute.disabled=!c.stream?.getAudioTracks().length;cameraToggle.disabled=!c.stream?.getVideoTracks().length;share.disabled=false;micDevice.disabled=!c.stream?.getAudioTracks().length;cameraDevice.disabled=!c.stream?.getVideoTracks().length;for(const [button,track,on,off] of [[mute,c.stream?.getAudioTracks()[0],'◉ 静音','◎ 取消静音'],[cameraToggle,c.stream?.getVideoTracks()[0],'◈ 关闭摄像头','◈ 开启摄像头']])if(track){button.setAttribute('aria-pressed',String(!track.enabled));button.textContent=track.enabled?on:off;}if(retry){recovery=null;c.recovery=null;const notices=[];if(retry.screenStopped)notices.push('请重新开启屏幕共享');if(retry.hadBridge)notices.push('请确认先前桥接已停止，网络中断可能阻碍清理');if(notices.length)showError(`已重新连接；${notices.join('；')}。`);}state(pc.connectionState==='connected'?'媒体连接正常':'正在建立媒体连接',pc.connectionState==='connected');scheduleSync(c);
     } catch(err){fail(c,err);}
   }
   form.addEventListener('submit',event=>{event.preventDefault();void connect();});
