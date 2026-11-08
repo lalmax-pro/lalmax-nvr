@@ -50,10 +50,19 @@ func testDynamicH264Subscription(t *testing.T, source string) {
 	received := make(chan []byte, 1)
 	remoteSSRC := make(chan uint32, 2)
 	viewer.OnTrack(func(tr *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		p, _, err := tr.ReadRTP()
-		if err == nil {
-			remoteSSRC <- uint32(tr.SSRC())
-			received <- p.Payload
+		select {
+		case remoteSSRC <- uint32(tr.SSRC()):
+		default:
+		}
+		for {
+			p, _, err := tr.ReadRTP()
+			if err != nil {
+				return
+			}
+			select {
+			case received <- p.Payload:
+			default:
+			}
 		}
 	})
 	negotiateWS(t, viewerWS, viewer)
@@ -188,6 +197,44 @@ delivered:
 	case <-feedback:
 		t.Fatal("unsubscribed viewer forwarded a keyframe request")
 	case <-time.After(400 * time.Millisecond):
+	}
+	select {
+	case <-received:
+	default:
+	}
+	// Cancel and restore the subscription before the next SDP offer. The old
+	// stopped sender must be replaced even though the publication ID is equal.
+	if err = viewerWS.WriteJSON(command{ID: "quick-resubscribe", Type: "subscribe", PublicationID: pub.Publication.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if r := readType(t, viewerWS, "result"); r.Error != "" {
+		t.Fatal(r.Error)
+	}
+	if err = transceiver.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	transceiver, err = viewer.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	negotiateWS(t, viewerWS, viewer)
+	quickDeadline := time.After(8 * time.Second)
+	for {
+		select {
+		case <-received:
+			goto quickDelivered
+		case <-ticker.C:
+			send()
+		case <-quickDeadline:
+			t.Fatal("quick resubscription received no RTP")
+		}
+	}
+quickDelivered:
+	if err = viewerWS.WriteJSON(command{ID: "quick-unsubscribe", Type: "unsubscribe", PublicationID: pub.Publication.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if r := readType(t, viewerWS, "result"); r.Error != "" {
+		t.Fatal(r.Error)
 	}
 	if err = transceiver.Stop(); err != nil {
 		t.Fatal(err)

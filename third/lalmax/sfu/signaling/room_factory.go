@@ -110,7 +110,12 @@ func (f *RoomFactory) NewNegotiator(ctx context.Context, id Identity, session *a
 		_ = pc.Close()
 		return nil, err
 	}
-	return &roomNegotiator{pion: negotiator, pc: pc, session: session, factory: f, room: session.RoomKey(), generation: session.RoomGeneration(), ctx: bindCtx, cancel: cancel, senders: make(map[string]*webrtc.RTPSender)}, nil
+	return &roomNegotiator{pion: negotiator, pc: pc, session: session, factory: f, room: session.RoomKey(), generation: session.RoomGeneration(), ctx: bindCtx, cancel: cancel, senders: make(map[string]outgoingSender)}, nil
+}
+
+type outgoingSender struct {
+	sender  *webrtc.RTPSender
+	stopped <-chan struct{}
 }
 
 type roomNegotiator struct {
@@ -123,7 +128,7 @@ type roomNegotiator struct {
 	generation string
 	ctx        context.Context
 	cancel     context.CancelFunc
-	senders    map[string]*webrtc.RTPSender
+	senders    map[string]outgoingSender
 	closed     bool
 }
 
@@ -159,9 +164,15 @@ func (n *roomNegotiator) syncOutgoing(ctx context.Context) error {
 	for _, p := range pubs {
 		desired[p.ID] = p
 	}
-	for id, sender := range n.senders {
-		if _, ok := desired[id]; !ok {
-			if err = n.pc.RemoveTrack(sender); err != nil {
+	for id, binding := range n.senders {
+		_, wanted := desired[id]
+		select {
+		case <-binding.stopped:
+			wanted = false
+		default:
+		}
+		if !wanted {
+			if err = n.pc.RemoveTrack(binding.sender); err != nil {
 				return err
 			}
 			delete(n.senders, id)
@@ -191,7 +202,10 @@ func (n *roomNegotiator) syncOutgoing(ctx context.Context) error {
 			return fmt.Errorf("bind outgoing track: %w", err)
 		}
 		go n.readFeedback(sender, p.ID, stopped)
-		n.senders[p.ID] = sender
+		// Stop unblocks ReadRTCP even if the client never renegotiates or sends
+		// another packet. RemoveTrack remains safe when the next offer arrives.
+		go func() { <-stopped; _ = sender.Stop() }()
+		n.senders[p.ID] = outgoingSender{sender: sender, stopped: stopped}
 	}
 	return nil
 }
