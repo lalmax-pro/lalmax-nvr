@@ -30,6 +30,9 @@ import (
 
 // This opt-in test uses synthesized images and audio, and does not open any media device.
 func TestSFUBridgeRecordingKeepsEncodedAVMarkersAligned(t *testing.T) {
+	if os.Getenv("SFU_AV_SYNC_TEST") != "1" {
+		t.Skip("set SFU_AV_SYNC_TEST=1 to use FFmpeg and libx264/libopus")
+	}
 	for _, tc := range []struct {
 		name        string
 		audioOffset time.Duration
@@ -40,18 +43,31 @@ func TestSFUBridgeRecordingKeepsEncodedAVMarkersAligned(t *testing.T) {
 		{"audio_200ms_earlier_fast", -200 * time.Millisecond, 3 * time.Millisecond},
 		{"audio_200ms_later_realtime", 200 * time.Millisecond, 20 * time.Millisecond},
 	} {
-		t.Run(tc.name, func(t *testing.T) { testSFUEncodedAVMarkers(t, tc.audioOffset, tc.pace) })
+		t.Run(tc.name, func(t *testing.T) { testSFUEncodedAVMarkers(t, tc.audioOffset, tc.pace, false) })
 	}
 }
 
-func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration) {
-	t.Helper()
-	if os.Getenv("SFU_AV_SYNC_TEST") != "1" {
-		t.Skip("set SFU_AV_SYNC_TEST=1 to use FFmpeg and libx264/libopus")
+func TestSFULongBridgeRecordingKeepsEncodedAVMarkersAligned(t *testing.T) {
+	if os.Getenv("SFU_AV_LONG_TEST") != "1" {
+		t.Skip("set SFU_AV_LONG_TEST=1 to run the one-minute recording test")
 	}
+	testSFUEncodedAVMarkers(t, 200*time.Millisecond, 20*time.Millisecond, true)
+}
+
+func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration, long bool) {
+	t.Helper()
 	dir := t.TempDir()
 	videoPath := filepath.Join(dir, "source.h264")
 	videoFilter := `color=c=black:s=160x96:r=25:d=2,drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='between(t,0.48,0.52)+between(t,1.48,1.52)'`
+	audioFilter := `aevalsrc=if(between(t\,0.48\,0.50)+between(t\,1.48\,1.50)\,0.5*sin(2*PI*1000*t)\,0):s=48000:d=2`
+	videoCount, audioCount, markerCount := 50, 100, 2
+	segmentDuration, timeout := time.Minute, 20*time.Second
+	if long {
+		videoFilter = `color=c=black:s=160x96:r=25:d=60,drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='between(t,0.48,0.52)+between(t,30.0,30.04)+between(t,59.0,59.04)'`
+		audioFilter = `aevalsrc=if(between(t\,0.48\,0.50)+between(t\,30.0\,30.02)+between(t\,59.0\,59.02)\,0.5*sin(2*PI*1000*t)\,0):s=48000:d=60`
+		videoCount, audioCount, markerCount = 1500, 3000, 3
+		segmentDuration, timeout = 2*time.Minute, 90*time.Second
+	}
 	cmd := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", videoFilter, "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-x264-params", "threads=1:slices=1:keyint=25:min-keyint=25:scenecut=0:repeat-headers=1", "-an", "-f", "h264", "-y", videoPath)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
@@ -82,9 +98,8 @@ func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration) {
 	}
 	require.NotEmpty(t, sps)
 	require.NotEmpty(t, pps)
-	require.Len(t, frames, 50)
+	require.Len(t, frames, videoCount)
 	audioPath := filepath.Join(dir, "source.opus")
-	audioFilter := `aevalsrc=if(between(t\,0.48\,0.50)+between(t\,1.48\,1.50)\,0.5*sin(2*PI*1000*t)\,0):s=48000:d=2`
 	cmd = exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", audioFilter, "-ac", "2", "-c:a", "libopus", "-frame_duration", "20", "-b:a", "64k", "-y", audioPath)
 	out, err = cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
@@ -97,9 +112,9 @@ func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration) {
 		} `json:"packets"`
 	}
 	require.NoError(t, json.Unmarshal(out, &audioPackets))
-	require.GreaterOrEqual(t, len(audioPackets.Packets), 100)
+	require.GreaterOrEqual(t, len(audioPackets.Packets), audioCount)
 	var packets [][]byte
-	for _, p := range audioPackets.Packets[:100] {
+	for _, p := range audioPackets.Packets[:audioCount] {
 		var data []byte
 		for _, line := range strings.Split(strings.TrimSpace(p.Data), "\n") {
 			parts := strings.SplitN(line, ":", 2)
@@ -117,7 +132,7 @@ func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration) {
 	t.Cleanup(func() { group.OnStop(); groups.RemoveGroupIfMatch(key, group) })
 	store := newTestManager(t)
 	engine := &media.EmbeddedLalmax{}
-	rec := NewH264Recorder(H264Config{CameraID: key.StreamName, SegmentDur: time.Minute, AudioEnabled: true, PreserveSourceTimestamps: true,
+	rec := NewH264Recorder(H264Config{CameraID: key.StreamName, SegmentDur: segmentDuration, AudioEnabled: true, PreserveSourceTimestamps: true,
 		FrameSource: func(ctx context.Context) (media.FrameSubscription, error) {
 			return engine.SubscribeFrames(ctx, media.SubscribeFramesRequest{StreamID: key.StreamName, AppName: "live"})
 		},
@@ -139,7 +154,7 @@ func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration) {
 		}
 	}))
 	t.Cleanup(func() { rec.Hub.UnsubscribeAudio("test") })
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	require.NoError(t, rec.Start(ctx))
 	t.Cleanup(func() { _ = rec.Stop() })
@@ -193,13 +208,13 @@ func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration) {
 		require.NoError(t, audioFan.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: uint16(i + 1), Timestamp: 48000 + uint32(i*960), Marker: true}, Payload: payload}))
 		time.Sleep(pace)
 	}
-	expectedAudio := int32(100)
+	expectedAudio := int32(audioCount)
 	if audioOffset < 0 {
 		// The segment starts at the first video keyframe, so earlier audio is not recorded.
 		expectedAudio -= int32((-audioOffset) / (20 * time.Millisecond))
 	}
 	require.Eventually(t, func() bool { return received.Load() == expectedAudio }, 3*time.Second, time.Millisecond)
-	require.Eventually(t, func() bool { return videoReceived.Load() == 50 }, 3*time.Second, time.Millisecond, "all video frames must reach the recorder before stopping")
+	require.Eventually(t, func() bool { return videoReceived.Load() == int32(videoCount) }, 3*time.Second, time.Millisecond, "all video frames must reach the recorder before stopping")
 	require.NoError(t, rec.Stop())
 	stopBridge()
 	select {
@@ -215,9 +230,9 @@ func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration) {
 	videoPixels, err := cmd.Output()
 	require.NoError(t, err)
 	const width, height = 160, 96
-	require.Equal(t, 50*width*height, len(videoPixels))
+	require.Equal(t, videoCount*width*height, len(videoPixels))
 	var flashTimes []float64
-	for i := 0; i < 50; i++ {
+	for i := 0; i < videoCount; i++ {
 		frame := videoPixels[i*width*height : (i+1)*width*height]
 		var sum int
 		for _, v := range frame {
@@ -227,7 +242,7 @@ func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration) {
 			flashTimes = append(flashTimes, float64(i)/25)
 		}
 	}
-	require.Len(t, flashTimes, 2)
+	require.Len(t, flashTimes, markerCount)
 	cmd = exec.Command("ffmpeg", "-v", "error", "-xerror", "-i", files[0], "-map", "0:a:0", "-af", "aresample=async=1:first_pts=0", "-ac", "1", "-f", "f32le", "-")
 	pcm, err := cmd.Output()
 	require.NoError(t, err)
@@ -246,7 +261,7 @@ func testSFUEncodedAVMarkers(t *testing.T, audioOffset, pace time.Duration) {
 			}
 		}
 	}
-	require.Len(t, signalTimes, 2)
+	require.Len(t, signalTimes, markerCount)
 	for i := range flashTimes {
 		require.InDelta(t, flashTimes[i]+audioOffset.Seconds(), signalTimes[i], .03, "audio and visual markers must remain within 30 ms")
 	}
