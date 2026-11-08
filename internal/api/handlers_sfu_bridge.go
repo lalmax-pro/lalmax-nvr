@@ -31,6 +31,9 @@ type SFUBridgeRegistry interface {
 type sfuAVBridgeRegistry interface {
 	CreateAV(context.Context, string, string, string) (sfubridge.Status, error)
 }
+type sfuScopedBridgeRegistry interface {
+	CreateForRoom(context.Context, string, string, string, string, string, string) (sfubridge.Status, error)
+}
 type sfuIdempotentBridgeRegistry interface {
 	CreateIdempotent(context.Context, string, string, string, string) (sfubridge.Status, error)
 }
@@ -264,6 +267,8 @@ func (h *Handler) createSFUBridge(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		PublicationID      string `json:"publication_id"`
 		AudioPublicationID string `json:"audio_publication_id,omitempty"`
+		RoomID             string `json:"room_id,omitempty"`
+		RoomGeneration     string `json:"room_generation,omitempty"`
 	}
 	if !sfuDecodeJSON(w, r, &input) {
 		return
@@ -283,7 +288,20 @@ func (h *Handler) createSFUBridge(w http.ResponseWriter, r *http.Request) {
 	}
 	var status sfubridge.Status
 	var err error
-	if len(keys) == 1 {
+	if scoped, ok := registry.(sfuScopedBridgeRegistry); ok {
+		if input.RoomID == "" || input.RoomGeneration == "" || len(input.RoomID) > 64 || len(input.RoomGeneration) > 128 {
+			writeError(w, http.StatusBadRequest, "room and generation required")
+			return
+		}
+		key := ""
+		if len(keys) == 1 {
+			key = keys[0]
+		}
+		status, err = scoped.CreateForRoom(r.Context(), principal, input.RoomID, input.RoomGeneration, input.PublicationID, input.AudioPublicationID, key)
+	} else if input.RoomID != "" || input.RoomGeneration != "" {
+		writeError(w, http.StatusBadRequest, "room scope unsupported")
+		return
+	} else if len(keys) == 1 {
 		idempotent, ok := registry.(sfuIdempotentBridgeRegistry)
 		if !ok {
 			writeError(w, http.StatusServiceUnavailable, "idempotent bridge creation unavailable")

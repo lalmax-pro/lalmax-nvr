@@ -9,6 +9,7 @@
   const controls = ['mute', 'camera-toggle', 'share', 'leave'];
   const localMode = document.documentElement.dataset.mode === 'local';
   if (localMode) {
+    $('bridge-panel').hidden = true;
     $('back-nvr').hidden = true;
     $('room').value = 'demo';
     $('room').readOnly = true;
@@ -21,6 +22,87 @@
   let current = null;
   let joining = false;
   let generation = 0;
+
+  function bridgeError(message) {
+    $('bridge-error').textContent = message || '';
+    $('bridge-error').hidden = !message;
+  }
+  async function bridgeRequest(path, options = {}) {
+    const response = await fetch(path, {
+      ...options, cache: 'no-store',
+      headers: { Authorization: `Basic ${current?.auth || basicAuth()}`, ...options.headers },
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `操作失败 (${response.status})`);
+    }
+    return response.status === 204 ? null : response.json();
+  }
+  function renderBridgeTracks(room) {
+    if (localMode) return;
+    const main = $('bridge-track');
+    const audio = $('bridge-audio');
+    const oldMain = main.value;
+    const oldAudio = audio.value;
+    main.replaceChildren(new Option('选择轨道', ''));
+    audio.replaceChildren(new Option('不附加', ''));
+    for (const participant of [room.localParticipant, ...room.remoteParticipants.values()]) {
+      for (const pub of participant.trackPublications.values()) {
+        if (!pub.trackSid || pub.isMuted) continue;
+        const name = participant === room.localParticipant ? '我' : participantName(participant);
+        const label = `${name} · ${sourceName(pub.source)}`;
+        main.add(new Option(label, pub.trackSid));
+        if (pub.kind === Track.Kind.Audio) audio.add(new Option(label, pub.trackSid));
+      }
+    }
+    main.value = oldMain;
+    audio.value = oldAudio;
+    if (main.selectedIndex < 0) main.selectedIndex = 0;
+    if (audio.selectedIndex < 0) audio.selectedIndex = 0;
+    main.disabled = false;
+    audio.disabled = false;
+    $('bridge-create').disabled = !!current?.bridgeBusy;
+  }
+  async function refreshBridges(state) {
+    if (localMode || current !== state || state.refreshingBridges) return;
+    state.refreshingBridges = true;
+    try {
+      const entries = await bridgeRequest('/api/sfu/bridges/');
+      if (current !== state) return;
+      const list = $('bridge-list');
+      list.replaceChildren();
+      for (const entry of entries) {
+        const row = document.createElement('div');
+        row.className = 'track-row';
+        const info = document.createElement('div');
+        info.className = 'track-info';
+        const name = document.createElement('strong');
+        name.textContent = entry.stream_id;
+        const detail = document.createElement('small');
+        detail.textContent = ({ pending: '已提交', stopping: '正在停止', stopped: '已停止', failed: '已结束' })[entry.state] || entry.state;
+        info.append(name, detail);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'track-toggle';
+        const terminal = entry.state === 'stopped' || entry.state === 'failed';
+        button.textContent = terminal ? '移除' : '停止';
+        button.disabled = entry.state === 'stopping';
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            const path = `/api/sfu/bridges/${encodeURIComponent(entry.id)}`;
+            await bridgeRequest(terminal ? path : `${path}/stop`, terminal ? { method: 'DELETE' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            bridgeError('');
+            await refreshBridges(state);
+          } catch (error) { bridgeError(error.message); button.disabled = false; }
+        });
+        row.append(info, button);
+        list.append(row);
+      }
+    } catch (error) {
+      if (current === state) bridgeError(error.message);
+    } finally { state.refreshingBridges = false; }
+  }
 
   function showError(message) {
     $('error').textContent = message || '';
@@ -113,6 +195,7 @@
     if (current !== state) return;
     const room = state.room;
     clearMedia(state);
+    renderBridgeTracks(room);
     trackList.replaceChildren();
     $('member-count').textContent = `${room.remoteParticipants.size + 1} 人在线`;
     let publications = 0;
@@ -204,6 +287,12 @@
   function cleanup(state, message) {
     if (current !== state) return;
     current = null;
+    clearInterval(state.bridgeTimer);
+    $('bridge-track').disabled = true;
+    $('bridge-audio').disabled = true;
+    $('bridge-create').disabled = true;
+    $('bridge-list').replaceChildren();
+    bridgeError('');
     generation++;
     clearMedia(state);
     trackList.replaceChildren();
@@ -227,7 +316,7 @@
       const credentials = await joinCredentials($('room').value, auth);
       if (attempt !== generation) return;
       const room = new Room({ adaptiveStream: true, dynacast: true, publishDefaults: { videoCodec: 'h264' } });
-      state = { room, attached: new Set(), desired: new Map() };
+      state = { room, auth, attached: new Set(), desired: new Map() };
       current = state;
       bindRoom(state);
       await room.connect(credentials.url, credentials.token, { autoSubscribe: true });
@@ -238,6 +327,10 @@
       joining = false;
       status('已连接', true);
       render(state);
+      if (!localMode) {
+        refreshBridges(state);
+        state.bridgeTimer = setInterval(() => refreshBridges(state), 5000);
+      }
       const failures = [];
       if ($('microphone').checked) {
         try { await room.localParticipant.setMicrophoneEnabled(true, { deviceId: $('microphone-device').value || 'default' }); }
@@ -274,6 +367,26 @@
   $('share').addEventListener('click', () => action((room) => room.localParticipant.setScreenShareEnabled(!room.localParticipant.isScreenShareEnabled, { audio: $('screen-audio').checked })));
   $('enable-audio').addEventListener('click', () => action((room) => room.startAudio()));
   $('leave').addEventListener('click', () => { const state = current; if (state) { cleanup(state, '已离开'); state.room.disconnect().catch(() => {}); } });
+  $('bridge-create').addEventListener('click', async () => {
+    const state = current;
+    if (!state || state.bridgeBusy) return;
+    if (!$('bridge-track').value) { bridgeError('请选择主轨道'); return; }
+    const button = $('bridge-create');
+    state.bridgeBusy = true;
+    button.disabled = true;
+    try {
+      const roomSID = await state.room.getSid();
+      if (current !== state) return;
+      await bridgeRequest('/api/sfu/bridges/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({ room_id: state.room.name, room_generation: roomSID, publication_id: $('bridge-track').value, audio_publication_id: $('bridge-audio').value }),
+      });
+      bridgeError('');
+      await refreshBridges(state);
+    } catch (error) { if (current === state) bridgeError(error.message); }
+    finally { state.bridgeBusy = false; if (current === state) button.disabled = false; }
+  });
   $('microphone-device').addEventListener('change', () => action((room) => room.switchActiveDevice('audioinput', $('microphone-device').value || 'default')));
   $('camera-device').addEventListener('change', () => action((room) => room.switchActiveDevice('videoinput', $('camera-device').value || 'default')));
   navigator.mediaDevices?.addEventListener('devicechange', () => devices().catch(() => {}));

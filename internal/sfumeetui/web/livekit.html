@@ -49,6 +49,7 @@
         </form><p id="error" class="error" role="alert" hidden></p>
       </div>
       <div class="small-card tracks-card" aria-labelledby="tracks-title"><span class="eyebrow">REMOTE TRACKS</span><h2 id="tracks-title">远端轨道</h2><p>默认自动订阅，可逐条取消或恢复。</p><div id="track-list" class="track-list" aria-live="polite"><p class="track-empty">加入会议后显示远端轨道。</p></div></div>
+      <div id="bridge-panel" class="small-card tracks-card" aria-labelledby="bridge-title"><span class="eyebrow">NVR GROUP</span><h2 id="bridge-title">发布到 Group</h2><p>选择房间中的轨道；合并音视频时须选择同一成员的摄像头和麦克风，或屏幕和屏幕音频。</p><label for="bridge-track">主轨道</label><select id="bridge-track" disabled><option value="">暂无轨道</option></select><label for="bridge-audio">附加音频</label><select id="bridge-audio" disabled><option value="">不附加</option></select><button id="bridge-create" class="track-toggle" type="button" disabled>发布</button><p id="bridge-error" class="error" role="alert" hidden></p><div id="bridge-list" class="track-list" aria-live="polite"></div></div>
       <div class="side-foot">LALMAX NVR <span> / </span> SFU</div>
     </aside>
   </main>

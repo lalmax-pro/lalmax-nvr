@@ -894,6 +894,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		if err = cfg.SFU.ValidateBackend(); err == nil {
 			if cfg.SFU.Backend == "livekit" {
 				a.liveKitRuntime, err = newNVRLiveKitRuntime(a, cfg.SFU.LiveKit)
+				if err == nil {
+					if embedded, ok := a.mediaEngine.(*media.EmbeddedLalmax); ok && embedded.Server() != nil {
+						a.liveKitRuntime.bridges, err = newNVRLiveKitBridgeRegistry(a.liveKitRuntime, &nvrSFUPublisher{engine: embedded, server: embedded.Server()}, a.mediaAuth, a.db)
+					}
+				}
 			} else {
 				a.sfuRuntime, err = newNVRSFURuntime(a)
 			}
@@ -987,6 +992,9 @@ func (a *App) buildRouter() http.Handler {
 	}
 	if a.liveKitRuntime != nil {
 		handler.SetLiveKitJoinIssuer(a.liveKitRuntime)
+		if a.liveKitRuntime.bridges != nil {
+			handler.SetSFUBridgeRegistry(a.liveKitRuntime.bridges)
+		}
 	}
 	// Capture runtime configuration at bootstrap; changes to executable paths or
 	// media listener settings require a restart before starting new transcodes.

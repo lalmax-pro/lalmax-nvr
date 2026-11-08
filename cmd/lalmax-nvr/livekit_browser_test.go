@@ -11,17 +11,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"testing"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/api"
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
 func TestLiveKitBrowser(t *testing.T) {
+	t.Chdir(t.TempDir())
 	ctx := context.Background()
 	db, err := storage.New(filepath.Join(t.TempDir(), "nvr.db"))
 	if err != nil {
@@ -53,8 +57,29 @@ func TestLiveKitBrowser(t *testing.T) {
 	if err = os.WriteFile(p, []byte(yaml), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Config{SFU: config.SFUConfig{Enabled: true, Backend: "livekit", LiveKit: config.SFULiveKitConfig{PublicURL: fmt.Sprintf("http://127.0.0.1:%d", port)}}}
+	cfg, _ := testConfig(t)
+	isolateEmbeddedMedia(t, cfg)
+	cfg.SFU = config.SFUConfig{Enabled: true, Backend: "livekit", LiveKit: config.SFULiveKitConfig{PublicURL: fmt.Sprintf("http://127.0.0.1:%d", port)}}
+	engine, err := newMediaEngine(cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		c, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := engine.Shutdown(c); err != nil {
+			t.Error(err)
+		}
+	}()
 	runtime, err := newNVRLiveKitRuntime(&App{db: db, cfg: cfg}, config.SFULiveKitConfig{ConfigFile: p, APIKey: key, PublicURL: fmt.Sprintf("http://127.0.0.1:%d", port)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedded := engine.(*media.EmbeddedLalmax)
+	runtime.bridges, err = newNVRLiveKitBridgeRegistry(runtime, &nvrSFUPublisher{engine: embedded, server: embedded.Server()}, coreauth.NewMediaAuthorizer(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,11 +96,17 @@ func TestLiveKitBrowser(t *testing.T) {
 	h := api.NewHandler(nil, nil, func(next http.Handler) http.Handler { return next }, cfg, nil, "", nil, nil)
 	h.SetMultiUserAuthMW(middleware.InjectUser(user))
 	h.SetLiveKitJoinIssuer(runtime)
+	h.SetSFUBridgeRegistry(runtime.bridges)
+	h.SetMediaEngine(engine)
 	svr := httptest.NewServer(h.Routes())
 	defer svr.Close()
 	browserCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(browserCtx, "node", "../../tools/sfu-meet/browser-e2e.cjs", svr.URL).CombinedOutput()
+	// t.Chdir isolates lal's logs; locate the source script independently of cwd.
+	_, source, _, _ := goruntime.Caller(0)
+	command := exec.CommandContext(browserCtx, "node", filepath.Join(filepath.Dir(source), "../../tools/sfu-meet/browser-e2e.cjs"), svr.URL)
+	command.Env = append(os.Environ(), "LK_BRIDGE_TEST=1")
+	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("browser: %v\n%s", err, output)
 	}

@@ -25,7 +25,7 @@ func (r *testCombinedBridgeRegistry) Get(ctx context.Context, principal, id stri
 func TestSFUCombinedWHEPRejectsPartialAnswerAndCleansUp(t *testing.T) {
 	const id = "d14f36e0-08ca-4b9f-9568-8493f6ad1122"
 	const header = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"
-	const video = "m=video 9 UDP/TLS/RTP/SAVPF 102\r\na=sendonly\r\na=rtpmap:102 H264/90000\r\n"
+	const video = "m=video 9 UDP/TLS/RTP/SAVPF 102\r\na=sendonly\r\na=rtpmap:102 H264/90000\r\na=msid:stream video\r\n"
 	const audio = "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendonly\r\na=rtpmap:111 opus/48000/2\r\n"
 	deletes := 0
 	answer := header + video
@@ -50,6 +50,11 @@ func TestSFUCombinedWHEPRejectsPartialAnswerAndCleansUp(t *testing.T) {
 		t.Fatalf("partial answer: %d, deletes=%d", rec.Code, deletes)
 	}
 	answer += audio
+	rec = sfuRequest(h.Routes(), "POST", "/api/sfu/bridges/bridge/whep", offer, "application/sdp")
+	if rec.Code != 503 || deletes != 2 {
+		t.Fatalf("answer without audio sender: %d, deletes=%d", rec.Code, deletes)
+	}
+	answer += "a=msid:stream audio\r\n"
 	rec = sfuRequest(h.Routes(), "POST", "/api/sfu/bridges/bridge/whep", offer, "application/sdp")
 	if rec.Code != 201 {
 		t.Fatalf("complete answer: %d %s", rec.Code, rec.Body.String())

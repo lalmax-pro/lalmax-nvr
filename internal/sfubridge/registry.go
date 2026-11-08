@@ -54,13 +54,20 @@ type registryEntry struct {
 	finishedAt time.Time
 }
 
+// BridgeService supplies authorized bridge lifecycles to a registry.
+type BridgeService interface {
+	Start(context.Context, string, string) (*Handle, error)
+	StartAV(context.Context, string, string, string) (*Handle, error)
+	Close(context.Context) error
+}
+
 // Registry keeps bridge handles and credentials on the server. Authentication
 // is the embedding application's responsibility. All operations check both
 // ownership and a required policy. Terminal entries count toward maxEntries
 // until explicitly removed or pruned, bounding memory while preserving failure status.
 type Registry struct {
 	mu         sync.Mutex
-	service    *Service
+	service    BridgeService
 	authorize  ManagementAuthorizer
 	maxEntries int
 	creating   int
@@ -68,7 +75,7 @@ type Registry struct {
 	entries    map[string]*registryEntry
 }
 
-func NewRegistry(service *Service, authorize ManagementAuthorizer, maxEntries int) (*Registry, error) {
+func NewRegistry(service BridgeService, authorize ManagementAuthorizer, maxEntries int) (*Registry, error) {
 	if service == nil || authorize == nil || maxEntries < 1 || maxEntries > 4096 {
 		return nil, ErrInvalid
 	}
@@ -143,13 +150,28 @@ func (r *Registry) observe(entry *registryEntry) {
 // PruneFinished removes terminal entries older than before. Active bridges
 // are never removed; callers choose a retention window for status inspection.
 func (r *Registry) PruneFinished(before time.Time) {
+	r.PruneFinishedIDs(before)
+}
+
+// PruneFinishedIDs also returns the removed IDs for callers maintaining an index.
+func (r *Registry) PruneFinishedIDs(before time.Time) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	var removed []string
 	for id, entry := range r.entries {
 		if !entry.finishedAt.IsZero() && entry.finishedAt.Before(before) {
 			delete(r.entries, id)
+			removed = append(removed, id)
 		}
 	}
+	return removed
+}
+
+// Empty reports whether there are no entries or creations in progress.
+func (r *Registry) Empty() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.entries) == 0 && r.creating == 0
 }
 func (r *Registry) allowed(ctx context.Context, principal, id string, action Action) (*registryEntry, error) {
 	if ctx == nil || principal == "" || id == "" {

@@ -25,6 +25,7 @@ type nvrLiveKitRuntime struct {
 	issuer    *livekitsfu.TokenIssuer
 	policy    *nvrSFUPolicy
 	publicURL string
+	bridges   *nvrLiveKitBridgeRegistry
 	mu        sync.Mutex
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -106,6 +107,9 @@ func (r *nvrLiveKitRuntime) Start(parent context.Context) error {
 			if err := parent.Err(); err != nil {
 				return err
 			}
+			if r.bridges != nil {
+				go r.bridges.monitor(ctx)
+			}
 			return nil
 		}
 		select {
@@ -131,10 +135,14 @@ func (r *nvrLiveKitRuntime) Start(parent context.Context) error {
 func (r *nvrLiveKitRuntime) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closed = true
-	cancel, done := r.cancel, r.done
+	cancel, done, bridges := r.cancel, r.done, r.bridges
 	r.mu.Unlock()
+	var bridgeErr error
+	if bridges != nil {
+		bridgeErr = bridges.Close(ctx)
+	}
 	if cancel == nil {
-		return nil
+		return bridgeErr
 	}
 	cancel()
 	select {
@@ -143,11 +151,11 @@ func (r *nvrLiveKitRuntime) Close(ctx context.Context) error {
 		err := r.err
 		r.mu.Unlock()
 		if errors.Is(err, context.Canceled) {
-			return nil
+			return bridgeErr
 		}
-		return err
+		return errors.Join(bridgeErr, err)
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Join(bridgeErr, ctx.Err())
 	}
 }
 

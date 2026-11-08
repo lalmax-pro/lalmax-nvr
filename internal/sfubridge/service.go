@@ -91,6 +91,16 @@ type Handle struct {
 func (h *Handle) Done() <-chan error { return h.done }
 func (h *Handle) Stop()              { h.cancel() }
 
+// NewHandle wraps a trusted service-owned bridge. The service must send its
+// terminal result after revoking the output and releasing the publisher. The
+// buffered channel permits completion even if registry creation races close.
+func NewHandle(streamID, playbackToken string, done chan error, cancel context.CancelFunc) (*Handle, error) {
+	if streamID == "" || playbackToken == "" || cap(done) < 1 || cancel == nil {
+		return nil, ErrInvalid
+	}
+	return &Handle{StreamID: streamID, PlaybackToken: playbackToken, done: done, cancel: cancel}, nil
+}
+
 func randomID() (string, error) {
 	var b [24]byte
 	if _, err := rand.Read(b[:]); err != nil {

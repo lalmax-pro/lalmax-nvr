@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/api"
+	coreauth "github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
@@ -23,9 +24,22 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+	"github.com/q191201771/lal/pkg/base"
+	"github.com/q191201771/lal/pkg/logic"
 )
 
+type liveKitBridgeHook struct{ messages chan base.RtmpMsg }
+
+func (h *liveKitBridgeHook) OnMsg(msg base.RtmpMsg) {
+	select {
+	case h.messages <- msg.Clone():
+	default:
+	}
+}
+func (*liveKitBridgeHook) OnStop() {}
+
 func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
+	t.Chdir(t.TempDir())
 	ctx := context.Background()
 	db, err := storage.New(filepath.Join(t.TempDir(), "nvr.db"))
 	if err != nil {
@@ -87,10 +101,22 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 		}
 	})
 	principal := fmt.Sprintf("user:%d", user.ID)
+	lalManager := logic.NewServerManager(func(o *logic.Option) {
+		o.ConfRawContent = []byte(`{"hls":{"enable":true,"on_demand":true,"url_pattern":"/hls/"}}`)
+	})
+	hook := &liveKitBridgeHook{messages: make(chan base.RtmpMsg, 128)}
+	lalManager.WithOnHookSession(func(_, _ string) logic.ICustomizeHookSessionContext { return hook })
+	grants := coreauth.NewMediaAuthorizer()
+	bridges, err := newNVRLiveKitBridgeRegistry(runtime, lalManager, grants, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.bridges = bridges
 	noop := func(next http.Handler) http.Handler { return next }
 	handler := api.NewHandler(nil, nil, noop, nil, nil, "", nil, nil)
 	handler.SetMultiUserAuthMW(middleware.InjectUser(user))
 	handler.SetLiveKitJoinIssuer(runtime)
+	handler.SetSFUBridgeRegistry(bridges)
 	req := httptest.NewRequest(http.MethodPost, "/api/sfu/livekit/join", strings.NewReader(`{"room":"front-door"}`))
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -134,7 +160,8 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := publisher.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{Name: "synthetic"}); err != nil {
+	publication, err := publisher.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{Name: "synthetic"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	ticker := time.NewTicker(20 * time.Millisecond)
@@ -160,6 +187,101 @@ receive:
 			t.Fatal("track did not arrive")
 		}
 	}
+	producerCtx, stopProducer := context.WithCancel(ctx)
+	defer stopProducer()
+	go func() {
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-producerCtx.Done():
+				return
+			case <-tick.C:
+				sequence++
+				_ = track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: sequence, Timestamp: uint32(sequence) * 960}, Payload: payload}, nil)
+			}
+		}
+	}()
+	body, _ := json.Marshal(map[string]string{"room_id": "front-door", "room_generation": viewer.SID(), "publication_id": publication.SID()})
+	create := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/api/sfu/bridges/", bytes.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Idempotency-Key", "bridge-test-1")
+		w := httptest.NewRecorder()
+		handler.Routes().ServeHTTP(w, r)
+		return w
+	}
+	created := create()
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("bridge create: %d %s", created.Code, created.Body.String())
+	}
+	var status struct {
+		ID       string `json:"id"`
+		StreamID string `json:"stream_id"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.ID == "" || !strings.HasPrefix(status.StreamID, "sfu_") {
+		t.Fatal("invalid bridge status")
+	}
+	retry := create()
+	if retry.Code != http.StatusAccepted || retry.Body.String() != created.Body.String() {
+		t.Fatalf("idempotent retry: %d", retry.Code)
+	}
+	select {
+	case <-hook.messages:
+	case <-time.After(10 * time.Second):
+		t.Fatal("bridge group did not receive audio")
+	}
+	stream, playToken, err := bridges.Playback(ctx, principal, status.ID)
+	if err != nil || stream != status.StreamID || grants.AuthorizePlayback("webrtc", stream, playToken) != nil {
+		t.Fatal("bridge playback grant missing")
+	}
+	if ok, err := db.IsSFUBridgeOutput(ctx, stream); err != nil || !ok {
+		t.Fatal("bridge output was not persisted")
+	}
+	stopReq := httptest.NewRequest(http.MethodPost, "/api/sfu/bridges/"+status.ID+"/stop", strings.NewReader(`{}`))
+	stopReq.Header.Set("Content-Type", "application/json")
+	stopped := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(stopped, stopReq)
+	if stopped.Code != http.StatusNoContent {
+		t.Fatalf("bridge stop: %d", stopped.Code)
+	}
+	stopDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(stopDeadline) {
+		group := lalManager.GetGroup("live", stream)
+		if (group == nil || !group.HasInSession()) && grants.AuthorizePlayback("webrtc", stream, playToken) != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if grants.AuthorizePlayback("webrtc", stream, playToken) == nil {
+		t.Fatal("bridge playback grant not revoked")
+	}
+	if group := lalManager.GetGroup("live", stream); group != nil && group.HasInSession() {
+		t.Fatal("group publisher not released")
+	}
+	// Completed room generations and their indexes must not exhaust the limits
+	// during a long-running deployment.
+	pruneDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(pruneDeadline) {
+		bridges.maintain(ctx, time.Now().Add(time.Second))
+		bridges.mu.Lock()
+		rooms, ids := len(bridges.rooms), len(bridges.byID)
+		bridges.mu.Unlock()
+		if rooms == 0 && ids == 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	bridges.mu.Lock()
+	rooms, ids := len(bridges.rooms), len(bridges.byID)
+	bridges.mu.Unlock()
+	if rooms != 0 || ids != 0 {
+		t.Fatalf("terminal bridge not pruned: %d rooms, %d IDs", rooms, ids)
+	}
+	stopProducer()
 	if join.Room != "front-door" || join.Identity == "" {
 		t.Fatal("invalid join response")
 	}

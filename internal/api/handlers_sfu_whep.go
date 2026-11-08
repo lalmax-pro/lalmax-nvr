@@ -58,6 +58,26 @@ func sfuSDPSupports(offer []byte, kind, codec string, answer bool) bool {
 	return false
 }
 
+// A sendonly m-line can advertise a codec even when the media server has no
+// sender yet. Require a real source before exposing a combined session.
+func sfuAnswerHasSource(answer []byte, kind string) bool {
+	var description sdp.SessionDescription
+	if description.Unmarshal(answer) != nil {
+		return false
+	}
+	for _, media := range description.MediaDescriptions {
+		if media.MediaName.Media != kind || media.MediaName.Port.Value == 0 {
+			continue
+		}
+		for _, attribute := range media.Attributes {
+			if (attribute.Key == "msid" || attribute.Key == "ssrc") && attribute.Value != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type sfuWHEPSession struct {
 	Principal string `json:"p"`
 	BridgeID  string `json:"b"`
@@ -203,7 +223,7 @@ func (h *Handler) createSFUBridgeWHEP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, "invalid SDP answer")
 		return
 	}
-	if status.AudioPublicationID != "" && (!sfuSDPSupports(answer, "video", "H264/90000", true) || !sfuSDPSupports(answer, "audio", "opus/48000/2", true)) {
+	if status.AudioPublicationID != "" && (!sfuSDPSupports(answer, "video", "H264/90000", true) || !sfuSDPSupports(answer, "audio", "opus/48000/2", true) || !sfuAnswerHasSource(answer, "video") || !sfuAnswerHasSource(answer, "audio")) {
 		writeError(w, 503, "combined bridge media not ready")
 		return
 	}
