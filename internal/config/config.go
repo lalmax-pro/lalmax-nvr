@@ -68,9 +68,10 @@ type Config struct {
 // SFUConfig configures the experimental NVR SFU runtime.
 // The runtime is opt-in and currently accepts authenticated administrators.
 type SFUConfig struct {
-	Enabled     bool           `yaml:"enabled" json:"enabled"`
-	ICEServers  []SFUICEServer `yaml:"ice_servers" json:"-"`
-	IdleTimeout string         `yaml:"idle_timeout,omitempty" json:"idle_timeout,omitempty"`
+	Enabled          bool           `yaml:"enabled" json:"enabled"`
+	ICEServers       []SFUICEServer `yaml:"ice_servers" json:"-"`
+	IdleTimeout      string         `yaml:"idle_timeout,omitempty" json:"idle_timeout,omitempty"`
+	ObserveBandwidth bool           `yaml:"observe_bandwidth,omitempty" json:"observe_bandwidth,omitempty"`
 }
 
 // RoomIdleTimeout returns zero when automatic room collection is disabled.
