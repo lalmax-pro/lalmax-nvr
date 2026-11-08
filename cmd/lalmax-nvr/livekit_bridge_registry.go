@@ -35,6 +35,7 @@ type nvrLiveKitBridgeRegistry struct {
 	mu        sync.Mutex
 	closed    bool
 	rooms     map[liveKitRoomKey]*liveKitRoomRegistry
+	retiring  map[*sfubridge.Registry]struct{}
 	byID      map[string]*sfubridge.Registry
 	requests  map[bridgeRequestKey]*liveKitBridgeRequest
 }
@@ -43,7 +44,7 @@ func newNVRLiveKitBridgeRegistry(runtime *nvrLiveKitRuntime, publisher bridge.Pu
 	if runtime == nil || publisher == nil || grants == nil || outputs == nil {
 		return nil, sfubridge.ErrInvalid
 	}
-	return &nvrLiveKitBridgeRegistry{runtime: runtime, publisher: publisher, grants: grants, outputs: outputs, rooms: make(map[liveKitRoomKey]*liveKitRoomRegistry), byID: make(map[string]*sfubridge.Registry), requests: make(map[bridgeRequestKey]*liveKitBridgeRequest)}, nil
+	return &nvrLiveKitBridgeRegistry{runtime: runtime, publisher: publisher, grants: grants, outputs: outputs, rooms: make(map[liveKitRoomKey]*liveKitRoomRegistry), retiring: make(map[*sfubridge.Registry]struct{}), byID: make(map[string]*sfubridge.Registry), requests: make(map[bridgeRequestKey]*liveKitBridgeRequest)}, nil
 }
 func (*nvrLiveKitBridgeRegistry) Create(context.Context, string, string) (sfubridge.Status, error) {
 	return sfubridge.Status{}, sfubridge.ErrInvalid
@@ -292,13 +293,44 @@ func (m *nvrLiveKitBridgeRegistry) monitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if p, ok := m.publisher.(*nvrSFUPublisher); ok && p.engine.Server() != p.server {
-				closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				_ = m.Close(closeCtx)
-				cancel()
-				return
-			}
+			m.refreshMedia(ctx)
 			m.maintain(ctx, time.Now().Add(-5*time.Minute))
+		}
+	}
+}
+
+// refreshMedia detaches registries bound to a replaced media server, then
+// cancels and drains them without blocking new rooms on the replacement.
+// Retiring registries stay tracked until their services actually stop.
+func (m *nvrLiveKitBridgeRegistry) refreshMedia(ctx context.Context) {
+	m.mu.Lock()
+	publisher, ok := m.publisher.(*nvrSFUPublisher)
+	if !ok || m.closed {
+		m.mu.Unlock()
+		return
+	}
+	current := publisher.engine.Server()
+	if current != publisher.server && len(m.retiring)+len(m.rooms) <= 128 {
+		for _, room := range m.rooms {
+			m.retiring[room.registry] = struct{}{}
+		}
+		m.rooms = make(map[liveKitRoomKey]*liveKitRoomRegistry)
+		m.byID = make(map[string]*sfubridge.Registry)
+		m.publisher = &nvrSFUPublisher{engine: publisher.engine, server: current}
+	}
+	retiring := make([]*sfubridge.Registry, 0, len(m.retiring))
+	for registry := range m.retiring {
+		retiring = append(retiring, registry)
+	}
+	m.mu.Unlock()
+	closeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for _, registry := range retiring {
+		err := registry.Close(closeCtx)
+		if err == nil {
+			m.mu.Lock()
+			delete(m.retiring, registry)
+			m.mu.Unlock()
 		}
 	}
 }
@@ -341,9 +373,12 @@ func (m *nvrLiveKitBridgeRegistry) Close(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	m.closed = true
-	all := make([]*sfubridge.Registry, 0, len(m.rooms))
+	all := make([]*sfubridge.Registry, 0, len(m.rooms)+len(m.retiring))
 	for _, r := range m.rooms {
 		all = append(all, r.registry)
+	}
+	for r := range m.retiring {
+		all = append(all, r)
 	}
 	m.mu.Unlock()
 	var result error

@@ -110,6 +110,30 @@ const assert = require('node:assert/strict');
         }, plan.id);
         console.log(`RECORDED_STREAM=${stream}`);
       }
+      if (process.env.LK_RESTART_TEST) {
+        const status = await viewer.evaluate(async () => (await fetch('/_test/restart-media', {method:'POST'})).status);
+        assert.equal(status, 204);
+        await viewer.waitForFunction(async () => {
+          const response = await fetch('/api/sfu/bridges/', {headers:{Authorization:`Basic ${sessionStorage.getItem('nvr_auth')}`}});
+          return response.ok && (await response.json()).length === 0;
+        }, null, {timeout:20000, polling:500});
+        await viewer.waitForFunction(() => !document.querySelector('#bridge-list .track-row'), null, {timeout:10000});
+        assert.equal(await viewer.locator('#status-text').textContent(), '已连接');
+        // Adaptive streaming may suspend an off-screen tile while controls are
+        // in view; make the meeting video visible before checking reception.
+        await viewer.locator('#tiles').scrollIntoViewIfNeeded();
+        await viewer.waitForFunction(() => [...document.querySelectorAll('#tiles video')].some(v => v.videoWidth > 0), null, {timeout:10000});
+        await viewer.click('#bridge-create');
+        await viewer.waitForSelector('#bridge-list .track-row', {timeout:20000});
+        const replacement = await viewer.locator('#bridge-list .track-info strong').first().textContent();
+        assert.match(replacement, /^sfu_/);
+        assert.notEqual(replacement, stream);
+        await viewer.getByRole('button', {name:'播放', exact:true}).click();
+        await viewer.waitForFunction(() => {
+          const video = document.querySelector('#bridge-player');
+          return video.videoWidth > 0 && video.srcObject?.getAudioTracks().some(track => track.readyState === 'live' && !track.muted);
+        }, null, {timeout:25000});
+      }
       await viewer.getByRole('button', {name:'停止', exact:true}).click();
       await viewer.getByRole('button', {name:'移除', exact:true}).waitFor({timeout:15000});
       assert.equal(await viewer.locator('#bridge-player').isHidden(), true);

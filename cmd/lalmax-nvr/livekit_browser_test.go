@@ -99,17 +99,40 @@ func TestLiveKitBrowser(t *testing.T) {
 	h.SetSFURoomManager(&nvrLiveKitRoomAdmin{runtime: runtime})
 	h.SetSFUBridgeRegistry(runtime.bridges)
 	h.SetMediaEngine(engine)
-	svr := httptest.NewServer(h.Routes())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/_test/restart-media", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		restartCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		if err := embedded.Restart(restartCtx, 1935, 9000, false, false); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.Handle("/", h.Routes())
+	svr := httptest.NewServer(mux)
 	defer svr.Close()
-	browserCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	browserCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 	// t.Chdir isolates lal's logs; locate the source script independently of cwd.
 	_, source, _, _ := goruntime.Caller(0)
 	command := exec.CommandContext(browserCtx, "node", filepath.Join(filepath.Dir(source), "../../tools/sfu-meet/browser-e2e.cjs"), svr.URL)
-	command.Env = append(os.Environ(), "LK_BRIDGE_TEST=1")
+	command.Env = append(os.Environ(), "LK_BRIDGE_TEST=1", "LK_RESTART_TEST=1")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("browser: %v\n%s", err, output)
+	}
+	runtime.bridges.mu.Lock()
+	publisher, ok := runtime.bridges.publisher.(*nvrSFUPublisher)
+	retiring := len(runtime.bridges.retiring)
+	closed := runtime.bridges.closed
+	runtime.bridges.mu.Unlock()
+	if !ok || publisher.server != embedded.Server() || retiring != 0 || closed {
+		t.Fatalf("bridge manager did not recover after media restart: publisher=%v retiring=%d closed=%v", ok, retiring, closed)
 	}
 	t.Log(string(output))
 }

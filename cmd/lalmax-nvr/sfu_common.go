@@ -38,7 +38,7 @@ type nvrSFUPublisher struct {
 }
 
 func (p *nvrSFUPublisher) AddCustomizePubSession(stream string) (logic.ICustomizePubSessionContext, error) {
-	if p.engine.Server() != p.server || !p.server.Ready() {
+	if p.server == nil || p.engine.Server() != p.server || !p.server.Ready() {
 		return nil, errors.New("SFU media server unavailable")
 	}
 	return p.server.AddCustomizePubSession(stream)
