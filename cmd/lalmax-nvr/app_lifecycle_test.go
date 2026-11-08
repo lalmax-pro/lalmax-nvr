@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,18 @@ func useHTTPMedia(cfg *config.Config) {
 	cfg.Media.Mode = "http"
 	cfg.Media.LalmaxHTTPAddr = "http://127.0.0.1:8080"
 	cfg.Media.LalmaxPublicURL = "http://127.0.0.1:8080"
+}
+
+// isolateEmbeddedMedia prevents unrelated packages' embedded servers from
+// competing for fixed RTC, JT1078, RTSP and HTTP ports in go test ./....
+func isolateEmbeddedMedia(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "lalmax.json")
+	addr := freeTCPAddr(t)
+	cfg.Media.LalmaxHTTPAddr = "http://" + addr
+	raw := fmt.Sprintf(`{"lalmax":{"http_config":{"http_listen_addr":%q},"rtc_config":{"enable":true,"ice_udp_mux_port":0,"ice_tcp_mux_port":0},"jt1078_config":{"enable":false},"fmp4_config":{"http":{"enable":false},"hls":{"enable":false}}},"lal":{"conf_version":"v0.4.1","default_http":{"http_listen_addr":"127.0.0.1:0"},"rtsp":{"enable":false},"httpflv":{"enable":false},"httpts":{"enable":false},"log":{"filename":"","is_to_file":false,"is_to_stdout":false,"level":5}}}`, addr)
+	require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+	cfg.Media.LalmaxConfigPath = path
 }
 
 func freeTCPPort(t *testing.T) int {

@@ -159,6 +159,7 @@ func TestMain3MainFailsOnRun(t *testing.T) {
 
 	cfg := main3MainConfig(t, freeTCPAddr(t), t.TempDir())
 	cfg.Media.Mode = "embedded"
+	isolateEmbeddedMedia(t, cfg)
 	cfg.JT808.Enabled = true
 	cfg.JT808.Port = occupied.Addr().(*net.TCPAddr).Port
 	cfg.JT808.MediaIP = "127.0.0.1"
