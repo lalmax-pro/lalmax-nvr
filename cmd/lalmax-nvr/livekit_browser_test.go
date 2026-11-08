@@ -4,10 +4,17 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -61,21 +68,24 @@ func TestLiveKitBrowser(t *testing.T) {
 	const key, secret = "testkey", "testsecret-testsecret-testsecret-123456"
 	yaml := fmt.Sprintf("development: false\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nrtc:\n  node_ip: 127.0.0.1\n  enable_loopback_candidate: true\n  ips:\n    includes: [127.0.0.1/32]\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
 	var turnAuth atomic.Int64
-	if os.Getenv("LK_TURN_TEST") != "" {
+	var turnTLSKeyPin string
+	turnMode := os.Getenv("LK_TURN_TEST")
+	if turnMode != "" {
 		if os.Getenv("LK_UDP_LOSS_TEST") != "" {
 			t.Fatal("LK_TURN_TEST and LK_UDP_LOSS_TEST must run separately")
 		}
-		conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
+		if turnMode == "1" {
+			turnMode = "udp"
+		}
+		if turnMode != "udp" && turnMode != "tcp" && turnMode != "tls" {
+			t.Fatal("LK_TURN_TEST must be udp, tcp or tls")
 		}
 		const turnSecret, realm = "local-test-turn-secret", "lalmax-test"
 		secretFile := filepath.Join(t.TempDir(), "turn-secret")
 		if err := os.WriteFile(secretFile, []byte(turnSecret), 0600); err != nil {
-			conn.Close()
 			t.Fatal(err)
 		}
-		turnServer, err := turn.NewServer(turn.ServerConfig{
+		turnConfig := turn.ServerConfig{
 			Realm: realm,
 			AuthHandler: func(req *turn.RequestAttributes) (string, []byte, bool) {
 				expiryText, _, ok := strings.Cut(req.Username, ":")
@@ -89,18 +99,54 @@ func TestLiveKitBrowser(t *testing.T) {
 				turnAuth.Add(1)
 				return req.Username, turn.GenerateAuthKey(req.Username, realm, credential), true
 			},
-			PacketConnConfigs: []turn.PacketConnConfig{{
-				PacketConn:            conn,
-				PermissionHandler:     func(_ net.Addr, peer net.IP) bool { return peer.IsLoopback() },
-				RelayAddressGenerator: &turn.RelayAddressGeneratorStatic{RelayAddress: net.ParseIP("127.0.0.1"), Address: "127.0.0.1"},
-			}},
-		})
+		}
+		allowLoopback := func(_ net.Addr, peer net.IP) bool { return peer.IsLoopback() }
+		relay := &turn.RelayAddressGeneratorStatic{RelayAddress: net.ParseIP("127.0.0.1"), Address: "127.0.0.1"}
+		var turnPort int
+		var closeListener func() error
+		if turnMode == "udp" {
+			conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			turnPort, closeListener = conn.LocalAddr().(*net.UDPAddr).Port, conn.Close
+			turnConfig.PacketConnConfigs = []turn.PacketConnConfig{{PacketConn: conn, PermissionHandler: allowLoopback, RelayAddressGenerator: relay}}
+		} else {
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if turnMode == "tls" {
+				privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					listener.Close()
+					t.Fatal(err)
+				}
+				cert := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+				der, err := x509.CreateCertificate(rand.Reader, cert, cert, &privateKey.PublicKey, privateKey)
+				if err != nil {
+					listener.Close()
+					t.Fatal(err)
+				}
+				publicKey, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+				if err != nil {
+					listener.Close()
+					t.Fatal(err)
+				}
+				pin := sha256.Sum256(publicKey)
+				turnTLSKeyPin = base64.StdEncoding.EncodeToString(pin[:])
+				listener = tls.NewListener(listener, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: privateKey}}})
+			}
+			turnPort, closeListener = listener.Addr().(*net.TCPAddr).Port, listener.Close
+			turnConfig.ListenerConfigs = []turn.ListenerConfig{{Listener: listener, PermissionHandler: allowLoopback, RelayAddressGenerator: relay}}
+		}
+		turnServer, err := turn.NewServer(turnConfig)
 		if err != nil {
-			conn.Close()
+			_ = closeListener()
 			t.Fatal(err)
 		}
 		defer turnServer.Close()
-		yaml += fmt.Sprintf("  turn_servers:\n    - host: 127.0.0.1\n      port: %d\n      protocol: udp\n      secret_file: %q\n", conn.LocalAddr().(*net.UDPAddr).Port, secretFile)
+		yaml += fmt.Sprintf("  turn_servers:\n    - host: 127.0.0.1\n      port: %d\n      protocol: %s\n      secret_file: %q\n", turnPort, turnMode, secretFile)
 	}
 	p := filepath.Join(t.TempDir(), "livekit.yaml")
 	if err = os.WriteFile(p, []byte(yaml), 0600); err != nil {
@@ -171,12 +217,15 @@ func TestLiveKitBrowser(t *testing.T) {
 	_, source, _, _ := goruntime.Caller(0)
 	command := exec.CommandContext(browserCtx, "node", filepath.Join(filepath.Dir(source), "../../tools/sfu-meet/browser-e2e.cjs"), svr.URL)
 	command.Env = append(os.Environ(), "LK_BRIDGE_TEST=1", "LK_RESTART_TEST=1", fmt.Sprintf("LK_LIVEKIT_UDP_PORT=%d", udpPort))
+	if turnTLSKeyPin != "" {
+		command.Env = append(command.Env, "LK_TEST_TURN_SPKI="+turnTLSKeyPin)
+	}
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("browser: %v\n%s", err, output)
 	}
 	if os.Getenv("LK_TURN_TEST") != "" && turnAuth.Load() == 0 {
-		t.Fatal("TURN server did not authenticate the browser")
+		t.Fatalf("TURN server did not authenticate the browser; browser output: %s", output)
 	}
 	runtime.bridges.mu.Lock()
 	publisher, ok := runtime.bridges.publisher.(*nvrSFUPublisher)

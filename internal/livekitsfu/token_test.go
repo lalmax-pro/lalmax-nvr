@@ -26,7 +26,7 @@ func TestJoinTokenScopesPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verifier.APIKey() != "test-key" || verifier.Identity() != "viewer-1" || claims.ExpiresAt == nil || time.Until(claims.ExpiresAt.Time) > time.Minute {
+	if verifier.APIKey() != "test-key" || verifier.Identity() != "viewer-1" || claims.ExpiresAt == nil || time.Until(claims.ExpiresAt.Time) > time.Minute || grants.GetParticipantKind() != livekit.ParticipantInfo_STANDARD {
 		t.Fatal("unexpected identity or expiry")
 	}
 	g := grants.Video

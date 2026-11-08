@@ -1,7 +1,16 @@
 const { chromium } = require('playwright-core');
 const assert = require('node:assert/strict');
+async function waitForAsync(page, predicate, argument, timeout, description) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await page.evaluate(predicate, argument)) return;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  throw new Error(`timed out waiting for ${description}`);
+}
 (async () => {
-  const browser = await chromium.launch({executablePath:process.env.LIVEKIT_BROWSER_EXECUTABLE,headless:true,args:['--no-sandbox','--mute-audio','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
+  if (process.env.LK_TURN_TEST === 'tls' && !process.env.LK_TEST_TURN_SPKI) throw new Error('TURN TLS test key pin missing');
+  const browser = await chromium.launch({executablePath:process.env.LIVEKIT_BROWSER_EXECUTABLE,headless:true,args:['--no-sandbox','--mute-audio','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream',...(process.env.LK_TURN_TEST === 'tls' ? [`--ignore-certificate-errors-spki-list=${process.env.LK_TEST_TURN_SPKI}`] : [])]});
   const context = await browser.newContext({permissions:['camera','microphone']});
   await context.addInitScript(() => {
     const NativeWebSocket = window.WebSocket;
@@ -81,9 +90,15 @@ const assert = require('node:assert/strict');
         window.__turnPeerConnections = [];
         window.RTCPeerConnection = class extends NativePeerConnection {
           constructor(configuration, ...args) {
-            const useRelay = configuration?.iceServers?.length > 0;
+            // LiveKit passes an RTC configuration even before it has ICE
+            // servers; the separate WHEP player constructs a PC without one.
+            const useRelay = configuration !== undefined;
             super(useRelay ? {...configuration, iceTransportPolicy:'relay'} : configuration, ...args);
+            this.__turnTestRelay = useRelay;
             if (useRelay) window.__turnPeerConnections.push(this);
+          }
+          setConfiguration(configuration) {
+            return super.setConfiguration(this.__turnTestRelay ? {...configuration, iceTransportPolicy:'relay'} : configuration);
           }
         };
       });
@@ -110,7 +125,9 @@ const assert = require('node:assert/strict');
     await viewer.waitForSelector('#audio-container audio', {state:'attached', timeout:15000});
     await viewer.locator('#tiles').scrollIntoViewIfNeeded();
     if (process.env.LK_TURN_TEST) {
-      await viewer.waitForFunction(async () => {
+      const expectedTransport = ['tcp', 'tls'].includes(process.env.LK_TURN_TEST) ? process.env.LK_TURN_TEST : 'udp';
+      try {
+        await waitForAsync(viewer, async expected => {
         for (const pc of window.__turnPeerConnections) {
           const stats = await pc.getStats();
           let relay = false; let audio = false; let video = false;
@@ -118,7 +135,7 @@ const assert = require('node:assert/strict');
             if (stat.type === 'transport' && stat.selectedCandidatePairId) {
               const pair = stats.get(stat.selectedCandidatePairId);
               const local = pair && stats.get(pair.localCandidateId);
-              relay = relay || local?.candidateType === 'relay';
+              relay = relay || (local?.candidateType === 'relay' && local.relayProtocol === expected);
             }
             if (stat.type === 'inbound-rtp' && stat.packetsReceived > 0) {
               audio = audio || stat.kind === 'audio';
@@ -128,7 +145,27 @@ const assert = require('node:assert/strict');
           if (relay && audio && video) return true;
         }
         return false;
-      }, null, {timeout:20000});
+        }, expectedTransport, 20000, `TURN ${expectedTransport} relay with audio/video`);
+      } catch (error) {
+        const diagnostic = await viewer.evaluate(async () => {
+          const connections = [];
+          for (const pc of window.__turnPeerConnections) {
+            const stats = await pc.getStats();
+            const candidates = [];
+            for (const stat of stats.values()) {
+              if (stat.type === 'local-candidate') candidates.push({type:stat.candidateType, protocol:stat.protocol, relay:stat.relayProtocol});
+              if (stat.type === 'transport' && stat.selectedCandidatePairId) {
+                const pair = stats.get(stat.selectedCandidatePairId);
+                const local = pair && stats.get(pair.localCandidateId);
+                candidates.push({selected:local?.candidateType, relay:local?.relayProtocol});
+              }
+            }
+            connections.push({state:pc.connectionState, candidates});
+          }
+          return connections;
+        });
+        throw new Error(`${error.message}: ${JSON.stringify(diagnostic)}`);
+      }
     }
     if (udpProxy) {
       assert.ok(await viewer.evaluate(() => window.__networkCandidateRewrites > 0), 'viewer did not use the UDP proxy');
@@ -271,10 +308,10 @@ const assert = require('node:assert/strict');
       if (process.env.LK_RESTART_TEST) {
         const status = await viewer.evaluate(async () => (await fetch('/_test/restart-media', {method:'POST'})).status);
         assert.equal(status, 204);
-        await viewer.waitForFunction(async () => {
+        await waitForAsync(viewer, async () => {
           const response = await fetch('/api/sfu/bridges/', {headers:{Authorization:`Basic ${sessionStorage.getItem('nvr_auth')}`}});
           return response.ok && (await response.json()).length === 0;
-        }, null, {timeout:20000, polling:500});
+        }, null, 20000, 'retired bridge cleanup');
         await viewer.waitForFunction(() => !document.querySelector('#bridge-list .track-row'), null, {timeout:10000});
         assert.equal(await viewer.locator('#status-text').textContent(), '已连接');
         // Adaptive streaming may suspend an off-screen tile while controls are
