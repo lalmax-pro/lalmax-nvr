@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +18,9 @@ type roomLossConn struct {
 	net.PacketConn
 	armed   atomic.Bool
 	packets atomic.Uint32
+	mu      sync.Mutex
+	seen    map[uint16]bool
+	burst   int
 	dropped chan uint16
 }
 
@@ -26,18 +30,27 @@ func (c *roomLossConn) ReadFrom(buf []byte) (int, net.Addr, error) {
 		if err != nil {
 			return n, addr, err
 		}
-		if n >= 12 && buf[0]>>6 == 2 && buf[1]&0x7f >= 96 && c.armed.Load() && c.packets.Add(1) == 5 {
-			c.dropped <- binary.BigEndian.Uint16(buf[2:4])
-			continue
+		if n >= 12 && buf[0]>>6 == 2 && buf[1]&0x7f >= 96 && c.armed.Load() && c.packets.Add(1) >= 5 {
+			sequence := binary.BigEndian.Uint16(buf[2:4])
+			c.mu.Lock()
+			shouldDrop := len(c.seen) < c.burst && !c.seen[sequence]
+			if shouldDrop {
+				c.seen[sequence] = true
+			}
+			c.mu.Unlock()
+			if shouldDrop {
+				c.dropped <- sequence
+				continue
+			}
 		}
 		return n, addr, nil
 	}
 }
-func roomLossViewer(t *testing.T) (*webrtc.PeerConnection, *roomLossConn) {
+func roomLossViewer(t *testing.T, burst int) (*webrtc.PeerConnection, *roomLossConn) {
 	t.Helper()
 	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
-	loss := &roomLossConn{PacketConn: conn, dropped: make(chan uint16, 1)}
+	loss := &roomLossConn{PacketConn: conn, dropped: make(chan uint16, burst), burst: burst, seen: make(map[uint16]bool)}
 	mux := webrtc.NewICEUDPMux(nil, loss)
 	t.Cleanup(func() { _ = mux.Close() })
 	settings := webrtc.SettingEngine{}
@@ -50,7 +63,11 @@ func roomLossViewer(t *testing.T) (*webrtc.PeerConnection, *roomLossConn) {
 	return pc, loss
 }
 
-func TestRoomNACKRecoversOneViewerWithoutInterruptingAnother(t *testing.T) {
+func TestRoomNACKRecoversOneViewerWithoutInterruptingAnother(t *testing.T) { testRoomBurstLoss(t, 1) }
+func TestRoomNACKRecoversBurstWithoutInterruptingAnother(t *testing.T)     { testRoomBurstLoss(t, 10) }
+
+func testRoomBurstLoss(t *testing.T, burst int) {
+	t.Helper()
 	_, origin := setup(t)
 	cookie := login(t, origin, testSecret, origin).Cookies()[0]
 	pubWS, _, err := dial(t, origin, origin, cookie)
@@ -135,7 +152,7 @@ func TestRoomNACKRecoversOneViewerWithoutInterruptingAnother(t *testing.T) {
 		require.NoError(t, pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: result.SDP}))
 		return ws, received
 	}
-	lossy, loss := roomLossViewer(t)
+	lossy, loss := roomLossViewer(t, burst)
 	lossyWS, lossyPackets := setupViewer(lossy)
 	defer lossyWS.Close()
 	healthy := demoPeer(t)
@@ -149,33 +166,44 @@ func TestRoomNACKRecoversOneViewerWithoutInterruptingAnother(t *testing.T) {
 		}
 	}
 	loss.armed.Store(true)
-	var missing uint16
-	select {
-	case missing = <-loss.dropped:
-	case <-time.After(5 * time.Second):
-		t.Fatal("no packet dropped")
+	missing := make(map[uint16]bool, burst)
+	var first uint16
+	for i := 0; i < burst; i++ {
+		select {
+		case sequence := <-loss.dropped:
+			if i == 0 {
+				first = sequence
+			}
+			require.Equal(t, first+uint16(i), sequence, "loss must be a consecutive burst")
+			missing[sequence] = true
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of %d packets dropped", i, burst)
+		}
 	}
 	deadline := time.After(5 * time.Second)
-	later, recovered := false, false
-	var healthySeen [6]bool
+	later := false
+	recovered := make(map[uint16]bool, burst)
+	healthySeen := make([]bool, burst+5)
 	healthyCount := 0
-	for !recovered || healthyCount < len(healthySeen) {
+	for len(recovered) < burst || healthyCount < len(healthySeen) {
 		select {
-		case seq := <-lossyPackets:
-			if seq > missing {
+		case sequence := <-lossyPackets:
+			if sequence > first {
 				later = true
 			}
-			if seq == missing {
-				require.True(t, later, "retransmission must arrive after newer packets")
-				recovered = true
+			if missing[sequence] {
+				if sequence == first {
+					require.True(t, later, "first retransmission must arrive after a newer packet")
+				}
+				recovered[sequence] = true
 			}
-		case seq := <-healthyPackets:
-			if seq >= missing && int(seq-missing) < len(healthySeen) && !healthySeen[seq-missing] {
-				healthySeen[seq-missing] = true
+		case sequence := <-healthyPackets:
+			if sequence >= first && int(sequence-first) < len(healthySeen) && !healthySeen[sequence-first] {
+				healthySeen[sequence-first] = true
 				healthyCount++
 			}
 		case <-deadline:
-			t.Fatalf("viewer loss recovery: missing=%d later=%v recovered=%v healthy=%v", missing, later, recovered, healthySeen)
+			t.Fatalf("viewer loss recovery: first=%d recovered=%d/%d healthy=%v", first, len(recovered), burst, healthySeen)
 		}
 	}
 }
