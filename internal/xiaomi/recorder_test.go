@@ -195,7 +195,11 @@ func TestXiaomiRecorderStartAndStop(t *testing.T) {
 	ctx := context.Background()
 	err := r.Start(ctx)
 	require.NoError(t, err)
-	require.Equal(t, model.StatusRecording, r.Status())
+	t.Cleanup(func() { _ = r.Stop() })
+	// Missing cloud credentials make the background worker enter reconnecting.
+	// It can do so before Start returns to this test, so do not depend on
+	// observing the transient recording state.
+	require.Eventually(t, func() bool { return r.Status() == model.StatusReconnecting }, 3*time.Second, 10*time.Millisecond)
 
 	// Stop should wait for goroutine to finish.
 	err = r.Stop()

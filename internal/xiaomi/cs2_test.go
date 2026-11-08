@@ -492,16 +492,24 @@ func TestCS2ConnErrorReturnsActualError(t *testing.T) {
 	defer server.Close()
 
 	c := newTestCS2Conn(t, client)
-	go c.worker()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.worker()
+	}()
 
 	// Close server side to make worker's Read return an error.
 	server.Close()
 
-	// Wait for worker to exit (channels close in defer).
-	require.Eventually(t, func() bool {
-		_, ok := c.channels[0].Pop(time.Millisecond)
-		return !ok // channel is closed
-	}, time.Second, 10*time.Millisecond)
+	// Pop returns false for both a timeout and a closed channel. Wait for the
+	// worker itself so Error is read only after its exit guard has run.
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not exit")
+	}
+	_, ok := c.channels[0].Pop(time.Second)
+	require.False(t, ok)
 
 	err := c.Error()
 	require.Error(t, err)
