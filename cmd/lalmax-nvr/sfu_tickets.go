@@ -37,6 +37,7 @@ func (t *nvrSFUTickets) Issue(ctx context.Context, user *model.User) (string, er
 	if err != nil {
 		return "", err
 	}
+	identity.RoomGeneration = t.policy.generation
 	if err = t.policy.check(ctx, identity.Principal); err != nil {
 		return "", err
 	}

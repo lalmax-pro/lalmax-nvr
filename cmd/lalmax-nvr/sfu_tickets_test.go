@@ -27,7 +27,7 @@ func TestSFUTicketsSingleUseExpiryAndRevocation(t *testing.T) {
 	if err = db.CreateUser(ctx, user); err != nil {
 		t.Fatal(err)
 	}
-	tickets := newNVRSFUTickets(&nvrSFUPolicy{app: &App{db: db, cfg: &config.Config{}}})
+	tickets := newNVRSFUTickets(&nvrSFUPolicy{app: &App{db: db, cfg: &config.Config{}}, generation: "room-generation"})
 	value, err := tickets.Issue(ctx, user)
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +38,10 @@ func TestSFUTicketsSingleUseExpiryAndRevocation(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := tickets.consume(ctx, value); err == nil {
+			if identity, err := tickets.consume(ctx, value); err == nil {
+				if identity.RoomGeneration != "room-generation" {
+					t.Errorf("ticket lost room generation: %q", identity.RoomGeneration)
+				}
 				successes.Add(1)
 			}
 		}()
