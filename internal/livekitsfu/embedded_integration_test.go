@@ -11,10 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/livekit/livekit-server/pkg/config"
-	"github.com/livekit/livekit-server/pkg/routing"
-	"github.com/livekit/livekit-server/pkg/service"
-	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -41,24 +37,7 @@ func TestEmbeddedTrack(t *testing.T) {
 	}
 	const key, secret = "testkey", "testsecret-testsecret-testsecret-123456"
 	yaml := fmt.Sprintf("development: true\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nrtc:\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
-	conf, err := config.NewConfig(yaml, true, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := conf.ValidateKeys(); err != nil {
-		t.Fatal(err)
-	}
-	if err := conf.LoadTURNSecrets(); err != nil {
-		t.Fatal(err)
-	}
-	node, err := routing.NewLocalNode(conf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := prometheus.Init(string(node.NodeID()), node.NodeType()); err != nil {
-		t.Fatal(err)
-	}
-	server, err := service.InitializeServer(conf, node)
+	server, err := NewServer(yaml)
 	if err != nil {
 		t.Fatal(err)
 	}
