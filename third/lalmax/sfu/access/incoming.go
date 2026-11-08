@@ -35,12 +35,14 @@ func (s *Session) StartIncoming(ctx context.Context, publicationID string, remot
 		return nil, sfu.ErrPublicationNotFound
 	}
 	kind := remote.Kind()
-	if (publication.Kind == "audio" && kind != webrtc.RTPCodecTypeAudio) || (publication.Kind == "video" && kind != webrtc.RTPCodecTypeVideo) || !strings.EqualFold(remote.Codec().MimeType, publication.Codec) {
+	codec := remote.Codec()
+	if (publication.Kind == "audio" && kind != webrtc.RTPCodecTypeAudio) || (publication.Kind == "video" && kind != webrtc.RTPCodecTypeVideo) || !strings.EqualFold(codec.MimeType, publication.Codec) {
 		return nil, ErrCodecMismatch
 	}
 	result := make(chan error, 1)
 	err := s.withPolicy(ctx, Request{Operation: Publish, PublicationID: publicationID, Kind: publication.Kind, Source: publication.Source, Codec: publication.Codec}, func() error {
-		if err := s.room.EnablePublicationRTP(s.scope.ParticipantID, s.generation, publicationID, maxSubscribers, queueSize); err != nil {
+		negotiated := sfu.NegotiatedCodec{MimeType: codec.MimeType, ClockRate: codec.ClockRate, Channels: codec.Channels, FMTP: codec.SDPFmtpLine}
+		if err := s.room.EnablePublicationRTPWithCodec(s.scope.ParticipantID, s.generation, publicationID, maxSubscribers, queueSize, negotiated); err != nil {
 			return err
 		}
 		bindingCtx, cancel := context.WithCancel(ctx)

@@ -123,6 +123,15 @@ func TestAuthorizedInboundTrackThroughRoom(t *testing.T) {
 		}
 	}
 bound:
+	var negotiated sfu.NegotiatedCodec
+	for _, p := range room.Snapshot().Publications {
+		if p.ID == id {
+			negotiated = p.Negotiated
+		}
+	}
+	if negotiated.MimeType != webrtc.MimeTypeOpus || negotiated.ClockRate != 48000 || negotiated.Channels != 2 {
+		t.Fatalf("negotiated codec not captured: %+v", negotiated)
+	}
 	view, err := room.JoinSession(sfu.Participant{ID: "viewer"})
 	if err != nil {
 		t.Fatal(err)
