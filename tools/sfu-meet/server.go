@@ -22,6 +22,7 @@ import (
 	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/access"
 	"github.com/q191201771/lalmax/sfu/signaling"
+	"github.com/q191201771/lalmax/sfu/webrtcbridge"
 )
 
 const cookieName = "sfu_demo_session"
@@ -94,6 +95,8 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 			if err := webrtc.ConfigureTWCCHeaderExtensionSender(media, registry); err != nil {
 				return nil, err
 			}
+			// NACK may resend one cached header concurrently; isolate it before TWCC mutates it.
+			registry.Add(webrtcbridge.CopyRTPHeaderFactory{})
 			if err := webrtc.RegisterDefaultInterceptors(media, registry); err != nil {
 				return nil, err
 			}

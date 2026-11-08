@@ -24,6 +24,7 @@ import (
 	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/access"
 	"github.com/q191201771/lalmax/sfu/signaling"
+	"github.com/q191201771/lalmax/sfu/webrtcbridge"
 )
 
 var nvrSFURoom = sfu.Key{Namespace: "nvr", ID: "default"}
@@ -232,6 +233,8 @@ func nvrSFUNewPeerWithPacing(servers []webrtc.ICEServer, onEstimate func(signali
 		if err := webrtc.ConfigureTWCCHeaderExtensionSender(engine, registry); err != nil {
 			return nil, err
 		}
+		// NACK may resend one cached header concurrently; isolate it before TWCC mutates it.
+		registry.Add(webrtcbridge.CopyRTPHeaderFactory{})
 		if err := webrtc.RegisterDefaultInterceptors(engine, registry); err != nil {
 			return nil, err
 		}
