@@ -112,6 +112,7 @@ func (r *Room) removePublication(id string) {
 		delete(r.rtpPublications, id)
 	}
 	delete(r.publications, id)
+	delete(r.senderReports, id)
 	for key := range r.subscriptions {
 		if key.publicationID == id {
 			r.closeRTPSubscriptionLocked(key)

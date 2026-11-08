@@ -17,6 +17,8 @@ import (
 
 // RoomFactory assembles Pion media for the session's authorized subscriptions.
 // The trusted callbacks must enforce authentication, network and codec policy.
+// It owns RTCP reads for inbound non-simulcast receivers and keeps the most
+// recent Sender Report in the Room while the publication is alive.
 type RoomFactory struct {
 	NewPeer        func(context.Context, Identity) (*webrtc.PeerConnection, error)
 	Codec          func(sfu.Publication) (webrtc.RTPCodecCapability, error)
@@ -26,6 +28,8 @@ type RoomFactory struct {
 	OnInboundPeer  func(context.Context, Identity, *webrtc.PeerConnection, *webrtc.TrackRemote, <-chan error, error)
 	feedbackMu     sync.Mutex
 	feedback       map[feedbackKey]*feedbackBinding
+	reportMu       sync.Mutex
+	reportReaders  map[*webrtc.RTPReceiver]*senderReportCollector
 }
 
 type feedbackKey struct {
@@ -69,8 +73,11 @@ func (f *RoomFactory) NewNegotiator(ctx context.Context, id Identity, session *a
 		return nil, errors.New("signaling: peer factory returned nil")
 	}
 	bindCtx, cancel := context.WithCancel(ctx)
-	pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		publication, done, stopped, err := session.StartMappedIncomingWithPublication(bindCtx, track, f.MaxSubscribers, f.QueueSize)
+		if err == nil && track.RID() == "" {
+			f.trackSenderReports(bindCtx, receiver, session, publication, uint32(track.SSRC()), stopped)
+		}
 		if err == nil && track.Kind() == webrtc.RTPCodecTypeVideo {
 			key := feedbackKey{room: session.RoomKey(), generation: session.RoomGeneration(), publication: publication}
 			requester, _ := webrtcbridge.NewKeyframeRequester(pc, 0, uint32(track.SSRC()), time.Second)
