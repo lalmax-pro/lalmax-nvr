@@ -25,6 +25,16 @@ var ErrInvalidPublisher = errors.New("bridge: invalid publisher or target")
 // interrupted by ctx and delays cleanup. The caller must arrange for bounded
 // lal processing. Cancellation never concurrently deletes an in-flight session.
 func RunH264ToLal(ctx context.Context, sub *rtpforward.Subscriber, publisher Publisher, stream string) error {
+	return runToLal(ctx, sub, publisher, stream, RunH264)
+}
+
+// RunOpusToLal owns a single audio subscriber and custom publisher. It does
+// not combine or synchronize audio with a video track.
+func RunOpusToLal(ctx context.Context, sub *rtpforward.Subscriber, publisher Publisher, stream string) error {
+	return runToLal(ctx, sub, publisher, stream, RunOpus)
+}
+
+func runToLal(ctx context.Context, sub *rtpforward.Subscriber, publisher Publisher, stream string, run func(context.Context, *rtpforward.Subscriber, VideoSink) error) error {
 	if ctx == nil || sub == nil || publisher == nil || stream == "" {
 		return ErrInvalidPublisher
 	}
@@ -43,7 +53,7 @@ func RunH264ToLal(ctx context.Context, sub *rtpforward.Subscriber, publisher Pub
 	session.WithOption(func(option *base.AvPacketStreamOption) {
 		option.VideoFormat = base.AvPacketStreamVideoFormatAnnexb
 	})
-	return RunH264(ctx, sub, func(ctx context.Context, frame *base.AvPacket) error {
+	return run(ctx, sub, func(ctx context.Context, frame *base.AvPacket) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

@@ -147,6 +147,20 @@ func nvrSFUValidateH264(ctx context.Context, p sfu.Publication) error {
 	}
 	return nil
 }
+
+func nvrSFUValidateBridge(ctx context.Context, p sfu.Publication) error {
+	if p.Kind != "audio" {
+		return nvrSFUValidateH264(ctx, p)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c := p.Negotiated
+	if !p.RTPReady || !strings.EqualFold(p.Codec, "audio/opus") || !strings.EqualFold(c.MimeType, "audio/opus") || c.ClockRate != 48000 || c.Channels != 2 {
+		return errors.New("source codec is not ready or unsupported")
+	}
+	return nil
+}
 func nvrSFUOrigin(r *http.Request) bool {
 	origin, err := url.Parse(r.Header.Get("Origin"))
 	if err != nil || origin.User != nil || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
@@ -205,7 +219,7 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 	}
 	policy := &nvrSFUPolicy{app: a, generation: room.Snapshot().Generation}
 	server := embedded.Server()
-	service, err := sfubridge.NewPersistent(context.Background(), room, policy, &nvrSFUPublisher{engine: embedded, server: server}, a.mediaAuth, nvrSFUValidateH264, 8, a.db)
+	service, err := sfubridge.NewPersistent(context.Background(), room, policy, &nvrSFUPublisher{engine: embedded, server: server}, a.mediaAuth, nvrSFUValidateBridge, 8, a.db)
 	if err != nil {
 		return nil, err
 	}

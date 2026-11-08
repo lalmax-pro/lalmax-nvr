@@ -9,7 +9,7 @@ import (
 	"github.com/q191201771/lalmax/sfu/bridge"
 )
 
-var ErrBridgeCodec = errors.New("sfu access: bridge requires H264 video")
+var ErrBridgeCodec = errors.New("sfu access: unsupported bridge track codec")
 
 type bridgeBinding struct{ cancel context.CancelFunc }
 
@@ -29,6 +29,16 @@ func (s *Session) StartH264Bridge(ctx context.Context, publicationID, target str
 // from the bridge lifetime. Both contexts must be valid during setup. The
 // caller must cancel lifetimeCtx on shutdown or permission revocation.
 func (s *Session) StartH264BridgeWithContexts(authCtx, lifetimeCtx context.Context, publicationID, target string, publisher bridge.Publisher) (<-chan error, error) {
+	return s.startBridge(authCtx, lifetimeCtx, publicationID, target, publisher, "video", "video/H264")
+}
+
+// StartOpusBridgeWithContexts binds an authorized Opus audio publication to
+// its own Group. The caller must validate the negotiated codec and clock.
+func (s *Session) StartOpusBridgeWithContexts(authCtx, lifetimeCtx context.Context, publicationID, target string, publisher bridge.Publisher) (<-chan error, error) {
+	return s.startBridge(authCtx, lifetimeCtx, publicationID, target, publisher, "audio", "audio/opus")
+}
+
+func (s *Session) startBridge(authCtx, lifetimeCtx context.Context, publicationID, target string, publisher bridge.Publisher, kind, codec string) (<-chan error, error) {
 	if authCtx == nil || lifetimeCtx == nil || publicationID == "" || target == "" || publisher == nil {
 		return nil, ErrInvalid
 	}
@@ -54,7 +64,7 @@ func (s *Session) StartH264BridgeWithContexts(authCtx, lifetimeCtx context.Conte
 	if publication.ID == "" {
 		return nil, sfu.ErrPublicationNotFound
 	}
-	if publication.Kind != "video" || !strings.EqualFold(publication.Codec, "video/H264") {
+	if publication.Kind != kind || !strings.EqualFold(publication.Codec, codec) {
 		return nil, ErrBridgeCodec
 	}
 	req := s.scope
@@ -85,7 +95,12 @@ func (s *Session) StartH264BridgeWithContexts(authCtx, lifetimeCtx context.Conte
 	s.bridges[publicationID] = binding
 	result := make(chan error, 1)
 	go func() {
-		err := bridge.RunH264ToLal(bindingCtx, sub, publisher, target)
+		var err error
+		if kind == "audio" {
+			err = bridge.RunOpusToLal(bindingCtx, sub, publisher, target)
+		} else {
+			err = bridge.RunH264ToLal(bindingCtx, sub, publisher, target)
+		}
 		cancel()
 		s.mu.Lock()
 		if s.bridges[publicationID] == binding {

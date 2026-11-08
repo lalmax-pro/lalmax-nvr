@@ -109,13 +109,13 @@
   }
   function renderBridgeTracks(snapshot,c) {
     const list=$('bridge-list');list.replaceChildren();
-    const tracks=(snapshot.Publications||[]).filter(p=>p.Kind==='video'&&p.RTPReady);
+    const tracks=(snapshot.Publications||[]).filter(p=>(p.Kind==='video'||p.Kind==='audio')&&p.RTPReady);
     for(const [id,b] of c.bridges)if(!tracks.some(p=>p.ID===id))tracks.push({ID:id,Source:b.source,RTPReady:false});
-    if(!tracks.length){const empty=document.createElement('p');empty.className='track-empty';empty.textContent='没有可桥接的视频轨道。';list.append(empty);return;}
+    if(!tracks.length){const empty=document.createElement('p');empty.className='track-empty';empty.textContent='没有可桥接的音视频轨道。';list.append(empty);return;}
     for(const p of tracks){
       const row=document.createElement('div');row.className='track-row';
       const info=document.createElement('div');info.className='track-info';
-      const title=document.createElement('strong');title.textContent=`${p.Source==='screen'?'屏幕':'摄像头'} · ${p.ID.slice(0,8)}`;
+      const title=document.createElement('strong');title.textContent=`${p.Source==='screen'?'屏幕':p.Source==='microphone'?'麦克风':'摄像头'} · ${p.ID.slice(0,8)}`;
       const detail=document.createElement('small');const b=c.bridges.get(p.ID);detail.textContent=b?b.label:(p.RTPReady?'已就绪':'源已结束');info.append(title,detail);
       const button=document.createElement('button');button.type='button';button.className='track-toggle';button.disabled=!!b?.busy||(!b&&(!p.RTPReady||c.bridges.size>0));button.textContent=b?'停止桥接':'桥接并播放';
       button.addEventListener('click',()=>{if(current!==c)return;if(b)void stopBridge(c,b,false);else void startBridge(c,p);});row.append(info,button);list.append(row);
@@ -129,10 +129,10 @@
       const result=await nvrRequest('/api/sfu/bridges/',{method:'POST',body:JSON.stringify({publication_id:p.ID})});
       bridge.id=result.id;
       if(current!==c||bridge.closeRequested||bridge.abort.signal.aborted){await stopBridge(c,bridge,true);return;}
-      bridge.label='等待视频';bridge.busy=false;renderBridgeTracks(c.snapshot,c);
-      const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});bridge.pc=pc;const transceiver=pc.addTransceiver('video',{direction:'recvonly'});preferH264(transceiver);
-      const video=$('bridge-video');video.hidden=false;video.onplaying=()=>{if(current===c){bridge.label='播放中';$('bridge-status').textContent='WHEP 视频播放中';renderBridgeTracks(c.snapshot,c);}};
-      pc.ontrack=event=>{if(current!==c)return;video.srcObject=new MediaStream([event.track]);void video.play().catch(()=>showError('浏览器阻止了播放，请重试。'));};
+      bridge.label='等待媒体';bridge.busy=false;renderBridgeTracks(c.snapshot,c);
+      const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});bridge.pc=pc;const transceiver=pc.addTransceiver(p.Kind,{direction:'recvonly'});if(p.Kind==='video')preferH264(transceiver);
+      const video=$('bridge-video');video.muted=p.Kind!=='audio';video.controls=p.Kind==='audio';video.hidden=false;video.onplaying=()=>{if(current===c){if(error.textContent==='浏览器阻止了播放，请使用播放器控件重试。')error.hidden=true;bridge.label='播放中';$('bridge-status').textContent='WHEP 播放中';renderBridgeTracks(c.snapshot,c);}};
+      pc.ontrack=event=>{if(current!==c)return;video.srcObject=new MediaStream([event.track]);void video.play().catch(err=>{if(current===c&&err.name!=='AbortError'&&video.paused)showError('浏览器阻止了播放，请使用播放器控件重试。');});};
       const offer=await pc.createOffer();await pc.setLocalDescription(offer);await gather(pc);
       let response;
       for(let attempt=0;attempt<10;attempt++){
@@ -140,7 +140,7 @@
         response=await fetch(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/whep`,{method:'POST',headers:{'Authorization':nvrAuth(),'Content-Type':'application/sdp'},body:pc.localDescription.sdp,cache:'no-store',signal:bridge.abort.signal});
         if(response.status!==503&&response.status!==404)break;
         const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);
-        if(status.state==='failed'||status.state==='stopped')throw new Error('桥接已停止，未能发布视频');
+        if(status.state==='failed'||status.state==='stopped')throw new Error('桥接已停止，未能发布媒体');
         if(response.status===404)break;
         await wait(500);
       }
