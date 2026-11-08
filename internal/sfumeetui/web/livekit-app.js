@@ -322,6 +322,7 @@
           if (pub.kind === Track.Kind.Audio) {
             const audio = pub.track.attach();
             audio.autoplay = true;
+            audio.dataset.source = sourceName(pub.source);
             audioContainer.append(audio);
             state.attached.add(pub.track);
           }

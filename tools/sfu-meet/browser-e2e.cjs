@@ -48,6 +48,12 @@ const assert = require('node:assert/strict');
       await viewer.getByRole('button', {name:new RegExp(`^取消订阅 .*${source}`)}).waitFor({timeout:5000});
     }
     await viewer.waitForFunction(() => document.querySelector('#audio-container audio') && [...document.querySelectorAll('#tiles video')].some(v=>v.videoWidth>0), null, {timeout:15000});
+    for (const selector of ['#camera-device', '#microphone-device']) {
+      const device = await publisher.locator(`${selector} option`).evaluateAll(options => options.find(option => option.value)?.value || '');
+      if (device) await publisher.selectOption(selector, device);
+    }
+    await viewer.locator('#tiles').scrollIntoViewIfNeeded();
+    await viewer.waitForFunction(() => document.querySelector('#audio-container audio') && [...document.querySelectorAll('#tiles video')].some(v=>v.videoWidth>0), null, {timeout:15000});
     if (process.env.LK_BRIDGE_TEST) {
       await viewer.waitForFunction(() => [...document.querySelector('#bridge-track').options].some(o => o.text.includes('摄像头')) && [...document.querySelector('#bridge-audio').options].some(o => o.text.includes('麦克风')));
       await viewer.selectOption('#bridge-track', {label: await viewer.locator('#bridge-track option').filter({hasText:'摄像头'}).first().textContent()});
@@ -141,6 +147,32 @@ const assert = require('node:assert/strict');
     }
     await publisher.check('#screen-audio'); await publisher.click('#share');
     await viewer.waitForFunction(() => document.querySelectorAll('#track-list .track-row').length>=4, null, {timeout:20000});
+    const screenTile = viewer.locator('#tiles .video-tile').filter({hasText:'屏幕共享'});
+    await screenTile.waitFor({timeout:15000});
+    await screenTile.scrollIntoViewIfNeeded();
+    await viewer.waitForFunction(() => {
+      const tile = [...document.querySelectorAll('#tiles .video-tile')].find(item => item.textContent.includes('屏幕共享'));
+      return tile?.querySelector('video')?.videoWidth > 0 && document.querySelector('#audio-container audio[data-source="屏幕音频"]')?.srcObject;
+    }, null, {timeout:20000});
+    const screenSignal = await viewer.evaluate(async () => {
+      const stream = document.querySelector('#audio-container audio[data-source="屏幕音频"]').srcObject;
+      const context = new AudioContext();
+      await context.resume();
+      const source = context.createMediaStreamSource(stream);
+      const analyser = context.createAnalyser();
+      source.connect(analyser); // Deliberately never connect to speakers.
+      const samples = new Uint8Array(analyser.fftSize);
+      let peak = 0;
+      for (let i = 0; i < 30 && peak < 5; i++) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        analyser.getByteTimeDomainData(samples);
+        peak = Math.max(peak, ...samples.map(value => Math.abs(value - 128)));
+      }
+      source.disconnect();
+      await context.close();
+      return peak;
+    });
+    assert.ok(screenSignal >= 5, `synthetic screen audio was silent (peak ${screenSignal})`);
     await publisher.click('#share');
     await viewer.waitForFunction(() => document.querySelectorAll('#track-list .track-row').length===2, null, {timeout:20000});
     await viewer.click('#leave'); await publisher.click('#leave');
