@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
@@ -67,10 +68,15 @@ func (h *Handler) createSFUTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "SFU ticket unavailable")
 		return
 	}
+	var servers []config.SFUICEServer
+	if h.config != nil {
+		servers = h.config.SFU.ICEServers
+	}
 	writeJSON(w, http.StatusCreated, struct {
-		Ticket    string `json:"ticket"`
-		ExpiresIn int    `json:"expires_in"`
-	}{ticket, 30})
+		Ticket     string                `json:"ticket"`
+		ExpiresIn  int                   `json:"expires_in"`
+		ICEServers []config.SFUICEServer `json:"ice_servers"`
+	}{ticket, 30, servers})
 }
 
 func sfuPrincipal(r *http.Request) (string, bool) {

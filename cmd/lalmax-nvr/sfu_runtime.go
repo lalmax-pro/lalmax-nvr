@@ -171,21 +171,23 @@ func nvrSFUIdentityForUser(user *model.User) (signaling.Identity, error) {
 	}
 	return signaling.Identity{Principal: principal, Room: nvrSFURoom, Participant: sfu.Participant{ID: hex.EncodeToString(id[:]), Name: user.DisplayName}}, nil
 }
-func nvrSFUNewPeer(_ context.Context, _ signaling.Identity) (*webrtc.PeerConnection, error) {
-	engine := &webrtc.MediaEngine{}
-	if err := engine.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, PayloadType: 111}, webrtc.RTPCodecTypeAudio); err != nil {
-		return nil, err
+func nvrSFUNewPeer(servers []webrtc.ICEServer) func(context.Context, signaling.Identity) (*webrtc.PeerConnection, error) {
+	return func(_ context.Context, _ signaling.Identity) (*webrtc.PeerConnection, error) {
+		engine := &webrtc.MediaEngine{}
+		if err := engine.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, PayloadType: 111}, webrtc.RTPCodecTypeAudio); err != nil {
+			return nil, err
+		}
+		if err := engine.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, PayloadType: 96}, webrtc.RTPCodecTypeVideo); err != nil {
+			return nil, err
+		}
+		registry := &interceptor.Registry{}
+		if err := webrtc.RegisterDefaultInterceptors(engine, registry); err != nil {
+			return nil, err
+		}
+		settings := webrtc.SettingEngine{}
+		settings.SetIncludeLoopbackCandidate(true)
+		return webrtc.NewAPI(webrtc.WithSettingEngine(settings), webrtc.WithMediaEngine(engine), webrtc.WithInterceptorRegistry(registry)).NewPeerConnection(webrtc.Configuration{ICEServers: servers})
 	}
-	if err := engine.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, PayloadType: 96}, webrtc.RTPCodecTypeVideo); err != nil {
-		return nil, err
-	}
-	registry := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(engine, registry); err != nil {
-		return nil, err
-	}
-	settings := webrtc.SettingEngine{}
-	settings.SetIncludeLoopbackCandidate(true)
-	return webrtc.NewAPI(webrtc.WithSettingEngine(settings), webrtc.WithMediaEngine(engine), webrtc.WithInterceptorRegistry(registry)).NewPeerConnection(webrtc.Configuration{})
 }
 func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 	embedded, ok := a.mediaEngine.(*media.EmbeddedLalmax)
@@ -213,7 +215,11 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 		_ = service.Close(context.Background())
 		return nil, err
 	}
-	factory := &signaling.RoomFactory{NewPeer: nvrSFUNewPeer, MaxSubscribers: 32, QueueSize: 64, Codec: func(p sfu.Publication) (webrtc.RTPCodecCapability, error) {
+	iceServers := make([]webrtc.ICEServer, 0, len(a.cfg.SFU.ICEServers))
+	for _, server := range a.cfg.SFU.ICEServers {
+		iceServers = append(iceServers, webrtc.ICEServer{URLs: append([]string(nil), server.URLs...), Username: server.Username, Credential: server.Credential, CredentialType: webrtc.ICECredentialTypePassword})
+	}
+	factory := &signaling.RoomFactory{NewPeer: nvrSFUNewPeer(iceServers), MaxSubscribers: 32, QueueSize: 64, Codec: func(p sfu.Publication) (webrtc.RTPCodecCapability, error) {
 		if p.Kind == "audio" && strings.EqualFold(p.Codec, "audio/opus") {
 			return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, nil
 		}

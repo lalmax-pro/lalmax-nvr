@@ -12,9 +12,24 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
+	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/access"
+	"github.com/q191201771/lalmax/sfu/signaling"
 )
+
+func TestNVRSFUUsesConfiguredICEServers(t *testing.T) {
+	servers := []webrtc.ICEServer{{URLs: []string{"turn:relay.example.com:3478"}, Username: "user", Credential: "password", CredentialType: webrtc.ICECredentialTypePassword}}
+	pc, err := nvrSFUNewPeer(servers)(context.Background(), signaling.Identity{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	got := pc.GetConfiguration().ICEServers
+	if len(got) != 1 || got[0].Username != "user" || got[0].Credential != "password" || got[0].URLs[0] != servers[0].URLs[0] {
+		t.Fatal("ICE servers not applied")
+	}
+}
 
 func TestNVRSFUCodecValidation(t *testing.T) {
 	valid := sfu.Publication{Kind: "video", RTPReady: true, Negotiated: sfu.NegotiatedCodec{MimeType: "video/H264", ClockRate: 90000, FMTP: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}}

@@ -78,7 +78,7 @@
       bridge.id=result.id;
       if(current!==c||bridge.closeRequested||bridge.abort.signal.aborted){await stopBridge(c,bridge,true);return;}
       bridge.label='等待视频';bridge.busy=false;renderBridgeTracks(c.snapshot,c);
-      const pc=new RTCPeerConnection();bridge.pc=pc;const transceiver=pc.addTransceiver('video',{direction:'recvonly'});preferH264(transceiver);
+      const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});bridge.pc=pc;const transceiver=pc.addTransceiver('video',{direction:'recvonly'});preferH264(transceiver);
       const video=$('bridge-video');video.hidden=false;video.onplaying=()=>{if(current===c){bridge.label='播放中';$('bridge-status').textContent='WHEP 视频播放中';renderBridgeTracks(c.snapshot,c);}};
       pc.ontrack=event=>{if(current!==c)return;video.srcObject=new MediaStream([event.track]);void video.play().catch(()=>showError('浏览器阻止了播放，请重试。'));};
       const offer=await pc.createOffer();await pc.setLocalDescription(offer);await gather(pc);
@@ -197,9 +197,9 @@
     try {
       if(!nvrMode){const login=await fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token.value})});if(!login.ok)throw new Error('访问口令无效，请检查终端中的口令');}
       if(micOption.checked||cameraOption.checked){if(!navigator.mediaDevices?.getUserMedia)throw new Error('当前浏览器无法访问媒体设备');c.stream=await navigator.mediaDevices.getUserMedia({audio:micOption.checked,video:cameraOption.checked});if(current!==c){c.stream.getTracks().forEach(t=>t.stop());return;}}
-      if(nvrMode){const auth=nvrAuth();const ticket=await nvrRequest('/api/sfu/ticket',{method:'POST',body:'{}'});sessionStorage.setItem('nvr_auth',auth.slice(6));$('nvr-password').value='';$('nvr-login').hidden=true;c.ticket=ticket.ticket;}
+      if(nvrMode){const auth=nvrAuth();const ticket=await nvrRequest('/api/sfu/ticket',{method:'POST',body:'{}'});sessionStorage.setItem('nvr_auth',auth.slice(6));$('nvr-password').value='';$('nvr-login').hidden=true;c.ticket=ticket.ticket;c.iceServers=ticket.ice_servers||[];}
       await openSocket(c);if(current!==c)return;
-      const pc=new RTCPeerConnection();c.pc=pc;
+      const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});c.pc=pc;
       pc.onconnectionstatechange=()=>{if(current!==c)return;if(pc.connectionState==='connected')state('媒体连接正常',true);else if(['failed','disconnected'].includes(pc.connectionState)){state('连接中断');showError('媒体连接中断，请重新加入。');}};
       pc.ontrack=event=>{if(current!==c)return;const id=[...c.subscribed].find(([,entry])=>entry.transceiver===event.transceiver)?.[0];if(!id)return;
         if(event.track.kind==='audio'){const audio=document.createElement('audio');audio.autoplay=true;audio.srcObject=new MediaStream([event.track]);audioContainer.append(audio);c.media.set(id,audio);audio.play().catch(()=>{showError('浏览器阻止自动播放，请点击“启用声音”。');$('enable-audio').hidden=false;});}

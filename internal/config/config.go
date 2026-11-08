@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pion/stun/v4"
 	"gopkg.in/yaml.v3"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
@@ -67,7 +68,39 @@ type Config struct {
 // SFUConfig enables the initial single-room NVR SFU runtime.
 // The runtime is opt-in and currently accepts authenticated administrators.
 type SFUConfig struct {
-	Enabled bool `yaml:"enabled" json:"enabled"`
+	Enabled    bool           `yaml:"enabled" json:"enabled"`
+	ICEServers []SFUICEServer `yaml:"ice_servers" json:"-"`
+}
+
+// SFUICEServer credentials are returned only to authenticated SFU users.
+type SFUICEServer struct {
+	URLs       []string `yaml:"urls" json:"urls"`
+	Username   string   `yaml:"username,omitempty" json:"username,omitempty"`
+	Credential string   `yaml:"credential,omitempty" json:"credential,omitempty"`
+}
+
+func (c SFUConfig) ValidateICE() error {
+	if len(c.ICEServers) > 8 {
+		return fmt.Errorf("sfu: too many ICE servers")
+	}
+	for i, server := range c.ICEServers {
+		if len(server.URLs) == 0 || len(server.URLs) > 8 || len(server.Username) > 512 || len(server.Credential) > 1024 {
+			return fmt.Errorf("sfu: invalid ICE server %d", i)
+		}
+		for _, raw := range server.URLs {
+			if len(raw) > 2048 {
+				return fmt.Errorf("sfu: invalid ICE URL in server %d", i)
+			}
+			u, err := stun.ParseURI(raw)
+			if err != nil || u.Host == "" || u.Username != "" || u.Password != "" {
+				return fmt.Errorf("sfu: invalid ICE URL in server %d", i)
+			}
+			if (u.Scheme == stun.SchemeTypeTURN || u.Scheme == stun.SchemeTypeTURNS) && (server.Username == "" || server.Credential == "") {
+				return fmt.Errorf("sfu: TURN credentials required for server %d", i)
+			}
+		}
+	}
+	return nil
 }
 
 type SnapshotConfig struct {
@@ -773,6 +806,9 @@ func Save(path string, cfg *Config) error {
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
+	}
+	if err := cfg.SFU.ValidateICE(); err != nil {
+		return err
 	}
 	for id := range cfg.Xiaomi.Accounts {
 		if id == "" || id == "default" || len(id) > 64 || strings.ContainsAny(id, "/?&# ") {

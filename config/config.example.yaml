@@ -79,6 +79,14 @@ media:
 # Experimental single-room SFU and browser meeting (embedded media mode only).
 # sfu:
 #   enabled: false
+#   # Optional STUN/TURN for SFU peers and the browser; TURN credentials are
+#   # delivered to authenticated meeting administrators. Use HTTPS and scoped
+#   # credentials. The lalmax WHEP server has its own ICE configuration.
+#   ice_servers:
+#     - urls: ["stun:stun.example.com:3478"]
+#     - urls: ["turn:turn.example.com:3478?transport=udp"]
+#       username: "replace-with-username"
+#       credential: "replace-with-password"
 
 # DLNA MediaServer — publishes live streams and recordings to trusted LAN players.
 # The LAN address is detected automatically. port is a dedicated listener,
