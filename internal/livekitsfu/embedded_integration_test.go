@@ -70,13 +70,18 @@ func TestEmbeddedTrack(t *testing.T) {
 	received := make(chan []byte, 1)
 	cb := lksdk.NewRoomCallback()
 	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, _ *lksdk.RemoteParticipant) {
-		packet, _, err := track.ReadRTP()
-		if err == nil {
-			select {
-			case received <- packet.Payload:
-			default:
+		go func() {
+			for {
+				packet, _, err := track.ReadRTP()
+				if err != nil {
+					return
+				}
+				select {
+				case received <- packet.Payload:
+				default:
+				}
 			}
-		}
+		}()
 	}
 	subscriber, err := lksdk.ConnectToRoom(endpoint, lksdk.ConnectInfo{APIKey: key, APISecret: secret, RoomName: "probe", ParticipantIdentity: "subscriber"}, cb)
 	if err != nil {
@@ -92,7 +97,8 @@ func TestEmbeddedTrack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := publisher.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{Name: "synthetic"}); err != nil {
+	mainPublication, err := publisher.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{Name: "synthetic"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	ticker := time.NewTicker(20 * time.Millisecond)
@@ -101,6 +107,7 @@ func TestEmbeddedTrack(t *testing.T) {
 	defer deadline.Stop()
 	payload := []byte{0xf8, 0xff, 0xfe}
 	var sequence uint16
+firstPacket:
 	for {
 		select {
 		case <-ticker.C:
@@ -113,9 +120,101 @@ func TestEmbeddedTrack(t *testing.T) {
 			if !bytes.Equal(got, payload) {
 				t.Fatalf("unexpected RTP payload %x", got)
 			}
-			return
+			break firstPacket
 		case <-deadline.C:
 			t.Fatal("track did not arrive")
+		}
+	}
+	// Room names and identities can coincide independently. Publish a
+	// different synthetic payload under the same identity and track name in a
+	// second room, then verify each viewer only receives its own room's media.
+	issuer, err := NewTokenIssuer(key, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := issuer.IssueJoin(JoinGrant{Room: "isolated", Identity: "subscriber", ValidFor: time.Minute, CanSubscribe: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolatedReceived := make(chan []byte, 1)
+	isolatedCB := lksdk.NewRoomCallback()
+	isolatedCB.OnTrackSubscribed = func(track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, _ *lksdk.RemoteParticipant) {
+		go func() {
+			for {
+				packet, _, err := track.ReadRTP()
+				if err != nil {
+					return
+				}
+				select {
+				case isolatedReceived <- packet.Payload:
+				default:
+				}
+			}
+		}()
+	}
+	isolatedViewer, err := lksdk.ConnectToRoomWithToken(endpoint, token, isolatedCB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer isolatedViewer.Disconnect()
+	isolatedPublisher, err := lksdk.ConnectToRoom(endpoint, lksdk.ConnectInfo{APIKey: key, APISecret: secret, RoomName: "isolated", ParticipantIdentity: "publisher"}, lksdk.NewRoomCallback(), lksdk.WithAutoSubscribe(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer isolatedPublisher.Disconnect()
+	isolatedTrack, err := lksdk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolatedPublication, err := isolatedPublisher.LocalParticipant.PublishTrack(isolatedTrack, &lksdk.TrackPublicationOptions{Name: "synthetic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolatedPayload := []byte{0xf8, 0xff, 0xfd}
+	end := time.NewTimer(3 * time.Second)
+	defer end.Stop()
+	var receivedMain, receivedIsolated int
+	for {
+		select {
+		case <-ticker.C:
+			sequence++
+			for _, item := range []struct {
+				track   *lksdk.LocalTrack
+				payload []byte
+			}{{track, payload}, {isolatedTrack, isolatedPayload}} {
+				if err := item.track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: sequence, Timestamp: uint32(sequence) * 960}, Payload: item.payload}, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+		case got := <-received:
+			if !bytes.Equal(got, payload) {
+				t.Fatal("main room received media from another room")
+			}
+			receivedMain++
+		case got := <-isolatedReceived:
+			if !bytes.Equal(got, isolatedPayload) {
+				t.Fatal("isolated room received media from another room")
+			}
+			receivedIsolated++
+		case <-end.C:
+			if receivedMain == 0 || receivedIsolated == 0 {
+				t.Fatalf("missing room media: main=%d isolated=%d", receivedMain, receivedIsolated)
+			}
+			for _, check := range []struct {
+				viewer      *lksdk.Room
+				participant string
+				publication string
+			}{{subscriber, publisher.LocalParticipant.SID(), mainPublication.SID()}, {isolatedViewer, isolatedPublisher.LocalParticipant.SID(), isolatedPublication.SID()}} {
+				participants := check.viewer.GetRemoteParticipants()
+				if len(participants) != 1 || participants[0].SID() != check.participant {
+					t.Fatal("room discovered another room's participant")
+				}
+				tracks := participants[0].TrackPublications()
+				if len(tracks) != 1 || tracks[0].SID() != check.publication {
+					t.Fatal("room discovered another room's track")
+				}
+			}
+			return
 		}
 	}
 }
