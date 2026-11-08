@@ -166,7 +166,7 @@ func (s *liveKitBridgeService) start(setup context.Context, principal, first, au
 		return nil, err
 	}
 	target := "sfu_" + id
-	bridgeToken, err := s.runtime.issuer.IssueJoin(livekitsfu.JoinGrant{Room: s.room, Identity: "bridge_" + id, ValidFor: 5 * time.Minute, CanSubscribe: true, Hidden: true})
+	bridgeToken, err := s.runtime.issuer.IssueJoin(livekitsfu.JoinGrant{Room: s.room, Identity: "bridge_" + id, ValidFor: 5 * time.Minute, CanSubscribe: true, Hidden: true, Dependent: true})
 	if err != nil {
 		return nil, err
 	}

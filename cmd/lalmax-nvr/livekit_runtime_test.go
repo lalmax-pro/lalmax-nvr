@@ -83,7 +83,7 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	const key, secret = "testkey", "testsecret-testsecret-testsecret-123456"
-	data := fmt.Sprintf("development: false\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nrtc:\n  node_ip: 127.0.0.1\n  enable_loopback_candidate: true\n  ips:\n    includes: [127.0.0.1/32]\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
+	data := fmt.Sprintf("development: false\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nroom:\n  max_participants: 3\nrtc:\n  node_ip: 127.0.0.1\n  enable_loopback_candidate: true\n  ips:\n    includes: [127.0.0.1/32]\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
 	configPath := filepath.Join(t.TempDir(), "livekit.yaml")
 	if err := os.WriteFile(configPath, []byte(data), 0600); err != nil {
 		t.Fatal(err)
@@ -331,6 +331,37 @@ receive:
 	if err != nil || len(roomSnapshots) != 1 || roomSnapshots[0].ID != "front-door" || roomSnapshots[0].Participants != 2 {
 		t.Fatalf("hidden bridge counted as participant: %+v %v", roomSnapshots, err)
 	}
+	// A hidden bridge is a dependent system subscriber: it must not use the
+	// last ordinary participant slot in a room limited to three people.
+	thirdJoin, err := runtime.IssueLiveKitJoin(ctx, principal, "front-door")
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := lksdk.ConnectToRoomWithToken(thirdJoin.URL, thirdJoin.Token, lksdk.NewRoomCallback(), lksdk.WithAutoSubscribe(false), lksdk.WithConnectTimeout(5*time.Second))
+	if err != nil {
+		t.Fatalf("hidden bridge occupied participant capacity: %v", err)
+	}
+	roomSnapshots, err = roomAdmin.ListRooms(ctx, principal)
+	if err != nil || len(roomSnapshots) != 1 || roomSnapshots[0].Participants != 3 {
+		t.Fatalf("room participant capacity: %+v %v", roomSnapshots, err)
+	}
+	fullBridge, err := bridges.CreateForRoom(ctx, principal, "front-door", viewer.SID(), publication.SID(), "", "")
+	if err != nil {
+		t.Fatalf("cannot bridge a full room: %v", err)
+	}
+	if err := bridges.Stop(ctx, principal, fullBridge.ID); err != nil {
+		t.Fatal(err)
+	}
+	fourthJoin, err := runtime.IssueLiveKitJoin(ctx, principal, "front-door")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fourth, err := lksdk.ConnectToRoomWithToken(fourthJoin.URL, fourthJoin.Token, lksdk.NewRoomCallback(), lksdk.WithAutoSubscribe(false), lksdk.WithConnectTimeout(5*time.Second))
+	if err == nil {
+		fourth.Disconnect()
+		t.Fatal("ordinary participant exceeded room capacity")
+	}
+	third.Disconnect()
 	stream, playToken, err := bridges.Playback(ctx, principal, status.ID)
 	if err != nil || stream != status.StreamID || grants.AuthorizePlayback("webrtc", stream, playToken) != nil {
 		t.Fatal("bridge playback grant missing")
