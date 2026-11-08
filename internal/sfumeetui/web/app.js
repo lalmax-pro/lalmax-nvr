@@ -131,6 +131,7 @@
   function closeCurrent() {
     const c = current; current = null;clearNetworkStats();
     if (c) {
+      clearTimeout(c.disconnectTimer?.id);c.disconnectTimer=null;
       for (const pending of c.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('连接已关闭')); }
       if(nvrMode) for(const bridge of c.bridges.values()) { bridge.closeRequested=true; void stopBridge(c,bridge,true); }
       c.pending.clear(); c.ws?.close(); c.pc?.close(); c.stream?.getTracks().forEach(t => t.stop()); c.screen?.getTracks().forEach(t => t.stop());
@@ -454,7 +455,7 @@
     if(retry && recovery!==retry)return;
     if(!retry)cancelRecovery();
     closeCurrent();error.hidden=true;join.disabled=true;micDevice.disabled=true;cameraDevice.disabled=true;state('正在连接');
-    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(retry?.disabledTracks||[]),bridges:new Map(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false,recovery:retry,roomID:retry?.roomID,deviceSelection:{audio:micDevice.value,video:cameraDevice.value}};current=c;if(retry){c.stream=retry.stream;leave.disabled=false;}if(nvrMode)updateRoomControls();
+    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(retry?.disabledTracks||[]),bridges:new Map(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false,disconnectTimer:null,recovery:retry,roomID:retry?.roomID,deviceSelection:{audio:micDevice.value,video:cameraDevice.value}};current=c;if(retry){c.stream=retry.stream;leave.disabled=false;}if(nvrMode)updateRoomControls();
     try {
       if(!nvrMode){const login=await fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token.value})});if(!login.ok)throw new Error('访问口令无效，请检查终端中的口令');if(current!==c)return;}
       if(retry&&c.stream)for(const track of c.stream.getTracks())if(track.readyState==='ended')c.stream.removeTrack(track);
@@ -463,7 +464,19 @@
       await openSocket(c);if(current!==c)return;
       if(retry && c.snapshot.Generation!==retry.generation){const err=new Error('房间已关闭或重新创建');err.terminal=true;throw err;}
       const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});c.pc=pc;if(networkPanel.open)startNetworkStats(c);
-      pc.onconnectionstatechange=()=>{if(current!==c)return;if(pc.connectionState==='connected')state('媒体连接正常',true);else if(pc.connectionState==='failed')fail(c,new Error('媒体连接失败'),true);else if(pc.connectionState==='disconnected')state('媒体连接中断');};
+      pc.onconnectionstatechange=()=>{
+        if(current!==c)return;
+        if(pc.connectionState!=='disconnected'){clearTimeout(c.disconnectTimer?.id);c.disconnectTimer=null;}
+        if(pc.connectionState==='connected')state('媒体连接正常',true);
+        else if(pc.connectionState==='failed')fail(c,new Error('媒体连接失败'),true);
+        else if(pc.connectionState==='disconnected'){
+          state('媒体连接中断');
+          if(c.disconnectTimer===null){
+            const timer={id:null};c.disconnectTimer=timer;
+            timer.id=setTimeout(()=>{if(current!==c||c.disconnectTimer!==timer)return;c.disconnectTimer=null;if(pc.connectionState==='disconnected')fail(c,new Error('媒体连接中断超时'),true);},10000);
+          }
+        }
+      };
       pc.ontrack=event=>{if(current!==c)return;const id=[...c.subscribed].find(([,entry])=>entry.transceiver===event.transceiver)?.[0];if(!id)return;
         if(event.track.kind==='audio'){const audio=document.createElement('audio');audio.autoplay=true;audio.srcObject=new MediaStream([event.track]);audioContainer.append(audio);c.media.set(id,audio);audio.play().catch(()=>{showError('浏览器阻止自动播放，请点击“启用声音”。');$('enable-audio').hidden=false;});}
         else {const video=document.createElement('video');video.autoplay=true;video.muted=true;video.playsInline=true;video.srcObject=new MediaStream([event.track]);c.media.set(id,video);if(c.snapshot)render(c.snapshot,c);}
