@@ -525,6 +525,73 @@ test('NVR reconnect retries cleanup only for its interrupted bridge', async () =
   element('leave').listeners.click();
 });
 
+for (const outcome of ['pending-then-found','missing','mismatched','manual-stop','hung-create']) test(`NVR resolves a lost bridge creation: ${outcome}`, async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(name,value){this.attributes[name]=value;}querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;}append(...children){this.children.push(...children);}remove(){}play(){return Promise.resolve();}
+  }
+  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const sockets=[],calls=[];let retryCallback,lookups=0,offline=false;
+  const generation='0123456789abcdef0123456789abcdef';
+  class Socket {
+    static OPEN=1;
+    constructor(){this.readyState=1;sockets.push(this);setImmediate(()=>this.snapshot([]));}
+    snapshot(publications){this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Generation:generation,Participants:[{ID:'remote'}],Publications:publications}})});}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+    disconnect(){this.readyState=3;this.onclose();}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';}
+    createDataChannel(){}addTransceiver(){return{stop(){}};}async createOffer(){return{sdp:'offer'};}
+    async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){}
+  }
+  const fetch=async(url,options={})=>{
+    calls.push({url,options});
+    if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'ticket',ice_servers:[]})};
+    if(url==='/api/sfu/bridges/'&&options.method==='POST'){
+      if(outcome==='hung-create')return await new Promise(()=>{});
+      throw new TypeError('response lost');
+    }
+    if(url==='/api/sfu/bridge-requests'){
+      if(offline)throw new TypeError('offline');
+      lookups++;
+      if(outcome==='missing')return{ok:false,status:404,json:async()=>({error:'not found'})};
+      if((outcome==='pending-then-found'||outcome==='hung-create')&&lookups===1)return{ok:true,status:202,json:async()=>({state:'pending'})};
+      return{ok:true,status:200,json:async()=>({id:'own-bridge',publication_id:outcome==='mismatched'?'another-publication':'pub-1',state:'pending'})};
+    }
+    if(url==='/api/sfu/bridges/own-bridge/stop')return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/own-bridge'&&options.method==='DELETE')return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/own-bridge')return{ok:true,status:200,json:async()=>({state:'stopped'})};
+    throw new Error(`unexpected request ${url}`);
+  };
+  const schedule=(fn,ms)=>{if(ms===1000&&sockets.length===1){retryCallback=fn;return 'retry';}return setTimeout(fn,0);};
+  const cancel=id=>{if(id==='retry')retryCallback=null;else clearTimeout(id);};
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,crypto:require('node:crypto').webcrypto,setTimeout:schedule,clearTimeout:cancel,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<300;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  sockets[0].snapshot([{ID:'pub-1',ParticipantID:'remote',Source:'microphone',Kind:'audio',Codec:'audio/opus',RTPReady:true}]);
+  element('bridge-list').children[0].children[1].listeners.click();
+  if(outcome==='hung-create')await waitFor(()=>calls.filter(c=>c.url==='/api/sfu/bridges/').length===1);
+  else await waitFor(()=>calls.filter(c=>c.url==='/api/sfu/bridges/').length===3 && element('bridge-status').textContent.includes('网络连接失败'));
+  if(outcome==='manual-stop')element('bridge-list').children[0].children[1].listeners.click();
+  else {
+    offline=true;sockets[0].disconnect();await waitFor(()=>typeof retryCallback==='function');
+    const retry=retryCallback;retryCallback=null;offline=false;retry();
+  }
+  if(outcome==='pending-then-found'||outcome==='manual-stop'||outcome==='hung-create')await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/own-bridge'&&c.options.method==='DELETE'));
+  else await waitFor(()=>element('error').textContent.includes('部分桥接未能自动清理'));
+  const creates=calls.filter(c=>c.url==='/api/sfu/bridges/');
+  assert.equal(creates.length,outcome==='hung-create'?1:3,'recovery must not create another bridge');
+  const key=creates[0].options.headers['Idempotency-Key'];
+  assert.ok(calls.filter(c=>c.url==='/api/sfu/bridge-requests').every(c=>c.options.headers['Idempotency-Key']===key));
+  assert.ok(!calls.some(c=>c.url.includes('other-bridge')));
+  if(outcome==='missing'||outcome==='mismatched')assert.ok(!calls.some(c=>c.url.endsWith('/stop')),'unknown or mismatched request must not stop a bridge');
+  element('leave').listeners.click();
+});
+
 test('network diagnostics sample deltas only while open and ignore results after leaving', async () => {
   class Element {
     constructor() { this.listeners={};this.children=[];this.disabled=false;this.hidden=true;this.open=false;this.value='';this.checked=false;this.textContent='';this.classList={toggle(){}}; }

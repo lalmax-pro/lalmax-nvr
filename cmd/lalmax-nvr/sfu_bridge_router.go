@@ -174,6 +174,42 @@ func (r *nvrSFUBridgeRouter) CreateIdempotent(ctx context.Context, principal, vi
 		return r.Get(ctx, principal, request.status.ID)
 	}
 }
+
+// ResolveIdempotent only looks up an existing request. It never starts a
+// bridge, even if the original HTTP request never reached this server.
+func (r *nvrSFUBridgeRouter) ResolveIdempotent(ctx context.Context, principal, key string) (sfubridge.Status, error) {
+	if ctx == nil || principal == "" || key == "" {
+		return sfubridge.Status{}, sfubridge.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return sfubridge.Status{}, err
+	}
+	if err := r.authorize(ctx, principal); err != nil {
+		return sfubridge.Status{}, sfubridge.ErrDenied
+	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return sfubridge.Status{}, sfubridge.ErrClosed
+	}
+	request := r.requests[bridgeRequestKey{principal, key}]
+	if request == nil || (!request.completed.IsZero() && time.Since(request.completed) >= bridgeRequestRetention) {
+		r.mu.Unlock()
+		return sfubridge.Status{}, sfubridge.ErrNotFound
+	}
+	select {
+	case <-request.done:
+		status, err := request.status, request.err
+		r.mu.Unlock()
+		if err != nil {
+			return sfubridge.Status{}, err
+		}
+		return r.Get(ctx, principal, status.ID)
+	default:
+		r.mu.Unlock()
+		return sfubridge.Status{}, sfubridge.ErrRequestPending
+	}
+}
 func (r *nvrSFUBridgeRouter) create(ctx context.Context, principal, pub, audio string) (sfubridge.Status, error) {
 	if ctx == nil || principal == "" || pub == "" {
 		return sfubridge.Status{}, sfubridge.ErrInvalid

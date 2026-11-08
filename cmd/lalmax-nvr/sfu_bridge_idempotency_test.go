@@ -40,6 +40,15 @@ func TestBridgeIdempotencyConcurrentRetryAndAuthorization(t *testing.T) {
 	first := make(chan error, 1)
 	go func() { _, err := router.CreateIdempotent(ctx, "alice", pub.ID, "", "request-1"); first <- err }()
 	<-bridge.start
+	if _, err = router.ResolveIdempotent(context.Background(), "alice", "request-1"); !errors.Is(err, sfubridge.ErrRequestPending) {
+		t.Fatalf("pending lookup: %v", err)
+	}
+	if _, err = router.ResolveIdempotent(context.Background(), "bob", "request-1"); !errors.Is(err, sfubridge.ErrNotFound) {
+		t.Fatalf("other principal: %v", err)
+	}
+	if _, err = router.ResolveIdempotent(context.Background(), "alice", "missing"); !errors.Is(err, sfubridge.ErrNotFound) {
+		t.Fatalf("missing lookup: %v", err)
+	}
 	cancel()
 	if err := <-first; !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled request: %v", err)
@@ -64,7 +73,14 @@ func TestBridgeIdempotencyConcurrentRetryAndAuthorization(t *testing.T) {
 			t.Fatalf("retry: %v", err)
 		}
 	}
+	status, err := router.ResolveIdempotent(context.Background(), "alice", "request-1")
+	if err != nil || status.ID != "bridge" {
+		t.Fatalf("resolved lookup: %+v %v", status, err)
+	}
 	revoked.Store(true)
+	if _, err = router.ResolveIdempotent(context.Background(), "alice", "request-1"); !errors.Is(err, sfubridge.ErrDenied) {
+		t.Fatalf("revoked lookup: %v", err)
+	}
 	if _, err = router.CreateIdempotent(context.Background(), "alice", pub.ID, "", "request-1"); !errors.Is(err, sfubridge.ErrDenied) {
 		t.Fatalf("revoked retry: %v", err)
 	}
@@ -74,6 +90,9 @@ func TestBridgeIdempotencyConcurrentRetryAndAuthorization(t *testing.T) {
 	}
 	if _, err = router.CreateIdempotent(context.Background(), "alice", pub.ID, "", "request-1"); !errors.Is(err, sfubridge.ErrNotFound) {
 		t.Fatalf("removed room: %v", err)
+	}
+	if _, err = router.ResolveIdempotent(context.Background(), "alice", "request-1"); !errors.Is(err, sfubridge.ErrNotFound) {
+		t.Fatalf("lookup after room removal: %v", err)
 	}
 }
 
@@ -106,5 +125,27 @@ func TestBridgeIdempotencyKeysAreScopedToPrincipal(t *testing.T) {
 	}
 	if _, err := router.CreateIdempotent(ctx, "alice", "second", "", "same-key"); !errors.Is(err, sfubridge.ErrIdempotencyConflict) {
 		t.Fatalf("alice's conflicting retry: %v", err)
+	}
+}
+
+func TestBridgeRequestLookupDoesNotCreateAndExpires(t *testing.T) {
+	router := newNVRSFUBridgeRouter(func(context.Context, string) error { return nil })
+	ctx := context.Background()
+	if _, err := router.ResolveIdempotent(ctx, "alice", "unknown"); !errors.Is(err, sfubridge.ErrNotFound) {
+		t.Fatalf("unknown lookup: %v", err)
+	}
+	if len(router.requests) != 0 {
+		t.Fatal("lookup created a request")
+	}
+	done := make(chan struct{})
+	close(done)
+	router.requests[bridgeRequestKey{"alice", "expired"}] = &bridgeRequest{done: done, completed: time.Now().Add(-bridgeRequestRetention - time.Second)}
+	if _, err := router.ResolveIdempotent(ctx, "alice", "expired"); !errors.Is(err, sfubridge.ErrNotFound) {
+		t.Fatalf("expired lookup: %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := router.ResolveIdempotent(canceled, "alice", "expired"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled lookup: %v", err)
 	}
 }

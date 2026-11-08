@@ -137,12 +137,15 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	})
 	require.Eventually(t, func() bool { return app.sfuRuntime.server.Ready() }, 10*time.Second, 20*time.Millisecond)
 	origin := "http://" + cfg.Server.Listen
-	request := func(method, path, body string, want int) []byte {
+	request := func(method, path, body string, want int, keys ...string) []byte {
 		t.Helper()
 		req, err := http.NewRequest(method, origin+path, strings.NewReader(body))
 		require.NoError(t, err)
 		req.SetBasicAuth(cfg.Auth.Username, "local-test-password")
 		req.Header.Set("Content-Type", "application/json")
+		if len(keys) != 0 {
+			req.Header.Set("Idempotency-Key", keys[0])
+		}
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
@@ -265,9 +268,42 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 		StreamID string `json:"stream_id"`
 	}
 	body, _ := json.Marshal(map[string]string{"publication_id": videoPub.Publication.ID, "audio_publication_id": audioPub.Publication.ID})
-	require.NoError(t, json.Unmarshal(request(http.MethodPost, "/api/sfu/bridges/", string(body), http.StatusAccepted), &bridge))
+	key := "nvr-recording-test-request"
+	require.NoError(t, json.Unmarshal(request(http.MethodPost, "/api/sfu/bridges/", string(body), http.StatusAccepted, key), &bridge))
 	require.NotEmpty(t, bridge.ID)
 	require.NotEmpty(t, bridge.StreamID)
+	var resolved struct {
+		ID            string `json:"id"`
+		PublicationID string `json:"publication_id"`
+	}
+	require.NoError(t, json.Unmarshal(request(http.MethodGet, "/api/sfu/bridge-requests", "", http.StatusOK, key), &resolved))
+	require.Equal(t, bridge.ID, resolved.ID)
+	require.Equal(t, videoPub.Publication.ID, resolved.PublicationID)
+	request(http.MethodGet, "/api/sfu/bridge-requests", "", http.StatusNotFound, "unknown-request")
+	// Model a lost create response: recover and stop this request's bridge,
+	// while another bridge for the same publication remains untouched.
+	lostKey := "nvr-recording-test-lost-response"
+	request(http.MethodPost, "/api/sfu/bridges/", string(body), http.StatusAccepted, lostKey)
+	var recovered struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(request(http.MethodGet, "/api/sfu/bridge-requests", "", http.StatusOK, lostKey), &recovered))
+	require.NotEmpty(t, recovered.ID)
+	require.NotEqual(t, bridge.ID, recovered.ID)
+	request(http.MethodPost, "/api/sfu/bridges/"+recovered.ID+"/stop", "{}", http.StatusNoContent)
+	require.Eventually(t, func() bool {
+		var status struct {
+			State string `json:"state"`
+		}
+		err := json.Unmarshal(request(http.MethodGet, "/api/sfu/bridges/"+recovered.ID, "", http.StatusOK), &status)
+		return err == nil && (status.State == "stopped" || status.State == "failed")
+	}, 5*time.Second, 50*time.Millisecond)
+	request(http.MethodDelete, "/api/sfu/bridges/"+recovered.ID, "", http.StatusNoContent)
+	var original struct {
+		State string `json:"state"`
+	}
+	require.NoError(t, json.Unmarshal(request(http.MethodGet, "/api/sfu/bridges/"+bridge.ID, "", http.StatusOK), &original))
+	require.Equal(t, "pending", original.State)
 	require.Eventually(t, func() bool {
 		ids, err := app.aliveRecordingStreams(context.Background())
 		if err != nil {

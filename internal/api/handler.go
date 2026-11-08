@@ -409,6 +409,7 @@ func (h *Handler) Routes() http.Handler {
 			r.Delete("/{id}", h.removeSFUBridge)
 		})
 		r.With(middleware.RequireOperatePermission()).Post("/api/sfu/ticket", h.createSFUTicket)
+		r.With(middleware.RequireOperatePermission()).Get("/api/sfu/bridge-requests", h.getSFUBridgeRequest)
 		r.Route("/api/sfu/rooms", func(r chi.Router) {
 			r.Use(middleware.RequireOperatePermission())
 			r.Get("/", h.listSFURooms)
