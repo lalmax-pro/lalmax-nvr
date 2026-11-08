@@ -121,7 +121,7 @@ func TestLiveKitBrowser(t *testing.T) {
 	// t.Chdir isolates lal's logs; locate the source script independently of cwd.
 	_, source, _, _ := goruntime.Caller(0)
 	command := exec.CommandContext(browserCtx, "node", filepath.Join(filepath.Dir(source), "../../tools/sfu-meet/browser-e2e.cjs"), svr.URL)
-	command.Env = append(os.Environ(), "LK_BRIDGE_TEST=1", "LK_RESTART_TEST=1")
+	command.Env = append(os.Environ(), "LK_BRIDGE_TEST=1", "LK_RESTART_TEST=1", fmt.Sprintf("LK_LIVEKIT_UDP_PORT=%d", udpPort))
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("browser: %v\n%s", err, output)

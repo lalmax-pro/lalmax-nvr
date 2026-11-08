@@ -51,6 +51,11 @@ npm ci --prefix tools/sfu-meet
 LIVEKIT_BROWSER_EXECUTABLE=/path/to/chrome go test -tags livekit_browser ./cmd/lalmax-nvr -run '^TestLiveKitBrowser$' -count=1
 ```
 
+Set `LK_UDP_LOSS_TEST=1` on that command to relay the viewer's LiveKit UDP
+traffic through a local test proxy that drops 20% of downstream media packets.
+The test verifies the selected ICE path, video frames and audio/video packet
+reception during loss and after recovery. It does not emulate real NAT or delay.
+
 To exercise the full NVR recording plan and decode a synthetic recording,
 run `TestNVRLiveKitRecordingBrowser` with the same build tag and executable.
 With FFmpeg installed, check generated audio/video synchronization markers with:
@@ -58,6 +63,15 @@ With FFmpeg installed, check generated audio/video synchronization markers with:
 ```sh
 SFU_NVR_RECORDING_TEST=1 SFU_NVR_RECORDING_MARKERS_TEST=1 go test ./cmd/lalmax-nvr -run '^TestNVRSFUBridgeRecordingPlanEndToEnd$'
 ```
+
+An optional synthetic SFU soak checks two viewers and a Group bridge every
+five seconds, including a receive-side packet-loss and recovery phase:
+
+```sh
+SFU_LIVEKIT_SOAK=5m go test -race -timeout 8m -tags livekit_integration ./internal/livekitsfu -run '^TestLiveKitTracksToLalAV$' -count=1 -v
+```
+
+This checks local synthetic media; it does not simulate network latency or NAT.
 
 The test uses Chrome's fake media devices, mutes browser audio, and supplies a
 canvas and isolated Web Audio stream for screen sharing. It does not capture

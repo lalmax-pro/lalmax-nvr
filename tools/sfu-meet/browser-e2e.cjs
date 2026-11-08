@@ -26,8 +26,56 @@ const assert = require('node:assert/strict');
     };
   });
   const publisher = await context.newPage(); const viewer = await context.newPage();
-  const errors=[]; for(const p of [publisher, viewer]) p.on('pageerror', e => errors.push(e.message));
+  let udpProxy;
+  const errors=[];
   try {
+    if (process.env.LK_UDP_LOSS_TEST) {
+      const targetPort = Number(process.env.LK_LIVEKIT_UDP_PORT);
+      if (!targetPort) throw new Error('LK_UDP_LOSS_TEST requires LK_LIVEKIT_UDP_PORT');
+      udpProxy = await require('./udp-loss-proxy.cjs')(targetPort);
+      await viewer.addInitScript(({targetPort, proxyPort}) => {
+        window.__networkCandidateRewrites = 0;
+        window.__networkPeerConnections = [];
+        const NativePeerConnection = window.RTCPeerConnection;
+        const iceEvent = Object.getOwnPropertyDescriptor(NativePeerConnection.prototype, 'onicecandidate');
+        window.RTCPeerConnection = class extends NativePeerConnection {
+          constructor(...args) {
+            super(...args);
+            window.__networkPeerConnections.push(this);
+            // For LiveKit's publisher/subscriber PCs, prevent the server from
+            // learning a direct candidate and bypassing the relay. The server
+            // can discover the relayed peer-reflexive candidate from ICE checks.
+            if (window.__networkPeerConnections.length <= 2 && iceEvent?.set) {
+              Object.defineProperty(this, 'onicecandidate', {
+                configurable:true,
+                get:() => iceEvent.get.call(this),
+                set:handler => iceEvent.set.call(this, handler && (event => { if (!event.candidate) handler(event); })),
+              });
+            }
+          }
+        };
+        const rewrite = candidate => {
+          const parts = candidate.split(' ');
+          if (parts.length >= 8 && parts[2].toLowerCase() === 'udp' && Number(parts[5]) === targetPort) {
+            parts[4] = '127.0.0.1'; parts[5] = String(proxyPort);
+            window.__networkCandidateRewrites++;
+            return parts.join(' ');
+          }
+          return candidate;
+        };
+        const addCandidate = NativePeerConnection.prototype.addIceCandidate;
+        NativePeerConnection.prototype.addIceCandidate = function(candidate) {
+          if (candidate?.candidate) candidate = {candidate:rewrite(candidate.candidate), sdpMid:candidate.sdpMid, sdpMLineIndex:candidate.sdpMLineIndex, usernameFragment:candidate.usernameFragment};
+          return addCandidate.call(this, candidate);
+        };
+        const setDescription = NativePeerConnection.prototype.setRemoteDescription;
+        NativePeerConnection.prototype.setRemoteDescription = function(description) {
+          if (description?.sdp) description = {type:description.type, sdp:description.sdp.split('\n').map(line => line.startsWith('a=candidate:') ? rewrite(line) : line).join('\n')};
+          return setDescription.call(this, description);
+        };
+      }, {targetPort, proxyPort:udpProxy.port});
+    }
+    for(const p of [publisher, viewer]) p.on('pageerror', e => errors.push(e.message));
     for(const page of [publisher,viewer]) {
       await page.goto(process.argv[2]+(process.env.LK_DEMO_LOCAL ? '/' : '/sfu-meet/'),{waitUntil:'load'});
       if (!process.env.LK_DEMO_LOCAL) await page.fill('#nvr-username','admin');
@@ -47,6 +95,38 @@ const assert = require('node:assert/strict');
     await viewer.click('#join'); await viewer.waitForFunction(() => document.querySelector('#status-text').textContent==='已连接', null, {timeout:20000});
     await viewer.waitForFunction(() => document.querySelectorAll('#track-list .track-row').length>=2 && [...document.querySelectorAll('#tiles video')].some(v=>v.videoWidth>0), null, {timeout:25000});
     await viewer.waitForSelector('#audio-container audio', {state:'attached', timeout:15000});
+    await viewer.locator('#tiles').scrollIntoViewIfNeeded();
+    if (udpProxy) {
+      assert.ok(await viewer.evaluate(() => window.__networkCandidateRewrites > 0), 'viewer did not use the UDP proxy');
+      const sample = () => viewer.evaluate(async () => {
+        let audio = 0; let video = 0; const remote = [];
+        for (const pc of window.__networkPeerConnections) {
+          const stats = await pc.getStats();
+          for (const stat of stats.values()) {
+            if (stat.type === 'transport' && stat.selectedCandidatePairId) {
+              const pair = stats.get(stat.selectedCandidatePairId);
+              const candidate = pair && stats.get(pair.remoteCandidateId);
+              if (candidate) remote.push({address:candidate.address, port:candidate.port, protocol:candidate.protocol});
+            }
+            if (stat.type !== 'inbound-rtp') continue;
+            if (stat.kind === 'audio') audio += stat.packetsReceived || 0;
+            if (stat.kind === 'video') video += stat.packetsReceived || 0;
+          }
+        }
+        return {audio, video, remote, frames:[...document.querySelectorAll('#tiles video')].reduce((total, v) => total + v.getVideoPlaybackQuality().totalVideoFrames, 0)};
+      });
+      const before = await sample();
+      udpProxy.setImpaired(true);
+      await viewer.waitForTimeout(5000);
+      const during = await sample();
+      udpProxy.setImpaired(false);
+      assert.ok(during.remote.some(candidate => candidate.port === udpProxy.port), `viewer did not select the UDP proxy: ${JSON.stringify({proxy:udpProxy.stats(), remote:during.remote})}`);
+      assert.ok(udpProxy.dropped() >= 10, `UDP proxy did not drop enough media packets: ${JSON.stringify({proxy:udpProxy.stats(), during})}`);
+      assert.ok(during.audio > before.audio && during.video > before.video && during.frames > before.frames, `media stopped during UDP loss: ${JSON.stringify({before, during})}`);
+      await viewer.waitForTimeout(2000);
+      const after = await sample();
+      assert.ok(after.audio > during.audio && after.video > during.video && after.frames > during.frames, `media did not recover after UDP loss: ${JSON.stringify({during, after})}`);
+    }
     if (process.env.LIVEKIT_BROWSER_SCREENSHOT) await viewer.screenshot({path:process.env.LIVEKIT_BROWSER_SCREENSHOT, fullPage:true});
     for (const source of ['摄像头', '麦克风']) {
       await viewer.getByRole('button', {name:new RegExp(`^取消订阅 .*${source}`)}).click();
@@ -241,6 +321,6 @@ const assert = require('node:assert/strict');
       assert.equal((await refreshed).status(), 200);
     }
     assert.deepEqual(errors, []);
-    console.log(`PASS: browser synthetic camera/microphone, device switching, signal reconnection, dynamic subscriptions, synthetic screen video/audio${process.env.LK_BRIDGE_TEST ? ', camera and screen Group WHEP audio/video and bridge cleanup' : ''}, and leave`);
-  } finally { await context.close(); await browser.close(); }
+    console.log(`PASS: browser synthetic camera/microphone, device switching, signal reconnection, dynamic subscriptions, synthetic screen video/audio${udpProxy ? ', UDP media loss and recovery' : ''}${process.env.LK_BRIDGE_TEST ? ', camera and screen Group WHEP audio/video and bridge cleanup' : ''}, and leave`);
+  } finally { await context.close(); await browser.close(); if (udpProxy) udpProxy.close(); }
 })().catch(e => { console.error(e.stack || e.message); process.exitCode=1; });

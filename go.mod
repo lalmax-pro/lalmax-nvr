@@ -208,4 +208,4 @@ replace github.com/pion/webrtc/v4 => github.com/livekit/webrtc-pion/v4 v4.2.25-w
 replace github.com/pion/ice/v4 => github.com/livekit/ice/v4 v4.4.8-warp.2
 
 // Temporary upstream race fix; see docs/zh/sfu-nvr.md for the pinned commit and removal criteria.
-replace github.com/livekit/livekit-server => github.com/lalmax-pro/livekit v1.13.12-0.20261108214212-ee9c8db1e443
+replace github.com/livekit/livekit-server => github.com/lalmax-pro/livekit v1.13.12-0.20261108220453-8e29689ea7fd

@@ -8,12 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lal/pkg/base"
@@ -29,6 +32,70 @@ func (h *groupTestHook) OnMsg(m base.RtmpMsg) {
 	}
 }
 func (*groupTestHook) OnStop() {}
+
+// receiveLoss simulates RTP loss for one subscriber after transport delivery.
+// It does not emulate ICE, network delay or a congested router.
+type receiveLoss struct {
+	interceptor.NoOp
+	enabled atomic.Bool
+	seen    atomic.Uint64
+	dropped atomic.Uint64
+}
+
+func (f *receiveLoss) NewInterceptor(string) (interceptor.Interceptor, error) { return f, nil }
+
+func (f *receiveLoss) BindRemoteStream(_ *interceptor.StreamInfo, reader interceptor.RTPReader) interceptor.RTPReader {
+	return interceptor.RTPReaderFunc(func(buf []byte, attrs interceptor.Attributes) (int, interceptor.Attributes, error) {
+		for {
+			n, result, err := reader.Read(buf, attrs)
+			if err != nil || !f.enabled.Load() || f.seen.Add(1)%3 != 0 {
+				return n, result, err
+			}
+			f.dropped.Add(1)
+		}
+	})
+}
+
+// soakAV checks each media path repeatedly, rather than treating the final
+// cumulative packet count as evidence that there were no long interruptions.
+func soakAV(t *testing.T, duration time.Duration, hook *groupTestHook, watchedVideo, watchedAudio, secondVideo, secondAudio *atomic.Int64) {
+	t.Helper()
+	if duration < 5*time.Second {
+		t.Fatal("SFU_LIVEKIT_SOAK must be at least 5s")
+	}
+	var start, end runtime.MemStats
+	runtime.ReadMemStats(&start)
+	startGoroutines := runtime.NumGoroutine()
+	started := time.Now()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	lastVideo, lastAudio := watchedVideo.Load(), watchedAudio.Load()
+	lastSecondVideo, lastSecondAudio := secondVideo.Load(), secondAudio.Load()
+	var groupVideo, groupAudio bool
+	var intervals int
+	for {
+		select {
+		case msg := <-hook.messages:
+			groupVideo = groupVideo || msg.Header.MsgTypeId == base.RtmpTypeIdVideo
+			groupAudio = groupAudio || msg.Header.MsgTypeId == base.RtmpTypeIdAudio
+		case <-ticker.C:
+			video, audio := watchedVideo.Load(), watchedAudio.Load()
+			video2, audio2 := secondVideo.Load(), secondAudio.Load()
+			if video <= lastVideo || audio <= lastAudio || video2 <= lastSecondVideo || audio2 <= lastSecondAudio || !groupVideo || !groupAudio {
+				t.Fatalf("media interruption during soak: viewer=(%d,%d) second=(%d,%d) group=(%v,%v)", video-lastVideo, audio-lastAudio, video2-lastSecondVideo, audio2-lastSecondAudio, groupVideo, groupAudio)
+			}
+			lastVideo, lastAudio, lastSecondVideo, lastSecondAudio = video, audio, video2, audio2
+			groupVideo, groupAudio = false, false
+			intervals++
+			if time.Since(started) < duration {
+				continue
+			}
+			runtime.ReadMemStats(&end)
+			t.Logf("synthetic soak %s: %d five-second intervals; process goroutines %d -> %d; heap %d -> %d bytes (includes clients)", duration, intervals, startGoroutines, runtime.NumGoroutine(), start.HeapAlloc, end.HeapAlloc)
+			return
+		}
+	}
+}
 
 // TestLiveKitTracksToLalAV exercises a real LiveKit subscriber, both RTP
 // depacketizers, RTCP sender-report clocks and a real lal Group. Its publisher
@@ -96,7 +163,7 @@ func TestLiveKitTracksToLalAV(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var watched atomic.Int64
+	var watched, watchedVideo, watchedAudio atomic.Int64
 	cb := lksdk.NewRoomCallback()
 	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, _ *lksdk.RemoteParticipant) {
 		go func() {
@@ -105,6 +172,11 @@ func TestLiveKitTracksToLalAV(t *testing.T) {
 					return
 				}
 				watched.Add(1)
+				if track.Kind() == webrtc.RTPCodecTypeVideo {
+					watchedVideo.Add(1)
+				} else if track.Kind() == webrtc.RTPCodecTypeAudio {
+					watchedAudio.Add(1)
+				}
 			}
 		}()
 	}
@@ -129,7 +201,9 @@ func TestLiveKitTracksToLalAV(t *testing.T) {
 			}
 		}()
 	}
-	secondViewer, err := lksdk.ConnectToRoom(endpoint, lksdk.ConnectInfo{APIKey: key, APISecret: secret, RoomName: "bridge", ParticipantIdentity: "second-viewer"}, secondCB)
+	loss := &receiveLoss{}
+	secondViewer, err := lksdk.ConnectToRoom(endpoint, lksdk.ConnectInfo{APIKey: key, APISecret: secret, RoomName: "bridge", ParticipantIdentity: "second-viewer"}, secondCB,
+		lksdk.WithInterceptors([]interceptor.Factory{loss}), lksdk.WithIncludeDefaultInterceptors(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +303,47 @@ func TestLiveKitTracksToLalAV(t *testing.T) {
 	}
 	if secondVideo.Load() == 0 || secondAudio.Load() == 0 {
 		t.Fatalf("second viewer missing media alongside the bridge: video=%d audio=%d", secondVideo.Load(), secondAudio.Load())
+	}
+	// Drop one third of one viewer's inbound RTP while the other viewer and
+	// Group bridge remain active. Verify fresh media in every path, then stop
+	// dropping and verify the affected viewer resumes both tracks.
+	for len(hook.messages) != 0 {
+		<-hook.messages
+	}
+	beforeViewer, beforeVideo, beforeAudio := watched.Load(), secondVideo.Load(), secondAudio.Load()
+	loss.enabled.Store(true)
+	var duringVideo, duringAudio bool
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case msg := <-hook.messages:
+			duringVideo = duringVideo || msg.Header.MsgTypeId == base.RtmpTypeIdVideo
+			duringAudio = duringAudio || msg.Header.MsgTypeId == base.RtmpTypeIdAudio
+		default:
+			time.Sleep(20 * time.Millisecond)
+		}
+		if loss.dropped.Load() >= 10 && watched.Load() > beforeViewer && secondVideo.Load() > beforeVideo && secondAudio.Load() > beforeAudio && duringVideo && duringAudio {
+			break
+		}
+	}
+	if loss.dropped.Load() < 10 || watched.Load() <= beforeViewer || secondVideo.Load() <= beforeVideo || secondAudio.Load() <= beforeAudio || !duringVideo || !duringAudio {
+		t.Fatalf("media interrupted during receive loss: drops=%d viewer=%d secondVideo=%d secondAudio=%d groupVideo=%v groupAudio=%v", loss.dropped.Load(), watched.Load()-beforeViewer, secondVideo.Load()-beforeVideo, secondAudio.Load()-beforeAudio, duringVideo, duringAudio)
+	}
+	loss.enabled.Store(false)
+	beforeVideo, beforeAudio = secondVideo.Load(), secondAudio.Load()
+	deadline = time.Now().Add(5 * time.Second)
+	for (secondVideo.Load() <= beforeVideo || secondAudio.Load() <= beforeAudio) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if secondVideo.Load() <= beforeVideo || secondAudio.Load() <= beforeAudio {
+		t.Fatal("viewer did not receive both tracks after simulated loss ended")
+	}
+	if durationText := os.Getenv("SFU_LIVEKIT_SOAK"); durationText != "" {
+		duration, err := time.ParseDuration(durationText)
+		if err != nil {
+			t.Fatalf("invalid SFU_LIVEKIT_SOAK: %v", err)
+		}
+		soakAV(t, duration, hook, &watchedVideo, &watchedAudio, &secondVideo, &secondAudio)
 	}
 	secondViewer.Disconnect()
 	before := watched.Load()
