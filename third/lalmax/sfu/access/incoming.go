@@ -52,7 +52,7 @@ func (s *Session) StartIncoming(ctx context.Context, publicationID string, remot
 		}
 		s.incoming[publicationID] = binding
 		go func() {
-			err := webrtcbridge.ForwardInbound(bindingCtx, remote, s.room, s.scope.ParticipantID, s.generation, publicationID)
+			err := webrtcbridge.ForwardInboundWithCodec(bindingCtx, remote, s.room, s.scope.ParticipantID, s.generation, publicationID, codec)
 			cancel()
 			s.mu.Lock()
 			if s.incoming[publicationID] == binding {
