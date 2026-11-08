@@ -174,6 +174,14 @@
     try { return await response.json(); }
     catch (err) { if(!retryBody)throw err;const failure=new Error('网络连接失败');failure.network=true;throw failure; }
   }
+  async function bridgeControlRequest(path,options={}) {
+    const timeout=new AbortController(),timer=setTimeout(()=>timeout.abort(),5000);
+    try { return await nvrRequest(path,{...options,signal:timeout.signal}); }
+    catch (err) {
+      if(timeout.signal.aborted){const failure=new Error('桥接管理请求超时，请重试');failure.network=true;throw failure;}
+      throw err;
+    } finally { clearTimeout(timer); }
+  }
   async function closeBridgePlayer(bridge,quiet=false) {
     if(!bridge?.location)return;
     // Player cleanup is best effort: a stalled WHEP request must not prevent
@@ -181,6 +189,11 @@
     const timeout=new AbortController(),timer=setTimeout(()=>timeout.abort(),5000);
     try { await fetch(bridge.location,{method:'DELETE',headers:{'Authorization':nvrAuth()},keepalive:quiet,cache:'no-store',signal:timeout.signal}); }
     catch (_) {} finally { clearTimeout(timer); }
+  }
+  function forgetLocalBridge(c,bridge) {
+    if(c.bridges.get(bridge.publication)!==bridge)return;
+    bridge.closeRequested=true;bridge.abort.abort();bridge.pc?.close();c.bridges.delete(bridge.publication);
+    if(current===c){$('bridge-video').srcObject=null;$('bridge-video').hidden=true;$('bridge-status').textContent='桥接已停止';if(c.snapshot)renderBridgeTracks(c.snapshot,c);}
   }
   let bridgeManagementBusy=false;
   async function manageBridges(action, id) {
@@ -194,13 +207,15 @@
         // If this tab owns the player, close its WHEP session before the
         // bridge stops and revokes the playback credential.
         await closeBridgePlayer(local);
-        await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(id)}/stop`,{method:'POST',body:'{}'});
-        if(local){local.closeRequested=true;local.abort.abort();local.pc?.close();c.bridges.delete(local.publication);
-          if(current===c){$('bridge-video').srcObject=null;$('bridge-video').hidden=true;$('bridge-status').textContent='桥接已停止';if(c.snapshot)renderBridgeTracks(c.snapshot,c);}}
+        await bridgeControlRequest(`/api/sfu/bridges/${encodeURIComponent(id)}/stop`,{method:'POST',body:'{}'});
+        if(local)forgetLocalBridge(c,local);
       }
-      if(action==='remove')await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(id)}`,{method:'DELETE'});
-      const bridges=await nvrRequest('/api/sfu/bridges/');
+      if(action==='remove')await bridgeControlRequest(`/api/sfu/bridges/${encodeURIComponent(id)}`,{method:'DELETE'});
+      const bridges=await bridgeControlRequest('/api/sfu/bridges/');
       if(!Array.isArray(bridges)||bridges.some(b=>typeof b.id!=='string'||typeof b.publication_id!=='string'||!['pending','stopping','stopped','failed'].includes(b.state)))throw new Error('桥接列表无效');
+      // A timed-out stop may already have completed on the server. Only an
+      // explicit terminal status is sufficient to discard the local player.
+      const c=current;if(c)for(const local of c.bridges.values())if(local.id&&bridges.some(b=>b.id===local.id&&(b.state==='stopped'||b.state==='failed')))forgetLocalBridge(c,local);
       list.replaceChildren();
       if(!bridges.length){message.textContent='没有可管理的桥接。';return;}
       const labels={pending:'运行中或等待媒体',stopping:'正在停止',stopped:'已停止',failed:'已失败'};
@@ -328,9 +343,9 @@
     try {
       if(!bridge.id && bridge.requestKey)await resolveBridgeRequest(bridge);
       await closeBridgePlayer(bridge,quiet);
-      if(bridge.id){await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/stop`,{method:'POST',body:'{}',keepalive:quiet});
-        for(let i=0;i<30;i++){const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);if(status.state==='stopped'||status.state==='failed')break;await wait(200);}
-        await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`,{method:'DELETE',keepalive:quiet});}
+      if(bridge.id){await bridgeControlRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/stop`,{method:'POST',body:'{}',keepalive:quiet});
+        for(let i=0;i<30;i++){const status=await bridgeControlRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);if(status.state==='stopped'||status.state==='failed')break;await wait(200);}
+        await bridgeControlRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`,{method:'DELETE',keepalive:quiet});}
       c.bridges.delete(bridge.publication);if(current===c){$('bridge-status').textContent='桥接已停止';renderBridgeTracks(c.snapshot,c);}
     } catch(err){if(err.status===404&&!err.unresolved){c.bridges.delete(bridge.publication);if(current===c){$('bridge-status').textContent='桥接已不存在';renderBridgeTracks(c.snapshot,c);}}else{bridge.busy=false;bridge.label='停止失败，可重试';if(current===c&&!quiet){$('bridge-status').textContent=err.message||'停止失败';renderBridgeTracks(c.snapshot,c);}}}
     finally {bridge.stopping=false;finishStop();}
