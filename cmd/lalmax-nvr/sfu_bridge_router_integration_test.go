@@ -80,9 +80,13 @@ func TestNVRSFUBridgeRouterRevokesClosedRoomOnly(t *testing.T) {
 	if _, err := router.CreateAV(ctx, "admin", video, audio); !errors.Is(err, sfu.ErrPublicationNotFound) {
 		t.Fatalf("cross-room AV: %v", err)
 	}
-	first, err := router.Create(ctx, "admin", video)
+	first, err := router.CreateIdempotent(ctx, "admin", video, "", "retry-key")
 	if err != nil {
 		t.Fatal(err)
+	}
+	retry, err := router.CreateIdempotent(ctx, "admin", video, "", "retry-key")
+	if err != nil || retry.ID != first.ID || retry.PublicationID != video {
+		t.Fatalf("idempotent replay: %+v, %v", retry, err)
 	}
 	second, err := router.Create(ctx, "admin", audio)
 	if err != nil {
@@ -114,6 +118,9 @@ func TestNVRSFUBridgeRouterRevokesClosedRoomOnly(t *testing.T) {
 	}
 	if _, err = router.Get(ctx, "admin", first.ID); !errors.Is(err, sfubridge.ErrNotFound) {
 		t.Fatalf("closed room bridge: %v", err)
+	}
+	if _, err = router.CreateIdempotent(ctx, "admin", video, "", "retry-key"); !errors.Is(err, sfubridge.ErrNotFound) {
+		t.Fatalf("closed room replay: %v", err)
 	}
 	if _, err = router.Get(ctx, "admin", second.ID); err != nil {
 		t.Fatal(err)

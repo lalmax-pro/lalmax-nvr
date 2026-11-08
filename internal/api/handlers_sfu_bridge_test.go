@@ -26,6 +26,52 @@ type testSFUBridgeRegistry struct {
 	err                                error
 }
 
+type testIdempotentBridgeRegistry struct {
+	*testSFUBridgeRegistry
+	key, audio string
+}
+
+func (s *testIdempotentBridgeRegistry) CreateIdempotent(ctx context.Context, p, pub, audio, key string) (sfubridge.Status, error) {
+	s.key, s.audio = key, audio
+	return s.Create(ctx, p, pub)
+}
+
+func TestSFUBridgeIdempotencyHeader(t *testing.T) {
+	mock := &testIdempotentBridgeRegistry{testSFUBridgeRegistry: &testSFUBridgeRegistry{}}
+	router := sfuTestRouter(&model.User{ID: 42, Role: model.RoleSuperAdmin, Enabled: true}, mock)
+	request := func(keys ...string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/sfu/bridges/", strings.NewReader(`{"publication_id":"video","audio_publication_id":"audio"}`))
+		req.Header.Set("Content-Type", "application/json")
+		for _, key := range keys {
+			req.Header.Add("Idempotency-Key", key)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := request("request-1"); rec.Code != 202 || mock.key != "request-1" || mock.audio != "audio" || mock.principal != "user:42" {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, keys := range [][]string{{""}, {"contains space"}, {strings.Repeat("x", 129)}, {"one", "two"}, {"one,two"}} {
+		if rec := request(keys...); rec.Code != 400 {
+			t.Fatalf("invalid key %q: %d", keys, rec.Code)
+		}
+	}
+	mock.err = sfubridge.ErrIdempotencyConflict
+	if rec := request("request-1"); rec.Code != 409 {
+		t.Fatalf("conflict: %d %s", rec.Code, rec.Body.String())
+	}
+	unsupported := sfuTestRouter(&model.User{ID: 42, Role: model.RoleSuperAdmin, Enabled: true}, &testSFUBridgeRegistry{})
+	req := httptest.NewRequest(http.MethodPost, "/api/sfu/bridges/", strings.NewReader(`{"publication_id":"video"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "request-1")
+	rec := httptest.NewRecorder()
+	unsupported.ServeHTTP(rec, req)
+	if rec.Code != 503 {
+		t.Fatalf("unsupported backend: %d", rec.Code)
+	}
+}
+
 func (s *testSFUBridgeRegistry) Create(_ context.Context, p, pub string) (sfubridge.Status, error) {
 	s.principal = p
 	s.publication = pub

@@ -31,6 +31,9 @@ type SFUBridgeRegistry interface {
 type sfuAVBridgeRegistry interface {
 	CreateAV(context.Context, string, string, string) (sfubridge.Status, error)
 }
+type sfuIdempotentBridgeRegistry interface {
+	CreateIdempotent(context.Context, string, string, string, string) (sfubridge.Status, error)
+}
 type sfuBridgeLister interface {
 	List(context.Context, string) ([]sfubridge.Status, error)
 }
@@ -183,6 +186,8 @@ func sfuBridgeError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusTooManyRequests, "bridge limit reached")
 	case errors.Is(err, sfubridge.ErrNotFinished):
 		writeError(w, http.StatusConflict, "bridge has not stopped")
+	case errors.Is(err, sfubridge.ErrIdempotencyConflict):
+		writeError(w, http.StatusConflict, "idempotency key reused with different publications")
 	case errors.Is(err, sfubridge.ErrClosed), errors.Is(err, access.ErrClosed), errors.Is(err, sfu.ErrRoomClosed):
 		writeError(w, http.StatusServiceUnavailable, "SFU bridge service unavailable")
 	default:
@@ -238,15 +243,27 @@ func (h *Handler) createSFUBridge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid publication ID")
 		return
 	}
+	if input.AudioPublicationID != "" && (len(input.AudioPublicationID) > 256 || strings.TrimSpace(input.AudioPublicationID) != input.AudioPublicationID || input.AudioPublicationID == input.PublicationID) {
+		writeError(w, http.StatusBadRequest, "invalid audio publication ID")
+		return
+	}
+	keys := r.Header.Values("Idempotency-Key")
+	if len(keys) > 1 || (len(keys) == 1 && !validSFUIdempotencyKey(keys[0])) {
+		writeError(w, http.StatusBadRequest, "invalid idempotency key")
+		return
+	}
 	var status sfubridge.Status
 	var err error
-	if input.AudioPublicationID == "" {
-		status, err = registry.Create(r.Context(), principal, input.PublicationID)
-	} else {
-		if len(input.AudioPublicationID) > 256 || strings.TrimSpace(input.AudioPublicationID) != input.AudioPublicationID || input.AudioPublicationID == input.PublicationID {
-			writeError(w, http.StatusBadRequest, "invalid audio publication ID")
+	if len(keys) == 1 {
+		idempotent, ok := registry.(sfuIdempotentBridgeRegistry)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "idempotent bridge creation unavailable")
 			return
 		}
+		status, err = idempotent.CreateIdempotent(r.Context(), principal, input.PublicationID, input.AudioPublicationID, keys[0])
+	} else if input.AudioPublicationID == "" {
+		status, err = registry.Create(r.Context(), principal, input.PublicationID)
+	} else {
 		combined, ok := registry.(sfuAVBridgeRegistry)
 		if !ok {
 			writeError(w, http.StatusServiceUnavailable, "combined bridge unavailable")
@@ -259,6 +276,18 @@ func (h *Handler) createSFUBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, sfuStatus(status))
+}
+
+func validSFUIdempotencyKey(key string) bool {
+	if len(key) == 0 || len(key) > 128 {
+		return false
+	}
+	for _, c := range key {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~') {
+			return false
+		}
+	}
+	return true
 }
 func (h *Handler) getSFUBridge(w http.ResponseWriter, r *http.Request) {
 	registry, principal, ok := h.sfuBridgeRequest(w, r)
