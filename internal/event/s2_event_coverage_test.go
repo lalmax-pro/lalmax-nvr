@@ -110,6 +110,7 @@ func TestS2ArchiverStart(t *testing.T) {
 		archiver.Start(ctx)
 		close(done)
 	}()
+	defer cancel()
 	reconnect := RecorderReconnected{
 		CameraID:       "cam1",
 		DisconnectedAt: "2026-01-01T00:00:00Z",
@@ -119,11 +120,15 @@ func TestS2ArchiverStart(t *testing.T) {
 		RetryCount:     2,
 		GapReason:      "network",
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for repo.count() == 0 && time.Now().Before(deadline) {
-		bus.Publish(context.Background(), TopicRecorderReconnected, reconnect)
-		time.Sleep(time.Millisecond)
-	}
+	// Publish exactly once after the archiver registers. Repeated publishing
+	// while waiting for asynchronous processing can legitimately archive twice.
+	require.Eventually(t, func() bool {
+		bus.mu.RLock()
+		defer bus.mu.RUnlock()
+		return len(bus.subscribers[TopicRecorderReconnected]) == 1
+	}, 2*time.Second, time.Millisecond, "archiver did not subscribe")
+	bus.Publish(context.Background(), TopicRecorderReconnected, reconnect)
+	require.Eventually(t, func() bool { return repo.count() == 1 }, 2*time.Second, time.Millisecond, "event was not archived")
 	cancel()
 	select {
 	case <-done:
