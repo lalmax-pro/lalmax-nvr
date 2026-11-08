@@ -524,3 +524,68 @@ test('NVR reconnect retries cleanup only for its interrupted bridge', async () =
   assert.ok(!calls.some(c=>c.url.includes('other-bridge')));
   element('leave').listeners.click();
 });
+
+test('network diagnostics sample deltas only while open and ignore results after leaving', async () => {
+  class Element {
+    constructor() { this.listeners={};this.children=[];this.disabled=false;this.hidden=true;this.open=false;this.value='';this.checked=false;this.textContent='';this.classList={toggle(){}}; }
+    addEventListener(type,fn){this.listeners[type]=fn;} setAttribute(){} querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;} append(...children){this.children.push(...children);} remove(){}
+  }
+  const elements=new Map(), element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  let socket, peer, pendingTimer, releaseStats;
+  class Socket {
+    static OPEN=1;
+    constructor(){socket=this;this.readyState=1;setImmediate(()=>this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[],Publications:[]}})}));}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+  }
+  const report=(timestamp, sent, audioBytes, videoBytes, received, lost)=>new Map([
+    ['out',{id:'out',type:'outbound-rtp',kind:'video',timestamp,bytesSent:sent}],
+    ['in-a',{id:'in-a',type:'inbound-rtp',kind:'audio',timestamp,bytesReceived:audioBytes,packetsReceived:received,packetsLost:lost}],
+    ['in-v',{id:'in-v',type:'inbound-rtp',kind:'video',timestamp,bytesReceived:videoBytes,packetsReceived:50,packetsLost:1}],
+    ['transport',{id:'transport',type:'transport',selectedCandidatePairId:'pair'}],
+    ['pair',{id:'pair',type:'candidate-pair',currentRoundTripTime:0.042}],
+  ]);
+  class Peer {
+    constructor(){peer=this;this.iceGatheringState='complete';this.connectionState='connected';this.calls=0;}
+    createDataChannel(){} async createOffer(){return{sdp:'offer'};} async setLocalDescription(){this.localDescription={sdp:'offer'};} async setRemoteDescription(){} close(){}
+    getStats(){this.calls++;if(this.calls===1)return Promise.resolve(report(1000,5000,1000,4000,100,5));if(this.calls===2)return Promise.resolve(report(3000,9000,3000,7000,198,7));if(this.calls===3)return Promise.reject(new Error('stats unavailable'));return new Promise(resolve=>{releaseStats=resolve;});}
+  }
+  const timer=(fn,delay)=>{if(delay===2000){pendingTimer={fn};return pendingTimer;}return setTimeout(fn,delay);};
+  const clear=id=>{if(id===pendingTimer){pendingTimer=null;return;}clearTimeout(id);};
+  const context={document:{getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'http:',host:'127.0.0.1'},navigator:{},fetch:async()=>({ok:true}),WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},setTimeout:timer,clearTimeout:clear,Map,Set,Promise,Error};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});
+  await waitFor(()=>!element('share').disabled);
+  assert.equal(peer.calls,0,'closed diagnostics must not poll');
+  const panel=element('network-stats');panel.open=true;panel.listeners.toggle();
+  await waitFor(()=>peer.calls===1 && pendingTimer);
+  assert.equal(element('network-send').textContent,'—','first sample has no interval');
+  assert.equal(element('network-rtt').textContent,'42 ms');
+  let next=pendingTimer;pendingTimer=null;next.fn();
+  await waitFor(()=>peer.calls===2 && pendingTimer);
+  assert.equal(element('network-send').textContent,'16 kbps');
+  assert.equal(element('network-receive').textContent,'20 kbps');
+  assert.equal(element('network-loss').textContent,'2.0%');
+  next=pendingTimer;pendingTimer=null;next.fn();
+  await waitFor(()=>peer.calls===3 && pendingTimer);
+  assert.equal(element('network-send').textContent,'—','an error must not leave stale values');
+  assert.equal(element('network-status').textContent,'暂时无法获取统计。');
+  next=pendingTimer;pendingTimer=null;next.fn();
+  await waitFor(()=>typeof releaseStats==='function');
+  panel.open=false;panel.listeners.toggle();
+  releaseStats(report(5000,20000,9000,9000,200,7));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(element('network-send').textContent,'—','closed panel must ignore late results');
+  assert.equal(pendingTimer,null,'closed panel must stop polling');
+  releaseStats=undefined;panel.open=true;panel.listeners.toggle();
+  await waitFor(()=>typeof releaseStats==='function');
+  element('leave').listeners.click();
+  releaseStats(report(7000,30000,11000,11000,300,9));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(element('network-send').textContent,'—','late results must not overwrite cleared state');
+  assert.equal(element('network-status').textContent,'加入会议后可查看。');
+  assert.equal(pendingTimer,null,'leaving must stop polling');
+  assert.equal(socket.readyState,3);
+});
