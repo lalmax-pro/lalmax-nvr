@@ -60,6 +60,20 @@ type Session struct {
 	trackMappings map[string]string
 }
 
+// RoomGeneration identifies the immutable room instance to which this
+// authenticated session joined; it does not expose participant credentials.
+func (s *Session) RoomGeneration() string { return s.scope.RoomGeneration }
+
+// RoomKey is the room scope checked during the session's authorized join.
+func (s *Session) RoomKey() sfu.Key { return s.scope.Room }
+
+// OutgoingActive reports whether this session still owns the media binding.
+func (s *Session) OutgoingActive(publicationID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.outgoing[publicationID] != nil
+}
+
 // JoinRoom checks policy before allocating a participant. The policy must be
 // trusted and the principal authenticated before calling this function.
 func JoinRoom(ctx context.Context, room *sfu.Room, policy Authorizer, principal string, participant sfu.Participant) (*Session, error) {

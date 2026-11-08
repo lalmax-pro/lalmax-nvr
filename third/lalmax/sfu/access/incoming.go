@@ -21,8 +21,15 @@ type incomingBinding struct{ cancel context.CancelFunc }
 // when external authorization changes. Cancel ctx or close the session to stop.
 // The buffered result reports the forwarder's termination; it is then closed.
 func (s *Session) StartIncoming(ctx context.Context, publicationID string, remote *webrtc.TrackRemote, maxSubscribers, queueSize int) (<-chan error, error) {
+	done, _, err := s.StartIncomingWithLifetime(ctx, publicationID, remote, maxSubscribers, queueSize)
+	return done, err
+}
+
+// StartIncomingWithLifetime exposes the source binding's cancellation signal
+// to trusted transport plumbing, including on unpublish and session close.
+func (s *Session) StartIncomingWithLifetime(ctx context.Context, publicationID string, remote *webrtc.TrackRemote, maxSubscribers, queueSize int) (<-chan error, <-chan struct{}, error) {
 	if ctx == nil || remote == nil || publicationID == "" {
-		return nil, ErrInvalid
+		return nil, nil, ErrInvalid
 	}
 	var publication sfu.Publication
 	for _, p := range s.room.Snapshot().Publications {
@@ -32,20 +39,22 @@ func (s *Session) StartIncoming(ctx context.Context, publicationID string, remot
 		}
 	}
 	if publication.ID == "" {
-		return nil, sfu.ErrPublicationNotFound
+		return nil, nil, sfu.ErrPublicationNotFound
 	}
 	kind := remote.Kind()
 	codec := remote.Codec()
 	if (publication.Kind == "audio" && kind != webrtc.RTPCodecTypeAudio) || (publication.Kind == "video" && kind != webrtc.RTPCodecTypeVideo) || !strings.EqualFold(codec.MimeType, publication.Codec) {
-		return nil, ErrCodecMismatch
+		return nil, nil, ErrCodecMismatch
 	}
 	result := make(chan error, 1)
+	var stopped <-chan struct{}
 	err := s.withPolicy(ctx, Request{Operation: Publish, PublicationID: publicationID, Kind: publication.Kind, Source: publication.Source, Codec: publication.Codec}, func() error {
 		negotiated := sfu.NegotiatedCodec{MimeType: codec.MimeType, ClockRate: codec.ClockRate, Channels: codec.Channels, FMTP: codec.SDPFmtpLine}
 		if err := s.room.EnablePublicationRTPWithCodec(s.scope.ParticipantID, s.generation, publicationID, maxSubscribers, queueSize, negotiated); err != nil {
 			return err
 		}
 		bindingCtx, cancel := context.WithCancel(ctx)
+		stopped = bindingCtx.Done()
 		binding := &incomingBinding{cancel: cancel}
 		if s.incoming == nil {
 			s.incoming = make(map[string]*incomingBinding)
@@ -67,7 +76,7 @@ func (s *Session) StartIncoming(ctx context.Context, publicationID string, remot
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return result, nil
+	return result, stopped, nil
 }

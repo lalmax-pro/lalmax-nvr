@@ -22,8 +22,15 @@ type outgoingBinding struct{ cancel context.CancelFunc }
 // On stop, the binding releases its subscription, unless the caller has
 // already removed and replaced it. The returned buffered channel reports exit.
 func (s *Session) StartOutgoing(ctx context.Context, publicationID string, local *webrtc.TrackLocalStaticRTP) (<-chan error, error) {
+	done, _, err := s.StartOutgoingWithLifetime(ctx, publicationID, local)
+	return done, err
+}
+
+// StartOutgoingWithLifetime additionally exposes a cancellation signal for
+// trusted transport feedback. It closes synchronously when unsubscribed.
+func (s *Session) StartOutgoingWithLifetime(ctx context.Context, publicationID string, local *webrtc.TrackLocalStaticRTP) (<-chan error, <-chan struct{}, error) {
 	if ctx == nil || local == nil || publicationID == "" {
-		return nil, ErrInvalid
+		return nil, nil, ErrInvalid
 	}
 	var publication sfu.Publication
 	for _, p := range s.room.Snapshot().Publications {
@@ -33,19 +40,21 @@ func (s *Session) StartOutgoing(ctx context.Context, publicationID string, local
 		}
 	}
 	if publication.ID == "" {
-		return nil, sfu.ErrPublicationNotFound
+		return nil, nil, sfu.ErrPublicationNotFound
 	}
 	kind := local.Kind()
 	if (publication.Kind == "audio" && kind != webrtc.RTPCodecTypeAudio) || (publication.Kind == "video" && kind != webrtc.RTPCodecTypeVideo) || !strings.EqualFold(local.Codec().MimeType, publication.Codec) {
-		return nil, ErrOutgoingCodecMismatch
+		return nil, nil, ErrOutgoingCodecMismatch
 	}
 	result := make(chan error, 1)
+	var stopped <-chan struct{}
 	err := s.withPolicy(ctx, Request{Operation: Subscribe, PublicationID: publicationID, Kind: publication.Kind, Source: publication.Source, Codec: publication.Codec}, func() error {
 		sub, err := s.room.OpenSubscriptionRTP(s.scope.ParticipantID, s.generation, publicationID)
 		if err != nil {
 			return err
 		}
 		bindingCtx, cancel := context.WithCancel(ctx)
+		stopped = bindingCtx.Done()
 		binding := &outgoingBinding{cancel: cancel}
 		if s.outgoing == nil {
 			s.outgoing = make(map[string]*outgoingBinding)
@@ -66,7 +75,7 @@ func (s *Session) StartOutgoing(ctx context.Context, publicationID string, local
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return result, nil
+	return result, stopped, nil
 }

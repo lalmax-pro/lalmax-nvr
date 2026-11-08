@@ -30,6 +30,10 @@ var webAssets = sfumeetui.Assets
 
 var demoRoom = sfu.Key{Namespace: "local", ID: "demo"}
 
+func demoVideoFeedback() []webrtc.RTCPFeedback {
+	return []webrtc.RTCPFeedback{{Type: "nack", Parameter: "pli"}, {Type: "ccm", Parameter: "fir"}}
+}
+
 type localPolicy struct{}
 
 func (localPolicy) Authorize(_ context.Context, r access.Request) error {
@@ -83,7 +87,7 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 			if err := media.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, PayloadType: 111}, webrtc.RTPCodecTypeAudio); err != nil {
 				return nil, err
 			}
-			if err := media.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, PayloadType: 96}, webrtc.RTPCodecTypeVideo); err != nil {
+			if err := media.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", RTCPFeedback: demoVideoFeedback()}, PayloadType: 96}, webrtc.RTPCodecTypeVideo); err != nil {
 				return nil, err
 			}
 			registry := &interceptor.Registry{}
@@ -97,7 +101,7 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 				return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, nil
 			}
 			if p.Kind == "video" && strings.EqualFold(p.Codec, "video/h264") {
-				return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, nil
+				return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", RTCPFeedback: demoVideoFeedback()}, nil
 			}
 			return webrtc.RTPCodecCapability{}, errors.New("unsupported codec")
 		}, MaxSubscribers: 8, QueueSize: 64,
@@ -105,7 +109,7 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 			if err != nil || track.Kind() != webrtc.RTPCodecTypeVideo {
 				return
 			}
-			// Demo fallback until subscriber PLI/FIR feedback is wired upstream.
+			// Retain a periodic fallback for late subscribers and keyframe loss.
 			go func() {
 				ticker := time.NewTicker(2 * time.Second)
 				defer ticker.Stop()

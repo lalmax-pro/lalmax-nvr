@@ -27,6 +27,10 @@ import (
 
 var nvrSFURoom = sfu.Key{Namespace: "nvr", ID: "default"}
 
+func nvrSFUVideoFeedback() []webrtc.RTCPFeedback {
+	return []webrtc.RTCPFeedback{{Type: "nack", Parameter: "pli"}, {Type: "ccm", Parameter: "fir"}}
+}
+
 type nvrSFURuntime struct {
 	rooms    *sfu.Manager
 	room     *sfu.Room
@@ -177,7 +181,7 @@ func nvrSFUNewPeer(servers []webrtc.ICEServer) func(context.Context, signaling.I
 		if err := engine.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, PayloadType: 111}, webrtc.RTPCodecTypeAudio); err != nil {
 			return nil, err
 		}
-		if err := engine.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, PayloadType: 96}, webrtc.RTPCodecTypeVideo); err != nil {
+		if err := engine.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", RTCPFeedback: nvrSFUVideoFeedback()}, PayloadType: 96}, webrtc.RTPCodecTypeVideo); err != nil {
 			return nil, err
 		}
 		registry := &interceptor.Registry{}
@@ -227,7 +231,7 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 			if err := nvrSFUValidateH264(context.Background(), p); err != nil {
 				return webrtc.RTPCodecCapability{}, err
 			}
-			return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: p.Negotiated.FMTP}, nil
+			return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: p.Negotiated.FMTP, RTCPFeedback: nvrSFUVideoFeedback()}, nil
 		}
 		return webrtc.RTPCodecCapability{}, errors.New("unsupported codec")
 	}, OnInboundPeer: func(ctx context.Context, _ signaling.Identity, pc *webrtc.PeerConnection, track *webrtc.TrackRemote, done <-chan error, err error) {
