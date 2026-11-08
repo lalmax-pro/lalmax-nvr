@@ -14,11 +14,13 @@ var nvrSFURoomLimits = sfu.RoomLimits{MaxParticipants: 32, MaxPublicationsPerPar
 // nvrSFURoomAdmin owns the set of NVR rooms. The default room is retained for
 // existing clients; additional rooms are explicit, bounded, and ephemeral.
 type nvrSFURoomAdmin struct {
-	mu      sync.Mutex
-	manager *sfu.Manager
-	policy  *nvrSFUPolicy
-	entries map[string]*sfu.Room
-	closed  bool
+	mu        sync.Mutex
+	manager   *sfu.Manager
+	policy    *nvrSFUPolicy
+	entries   map[string]*sfu.Room
+	closed    bool
+	bridges   *nvrSFUBridgeRouter
+	newBridge func(context.Context, *sfu.Room) (nvrRoomBridge, error)
 }
 
 func newNVRSFURoomAdmin(m *sfu.Manager, room *sfu.Room, policy *nvrSFUPolicy) *nvrSFURoomAdmin {
@@ -89,6 +91,20 @@ func (a *nvrSFURoomAdmin) CreateRoom(ctx context.Context, principal, id string) 
 	if err != nil {
 		return sfu.Snapshot{}, err
 	}
+	if a.newBridge != nil {
+		registry, err := a.newBridge(ctx, room)
+		if err != nil {
+			_ = a.manager.Close(room.Snapshot().Key, room.Snapshot().Generation)
+			return sfu.Snapshot{}, err
+		}
+		if err := a.bridges.add(room, registry); err != nil {
+			_ = a.manager.Close(room.Snapshot().Key, room.Snapshot().Generation)
+			if registry != nil {
+				_ = registry.Close(ctx)
+			}
+			return sfu.Snapshot{}, err
+		}
+	}
 	a.entries[id] = room
 	return room.Snapshot(), nil
 }
@@ -100,18 +116,24 @@ func (a *nvrSFURoomAdmin) CloseRoom(ctx context.Context, principal, id, generati
 		return sfu.ErrInvalidID
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.closed {
+		a.mu.Unlock()
 		return sfubridge.ErrClosed
 	}
 	room, ok := a.entries[id]
 	if !ok || room.Snapshot().Generation != generation {
+		a.mu.Unlock()
 		return sfu.ErrRoomNotFound
 	}
 	if err := a.manager.Close(sfu.Key{Namespace: nvrSFURoom.Namespace, ID: id}, generation); err != nil {
+		a.mu.Unlock()
 		return err
 	}
 	delete(a.entries, id)
+	a.mu.Unlock()
+	if a.bridges != nil {
+		return a.bridges.remove(ctx, room)
+	}
 	return nil
 }
 func (a *nvrSFURoomAdmin) closeAll() error {

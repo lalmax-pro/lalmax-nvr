@@ -35,7 +35,7 @@ type nvrSFURuntime struct {
 	rooms     *sfu.Manager
 	roomAdmin *nvrSFURoomAdmin
 	room      *sfu.Room
-	registry  *sfubridge.Registry
+	registry  *nvrSFUBridgeRouter
 	signal    http.Handler
 	tickets   *nvrSFUTickets
 	policy    *nvrSFUPolicy
@@ -227,20 +227,33 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 	policy := &nvrSFUPolicy{app: a, generation: room.Snapshot().Generation, rooms: rooms}
 	roomAdmin := newNVRSFURoomAdmin(rooms, room, policy)
 	server := embedded.Server()
-	service, err := sfubridge.NewPersistent(context.Background(), room, policy, &nvrSFUPublisher{engine: embedded, server: server}, a.mediaAuth, nvrSFUValidateBridge, 8, a.db)
-	if err != nil {
-		return nil, err
-	}
-	registry, err := sfubridge.NewRegistry(service, func(ctx context.Context, r sfubridge.ManagementRequest) error {
-		if r.Principal != r.Owner {
-			return errors.New("not owner")
+	newRegistry := func(ctx context.Context, target *sfu.Room) (nvrRoomBridge, error) {
+		service, err := sfubridge.NewPersistent(ctx, target, policy, &nvrSFUPublisher{engine: embedded, server: server}, a.mediaAuth, nvrSFUValidateBridge, 8, a.db)
+		if err != nil {
+			return nil, err
 		}
-		return policy.check(ctx, r.Principal)
-	}, 64)
+		registry, err := sfubridge.NewRegistry(service, func(ctx context.Context, r sfubridge.ManagementRequest) error {
+			if r.Principal != r.Owner {
+				return errors.New("not owner")
+			}
+			return policy.check(ctx, r.Principal)
+		}, 64)
+		if err != nil {
+			_ = service.Close(context.Background())
+			return nil, err
+		}
+		return registry, nil
+	}
+	registry := newNVRSFUBridgeRouter(policy.check)
+	defaultRegistry, err := newRegistry(context.Background(), room)
 	if err != nil {
-		_ = service.Close(context.Background())
 		return nil, err
 	}
+	if err = registry.add(room, defaultRegistry); err != nil {
+		_ = defaultRegistry.Close(context.Background())
+		return nil, err
+	}
+	roomAdmin.bridges, roomAdmin.newBridge = registry, newRegistry
 	iceServers := make([]webrtc.ICEServer, 0, len(a.cfg.SFU.ICEServers))
 	for _, server := range a.cfg.SFU.ICEServers {
 		iceServers = append(iceServers, webrtc.ICEServer{URLs: append([]string(nil), server.URLs...), Username: server.Username, Credential: server.Credential, CredentialType: webrtc.ICECredentialTypePassword})
@@ -362,8 +375,9 @@ func (s *nvrSFURuntime) Start(ctx context.Context) {
 func (s *nvrSFURuntime) Close(ctx context.Context) error {
 	s.tickets.Close()
 	err := s.roomAdmin.closeAll()
+	bridgeErr := s.registry.Close(ctx)
 	if err != nil {
-		return fmt.Errorf("close SFU rooms: %w", err)
+		return errors.Join(fmt.Errorf("close SFU rooms: %w", err), bridgeErr)
 	}
-	return s.registry.Close(ctx)
+	return bridgeErr
 }
