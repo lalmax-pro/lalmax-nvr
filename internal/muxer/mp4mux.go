@@ -15,6 +15,7 @@ import (
 
 // defaultTimescale is the timescale used for MP4 timestamps (ticks per second).
 const defaultTimescale = 1000
+const opusTimescale = 48000
 
 // track holds per-track state for the MP4 muxer.
 type track struct {
@@ -593,9 +594,15 @@ func writeMdia(w *mp4.Writer, tr *track) error {
 		return err
 	}
 	mdhd := &mp4.Mdhd{
-		Timescale:  defaultTimescale,
-		DurationV0: trackDurationMs(tr),
-		Language:   [3]byte{0x15, 0xC0, 0x00}, // 'und' packed
+		Timescale: trackTimescale(tr),
+		Language:  [3]byte{0x15, 0xC0, 0x00}, // 'und' packed
+	}
+	duration := trackDurationTicks(tr)
+	if duration > math.MaxUint32 {
+		mdhd.SetVersion(1)
+		mdhd.DurationV1 = duration
+	} else {
+		mdhd.DurationV0 = uint32(duration)
 	}
 	if _, err := mp4.Marshal(w, mdhd, mp4.Context{}); err != nil {
 		return err
@@ -762,7 +769,7 @@ func writeStbl(w *mp4.Writer, tr *track) error {
 	for i, s := range tr.samples {
 		sttsEntries[i] = mp4.SttsEntry{
 			SampleCount: 1,
-			SampleDelta: uint32(s.duration.Milliseconds()),
+			SampleDelta: durationTicks(s.duration, trackTimescale(tr)),
 		}
 	}
 	if _, err := mp4.Marshal(w, &mp4.Stts{EntryCount: uint32(len(sttsEntries)), Entries: sttsEntries}, mp4.Context{}); err != nil {
@@ -1246,11 +1253,46 @@ func buildHvcC(vps, sps, pps []byte) *mp4.HvcC {
 // --- Helpers ---
 
 func trackDurationMs(tr *track) uint32 {
+	if tr.isAudio && tr.audioCodec == "opus" {
+		ms := trackDurationTicks(tr) / (opusTimescale / defaultTimescale)
+		if ms > math.MaxUint32 {
+			return math.MaxUint32
+		}
+		return uint32(ms)
+	}
 	d := uint32(0)
 	for _, s := range tr.samples {
 		d += uint32(s.duration.Milliseconds())
 	}
 	return d
+}
+
+func trackTimescale(tr *track) uint32 {
+	if tr.isAudio && tr.audioCodec == "opus" {
+		return opusTimescale
+	}
+	return defaultTimescale
+}
+
+func durationTicks(duration time.Duration, scale uint32) uint32 {
+	if duration <= 0 {
+		return 0
+	}
+	seconds := uint64(duration / time.Second)
+	remainder := uint64(duration % time.Second)
+	ticks := seconds*uint64(scale) + remainder*uint64(scale)/uint64(time.Second)
+	if ticks > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(ticks)
+}
+
+func trackDurationTicks(tr *track) uint64 {
+	var ticks uint64
+	for _, sample := range tr.samples {
+		ticks += uint64(durationTicks(sample.duration, trackTimescale(tr)))
+	}
+	return ticks
 }
 
 // All tracks share the earliest first decode timestamp as their movie origin.
@@ -1682,7 +1724,8 @@ func writeTrackEdit(w *mp4.Writer, tr *track, offset uint32) error {
 	binary.BigEndian.PutUint32(data[12:], math.MaxUint32)
 	binary.BigEndian.PutUint16(data[16:], 1)
 	binary.BigEndian.PutUint32(data[20:], duration-skip)
-	binary.BigEndian.PutUint32(data[24:], skip)
+	mediaSkip := uint32(uint64(skip) * uint64(trackTimescale(tr)) / defaultTimescale)
+	binary.BigEndian.PutUint32(data[24:], mediaSkip)
 	binary.BigEndian.PutUint16(data[28:], 1)
 	if err := writeRawBox(w, "elst", data); err != nil {
 		return err
