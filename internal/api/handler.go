@@ -389,6 +389,8 @@ func (h *Handler) Routes() http.Handler {
 	})
 	r.Get("/sfu-meet/", h.serveSFUMeet)
 	r.Get("/sfu-meet/app.js", h.serveSFUMeet)
+	r.Get("/sfu-meet/livekit-sdk.js", h.serveSFUMeet)
+	r.Get("/sfu-meet/licenses", h.serveSFUMeet)
 	r.Get("/sfu-meet/style.css", h.serveSFUMeet)
 
 	// Protected routes

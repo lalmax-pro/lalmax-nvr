@@ -55,6 +55,7 @@ test-results/
 tmp/
 package-lock.json
 !site/package-lock.json
+!tools/sfu-meet/package-lock.json
 
 # Test screenshots
 /test*.png

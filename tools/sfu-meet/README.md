@@ -1,17 +1,42 @@
-# SFU Meet local signaling server
+# SFU Meet
 
-This is an early local development endpoint for [issue #93](https://github.com/lalmax-pro/lalmax-nvr/issues/93). From the repository root:
+The Meet demo uses the embedded LiveKit server and the locally bundled
+LiveKit browser SDK. To run the isolated local demo from the repository root:
 
 ```sh
 go run ./tools/sfu-meet
 ```
 
-Open the printed `127.0.0.1` address in a browser and enter the randomly generated access token from the terminal. Choose microphone and camera before joining; participants can also join without publishing media. The token lasts until restart and is exchanged via same-origin `POST /session` for an HttpOnly, SameSite=Strict session cookie. All authorized connections join one in-memory `local/demo` room. Never expose this development server to a network or reuse its shared token for production.
+Open the printed `127.0.0.1` address and enter the access token shown in the
+terminal. The local server binds only to loopback and creates a temporary
+`demo` room. Its token and LiveKit keys change on each start; do not expose
+the local demo to other networks.
 
-The UI supports microphone mute, camera mute, screen sharing, remote audio/video and automatic subscription changes as room tracks appear or disappear, and per-track subscribe/unsubscribe controls for remote audio and video. Choose input devices before joining or switch an already-published microphone or camera during a call; to enable a device not published on joining, leave and rejoin. Video uses H.264 constrained baseline with packetization mode 1; a compatible browser is required. Screen sharing requires browser permission and user selection. Browser autoplay policies may require the user to enable sound. Screen audio is not published. Up to three tracks per participant allow microphone, camera and screen simultaneously.
+To use the same page through NVR, enable `sfu.backend: livekit` as shown in
+`config/config.example.yaml`, configure the native LiveKit file using
+`config/livekit.example.yaml`, then open `/sfu-meet/` on the NVR server and
+sign in as an administrator. The configured LiveKit public URL and media
+ports must be reachable from browsers. Use HTTPS/WSS outside a trusted local
+setup; camera and microphone access also requires a secure browser context.
 
-Expand “网络诊断” during a meeting to sample browser-reported send/receive media payload bitrate, recent receive packet loss and selected ICE-pair RTT. Sampling stops when the panel closes or the meeting ends. Availability and counting vary by browser; these values are not a server capacity measurement.
+Microphone and camera start disabled. Participants can join as viewers,
+enable or switch devices, publish screen video and optionally screen audio,
+and subscribe or unsubscribe from individual remote tracks. Screen audio
+availability depends on the browser and selected source. If autoplay is
+blocked, select “启用声音”. LiveKit handles transient connection recovery.
 
-When signaling closes or the peer connection fails, the page retries up to three times and joins the same room generation with a fresh session. A disconnected peer gets 10 seconds to recover before the page starts reconnecting; recovery during that grace period keeps the current connection. Live microphone and camera tracks retain their mute state; screen sharing must be started again. Leaving cancels pending retries and releases capture. This is a new connection, not server-side session resumption; real network interruption and long-running recovery still need validation.
+The LiveKit page does not yet provide Group bridge management. See issue #93
+for remaining integration and acceptance work. The bundled SDK version and
+license are recorded in `internal/sfumeetui/LIVEKIT-SDK.md`.
 
-The demo periodically requests upstream video keyframes to support late subscribers; this is a local-demo fallback, not subscriber RTCP feedback routing. The existing [signaling protocol](../../third/lalmax/sfu/signaling/README.md) describes its control messages and SDP renegotiation. Trickle ICE, active permission revocation and persistent rooms are not implemented. The service is not integrated into the NVR or lalmax production server and does not provide GroupBridge or recording.
+For the optional browser integration test, install the test-only dependency and
+point to an installed Chrome or Chromium executable:
+
+```sh
+npm ci --prefix tools/sfu-meet
+LIVEKIT_BROWSER_EXECUTABLE=/path/to/chrome go test -tags livekit_browser ./cmd/lalmax-nvr -run '^TestLiveKitBrowser$' -count=1
+```
+
+The test uses Chrome's fake media devices, mutes browser audio, and supplies a
+canvas and isolated Web Audio stream for screen sharing. It does not capture
+real devices or the desktop.

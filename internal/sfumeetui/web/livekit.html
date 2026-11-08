@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>SFU Meet · LiveKit</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./livekit-sdk.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <a id="back-nvr" href="/">← 返回 NVR</a>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><div><strong>SFU Meet</strong><span>LiveKit 会议</span></div></div>
+    <div class="top-right"><span class="local-pill">NVR 会议</span></div>
+  </header>
+  <main class="layout">
+    <section class="stage" aria-labelledby="stage-title">
+      <div class="stage-head"><div><div class="eyebrow">LIVEKIT / NVR</div><h1 id="stage-title">让彼此连接起来<span>.</span></h1><p>加入房间，发布媒体并选择要观看的轨道。</p></div><span id="connection-badge" class="badge"><i></i><span>未连接</span></span></div>
+      <div class="room-panel">
+        <div class="room-meta"><span class="room-icon" aria-hidden="true">⌁</span><div><strong id="room-title">尚未加入</strong><small>LiveKit 房间</small></div><span id="member-count" class="member-count">0 人在线</span></div>
+        <div id="tiles" class="tiles"><div class="empty-state"><strong>准备好加入了吗？</strong><p>输入房间和管理员账号后加入。</p></div></div>
+      </div>
+      <div class="control-strip"><div class="status-copy"><span class="status-dot" id="status-dot"></span><span id="status-text" role="status" aria-live="polite">等待加入</span></div>
+        <div class="controls">
+          <button id="enable-audio" class="control-button" type="button" hidden>启用声音</button>
+          <button id="mute" class="control-button" type="button" disabled aria-pressed="false">开启麦克风</button>
+          <button id="camera-toggle" class="control-button" type="button" disabled aria-pressed="false">开启摄像头</button>
+          <button id="share" class="control-button" type="button" disabled aria-pressed="false">共享屏幕</button>
+          <button id="leave" class="control-button leave" type="button" disabled>离开会议</button>
+        </div>
+      </div>
+      <div id="audio-container" class="audios"></div>
+    </section>
+    <aside class="sidebar">
+      <div class="card"><div class="card-top"><span>01 / 连接设置</span></div><h2>加入会议</h2><p class="card-intro">使用 NVR 管理员账号加入房间。</p>
+        <form id="join-form">
+          <label for="room">房间 ID</label><input id="room" type="text" value="default" maxlength="64" required pattern="[A-Za-z0-9_-]+">
+          <label for="nvr-username">NVR 用户名</label><input id="nvr-username" type="text" autocomplete="username">
+          <label for="nvr-password">NVR 密码</label><input id="nvr-password" type="password" autocomplete="current-password">
+          <label class="check"><input id="microphone" type="checkbox"><span><strong>加入时开启麦克风</strong><small>也可以加入后开启</small></span></label>
+          <label for="microphone-device">麦克风设备</label><select id="microphone-device"><option value="">系统默认</option></select>
+          <label class="check"><input id="camera" type="checkbox"><span><strong>加入时开启摄像头</strong><small>也可以加入后开启</small></span></label>
+          <label for="camera-device">摄像头设备</label><select id="camera-device"><option value="">系统默认</option></select>
+          <label class="check"><input id="screen-audio" type="checkbox"><span><strong>共享屏幕时包含音频</strong><small>是否可用取决于浏览器和所选内容</small></span></label>
+          <button class="join-button" id="join" type="submit">加入会议 <span>→</span></button>
+        </form><p id="error" class="error" role="alert" hidden></p>
+      </div>
+      <div class="small-card tracks-card" aria-labelledby="tracks-title"><span class="eyebrow">REMOTE TRACKS</span><h2 id="tracks-title">远端轨道</h2><p>默认自动订阅，可逐条取消或恢复。</p><div id="track-list" class="track-list" aria-live="polite"><p class="track-empty">加入会议后显示远端轨道。</p></div></div>
+      <div class="side-foot">LALMAX NVR <span> / </span> SFU</div>
+    </aside>
+  </main>
+  <footer><span>REAL-TIME CONNECTION</span><a href="./licenses">开源许可证</a></footer>
+</div>
+</body>
+</html>

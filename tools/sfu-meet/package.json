@@ -1,0 +1,9 @@
+{
+  "name": "lalmax-sfu-meet-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Optional browser integration tests for SFU Meet",
+  "devDependencies": {
+    "playwright-core": "1.55.1"
+  }
+}
