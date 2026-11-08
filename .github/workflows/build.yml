@@ -162,6 +162,19 @@ jobs:
           fi
           echo "Coverage threshold check passed"
 
+      # All binary matrix jobs run on the same Linux host architecture. Reuse
+      # the exact toolchain that passed tests instead of six network downloads.
+      - name: Package tested Go toolchain
+        run: tar -C "$(go env GOROOT)" -cf "$RUNNER_TEMP/go-toolchain.tar" .
+
+      - name: Upload tested Go toolchain
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-go-toolchain
+          path: ${{ runner.temp }}/go-toolchain.tar
+          retention-days: 1
+          overwrite: true
+
   build-frontend:
     runs-on: ubuntu-latest
     needs: test
@@ -218,9 +231,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4.2.2
 
-      - uses: actions/setup-go@v5.2.0
+      - name: Download tested Go toolchain
+        uses: actions/download-artifact@v4.2.0
         with:
-          go-version: '1.26.2'
+          name: tested-go-toolchain
+          path: ${{ runner.temp }}/tested-go
+
+      - name: Restore tested Go toolchain
+        run: |
+          mkdir -p "$RUNNER_TEMP/go"
+          tar -xf "$RUNNER_TEMP/tested-go/go-toolchain.tar" -C "$RUNNER_TEMP/go"
+          echo "GOROOT=$RUNNER_TEMP/go" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/go/bin/go" version
 
       - name: Cache Go modules
         uses: actions/cache@v4.2.0
