@@ -31,6 +31,26 @@ func TestNVRSFUUsesConfiguredICEServers(t *testing.T) {
 	}
 }
 
+func TestNVRSFUAdvertisesKeyframeFeedback(t *testing.T) {
+	pc, err := nvrSFUNewPeer(nil)(context.Background(), signaling.Identity{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	if _, err = pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := pc.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"a=rtcp-fb:96 nack pli", "a=rtcp-fb:96 ccm fir"} {
+		if !strings.Contains(offer.SDP, expected) {
+			t.Fatalf("missing %q in video offer", expected)
+		}
+	}
+}
+
 func TestNVRSFUCodecValidation(t *testing.T) {
 	valid := sfu.Publication{Kind: "video", RTPReady: true, Negotiated: sfu.NegotiatedCodec{MimeType: "video/H264", ClockRate: 90000, FMTP: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}}
 	cases := []struct {

@@ -33,12 +33,20 @@ func TestOutgoingRequiresCurrentPolicyAndCleansUp(t *testing.T) {
 		t.Fatalf("denied bind: %v", err)
 	}
 	auth.set(Subscribe, false)
-	done, err := viewer.StartOutgoing(ctx, pub.ID, local)
+	done, stopped, err := viewer.StartOutgoingWithLifetime(ctx, pub.ID, local)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = viewer.Unsubscribe(ctx, pub.ID); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("unsubscribe did not synchronously cancel the feedback lifetime")
+	}
+	if viewer.OutgoingActive(pub.ID) {
+		t.Fatal("unsubscribed binding still active")
 	}
 	select {
 	case <-done:
