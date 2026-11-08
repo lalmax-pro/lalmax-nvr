@@ -145,6 +145,14 @@ func TestNVRSFUPolicyRevalidatesAccountAndScope(t *testing.T) {
 	if err = policy.Authorize(context.Background(), req); err == nil {
 		t.Fatal("unsupported publish allowed")
 	}
+	req.Kind, req.Source, req.Codec = "audio", "screen", "audio/opus"
+	if err = policy.Authorize(context.Background(), req); err != nil {
+		t.Fatalf("screen audio denied: %v", err)
+	}
+	req.Codec = "audio/PCMU"
+	if err = policy.Authorize(context.Background(), req); err == nil {
+		t.Fatal("unsupported screen audio codec allowed")
+	}
 	req.Operation = access.ManageBridge
 	req.TargetGroup = "arbitrary"
 	if err = policy.Authorize(context.Background(), req); err == nil {

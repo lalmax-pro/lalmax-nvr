@@ -120,7 +120,7 @@ func (p *nvrSFUPolicy) Authorize(ctx context.Context, r access.Request) error {
 	case access.Join, access.Unpublish, access.Subscribe, access.Unsubscribe:
 		return nil
 	case access.Publish:
-		if r.Kind == "audio" && r.Source == "microphone" && strings.EqualFold(r.Codec, "audio/opus") {
+		if r.Kind == "audio" && (r.Source == "microphone" || r.Source == "screen") && strings.EqualFold(r.Codec, "audio/opus") {
 			return nil
 		}
 		if r.Kind == "video" && (r.Source == "camera" || r.Source == "screen") && strings.EqualFold(r.Codec, "video/h264") {

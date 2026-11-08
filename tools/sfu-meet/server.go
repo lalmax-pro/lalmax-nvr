@@ -45,7 +45,7 @@ func (localPolicy) Authorize(_ context.Context, r access.Request) error {
 	case access.Join, access.Subscribe, access.Unsubscribe, access.Unpublish:
 		return nil
 	case access.Publish:
-		if r.Kind == "audio" && r.Source == "microphone" && strings.EqualFold(r.Codec, "audio/opus") {
+		if r.Kind == "audio" && (r.Source == "microphone" || r.Source == "screen") && strings.EqualFold(r.Codec, "audio/opus") {
 			return nil
 		}
 		if r.Kind == "video" && (r.Source == "camera" || r.Source == "screen") && strings.EqualFold(r.Codec, "video/h264") {
@@ -75,7 +75,7 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 		return nil, errors.New("demo requires loopback origin and secret")
 	}
 	rooms := sfu.NewManager()
-	_, err = rooms.CreateWithLimits(demoRoom, sfu.RoomLimits{MaxParticipants: 8, MaxPublicationsPerParticipant: 3, MaxSubscriptions: 48, MaxWatchers: 8})
+	_, err = rooms.CreateWithLimits(demoRoom, sfu.RoomLimits{MaxParticipants: 8, MaxPublicationsPerParticipant: 4, MaxSubscriptions: 48, MaxWatchers: 8})
 	if err != nil {
 		return nil, err
 	}

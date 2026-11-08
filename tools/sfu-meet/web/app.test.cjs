@@ -1031,3 +1031,193 @@ for (const scenario of ['request-timeout','answer-timeout','leave-during-answer'
   assert.equal(peers[1].closed,true);
   if(!['leave-during-answer','late-response'].includes(scenario))element('leave').listeners.click();
 });
+
+for (const scenario of ['default-video-only','screen-av','missing-audio','audio-ends','video-ends-during-audio-publish','audio-ends-during-publish','leave-before-capture']) test(`screen share ${scenario} manages its own tracks`, async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(name,value){this.attributes[name]=value;}querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;}append(...children){this.children.push(...children);}remove(){}play(){return Promise.resolve();}
+  }
+  class Stream {
+    constructor(tracks=[]){this.tracks=tracks;}getTracks(){return [...this.tracks];}getVideoTracks(){return this.tracks.filter(t=>t.kind==='video');}getAudioTracks(){return this.tracks.filter(t=>t.kind==='audio');}
+  }
+  const makeTrack=(kind,id)=>({kind,id,enabled:true,readyState:'live',stops:0,stop(){this.readyState='ended';this.stops++;},end(){this.readyState='ended';this.onended?.();}});
+  const microphone=makeTrack('audio','mic'),video=makeTrack('video','screen-video'),audio=makeTrack('audio','screen-audio');
+  const display=new Stream(scenario==='missing-audio'?[video]:[video,audio]);
+  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const commands=[],peers=[];let requested,releaseCapture;
+  class Socket {
+    static OPEN=1;
+    constructor(){this.readyState=1;setImmediate(()=>this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[],Publications:[]}})}));}
+    send(data){
+      const msg=JSON.parse(data);commands.push(msg);
+      if(msg.type==='publish'){
+        if(msg.source==='screen'&&msg.kind==='audio'){
+          if(scenario==='video-ends-during-audio-publish')video.end();
+          if(scenario==='audio-ends-during-publish')audio.end();
+        }
+        setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,publication:{ID:`${msg.source}-${msg.kind}`}})}));
+      } else setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));
+    }
+    close(){this.readyState=3;}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';this.transceivers=[];peers.push(this);}
+    addTrack(track){const sender={track};this.transceivers.push({sender});return sender;}getTransceivers(){return this.transceivers;}
+    removeTrack(sender){this.transceivers=this.transceivers.filter(t=>t.sender!==sender);}
+    async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){this.closed=true;}
+  }
+  const navigator={mediaDevices:{async getUserMedia(){return new Stream([microphone]);},async getDisplayMedia(options){requested=options;if(scenario==='leave-before-capture')return await new Promise(resolve=>{releaseCapture=()=>resolve(display);});return display;}}};
+  const context={document:{getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'http:',host:'localhost'},navigator,fetch:async()=>({ok:true}),WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:Stream,AbortController,setTimeout,clearTimeout,Map,Set,Promise,Error};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('microphone').checked=true;element('share-audio').checked=scenario!=='default-video-only';
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  const sharePromise=element('share').listeners.click();
+  if(scenario==='leave-before-capture'){
+    await waitFor(()=>typeof releaseCapture==='function');element('leave').listeners.click();releaseCapture();await sharePromise;
+    assert.equal(video.readyState,'ended');assert.equal(audio.readyState,'ended');
+    assert.equal(commands.filter(c=>c.type==='publish'&&c.source==='screen').length,0);return;
+  }
+  await sharePromise;
+  assert.equal(requested.video,true);assert.equal(requested.audio,scenario!=='default-video-only');
+  const published=commands.filter(c=>c.type==='publish'&&c.source==='screen');
+  assert.deepEqual(published.map(c=>c.kind),['screen-av','audio-ends','video-ends-during-audio-publish','audio-ends-during-publish'].includes(scenario)?['video','audio']:['video']);
+  assert.equal(microphone.readyState,'live','screen changes must not stop the microphone');
+  if(scenario==='video-ends-during-audio-publish'){
+    await waitFor(()=>element('share').textContent==='▣ 共享屏幕');
+    assert.equal(video.readyState,'ended');assert.equal(audio.readyState,'ended');
+  } else {
+    assert.equal(element('share').textContent,'▣ 停止共享');assert.equal(element('share-audio').disabled,true);
+    if(scenario==='missing-audio')assert.match(element('error').textContent,/仅共享画面/);
+    if(scenario==='default-video-only')assert.equal(audio.readyState,'ended','unrequested audio is discarded');
+    if(scenario==='audio-ends'){
+      audio.end();await waitFor(()=>commands.some(c=>c.type==='unpublish'&&c.publication_id==='screen-audio'));
+      await waitFor(()=>element('error').textContent.includes('屏幕音频已停止'));
+      assert.equal(video.readyState,'live');assert.equal(element('share').textContent,'▣ 停止共享');
+    }
+    if(scenario==='audio-ends-during-publish')assert.ok(commands.some(c=>c.type==='unpublish'&&c.publication_id==='screen-audio'));
+    await element('share').listeners.click();
+    assert.equal(video.readyState,'ended');if(scenario!=='missing-audio')assert.equal(audio.readyState,'ended');
+    assert.equal(element('share').textContent,'▣ 共享屏幕');
+  }
+  assert.ok(commands.some(c=>c.type==='unpublish'&&c.publication_id==='screen-video'));
+  if(published.length===2)assert.ok(commands.some(c=>c.type==='unpublish'&&c.publication_id==='screen-audio'));
+  assert.equal(element('share-audio').disabled,false);
+  assert.equal(microphone.readyState,'live');
+  assert.deepEqual(peers[0].transceivers.map(t=>t.sender.track.id),['mic']);
+  element('leave').listeners.click();
+});
+
+for (const scenario of ['screen-pair','camera-pair','no-screen-audio']) test(`bridge UI chooses matching source for ${scenario}`, async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(name,value){this.attributes[name]=value;}querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;}append(...children){this.children.push(...children);}remove(){}play(){return Promise.resolve();}
+  }
+  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  let socket,body;
+  class Socket {
+    static OPEN=1;
+    constructor(){socket=this;this.readyState=1;setImmediate(()=>this.snapshot([]));}
+    snapshot(publications){this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[{ID:'owner'},{ID:'other'}],Publications:publications}})});}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';}createDataChannel(){}
+    addTransceiver(){return{stop(){}};}async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){}
+  }
+  const fetch=async(url,options={})=>{
+    if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'ticket',ice_servers:[]})};
+    if(url==='/api/sfu/bridges/'&&options.method==='POST'){body=JSON.parse(options.body);return{ok:true,status:202,json:async()=>({id:'bridge-1'})};}
+    if(url==='/api/sfu/bridges/bridge-1/whep')return await new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(new Error('aborted'))));
+    if(url==='/api/sfu/bridges/bridge-1/stop'||(url==='/api/sfu/bridges/bridge-1'&&options.method==='DELETE'))return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/bridge-1')return{ok:true,status:200,json:async()=>({state:'stopped'})};
+    throw new Error(`unexpected request ${url}`);
+  };
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  const pub=(id,kind,source,owner='owner')=>({ID:id,ParticipantID:owner,Kind:kind,Source:source,Codec:kind==='audio'?'audio/opus':'video/H264',RTPReady:true});
+  const tracks=[pub('mic','audio','microphone'),pub('other-screen','audio','screen','other'),pub('camera','video','camera'),pub('screen-video','video','screen')];
+  if(scenario!=='no-screen-audio')tracks.push(pub('screen-audio','audio','screen'));
+  socket.snapshot(tracks);
+  const target=scenario==='camera-pair'?'摄像头 · camera':'屏幕 · screen-v';
+  const row=element('bridge-list').children.find(r=>r.children[0].children[0].textContent===target);
+  assert.ok(row,'target video row exists');
+  if(scenario==='no-screen-audio')assert.equal(row.children.length,2,'microphone or another member must not be paired with screen video');
+  else {
+    assert.equal(row.children[2].textContent,'音视频桥接');row.children[2].listeners.click();await waitFor(()=>!!body);
+    assert.equal(body.publication_id,scenario==='camera-pair'?'camera':'screen-video');
+    assert.equal(body.audio_publication_id,scenario==='camera-pair'?'mic':'screen-audio');
+  }
+  element('leave').listeners.click();
+});
+
+for (const scenario of ['video-ended','audio-ended','during-create','temporarily-not-ready']) test(`bridge reflects ${scenario} without stale playback`, async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(name,value){this.attributes[name]=value;}querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;}append(...children){this.children.push(...children);}remove(){}play(){return Promise.resolve();}
+  }
+  class Stream {constructor(){this.tracks=[];}addTrack(track){this.tracks.push(track);}}
+  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const calls=[],peers=[];let socket,releaseCreate;
+  class Socket {
+    static OPEN=1;
+    constructor(){socket=this;this.readyState=1;setImmediate(()=>this.snapshot([]));}
+    snapshot(publications){this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[{ID:'owner'}],Publications:publications}})});}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';peers.push(this);}createDataChannel(){}
+    addTransceiver(){return{stop(){}};}async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){this.closed=true;}
+  }
+  const location='/api/sfu/bridges/bridge-1/whep/session';
+  const fetch=async(url,options={})=>{
+    calls.push({url,method:options.method||'GET'});
+    if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'ticket',ice_servers:[]})};
+    if(url==='/api/sfu/bridges/'&&options.method==='POST'){
+      if(scenario==='during-create')return await new Promise(resolve=>{releaseCreate=()=>resolve({ok:true,status:202,json:async()=>({id:'bridge-1'})});});
+      return{ok:true,status:202,json:async()=>({id:'bridge-1'})};
+    }
+    if(url==='/api/sfu/bridges/bridge-1/whep')return{ok:true,status:201,headers:{get:()=>location},text:async()=> 'answer'};
+    if(url===location||url==='/api/sfu/bridges/bridge-1/stop'||(url==='/api/sfu/bridges/bridge-1'&&options.method==='DELETE'))return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/bridge-1')return{ok:true,status:200,json:async()=>({state:'stopped'})};
+    throw new Error(`unexpected request ${url}`);
+  };
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:Stream,AbortController,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  const video={ID:'screen-video',ParticipantID:'owner',Kind:'video',Source:'screen',Codec:'video/H264',RTPReady:true};
+  const audio={ID:'screen-audio',ParticipantID:'owner',Kind:'audio',Source:'screen',Codec:'audio/opus',RTPReady:true};
+  socket.snapshot([video,audio]);element('bridge-list').children[0].children[2].listeners.click();
+  if(scenario==='during-create'){
+    await waitFor(()=>typeof releaseCreate==='function');socket.snapshot([video]);releaseCreate();
+    await waitFor(()=>element('bridge-status').textContent.includes('源已结束'));
+    assert.ok(!calls.some(c=>c.url.endsWith('/whep')),'ended source must not start a player');
+  } else {
+    await waitFor(()=>element('bridge-list').children[0].children[0].children[1].textContent==='正在连接播放器');
+    const player=peers[1],onplaying=element('bridge-video').onplaying;onplaying();
+    assert.equal(element('bridge-status').textContent,'WHEP 播放中');
+    if(scenario==='temporarily-not-ready'){
+      socket.snapshot([video,{...audio,RTPReady:false}]);
+      assert.equal(player.closed,undefined,'an existing publication that is not ready is not ended');
+      assert.equal(element('bridge-status').textContent,'WHEP 播放中');
+    }
+    socket.snapshot(scenario==='video-ended'?[audio]:[video]);
+    assert.equal(player.closed,true);assert.equal(element('bridge-video').hidden,true);
+    assert.match(element('bridge-status').textContent,/源已结束/);
+    onplaying();assert.match(element('bridge-status').textContent,/源已结束/,'late playback events must not restore stale state');
+    player.ontrack?.({track:{kind:'video'}});assert.equal(element('bridge-video').srcObject,null);
+    await waitFor(()=>calls.some(c=>c.url===location&&c.method==='DELETE'));
+  }
+  const row=element('bridge-list').children.find(r=>r.children[0].children[0].textContent.startsWith('屏幕 · screen-v'));
+  assert.ok(row);assert.equal(row.children[0].children[1].textContent,'源已结束');assert.equal(row.children[1].disabled,false);
+  row.children[1].listeners.click();await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/bridge-1'&&c.method==='DELETE'));
+  element('leave').listeners.click();
+});

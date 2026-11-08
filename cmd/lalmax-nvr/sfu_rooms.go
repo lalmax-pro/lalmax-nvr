@@ -11,7 +11,7 @@ import (
 	"github.com/q191201771/lalmax/sfu"
 )
 
-var nvrSFURoomLimits = sfu.RoomLimits{MaxParticipants: 32, MaxPublicationsPerParticipant: 3, MaxSubscriptions: 256, MaxWatchers: 32}
+var nvrSFURoomLimits = sfu.RoomLimits{MaxParticipants: 32, MaxPublicationsPerParticipant: 4, MaxSubscriptions: 256, MaxWatchers: 32}
 
 // nvrSFURoomAdmin owns the set of NVR rooms. The default room is retained for
 // existing clients; additional rooms are explicit, bounded, and ephemeral.
