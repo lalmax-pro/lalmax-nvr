@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,16 +16,8 @@ import (
 
 func setupONVIFCamera(t *testing.T) (*storage.DB, *storage.Manager) {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-	db, err := storage.New(dbPath)
-	require.NoError(t, err)
-	// Close the SQLite handle before t.TempDir removes its files on Windows.
-	t.Cleanup(func() { _ = db.Close() })
+	db, store := setupTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.Init(ctx))
-	store, err := storage.NewManager(filepath.Join(dir, "storage"))
-	require.NoError(t, err)
 	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "admin", "pass", true, "", "", ""))
 	return db, store
 }

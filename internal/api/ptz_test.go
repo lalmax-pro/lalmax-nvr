@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,18 +14,7 @@ import (
 
 func setupPTZTestDB(t *testing.T) (*storage.DB, *storage.Manager) {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-	db, err := storage.New(dbPath)
-	require.NoError(t, err)
-	// Register after t.TempDir: the database must close before Windows
-	// removes the fixture directory. ONVIF and PTZ tests share this helper.
-	t.Cleanup(func() { _ = db.Close() })
-	ctx := context.Background()
-	require.NoError(t, db.Init(ctx))
-	store, err := storage.NewManager(filepath.Join(dir, "storage"))
-	require.NoError(t, err)
-	return db, store
+	return setupTestDB(t)
 }
 
 func TestPTZMoveEndpoint(t *testing.T) {
