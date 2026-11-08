@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -70,6 +71,9 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	cfg.Auth.Username = "admin"
 	cfg.Auth.Password = "local-test-password"
 	cfg.SFU.Enabled = true
+	if os.Getenv("SFU_NVR_RECORDING_LONG_TEST") == "1" {
+		cfg.Storage.SegmentDuration = "2m"
+	}
 	cfg.JT808.Enabled = false
 	cfg.MQTT.Enabled = false
 	disabled := false
@@ -257,7 +261,11 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 		}
 		return false
 	}, 8*time.Second, 30*time.Millisecond, "plan did not start recorder")
-	time.Sleep(3 * time.Second)
+	recordFor := 3 * time.Second
+	if os.Getenv("SFU_NVR_RECORDING_LONG_TEST") == "1" {
+		recordFor = 60 * time.Second
+	}
+	time.Sleep(recordFor)
 	var status struct {
 		State string `json:"state"`
 	}
@@ -287,6 +295,7 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	require.NoError(t, err, "%s", out)
 	require.Contains(t, string(out), "h264")
 	require.Contains(t, string(out), "opus")
+	var durations []float64
 	for _, stream := range []struct {
 		selector string
 		minimum  int
@@ -297,6 +306,24 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 		count, err := strconv.Atoi(strings.TrimSpace(string(out)))
 		require.NoError(t, err, "%s", out)
 		require.GreaterOrEqual(t, count, stream.minimum, "%s", stream.selector)
+		if recordFor >= time.Minute {
+			minimum := 1350
+			if stream.selector == "a:0" {
+				minimum = 2700
+			}
+			require.GreaterOrEqual(t, count, minimum, "%s", stream.selector)
+			cmd = exec.Command("ffprobe", "-v", "error", "-select_streams", stream.selector, "-show_entries", "stream=duration", "-of", "default=nw=1:nk=1", files[0])
+			out, err = cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			duration, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+			require.NoError(t, err, "%s", out)
+			require.GreaterOrEqual(t, duration, 55.0, "%s", stream.selector)
+			t.Logf("%s: packets=%d, duration=%.3fs", stream.selector, count, duration)
+			durations = append(durations, duration)
+		}
+	}
+	if len(durations) == 2 {
+		require.LessOrEqual(t, math.Abs(durations[0]-durations[1]), 0.3)
 	}
 	cmd = exec.Command("ffmpeg", "-v", "error", "-xerror", "-i", files[0], "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-")
 	out, err = cmd.CombinedOutput()
