@@ -7,7 +7,6 @@ import (
 
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
-	"github.com/q191201771/lalmax/sfu/rtpforward"
 )
 
 // Publisher manages lal custom publisher sessions. Target authorization and
@@ -24,17 +23,17 @@ var ErrInvalidPublisher = errors.New("bridge: invalid publisher or target")
 // input. No asynchronous goroutine is created: a blocked FeedAvPacket cannot be
 // interrupted by ctx and delays cleanup. The caller must arrange for bounded
 // lal processing. Cancellation never concurrently deletes an in-flight session.
-func RunH264ToLal(ctx context.Context, sub *rtpforward.Subscriber, publisher Publisher, stream string) error {
+func RunH264ToLal(ctx context.Context, sub RTPSubscriber, publisher Publisher, stream string) error {
 	return runToLal(ctx, sub, publisher, stream, RunH264)
 }
 
 // RunOpusToLal owns a single audio subscriber and custom publisher. It does
 // not combine or synchronize audio with a video track.
-func RunOpusToLal(ctx context.Context, sub *rtpforward.Subscriber, publisher Publisher, stream string) error {
+func RunOpusToLal(ctx context.Context, sub RTPSubscriber, publisher Publisher, stream string) error {
 	return runToLal(ctx, sub, publisher, stream, RunOpus)
 }
 
-func runToLal(ctx context.Context, sub *rtpforward.Subscriber, publisher Publisher, stream string, run func(context.Context, *rtpforward.Subscriber, VideoSink) error) error {
+func runToLal(ctx context.Context, sub RTPSubscriber, publisher Publisher, stream string, run func(context.Context, RTPSubscriber, VideoSink) error) error {
 	if ctx == nil || sub == nil || publisher == nil || stream == "" {
 		return ErrInvalidPublisher
 	}

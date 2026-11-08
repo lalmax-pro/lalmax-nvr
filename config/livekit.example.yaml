@@ -1,6 +1,7 @@
 # Native LiveKit configuration for sfu.backend: livekit.
 # Replace the key and secret, keep this file private, and set api_key in the
 # NVR configuration to the key below. The public URL belongs in NVR's config.
+development: false
 port: 7880
 bind_addresses: ["0.0.0.0"]
 keys:

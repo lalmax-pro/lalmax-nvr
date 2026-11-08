@@ -7,8 +7,15 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/q191201771/lal/pkg/base"
-	"github.com/q191201771/lalmax/sfu/rtpforward"
 )
+
+// RTPSubscriber provides one bounded, already-authorized RTP subscription.
+// The bridge owns the subscription and closes it on exit.
+type RTPSubscriber interface {
+	Packets() <-chan *rtp.Packet
+	Err() error
+	Close()
+}
 
 // VideoSink receives video frames sequentially. It must return when ctx is
 // canceled when possible; RunH264 waits for the current call before releasing its subscriber.
@@ -21,17 +28,17 @@ var ErrInvalidRunner = errors.New("bridge: invalid runner arguments")
 // terminal source error, an invalid packet, or a sink failure. It owns and
 // closes sub. The bounded fanout disconnects a slow consumer independently of
 // the source and other subscribers. This function does not create a Group.
-func RunH264(ctx context.Context, sub *rtpforward.Subscriber, sink VideoSink) error {
+func RunH264(ctx context.Context, sub RTPSubscriber, sink VideoSink) error {
 	return runTrack(ctx, sub, sink, NewH264().Push)
 }
 
 // RunOpus forwards one authorized Opus subscriber to the sink. It owns sub.
 // Its timestamps are relative to this track and are not synchronized to video.
-func RunOpus(ctx context.Context, sub *rtpforward.Subscriber, sink VideoSink) error {
+func RunOpus(ctx context.Context, sub RTPSubscriber, sink VideoSink) error {
 	return runTrack(ctx, sub, sink, (&Opus{}).Push)
 }
 
-func runTrack(ctx context.Context, sub *rtpforward.Subscriber, sink VideoSink, decode func(*rtp.Packet) (*base.AvPacket, error)) error {
+func runTrack(ctx context.Context, sub RTPSubscriber, sink VideoSink, decode func(*rtp.Packet) (*base.AvPacket, error)) error {
 	if ctx == nil || sub == nil || sink == nil {
 		return ErrInvalidRunner
 	}

@@ -30,6 +30,7 @@ type JoinGrant struct {
 	Room, Identity           string
 	ValidFor                 time.Duration
 	CanPublish, CanSubscribe bool
+	Hidden                   bool
 }
 
 func (i *TokenIssuer) IssueJoin(g JoinGrant) (string, error) {
@@ -38,7 +39,7 @@ func (i *TokenIssuer) IssueJoin(g JoinGrant) (string, error) {
 		g.ValidFor <= 0 || g.ValidFor > 24*time.Hour {
 		return "", ErrInvalidJoinGrant
 	}
-	grant := &auth.VideoGrant{RoomJoin: true, Room: g.Room}
+	grant := &auth.VideoGrant{RoomJoin: true, Room: g.Room, Hidden: g.Hidden}
 	grant.SetCanPublish(g.CanPublish)
 	grant.SetCanSubscribe(g.CanSubscribe)
 	grant.SetCanPublishData(false)

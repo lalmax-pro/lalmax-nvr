@@ -41,6 +41,11 @@ func newNVRLiveKitRuntime(a *App, cfg config.SFULiveKitConfig) (*nvrLiveKitRunti
 	if err != nil {
 		return nil, fmt.Errorf("parse LiveKit configuration: %w", err)
 	}
+	// LiveKit development mode registers debug handlers on the process-global
+	// HTTP mux. NVR embeds the server and must not expose or collide with them.
+	if conf.Development {
+		return nil, errors.New("LiveKit development mode is not supported in NVR")
+	}
 	if err := conf.ValidateKeys(); err != nil {
 		return nil, fmt.Errorf("validate LiveKit keys: %w", err)
 	}

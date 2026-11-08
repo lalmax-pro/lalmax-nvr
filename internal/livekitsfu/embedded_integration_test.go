@@ -36,7 +36,7 @@ func TestEmbeddedTrack(t *testing.T) {
 		t.Fatal(err)
 	}
 	const key, secret = "testkey", "testsecret-testsecret-testsecret-123456"
-	yaml := fmt.Sprintf("development: true\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nrtc:\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
+	yaml := fmt.Sprintf("development: false\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nrtc:\n  node_ip: 127.0.0.1\n  enable_loopback_candidate: true\n  ips:\n    includes: [127.0.0.1/32]\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
 	server, err := NewServer(yaml)
 	if err != nil {
 		t.Fatal(err)

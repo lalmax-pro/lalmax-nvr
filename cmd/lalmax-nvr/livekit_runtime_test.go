@@ -56,7 +56,7 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	const key, secret = "testkey", "testsecret-testsecret-testsecret-123456"
-	data := fmt.Sprintf("development: true\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nrtc:\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
+	data := fmt.Sprintf("development: false\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nrtc:\n  node_ip: 127.0.0.1\n  enable_loopback_candidate: true\n  ips:\n    includes: [127.0.0.1/32]\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
 	configPath := filepath.Join(t.TempDir(), "livekit.yaml")
 	if err := os.WriteFile(configPath, []byte(data), 0600); err != nil {
 		t.Fatal(err)
@@ -194,5 +194,15 @@ receive:
 	wg.Wait()
 	if _, err := runtime.IssueLiveKitJoin(ctx, principal, "front-door"); err == nil {
 		t.Fatal("closed runtime issued a token")
+	}
+}
+
+func TestNVRLiveKitRejectsDevelopmentMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "livekit.yaml")
+	if err := os.WriteFile(path, []byte("development: true\nkeys:\n  key: testsecret-testsecret-testsecret-123456\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newNVRLiveKitRuntime(&App{}, config.SFULiveKitConfig{ConfigFile: path, APIKey: "key", PublicURL: "http://127.0.0.1:7880"}); err == nil {
+		t.Fatal("development mode was accepted")
 	}
 }

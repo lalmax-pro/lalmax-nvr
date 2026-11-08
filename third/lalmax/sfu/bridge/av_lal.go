@@ -8,7 +8,6 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/q191201771/lal/pkg/base"
-	"github.com/q191201771/lalmax/sfu/rtpforward"
 )
 
 var ErrAVClockNotReady = errors.New("bridge: sender report clock not ready")
@@ -25,8 +24,8 @@ type AVReferenceProvider func(context.Context) (AVReferences, error)
 // It owns both subscriptions. The provider must reject stale or unrelated
 // reports and ensure they come from a common clock. While reports are missing,
 // incoming packets are drained, not buffered. It starts at a video keyframe.
-func RunAVToLal(ctx context.Context, audio, video *rtpforward.Subscriber, publisher Publisher, stream string, reports AVReferenceProvider) error {
-	if ctx == nil || audio == nil || video == nil || audio == video || publisher == nil || stream == "" || reports == nil {
+func RunAVToLal(ctx context.Context, audio, video RTPSubscriber, publisher Publisher, stream string, reports AVReferenceProvider) error {
+	if ctx == nil || audio == nil || video == nil || audio.Packets() == video.Packets() || publisher == nil || stream == "" || reports == nil {
 		return ErrInvalidPublisher
 	}
 	defer audio.Close()
