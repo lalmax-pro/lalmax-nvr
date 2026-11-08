@@ -574,8 +574,15 @@ test('network diagnostics sample deltas only while open and ignore results after
   assert.equal(element('network-status').textContent,'暂时无法获取统计。');
   next=pendingTimer;pendingTimer=null;next.fn();
   await waitFor(()=>typeof releaseStats==='function');
-  element('leave').listeners.click();
+  panel.open=false;panel.listeners.toggle();
   releaseStats(report(5000,20000,9000,9000,200,7));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(element('network-send').textContent,'—','closed panel must ignore late results');
+  assert.equal(pendingTimer,null,'closed panel must stop polling');
+  releaseStats=undefined;panel.open=true;panel.listeners.toggle();
+  await waitFor(()=>typeof releaseStats==='function');
+  element('leave').listeners.click();
+  releaseStats(report(7000,30000,11000,11000,300,9));
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(element('network-send').textContent,'—','late results must not overwrite cleared state');
   assert.equal(element('network-status').textContent,'加入会议后可查看。');
