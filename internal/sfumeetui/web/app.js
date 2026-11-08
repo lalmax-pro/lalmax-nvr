@@ -466,14 +466,14 @@
       const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});c.pc=pc;if(networkPanel.open)startNetworkStats(c);
       pc.onconnectionstatechange=()=>{
         if(current!==c)return;
-        if(pc.connectionState!=='disconnected'){clearTimeout(c.disconnectTimer?.id);c.disconnectTimer=null;}
+        if(['connected','failed','closed'].includes(pc.connectionState)){clearTimeout(c.disconnectTimer?.id);c.disconnectTimer=null;}
         if(pc.connectionState==='connected')state('媒体连接正常',true);
         else if(pc.connectionState==='failed')fail(c,new Error('媒体连接失败'),true);
         else if(pc.connectionState==='disconnected'){
           state('媒体连接中断');
           if(c.disconnectTimer===null){
             const timer={id:null};c.disconnectTimer=timer;
-            timer.id=setTimeout(()=>{if(current!==c||c.disconnectTimer!==timer)return;c.disconnectTimer=null;if(pc.connectionState==='disconnected')fail(c,new Error('媒体连接中断超时'),true);},10000);
+            timer.id=setTimeout(()=>{if(current!==c||c.disconnectTimer!==timer)return;c.disconnectTimer=null;if(pc.connectionState!=='connected'&&pc.connectionState!=='closed')fail(c,new Error('媒体连接中断超时'),true);},10000);
           }
         }
       };

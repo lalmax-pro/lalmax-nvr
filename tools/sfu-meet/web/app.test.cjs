@@ -451,9 +451,11 @@ test('media disconnect recovers briefly and reconnects only after its grace peri
   const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
   element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
   peers[0].transition('disconnected');peers[0].transition('disconnected');assert.equal(deadlines.length,1);
+  peers[0].transition('connecting');assert.equal(deadlines[0].active,true,'checking does not count as a recovered connection');
   peers[0].transition('connected');assert.equal(deadlines[0].active,false);
   peers[0].transition('disconnected');assert.equal(deadlines.length,2);
   deadlines[0].fn();assert.equal(peers[0].closed,false,'a stale timer must not end the newer connection');
+  peers[0].transition('connecting');
   deadlines[1].fn();assert.equal(peers[0].closed,true);assert.equal(typeof retryCallback,'function');
   const retry=retryCallback;retryCallback=null;retry();await waitFor(()=>socketCount===2 && !element('share').disabled);
   assert.equal(peers.length,2);
