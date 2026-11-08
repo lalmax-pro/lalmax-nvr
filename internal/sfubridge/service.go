@@ -186,7 +186,12 @@ func (s *Service) Start(requestCtx context.Context, principal, publicationID str
 		}
 	}
 	lifetime, cancel := context.WithCancel(s.ctx)
-	done, err := session.StartH264BridgeWithContexts(requestCtx, lifetime, publicationID, target, s.publisher)
+	var done <-chan error
+	if pub.Kind == "audio" {
+		done, err = session.StartOpusBridgeWithContexts(requestCtx, lifetime, publicationID, target, s.publisher)
+	} else {
+		done, err = session.StartH264BridgeWithContexts(requestCtx, lifetime, publicationID, target, s.publisher)
+	}
 	if err != nil {
 		cancel()
 		return nil, err

@@ -91,6 +91,30 @@ func TestNVRSFUOrigin(t *testing.T) {
 	}
 }
 
+func TestNVRSFUValidateOpusBridge(t *testing.T) {
+	valid := sfu.Publication{Kind: "audio", Codec: "audio/opus", RTPReady: true, Negotiated: sfu.NegotiatedCodec{MimeType: "audio/opus", ClockRate: 48000, Channels: 2}}
+	for _, tc := range []struct {
+		name   string
+		change func(*sfu.Publication)
+		ok     bool
+	}{
+		{"valid", func(*sfu.Publication) {}, true},
+		{"not ready", func(p *sfu.Publication) { p.RTPReady = false }, false},
+		{"wrong codec", func(p *sfu.Publication) { p.Negotiated.MimeType = "audio/PCMU" }, false},
+		{"wrong rate", func(p *sfu.Publication) { p.Negotiated.ClockRate = 8000 }, false},
+		{"wrong channels", func(p *sfu.Publication) { p.Negotiated.Channels = 1 }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := valid
+			tc.change(&p)
+			err := nvrSFUValidateBridge(context.Background(), p)
+			if (err == nil) != tc.ok {
+				t.Fatalf("validation: %v", err)
+			}
+		})
+	}
+}
+
 func TestNVRSFUPolicyRevalidatesAccountAndScope(t *testing.T) {
 	db, err := storage.New(filepath.Join(t.TempDir(), "nvr.db"))
 	if err != nil {

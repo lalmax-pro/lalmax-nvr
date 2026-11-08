@@ -18,7 +18,38 @@ import (
 	"github.com/gofrs/uuid"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
+	"github.com/pion/sdp/v3"
 )
+
+func sfuOfferSupportsOpus(offer []byte) bool {
+	var description sdp.SessionDescription
+	if description.Unmarshal(offer) != nil {
+		return false
+	}
+	for _, media := range description.MediaDescriptions {
+		if media.MediaName.Media != "audio" || media.MediaName.Port.Value == 0 {
+			continue
+		}
+		if _, inactive := media.Attribute("inactive"); inactive {
+			continue
+		}
+		if _, sendonly := media.Attribute("sendonly"); sendonly {
+			continue
+		}
+		for _, a := range media.Attributes {
+			fields := strings.Fields(a.Value)
+			if a.Key != "rtpmap" || len(fields) != 2 || !strings.EqualFold(fields[1], "opus/48000/2") {
+				continue
+			}
+			for _, format := range media.MediaName.Formats {
+				if format == fields[0] {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
 
 type sfuWHEPSession struct {
 	Principal string `json:"p"`
@@ -99,8 +130,8 @@ func (h *Handler) createSFUBridgeWHEP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
-	if err != nil || len(body) == 0 || !homeAssistantOfferSupportsCodec(body, "H264") {
-		writeError(w, 400, "invalid H.264 SDP offer")
+	if err != nil || len(body) == 0 || (!homeAssistantOfferSupportsCodec(body, "H264") && !sfuOfferSupportsOpus(body)) {
+		writeError(w, 400, "invalid H.264 or Opus SDP offer")
 		return
 	}
 	upstream, err := h.sfuWHEPURL(r.Context(), stream, token)
@@ -116,7 +147,7 @@ func (h *Handler) createSFUBridgeWHEP(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		if resp.StatusCode == http.StatusNotFound {
-			writeError(w, 503, "bridge video not ready")
+			writeError(w, 503, "bridge media not ready")
 		} else {
 			writeError(w, 502, "media engine rejected WebRTC offer")
 		}
