@@ -63,7 +63,7 @@ func (h *H264) Push(pkt *rtp.Packet) (*base.AvPacket, error) {
 		return nil, ErrSSRCChanged
 	}
 	h.ssrc, h.ssrcSet = pkt.SSRC, true
-	if len(pkt.Payload) == 0 {
+	if len(pkt.Payload) == 0 && (!pkt.Padding || pkt.PaddingSize == 0) {
 		h.resetFrame()
 		h.timestampSet = false
 		return nil, ErrInvalidRTP
@@ -81,6 +81,11 @@ func (h *H264) Push(pkt *rtp.Packet) (*base.AvPacket, error) {
 	}
 	h.seqSet = true
 	h.lastSeq = pkt.SequenceNumber
+	// WebRTC bandwidth probing can send padding-only RTP packets. They occupy
+	// sequence numbers but do not belong to an H264 access unit or its clock.
+	if len(pkt.Payload) == 0 {
+		return nil, nil
+	}
 	if h.discarding {
 		if pkt.Timestamp == h.discardTimestamp {
 			return nil, nil
