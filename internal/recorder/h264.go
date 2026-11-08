@@ -136,11 +136,19 @@ func (r *H264Recorder) PPS() []byte { return r.pps }
 // AudioEnabled returns whether this recorder has audio configured.
 func (r *H264Recorder) AudioEnabled() bool { return r.cfg.AudioEnabled }
 
-// AudioCodec returns the audio codec type ("aac" or "g711"), or empty string if no audio.
-func (r *H264Recorder) AudioCodec() string { return r.audioCodec }
+// AudioCodec returns the audio codec type, or empty string if no audio.
+func (r *H264Recorder) AudioCodec() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.audioCodec
+}
 
 // AudioMuxerConfig returns the AudioSpecificConfig bytes for AAC, or nil if no audio.
-func (r *H264Recorder) AudioMuxerConfig() []byte { return r.audioMuxerConfig }
+func (r *H264Recorder) AudioMuxerConfig() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]byte(nil), r.audioMuxerConfig...)
+}
 
 // SourceURL returns the configured RTSP source URL.
 func (r *H264Recorder) SourceURL() string { return r.cfg.RTSPURL }
@@ -481,8 +489,10 @@ func (r *H264Recorder) handleMediaAudioFrame(frame media.MediaFrame) {
 	switch frame.Codec {
 	case "aac":
 		if frame.IsSeqHeader {
+			r.mu.Lock()
 			r.audioCodec = "aac"
 			r.audioMuxerConfig = append([]byte(nil), frame.Data...)
+			r.mu.Unlock()
 			return
 		}
 		if r.Hub != nil {
@@ -490,6 +500,7 @@ func (r *H264Recorder) handleMediaAudioFrame(frame media.MediaFrame) {
 		}
 		r.writeMediaAudioSample(frame.Data, 1024*time.Second/44100)
 	case "g711", "g711a", "g711u":
+		r.mu.Lock()
 		if r.audioCodec == "" {
 			r.audioCodec = "g711"
 			r.g711MULaw = frame.Codec == "g711u"
@@ -501,14 +512,45 @@ func (r *H264Recorder) handleMediaAudioFrame(frame media.MediaFrame) {
 			rate := r.g711SampleRate
 			r.audioMuxerConfig = []byte{muLawByte, byte(rate >> 24), byte(rate >> 16), byte(rate >> 8), byte(rate)}
 		}
+		rate := r.g711SampleRate
+		r.mu.Unlock()
 		if r.Hub != nil {
 			r.Hub.BroadcastAudio(frame.PTS.Milliseconds(), model.AudioG711, frame.Data)
 		}
-		dur := time.Duration(len(frame.Data)) * time.Second / time.Duration(r.g711SampleRate)
+		if rate <= 0 {
+			return
+		}
+		dur := time.Duration(len(frame.Data)) * time.Second / time.Duration(rate)
 		if dur < time.Millisecond {
 			dur = time.Millisecond
 		}
 		r.writeMediaAudioSample(frame.Data, dur)
+	case "opus":
+		if len(frame.Data) == 0 {
+			return
+		}
+		r.mu.Lock()
+		if r.audioCodec == "" {
+			r.audioCodec = "opus"
+		}
+		if r.audioCodec != "opus" {
+			r.mu.Unlock()
+			return
+		}
+		if r.muxer != nil && r.audioTrackID == 0 {
+			id, err := r.muxer.AddAudioTrack("opus", nil)
+			if err != nil {
+				r.mu.Unlock()
+				h264Logger.Error("failed to add Opus track", "camera_id", r.cfg.CameraID, "error", err)
+				return
+			}
+			r.audioTrackID = id
+		}
+		r.mu.Unlock()
+		if r.Hub != nil {
+			r.Hub.BroadcastAudio(frame.PTS.Milliseconds(), model.AudioOpus, frame.Data)
+		}
+		r.writeMediaAudioSample(frame.Data, audioDuration(audioFrame{codec: "opus", frame: frame.Data}))
 	}
 }
 
@@ -909,9 +951,11 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 				continue
 			}
 			r.trackID = trackID
-			// Add audio track if audio config is available.
+			// Add audio track if its configuration is available. Opus uses
+			// the muxer's fixed RTP Opus configuration and needs no sequence header.
+			r.mu.Lock()
 			audioTrackID := 0
-			if len(r.audioMuxerConfig) > 0 && r.audioCodec != "" {
+			if r.audioCodec == "opus" || (len(r.audioMuxerConfig) > 0 && r.audioCodec != "") {
 				aID, err := m.AddAudioTrack(r.audioCodec, r.audioMuxerConfig)
 				if err != nil {
 					h264Logger.Error("failed to add audio track", "camera_id", r.cfg.CameraID, "codec", r.audioCodec, "error", err)
@@ -919,7 +963,6 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 					audioTrackID = aID
 				}
 			}
-			r.mu.Lock()
 			r.audioTrackID = audioTrackID
 			r.muxer = m
 			r.segStart = time.Now()
