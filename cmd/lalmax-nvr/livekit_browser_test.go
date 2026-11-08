@@ -4,6 +4,9 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,6 +15,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +28,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
+	"github.com/pion/turn/v5"
 )
 
 func TestLiveKitBrowser(t *testing.T) {
@@ -53,6 +60,48 @@ func TestLiveKitBrowser(t *testing.T) {
 	udp.Close()
 	const key, secret = "testkey", "testsecret-testsecret-testsecret-123456"
 	yaml := fmt.Sprintf("development: false\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nrtc:\n  node_ip: 127.0.0.1\n  enable_loopback_candidate: true\n  ips:\n    includes: [127.0.0.1/32]\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
+	var turnAuth atomic.Int64
+	if os.Getenv("LK_TURN_TEST") != "" {
+		if os.Getenv("LK_UDP_LOSS_TEST") != "" {
+			t.Fatal("LK_TURN_TEST and LK_UDP_LOSS_TEST must run separately")
+		}
+		conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		const turnSecret, realm = "local-test-turn-secret", "lalmax-test"
+		secretFile := filepath.Join(t.TempDir(), "turn-secret")
+		if err := os.WriteFile(secretFile, []byte(turnSecret), 0600); err != nil {
+			conn.Close()
+			t.Fatal(err)
+		}
+		turnServer, err := turn.NewServer(turn.ServerConfig{
+			Realm: realm,
+			AuthHandler: func(req *turn.RequestAttributes) (string, []byte, bool) {
+				expiryText, _, ok := strings.Cut(req.Username, ":")
+				expiry, err := strconv.ParseInt(expiryText, 10, 64)
+				if !ok || err != nil || expiry <= time.Now().Unix() {
+					return "", nil, false
+				}
+				mac := hmac.New(sha1.New, []byte(turnSecret))
+				_, _ = mac.Write([]byte(req.Username))
+				credential := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+				turnAuth.Add(1)
+				return req.Username, turn.GenerateAuthKey(req.Username, realm, credential), true
+			},
+			PacketConnConfigs: []turn.PacketConnConfig{{
+				PacketConn:            conn,
+				PermissionHandler:     func(_ net.Addr, peer net.IP) bool { return peer.IsLoopback() },
+				RelayAddressGenerator: &turn.RelayAddressGeneratorStatic{RelayAddress: net.ParseIP("127.0.0.1"), Address: "127.0.0.1"},
+			}},
+		})
+		if err != nil {
+			conn.Close()
+			t.Fatal(err)
+		}
+		defer turnServer.Close()
+		yaml += fmt.Sprintf("  turn_servers:\n    - host: 127.0.0.1\n      port: %d\n      protocol: udp\n      secret_file: %q\n", conn.LocalAddr().(*net.UDPAddr).Port, secretFile)
+	}
 	p := filepath.Join(t.TempDir(), "livekit.yaml")
 	if err = os.WriteFile(p, []byte(yaml), 0600); err != nil {
 		t.Fatal(err)
@@ -125,6 +174,9 @@ func TestLiveKitBrowser(t *testing.T) {
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("browser: %v\n%s", err, output)
+	}
+	if os.Getenv("LK_TURN_TEST") != "" && turnAuth.Load() == 0 {
+		t.Fatal("TURN server did not authenticate the browser")
 	}
 	runtime.bridges.mu.Lock()
 	publisher, ok := runtime.bridges.publisher.(*nvrSFUPublisher)

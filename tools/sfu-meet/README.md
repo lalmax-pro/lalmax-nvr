@@ -55,6 +55,10 @@ Set `LK_UDP_LOSS_TEST=1` on that command to relay the viewer's LiveKit UDP
 traffic through a local test proxy that drops 20% of downstream media packets.
 The test verifies the selected ICE path, video frames and audio/video packet
 reception during loss and after recovery. It does not emulate real NAT or delay.
+Set `LK_TURN_TEST=1` instead to run a local UDP TURN server with short-lived
+shared-secret credentials and force the viewer to use a relay candidate. This
+is a loopback test; public NAT, TCP and TLS TURN still require deployment-specific
+verification.
 
 To exercise the full NVR recording plan and decode a synthetic recording,
 run `TestNVRLiveKitRecordingBrowser` with the same build tag and executable.

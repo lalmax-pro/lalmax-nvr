@@ -11,3 +11,10 @@ rtc:
   # your network as described by the LiveKit self-hosting documentation.
   udp_port: 7882
   tcp_port: 7881
+  # Optional external TURN relay. The file contains the TURN shared secret;
+  # LiveKit generates short-lived credentials for authorized participants.
+  # turn_servers:
+  #   - host: turn.example.com
+  #     port: 3478
+  #     protocol: udp
+  #     secret_file: /path/to/turn-secret

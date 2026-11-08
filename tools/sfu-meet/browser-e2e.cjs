@@ -75,6 +75,19 @@ const assert = require('node:assert/strict');
         };
       }, {targetPort, proxyPort:udpProxy.port});
     }
+    if (process.env.LK_TURN_TEST) {
+      await viewer.addInitScript(() => {
+        const NativePeerConnection = window.RTCPeerConnection;
+        window.__turnPeerConnections = [];
+        window.RTCPeerConnection = class extends NativePeerConnection {
+          constructor(configuration, ...args) {
+            const useRelay = configuration?.iceServers?.length > 0;
+            super(useRelay ? {...configuration, iceTransportPolicy:'relay'} : configuration, ...args);
+            if (useRelay) window.__turnPeerConnections.push(this);
+          }
+        };
+      });
+    }
     for(const p of [publisher, viewer]) p.on('pageerror', e => errors.push(e.message));
     for(const page of [publisher,viewer]) {
       await page.goto(process.argv[2]+(process.env.LK_DEMO_LOCAL ? '/' : '/sfu-meet/'),{waitUntil:'load'});
@@ -96,6 +109,27 @@ const assert = require('node:assert/strict');
     await viewer.waitForFunction(() => document.querySelectorAll('#track-list .track-row').length>=2 && [...document.querySelectorAll('#tiles video')].some(v=>v.videoWidth>0), null, {timeout:25000});
     await viewer.waitForSelector('#audio-container audio', {state:'attached', timeout:15000});
     await viewer.locator('#tiles').scrollIntoViewIfNeeded();
+    if (process.env.LK_TURN_TEST) {
+      await viewer.waitForFunction(async () => {
+        for (const pc of window.__turnPeerConnections) {
+          const stats = await pc.getStats();
+          let relay = false; let audio = false; let video = false;
+          for (const stat of stats.values()) {
+            if (stat.type === 'transport' && stat.selectedCandidatePairId) {
+              const pair = stats.get(stat.selectedCandidatePairId);
+              const local = pair && stats.get(pair.localCandidateId);
+              relay = relay || local?.candidateType === 'relay';
+            }
+            if (stat.type === 'inbound-rtp' && stat.packetsReceived > 0) {
+              audio = audio || stat.kind === 'audio';
+              video = video || stat.kind === 'video';
+            }
+          }
+          if (relay && audio && video) return true;
+        }
+        return false;
+      }, null, {timeout:20000});
+    }
     if (udpProxy) {
       assert.ok(await viewer.evaluate(() => window.__networkCandidateRewrites > 0), 'viewer did not use the UDP proxy');
       const sample = () => viewer.evaluate(async () => {
@@ -365,6 +399,6 @@ const assert = require('node:assert/strict');
       assert.equal((await refreshed).status(), 200);
     }
     assert.deepEqual(errors, []);
-    console.log(`PASS: browser bidirectional synthetic camera/microphone, device switching, signal reconnection, dynamic subscriptions, synthetic screen video/audio${udpProxy ? ', UDP media loss and recovery' : ''}${process.env.LK_BRIDGE_TEST ? ', camera and screen Group WHEP audio/video and bridge cleanup' : ''}, and leave`);
+    console.log(`PASS: browser bidirectional synthetic camera/microphone, device switching, signal reconnection, dynamic subscriptions, synthetic screen video/audio${udpProxy ? ', UDP media loss and recovery' : ''}${process.env.LK_TURN_TEST ? ', authenticated TURN relay' : ''}${process.env.LK_BRIDGE_TEST ? ', camera and screen Group WHEP audio/video and bridge cleanup' : ''}, and leave`);
   } finally { await context.close(); await browser.close(); if (udpProxy) udpProxy.close(); }
 })().catch(e => { console.error(e.stack || e.message); process.exitCode=1; });
