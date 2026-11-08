@@ -121,7 +121,7 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
     querySelector(){return new Element();} replaceChildren(...children){this.children=children;} append(...children){this.children.push(...children);} remove(){}
   }
   const elements=new Map();const element=id=>{if(!elements.has(id))elements.set(id,new Element(id));return elements.get(id);};
-  const calls=[];let socket,releaseCreate;
+  const calls=[];let socket,releaseCreate,peerConfig;
   class Socket {
     static OPEN=1;
     constructor(url){socket=this;this.url=url;this.readyState=1;setImmediate(()=>this.snapshot([]));}
@@ -130,12 +130,12 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
     close(){this.readyState=3;}
   }
   class Peer {
-    constructor(){this.iceGatheringState='complete';this.connectionState='connected';} createDataChannel(){} async createOffer(){return{sdp:'offer'};}
+    constructor(config){peerConfig=config;this.iceGatheringState='complete';this.connectionState='connected';} createDataChannel(){} async createOffer(){return{sdp:'offer'};}
     async setLocalDescription(){this.localDescription={sdp:'offer'};} async setRemoteDescription(){} addTransceiver(){return{stop(){}};} close(){}
   }
   const fetch=async(url,options={})=>{
     calls.push({url,options});
-    if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'short-ticket'})};
+    if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'short-ticket',ice_servers:[{urls:['stun:example.test:3478']}]})};
     if(url==='/api/sfu/bridges/')return await new Promise(resolve=>{releaseCreate=()=>resolve({ok:true,status:202,json:async()=>({id:'bridge-1'})});});
     if(url==='/api/sfu/bridges/bridge-1/stop')return{ok:true,status:204};
     if(url==='/api/sfu/bridges/bridge-1' && options.method==='DELETE')return{ok:true,status:204};
@@ -147,6 +147,7 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
   element('join-form').listeners.submit({preventDefault(){}});
   const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
   await waitFor(()=>!element('share').disabled);
+  assert.equal(peerConfig.iceServers[0].urls[0],'stun:example.test:3478');
   assert.equal(socket.url,'wss://nvr.test/api/sfu/ws?ticket=short-ticket');
   assert.equal(calls[0].options.headers.Authorization,'Basic encoded-credentials');
   socket.snapshot([{ID:'video-publication',ParticipantID:'remote',Source:'camera',Kind:'video',Codec:'video/H264',RTPReady:true}]);
