@@ -397,6 +397,7 @@ func resolveConfigPath(path string) string {
 //  14. FTP server — depends on Config, Storage, DB
 //  15. HTTP server — depends on Router (which depends on all above)
 type App struct {
+	sfuRuntime       *nvrSFURuntime
 	transcodeManager *transcode.Manager
 	transcodeService *transcode.Service
 	cfg              *config.Config
@@ -888,6 +889,14 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	// Optional DLNA MediaServer shares the NVR HTTP listener but has its own SSDP lifecycle.
 	a.dlna = dlna.NewService(cfg, a.db, a.store, a.mediaEngine)
 
+	if cfg.SFU.Enabled {
+		a.sfuRuntime, err = newNVRSFURuntime(a)
+		if err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("initialize SFU: %w", err)
+		}
+	}
+
 	// Step 12: Build HTTP router
 	a.httpServer = &http.Server{
 		Addr:    cfg.Server.Listen,
@@ -963,6 +972,11 @@ func (a *App) buildRouter() http.Handler {
 
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.configPath, a.mergeMgr, cloudProxy)
+	if a.sfuRuntime != nil {
+		handler.SetSFUBridgeRegistry(a.sfuRuntime.registry)
+		handler.SetSFUSignaling(a.sfuRuntime.signal)
+		handler.SetSFUTicketIssuer(a.sfuRuntime.tickets)
+	}
 	// Capture runtime configuration at bootstrap; changes to executable paths or
 	// media listener settings require a restart before starting new transcodes.
 	transcodeCfg := *cfg
@@ -1411,6 +1425,9 @@ func (a *App) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
 	a.startCtx = ctx
+	if a.sfuRuntime != nil {
+		a.sfuRuntime.Start(ctx)
+	}
 	if a.jt808Svr != nil {
 		if err := a.jt808Svr.Start(); err != nil {
 			cancel()
@@ -1669,6 +1686,11 @@ func (a *App) Stop() error {
 		if a.transcodeManager != nil {
 			if err := a.transcodeManager.Close(shutdownCtx); err != nil {
 				log.Warn("transcoding shutdown incomplete", "error", err)
+			}
+		}
+		if a.sfuRuntime != nil {
+			if err := a.sfuRuntime.Close(shutdownCtx); err != nil {
+				log.Warn("SFU shutdown incomplete", "error", err)
 			}
 		}
 

@@ -149,6 +149,8 @@ type snapshotCache struct {
 
 type Handler struct {
 	sfuBridges            SFUBridgeRegistry
+	sfuSignaling          http.Handler
+	sfuTickets            SFUTicketIssuer
 	isInternalMediaStream func(string) bool
 	transcodePlayback     derivedPlaybackProvider
 	transcodeService      *transcode.Service
@@ -375,6 +377,9 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
 	r.Get("/api/setup/directories", h.handleSetupDirectories)
+	// Authentication for this WebSocket is a short-lived, single-use ticket;
+	// the signaling handler validates both the ticket and its Origin.
+	r.Get("/api/sfu/ws", h.handleSFUSignaling)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -391,6 +396,7 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/{id}/stop", h.stopSFUBridge)
 			r.Delete("/{id}", h.removeSFUBridge)
 		})
+		r.With(middleware.RequireOperatePermission()).Post("/api/sfu/ticket", h.createSFUTicket)
 		r.Post("/api/auth/logout", h.handleLogout)
 		r.Get("/api/health/details", h.handleHealthDetails)
 		r.Route("/api/recordings", func(r chi.Router) {

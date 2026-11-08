@@ -211,3 +211,37 @@ func (r *Registry) Close(ctx context.Context) error {
 	r.mu.Unlock()
 	return r.service.Close(ctx)
 }
+
+// RevalidateOwners cancels active bridges whose owner no longer passes the
+// supplied server-side authorization check. Callers must bound ctx and invoke
+// this periodically when identity or role changes must revoke active media.
+// Policy callbacks run outside the registry lock. Terminal records are kept.
+func (r *Registry) RevalidateOwners(ctx context.Context, check func(context.Context, string) error) error {
+	if ctx == nil || check == nil {
+		return ErrInvalid
+	}
+	r.mu.Lock()
+	owners := make(map[string]struct{})
+	for _, entry := range r.entries {
+		if entry.status.State == StatePending {
+			owners[entry.owner] = struct{}{}
+		}
+	}
+	r.mu.Unlock()
+	for owner := range owners {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := check(ctx, owner); err != nil {
+			r.mu.Lock()
+			for _, entry := range r.entries {
+				if entry.owner == owner && entry.status.State == StatePending {
+					entry.status.State = StateStopping
+					entry.handle.Stop()
+				}
+			}
+			r.mu.Unlock()
+		}
+	}
+	return ctx.Err()
+}

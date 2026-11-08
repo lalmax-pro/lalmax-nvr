@@ -256,3 +256,33 @@ func TestSFUBridgeHTTPRegistryLifecycle(t *testing.T) {
 		t.Fatalf("delete: %d", rec.Code)
 	}
 }
+
+type testSFUTicketIssuer struct{ user *model.User }
+
+func (i *testSFUTicketIssuer) Issue(_ context.Context, u *model.User) (string, error) {
+	i.user = u
+	return "one-time-ticket", nil
+}
+func TestSFUTicketRequiresAdministrator(t *testing.T) {
+	issuer := &testSFUTicketIssuer{}
+	h := NewHandler(nil, nil, noopAuthMW(), nil, nil, "", nil, nil)
+	h.SetMultiUserAuthMW(middleware.InjectUser(&model.User{ID: 9, Role: model.RoleSuperAdmin, Enabled: true}))
+	h.SetSFUTicketIssuer(issuer)
+	router := h.Routes()
+	rec := sfuRequest(router, "POST", "/api/sfu/ticket", `{}`, "application/json")
+	if rec.Code != 201 || rec.Header().Get("Cache-Control") != "no-store" || issuer.user == nil || issuer.user.ID != 9 || !strings.Contains(rec.Body.String(), "one-time-ticket") {
+		t.Fatalf("ticket: %d %s", rec.Code, rec.Body.String())
+	}
+	viewer := NewHandler(nil, nil, noopAuthMW(), nil, nil, "", nil, nil)
+	viewer.SetMultiUserAuthMW(middleware.InjectUser(&model.User{ID: 10, Role: model.RoleUser, Enabled: true}))
+	viewer.SetSFUTicketIssuer(issuer)
+	issuer.user = nil
+	rec = sfuRequest(viewer.Routes(), "POST", "/api/sfu/ticket", `{}`, "application/json")
+	if rec.Code != 403 || issuer.user != nil {
+		t.Fatalf("viewer ticket: %d", rec.Code)
+	}
+	rec = sfuRequest(router, "GET", "/api/sfu/ws?ticket=x", "", "")
+	if rec.Code != 503 {
+		t.Fatalf("unmounted signaling: %d", rec.Code)
+	}
+}
