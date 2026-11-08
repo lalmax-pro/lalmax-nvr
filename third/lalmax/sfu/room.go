@@ -131,6 +131,7 @@ type Room struct {
 	watchers         map[chan Event]struct{}
 	rtpPublications  map[string]*rtpforward.Fanout
 	rtpSubscriptions map[subscriptionKey]*rtpforward.Subscriber
+	senderReports    map[string]SenderReport
 }
 
 // Join adds a participant. Connection handlers should use JoinSession and
@@ -239,6 +240,7 @@ func (r *Room) close() {
 	}
 	clear(r.rtpPublications)
 	clear(r.rtpSubscriptions)
+	clear(r.senderReports)
 	clear(r.participants)
 	clear(r.sessions)
 	clear(r.publications)
