@@ -2,6 +2,8 @@
 
 NVR 在进程内运行 LiveKit。按 `config/config.example.yaml` 启用 `sfu`，并参考 `config/livekit.example.yaml` 配置 LiveKit 的密钥、房间及网络参数；重启后访问 `/sfu-meet/`，使用 NVR 超级管理员账号加入。浏览器使用摄像头、麦克风或屏幕需要 HTTPS 或 localhost 安全上下文及相应权限。独立本机演示的启动方式见 `tools/sfu-meet/README.md`。
 
+服务端依赖暂时使用 [LiveKit 修复分支的固定提交](https://github.com/lalmax-pro/livekit/commit/ee9c8db1e4434f8ff956cb05697d31448d945a56)，修复 RTP 扩展 ID 和发布轨道信令的并发访问；上游版本包含等效修复并通过 SFU 和浏览器竞态测试后，应移除 `go.mod` 中的替换并升级到上游版本。
+
 会议采用 LiveKit 的房间、成员和 Track，支持仅观看、多轨发布和按轨道订阅。NVR 签发有效期五分钟、限定房间的 LiveKit 凭证；账号被撤权后不能再签发新凭证，但已签发的凭证仍可能在有效期内使用。LiveKit 自身负责连接恢复及媒体转发。公网地址、STUN/TURN、房间空闲时间和其他媒体参数在原生 LiveKit 配置中设置；lalmax 的 WHEP 播放使用单独的 ICE 配置。
 
 管理员可通过 Meet 页面或受保护的 API 管理临时房间：
