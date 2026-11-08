@@ -138,6 +138,11 @@ jobs:
           cd third/lalmax
           go test -race -timeout 20m -count=1 ./sfu/...
 
+      - name: Test embedded lal RTMP
+        run: |
+          cd third/lal
+          go test -race -timeout 10m -count=1 ./pkg/rtmp
+
       - name: Display coverage
         run: go tool cover -func=coverage.out
 
