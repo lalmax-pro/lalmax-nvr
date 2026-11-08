@@ -85,6 +85,10 @@ media:
 #   # Optional observation only; bitrate estimates are logged at debug level.
 #   # This does not pace traffic, select layers or adapt publishing bitrate.
 #   observe_bandwidth: false
+#   # Experimental and disruptive on congestion: a subscription can stop
+#   # when its pacing wait budget or the SFU subscriber queue is exceeded.
+#   # Requires observe_bandwidth: true; no automatic source adaptation exists.
+#   pacing: false
 #   # Optional STUN/TURN for SFU peers and the browser; TURN credentials are
 #   # delivered to authenticated meeting administrators. Use HTTPS and scoped
 #   # credentials. The lalmax WHEP server has its own ICE configuration.

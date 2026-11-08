@@ -15,22 +15,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNVRSFUEmitsTransportCCAndReceivesFeedback(t *testing.T) { testNVRSFUTWCCFeedback(t, false) }
-func TestNVRSFUBandwidthObserverReceivesEstimates(t *testing.T)  { testNVRSFUTWCCFeedback(t, true) }
-func TestNVRSFUWorksWithoutTransportCCNegotiation(t *testing.T)  { testNVRSFUWithoutTWCC(t, false) }
-func TestNVRSFUBandwidthObserverWithoutTransportCC(t *testing.T) { testNVRSFUWithoutTWCC(t, true) }
+func TestNVRSFUEmitsTransportCCAndReceivesFeedback(t *testing.T) {
+	testNVRSFUTWCCFeedback(t, false, false)
+}
+func TestNVRSFUBandwidthObserverReceivesEstimates(t *testing.T) {
+	testNVRSFUTWCCFeedback(t, true, false)
+}
+func TestNVRSFUPacingReceivesEstimates(t *testing.T) { testNVRSFUTWCCFeedback(t, true, true) }
+func TestNVRSFUWorksWithoutTransportCCNegotiation(t *testing.T) {
+	testNVRSFUWithoutTWCC(t, false, false)
+}
+func TestNVRSFUBandwidthObserverWithoutTransportCC(t *testing.T) {
+	testNVRSFUWithoutTWCC(t, true, false)
+}
 
-func testNVRSFUTWCCFeedback(t *testing.T, observeBandwidth bool) {
+func TestNVRSFUPacingWithoutTransportCC(t *testing.T) { testNVRSFUWithoutTWCC(t, true, true) }
+
+func testNVRSFUTWCCFeedback(t *testing.T, observeBandwidth, enablePacing bool) {
 	t.Helper()
 	estimates := make(chan int, 16)
 	newPeer := nvrSFUNewPeer(nil)
 	if observeBandwidth {
-		newPeer = nvrSFUNewPeerObservingBWE(nil, func(_ signaling.Identity, bitrate int) {
+		newPeer = nvrSFUNewPeerWithPacing(nil, func(_ signaling.Identity, bitrate int) {
 			select {
 			case estimates <- bitrate:
 			default:
 			}
-		})
+		}, enablePacing)
 	}
 	sender, err := newPeer(context.Background(), signaling.Identity{})
 	require.NoError(t, err)
@@ -133,11 +144,11 @@ func testNVRSFUTWCCFeedback(t *testing.T, observeBandwidth bool) {
 	require.NotEqual(t, extensionSequence[0], extensionSequence[1], "outgoing transport sequence must advance")
 }
 
-func testNVRSFUWithoutTWCC(t *testing.T, observeBandwidth bool) {
+func testNVRSFUWithoutTWCC(t *testing.T, observeBandwidth, enablePacing bool) {
 	t.Helper()
 	newPeer := nvrSFUNewPeer(nil)
 	if observeBandwidth {
-		newPeer = nvrSFUNewPeerObservingBWE(nil, func(signaling.Identity, int) {})
+		newPeer = nvrSFUNewPeerWithPacing(nil, func(signaling.Identity, int) {}, enablePacing)
 	}
 	sender, err := newPeer(context.Background(), signaling.Identity{})
 	require.NoError(t, err)

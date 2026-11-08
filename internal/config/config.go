@@ -72,6 +72,15 @@ type SFUConfig struct {
 	ICEServers       []SFUICEServer `yaml:"ice_servers" json:"-"`
 	IdleTimeout      string         `yaml:"idle_timeout,omitempty" json:"idle_timeout,omitempty"`
 	ObserveBandwidth bool           `yaml:"observe_bandwidth,omitempty" json:"observe_bandwidth,omitempty"`
+	Pacing           bool           `yaml:"pacing,omitempty" json:"pacing,omitempty"`
+}
+
+// ValidatePacing requires the bandwidth estimator when pacing is enabled.
+func (c SFUConfig) ValidatePacing() error {
+	if c.Pacing && !c.ObserveBandwidth {
+		return fmt.Errorf("sfu: pacing requires observe_bandwidth")
+	}
+	return nil
 }
 
 // RoomIdleTimeout returns zero when automatic room collection is disabled.
@@ -820,6 +829,9 @@ func Save(path string, cfg *Config) error {
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
+	}
+	if err := cfg.SFU.ValidatePacing(); err != nil {
+		return err
 	}
 	if err := cfg.SFU.ValidateICE(); err != nil {
 		return err

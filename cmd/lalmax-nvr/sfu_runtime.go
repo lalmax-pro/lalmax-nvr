@@ -214,6 +214,9 @@ func nvrSFUNewPeer(servers []webrtc.ICEServer) func(context.Context, signaling.I
 	return nvrSFUNewPeerObservingBWE(servers, nil)
 }
 func nvrSFUNewPeerObservingBWE(servers []webrtc.ICEServer, onEstimate func(signaling.Identity, int)) func(context.Context, signaling.Identity) (*webrtc.PeerConnection, error) {
+	return nvrSFUNewPeerWithPacing(servers, onEstimate, false)
+}
+func nvrSFUNewPeerWithPacing(servers []webrtc.ICEServer, onEstimate func(signaling.Identity, int), enablePacing bool) func(context.Context, signaling.Identity) (*webrtc.PeerConnection, error) {
 	return func(_ context.Context, identity signaling.Identity) (*webrtc.PeerConnection, error) {
 		engine := &webrtc.MediaEngine{}
 		if err := engine.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, PayloadType: 111}, webrtc.RTPCodecTypeAudio); err != nil {
@@ -224,7 +227,7 @@ func nvrSFUNewPeerObservingBWE(servers []webrtc.ICEServer, onEstimate func(signa
 		}
 		registry := &interceptor.Registry{}
 		if onEstimate != nil {
-			registry.Add(&sfuBWEFactory{onEstimate: func(bitrate int) { onEstimate(identity, bitrate) }})
+			registry.Add(&sfuBWEFactory{onEstimate: func(bitrate int) { onEstimate(identity, bitrate) }, pacing: enablePacing})
 		}
 		if err := webrtc.ConfigureTWCCHeaderExtensionSender(engine, registry); err != nil {
 			return nil, err
@@ -287,9 +290,9 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 	}
 	newPeer := nvrSFUNewPeer(iceServers)
 	if a.cfg.SFU.ObserveBandwidth {
-		newPeer = nvrSFUNewPeerObservingBWE(iceServers, func(id signaling.Identity, bitrate int) {
+		newPeer = nvrSFUNewPeerWithPacing(iceServers, func(id signaling.Identity, bitrate int) {
 			slog.Debug("sfu bandwidth estimate", "namespace", id.Room.Namespace, "room", id.Room.ID, "participant", id.Participant.ID, "bitrate_bps", bitrate)
-		})
+		}, a.cfg.SFU.Pacing)
 	}
 	factory := &signaling.RoomFactory{NewPeer: newPeer, MaxSubscribers: 32, QueueSize: 64, Codec: func(p sfu.Publication) (webrtc.RTPCodecCapability, error) {
 		if p.Kind == "audio" && strings.EqualFold(p.Codec, "audio/opus") {

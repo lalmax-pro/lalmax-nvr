@@ -3,11 +3,13 @@ package main
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/cc"
 	"github.com/pion/interceptor/pkg/gcc"
 	"github.com/pion/rtp"
+	"github.com/q191201771/lalmax/sfu/pacing"
 )
 
 const sfuInitialBandwidthEstimate = 1_000_000 // bits per second; not a measured capacity
@@ -39,7 +41,7 @@ func (p *sfuBWEPassThrough) Write(header *rtp.Header, payload []byte, attrs inte
 	}
 	return writer.Write(header, payload, attrs)
 }
-func (p *sfuBWEPassThrough) remove(ssrc uint32) {
+func (p *sfuBWEPassThrough) RemoveStream(ssrc uint32) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.writers, ssrc)
@@ -52,10 +54,25 @@ func (p *sfuBWEPassThrough) Close() error {
 	return nil
 }
 
-type sfuBWEFactory struct{ onEstimate func(int) }
+type sfuBWEFactory struct {
+	onEstimate func(int)
+	pacing     bool
+}
+
+type sfuBWEPacer interface {
+	gcc.Pacer
+	RemoveStream(uint32)
+}
 
 func (f *sfuBWEFactory) NewInterceptor(id string) (interceptor.Interceptor, error) {
-	pacer := &sfuBWEPassThrough{writers: make(map[uint32]interceptor.RTPWriter)}
+	var pacer sfuBWEPacer = &sfuBWEPassThrough{writers: make(map[uint32]interceptor.RTPWriter)}
+	if f.pacing {
+		var err error
+		pacer, err = pacing.New(sfuInitialBandwidthEstimate, 200*time.Millisecond, 64)
+		if err != nil {
+			return nil, err
+		}
+	}
 	factory, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
 		return gcc.NewSendSideBWE(gcc.SendSideBWEPacer(pacer), gcc.SendSideBWEInitialBitrate(sfuInitialBandwidthEstimate))
 	})
@@ -72,10 +89,10 @@ func (f *sfuBWEFactory) NewInterceptor(id string) (interceptor.Interceptor, erro
 
 type sfuBWEInterceptor struct {
 	interceptor.Interceptor
-	pacer *sfuBWEPassThrough
+	pacer sfuBWEPacer
 }
 
 func (i *sfuBWEInterceptor) UnbindLocalStream(info *interceptor.StreamInfo) {
 	i.Interceptor.UnbindLocalStream(info)
-	i.pacer.remove(info.SSRC)
+	i.pacer.RemoveStream(info.SSRC)
 }
