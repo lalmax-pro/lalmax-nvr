@@ -145,21 +145,6 @@ func (s *Service) Start(requestCtx context.Context, principal, publicationID str
 		return nil, err
 	}
 	target := "sfu_" + id
-	if err = s.grants.ReserveInternalStream(target, publish, playback); err != nil {
-		return nil, fmt.Errorf("reserve output: %w", err)
-	}
-	defer func() {
-		if !handedOff {
-			s.grants.RevokeInternalStream(target)
-		}
-	}()
-	// Persist the name before exposing it to any publisher. On error the
-	// deferred revocation keeps this identity denied until this process exits.
-	if s.outputs != nil {
-		if err = s.outputs.RegisterSFUBridgeOutput(requestCtx, target); err != nil {
-			return nil, fmt.Errorf("record output identity: %w", err)
-		}
-	}
 	session, err := access.JoinRoom(requestCtx, s.room, s.policy, principal, sfu.Participant{ID: "bridge_" + id})
 	if err != nil {
 		return nil, err
@@ -184,6 +169,21 @@ func (s *Service) Start(requestCtx context.Context, principal, publicationID str
 	}
 	if err = s.validate(requestCtx, pub); err != nil {
 		return nil, err
+	}
+	if err = s.grants.ReserveInternalStream(target, publish, playback); err != nil {
+		return nil, fmt.Errorf("reserve output: %w", err)
+	}
+	defer func() {
+		if !handedOff {
+			s.grants.RevokeInternalStream(target)
+		}
+	}()
+	// Persist the name before exposing it to any publisher. On error the
+	// deferred revocation keeps this identity denied until this process exits.
+	if s.outputs != nil {
+		if err = s.outputs.RegisterSFUBridgeOutput(requestCtx, target); err != nil {
+			return nil, fmt.Errorf("record output identity: %w", err)
+		}
 	}
 	lifetime, cancel := context.WithCancel(s.ctx)
 	done, err := session.StartH264BridgeWithContexts(requestCtx, lifetime, publicationID, target, s.publisher)
