@@ -30,16 +30,23 @@ func (c *roomLossConn) ReadFrom(buf []byte) (int, net.Addr, error) {
 		if err != nil {
 			return n, addr, err
 		}
-		if n >= 12 && buf[0]>>6 == 2 && buf[1]&0x7f >= 96 && c.armed.Load() && c.packets.Add(1) >= 5 {
+		if n >= 12 && buf[0]>>6 == 2 && buf[1]&0x7f >= 96 && c.armed.Load() {
+			count := c.packets.Add(1)
 			sequence := binary.BigEndian.Uint16(buf[2:4])
-			c.mu.Lock()
-			shouldDrop := len(c.seen) < c.burst && !c.seen[sequence]
-			if shouldDrop {
-				c.seen[sequence] = true
+			shouldDrop := c.burst < 0 && count%3 == 0
+			if c.burst > 0 && count >= 5 {
+				c.mu.Lock()
+				shouldDrop = len(c.seen) < c.burst && !c.seen[sequence]
+				if shouldDrop {
+					c.seen[sequence] = true
+				}
+				c.mu.Unlock()
 			}
-			c.mu.Unlock()
 			if shouldDrop {
-				c.dropped <- sequence
+				select {
+				case c.dropped <- sequence:
+				default:
+				}
 				continue
 			}
 		}
@@ -50,7 +57,11 @@ func roomLossViewer(t *testing.T, burst int) (*webrtc.PeerConnection, *roomLossC
 	t.Helper()
 	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
-	loss := &roomLossConn{PacketConn: conn, dropped: make(chan uint16, burst), burst: burst, seen: make(map[uint16]bool)}
+	capacity := burst
+	if capacity < 0 {
+		capacity = 512
+	}
+	loss := &roomLossConn{PacketConn: conn, dropped: make(chan uint16, capacity), burst: burst, seen: make(map[uint16]bool)}
 	mux := webrtc.NewICEUDPMux(nil, loss)
 	t.Cleanup(func() { _ = mux.Close() })
 	settings := webrtc.SettingEngine{}
@@ -63,10 +74,12 @@ func roomLossViewer(t *testing.T, burst int) (*webrtc.PeerConnection, *roomLossC
 	return pc, loss
 }
 
-func TestRoomNACKRecoversOneViewerWithoutInterruptingAnother(t *testing.T) { testRoomBurstLoss(t, 1) }
-func TestRoomNACKRecoversBurstWithoutInterruptingAnother(t *testing.T)     { testRoomBurstLoss(t, 10) }
+func TestRoomNACKRecoversOneViewerWithoutInterruptingAnother(t *testing.T) { testRoomLoss(t, 1) }
+func TestRoomNACKRecoversBurstWithoutInterruptingAnother(t *testing.T)     { testRoomLoss(t, 10) }
 
-func testRoomBurstLoss(t *testing.T, burst int) {
+func TestRoomSustainedLossDoesNotStopOtherViewer(t *testing.T) { testRoomLoss(t, -1) }
+
+func testRoomLoss(t *testing.T, burst int) {
 	t.Helper()
 	_, origin := setup(t)
 	cookie := login(t, origin, testSecret, origin).Cookies()[0]
@@ -94,6 +107,7 @@ func testRoomBurstLoss(t *testing.T, burst int) {
 	require.Empty(t, answer.Error)
 	require.NoError(t, publisher.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer.SDP}))
 	stop := make(chan struct{})
+	var sent atomic.Uint32
 	defer close(stop)
 	go func() {
 		ticker := time.NewTicker(10 * time.Millisecond)
@@ -105,7 +119,9 @@ func testRoomBurstLoss(t *testing.T, burst int) {
 				return
 			case <-ticker.C:
 				seq++
-				_ = input.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: seq, Timestamp: uint32(seq) * 900, Marker: true}, Payload: []byte{0x41, 0x01}})
+				if input.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: seq, Timestamp: uint32(seq) * 900, Marker: true}, Payload: []byte{0x41, 0x01}}) == nil {
+					sent.Add(1)
+				}
 			}
 		}
 	}()
@@ -164,6 +180,61 @@ func testRoomBurstLoss(t *testing.T, burst int) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("viewer did not receive video")
 		}
+	}
+	if burst < 0 {
+		// Drain setup packets so the measurement reflects the impaired interval.
+		drain := func(ch <-chan uint16) {
+			for {
+				select {
+				case <-ch:
+				default:
+					return
+				}
+			}
+		}
+		drain(lossyPackets)
+		drain(healthyPackets)
+		startSent := sent.Load()
+		loss.armed.Store(true)
+		deadline := time.After(2 * time.Second)
+		lossySeen, healthySeen := map[uint16]bool{}, map[uint16]bool{}
+	measure:
+		for {
+			select {
+			case sequence := <-lossyPackets:
+				lossySeen[sequence] = true
+			case sequence := <-healthyPackets:
+				healthySeen[sequence] = true
+			case <-deadline:
+				break measure
+			}
+		}
+		loss.armed.Store(false)
+		transmitted := sent.Load() - startSent
+		require.Greater(t, transmitted, uint32(30), "publisher must keep sending")
+		require.Greater(t, len(loss.dropped), 0, "loss must actually occur")
+		require.GreaterOrEqual(t, len(healthySeen), int(transmitted)*8/10, "healthy viewer must keep receiving")
+		require.GreaterOrEqual(t, len(lossySeen), int(transmitted)*3/10, "impaired viewer must keep receiving")
+		last := uint16(0)
+		for sequence := range lossySeen {
+			if sequence > last {
+				last = sequence
+			}
+		}
+		fresh := 0
+		deadline = time.After(3 * time.Second)
+		for fresh < 10 {
+			select {
+			case sequence := <-lossyPackets:
+				if sequence > last {
+					last = sequence
+					fresh++
+				}
+			case <-deadline:
+				t.Fatalf("impaired viewer did not continue after loss: %d new packets", fresh)
+			}
+		}
+		return
 	}
 	loss.armed.Store(true)
 	missing := make(map[uint16]bool, burst)
