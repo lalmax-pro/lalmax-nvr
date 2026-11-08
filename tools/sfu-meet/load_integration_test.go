@@ -190,6 +190,9 @@ func testDemoSFULoad(t *testing.T, count int, duration time.Duration) {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+	if peakRSS == 0 {
+		t.Fatal("process RSS measurement unavailable")
+	}
 	elapsed := time.Since(start)
 	afterCPU, err := proc.Times()
 	if err != nil {
