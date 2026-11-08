@@ -30,9 +30,9 @@ func TestMP4TrackEditPreservesLateOpusOffset(t *testing.T) {
 	require.GreaterOrEqual(t, len(data), idx+36)
 	elst := data[idx+4:]
 	require.Equal(t, uint32(2), binary.BigEndian.Uint32(elst[4:8]))
-	require.Equal(t, uint32(280), binary.BigEndian.Uint32(elst[8:12]), "200 ms track offset plus 80 ms Opus priming")
+	require.Equal(t, uint32(200), binary.BigEndian.Uint32(elst[8:12]), "the edit preserves the 200 ms track offset")
 	require.Equal(t, uint32(0xffffffff), binary.BigEndian.Uint32(elst[12:16]), "first edit must be empty")
-	require.Equal(t, uint32(120), binary.BigEndian.Uint32(elst[20:24]))
+	require.Equal(t, uint32(200), binary.BigEndian.Uint32(elst[20:24]))
 	require.Equal(t, uint32(3840), binary.BigEndian.Uint32(elst[24:28]), "Opus media time uses a 48 kHz clock")
 	if artifact := os.Getenv("SFU_OFFSET_TEST_MP4"); artifact != "" {
 		require.NoError(t, os.WriteFile(artifact, data, 0o600))
@@ -73,4 +73,22 @@ func TestSetLastVideoSampleDuration(t *testing.T) {
 	require.Equal(t, 20*time.Millisecond, m.Duration())
 	require.NoError(t, m.Close())
 	require.Error(t, m.SetLastVideoSampleDuration(video, 20*time.Millisecond))
+}
+
+func TestMP4OpusShortTrackKeepsItsSourceDuration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "short-opus.mp4")
+	m := NewMP4Muxer(path)
+	audio, err := m.AddAudioTrack("opus", nil)
+	require.NoError(t, err)
+	require.NoError(t, m.WriteAudioSample(audio, []byte{0xf8, 0xff, 0xfe}, 0, 20*time.Millisecond))
+	require.Equal(t, 20*time.Millisecond, m.Duration(), "decoder priming is not recorded media duration")
+	require.NoError(t, m.Close())
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	idx := bytes.Index(data, []byte("elst"))
+	require.GreaterOrEqual(t, idx, 0)
+	edit := data[idx+4:]
+	require.Zero(t, binary.BigEndian.Uint32(edit[8:12]), "there is no initial track offset")
+	require.Equal(t, uint32(20), binary.BigEndian.Uint32(edit[20:24]), "all source audio remains in the movie")
+	require.Equal(t, uint32(3840), binary.BigEndian.Uint32(edit[24:28]), "only the synthetic priming is skipped")
 }

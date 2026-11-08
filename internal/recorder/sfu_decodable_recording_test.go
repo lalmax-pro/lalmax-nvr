@@ -43,9 +43,9 @@ func testSFUDecodableBridgeRecording(t *testing.T, longGap bool) {
 	}
 	dir := t.TempDir()
 	input := filepath.Join(dir, "input.h264")
-	duration, videoFrames, audioFrames, expectedAudio := "1", 25, 50, "opus,50"
+	duration, videoFrames, audioFrames, expectedAudio := "1", 25, 50, "opus,51"
 	if longGap {
-		duration, videoFrames, audioFrames, expectedAudio = "4", 100, 200, "opus,100"
+		duration, videoFrames, audioFrames, expectedAudio = "4", 100, 200, "opus,101"
 	}
 	cmd := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x96:rate=25:duration="+duration, "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-x264-params", "threads=1:slices=1:keyint=25:min-keyint=25:scenecut=0:repeat-headers=1", "-an", "-f", "h264", "-y", input)
 	out, err := cmd.CombinedOutput()
