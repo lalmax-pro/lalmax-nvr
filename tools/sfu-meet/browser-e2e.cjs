@@ -207,6 +207,20 @@ const assert = require('node:assert/strict');
         const video = document.querySelector('#bridge-player');
         return video.videoWidth > 0 && video.srcObject?.getAudioTracks().some(track => track.readyState === 'live' && !track.muted);
       }, null, {timeout:25000});
+      const bridgeFrames = await viewer.locator('#bridge-player').evaluate(video => video.getVideoPlaybackQuality().totalVideoFrames);
+      await publisher.evaluate(() => {
+        window.__publisherConnectionStates = [];
+        new MutationObserver(() => window.__publisherConnectionStates.push(document.querySelector('#status-text').textContent))
+          .observe(document.querySelector('#status-text'), {childList:true, subtree:true, characterData:true});
+        if (!window.__liveKitTestSocket || window.__liveKitTestSocket.readyState !== WebSocket.OPEN) throw new Error('publisher signaling socket unavailable');
+        window.__liveKitTestSocket.close(4000, 'synthetic interruption');
+      });
+      await publisher.waitForFunction(() => window.__publisherConnectionStates.includes('正在重连') && document.querySelector('#status-text').textContent === '已连接', null, {timeout:30000});
+      await viewer.waitForFunction(previous => {
+        const video = document.querySelector('#bridge-player');
+        return !video.hidden && video.getVideoPlaybackQuality().totalVideoFrames > previous + 2 && video.srcObject?.getAudioTracks().some(track => track.readyState === 'live' && !track.muted);
+      }, bridgeFrames, {timeout:20000});
+      assert.equal(await viewer.locator('#bridge-list .track-info strong').first().textContent(), stream);
       if (process.env.LK_RECORD_TEST) {
         const plan = await viewer.evaluate(async streamID => {
           const response = await fetch('/api/recording-plans', {method:'POST',headers:{Authorization:`Basic ${sessionStorage.getItem('nvr_auth')}`,'Content-Type':'application/json'},body:JSON.stringify({stream_id:streamID,name:'LiveKit browser test',mode:'continuous',enabled:true})});
