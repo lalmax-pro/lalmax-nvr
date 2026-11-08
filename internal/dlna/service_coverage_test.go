@@ -354,13 +354,21 @@ func TestDLNAMediaStreaming(t *testing.T) {
 
 	releaseViewer := make(chan struct{})
 	started := make(chan struct{})
+	finished := make(chan struct{})
 	var once sync.Once
-	limit := svc.limitMediaViewers(func(w http.ResponseWriter, r *http.Request) {
+	// The preceding HTTP handler may still be releasing its viewer slot after
+	// the client reads the response. Isolate this limiter assertion from it.
+	limiterService := enabledService(repo, engine)
+	limiterService.setViewerLimit(1)
+	limit := limiterService.limitMediaViewers(func(w http.ResponseWriter, r *http.Request) {
 		once.Do(func() { close(started) })
 		<-releaseViewer
 		w.WriteHeader(http.StatusOK)
 	})
-	go limit(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/dlna/live/cam.ts", nil))
+	go func() {
+		defer close(finished)
+		limit(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/dlna/live/cam.ts", nil))
+	}()
 	select {
 	case <-started:
 	case <-time.After(3 * time.Second):
@@ -371,6 +379,7 @@ func TestDLNAMediaStreaming(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, limited.Code)
 	require.Equal(t, "5", limited.Header().Get("Retry-After"))
 	close(releaseViewer)
+	<-finished
 
 	rr := httptest.NewRecorder()
 	svc.live(rr, httptest.NewRequest(http.MethodGet, "/dlna/live/.ts", nil))
