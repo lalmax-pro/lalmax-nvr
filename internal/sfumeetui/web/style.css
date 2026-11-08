@@ -7,3 +7,4 @@
 #bridge-video { width: 100%; margin-top: 12px; border-radius: 10px; background: #080b09; }
 #back-nvr { color: #c5ed85; font-size: 12px; text-decoration: none; margin-right: 18px; }
 #nvr-username,#nvr-password { width: 100%; border: 1px solid #3b453d; background: #101511; color: #fff; border-radius: 9px; padding: 13px; outline: none; }
+#microphone-device,#camera-device { width: 100%; border: 1px solid #3b453d; background: #101511; color: #fff; border-radius: 9px; padding: 11px; }

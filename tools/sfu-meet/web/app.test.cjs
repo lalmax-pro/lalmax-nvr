@@ -166,3 +166,64 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
   await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/bridge-1' && c.options.method==='DELETE'));
   assert.ok(!calls.some(c=>c.url.includes('/whep')),'closed room must not start a player');
 });
+
+for (const kind of ['audio','video']) test(`switching ${kind} preserves publication and cleans up failed or late capture`, async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;} setAttribute(){} querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;} append(...children){this.children.push(...children);} remove(){} play(){return Promise.resolve();}
+  }
+  class Stream {
+    constructor(tracks=[]){this.tracks=[...tracks];} getTracks(){return [...this.tracks];}
+    getAudioTracks(){return this.tracks.filter(t=>t.kind==='audio');} getVideoTracks(){return this.tracks.filter(t=>t.kind==='video');}
+    removeTrack(track){this.tracks=this.tracks.filter(t=>t!==track);} addTrack(track){this.tracks.push(track);}
+  }
+  const elements=new Map(), element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const track=id=>({id,kind,enabled:true,stopped:false,stop(){this.stopped=true;}});
+  const original=track('old'), replacement=track('new'), rejected=track('rejected'), late=track('late');
+  let capture=0, resolveLate, releaseSwap, sender;const calls=[];
+  const inputKind=kind==='video'?'videoinput':'audioinput', selectID=kind==='video'?'camera-device':'microphone-device';
+  const mediaDevices={addEventListener(){},async enumerateDevices(){return [{kind:inputKind,deviceId:'cam-0',label:'Device 0'},{kind:inputKind,deviceId:'cam-1',label:'Device 1'},{kind:inputKind,deviceId:'cam-2',label:'Device 2'}];},
+    async getUserMedia(options){calls.push(options);capture++;if(capture===1)return new Stream([original]);if(capture===2)return new Stream([replacement]);if(capture===3)return new Stream([rejected]);if(capture===4)throw new Error('device unavailable');return await new Promise(resolve=>{resolveLate=()=>resolve(new Stream([late]));});}};
+  const commands=[];
+  class Socket {
+    static OPEN=1;
+    constructor(){this.readyState=1;setImmediate(()=>this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[],Publications:[]}})}));}
+    send(data){const msg=JSON.parse(data);commands.push(msg.type);setImmediate(()=>this.onmessage({data:JSON.stringify(msg.type==='publish'?{type:'result',id:msg.id,publication:{ID:'publication'}}:{type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';this.transceivers=[];}
+    addTrack(track){sender={track,async replaceTrack(next){if(this.rejectNext){this.rejectNext=false;throw new Error('replace failed');}if(next===replacement)await new Promise(resolve=>{releaseSwap=resolve;});this.track=next;}};this.transceivers.push({sender});return sender;}
+    getTransceivers(){return this.transceivers;} async createOffer(){return{sdp:'offer'};} async setLocalDescription(){this.localDescription={sdp:'offer'};}
+    async setRemoteDescription(){} close(){}
+  }
+  const context={document:{getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'http:',host:'127.0.0.1'},navigator:{mediaDevices},fetch:async()=>({ok:true}),WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:Stream,setTimeout,clearTimeout,Map,Set,Promise,Error};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  await waitFor(()=>element(selectID).children.length===4);
+  element(selectID).value='cam-0';element(kind==='video'?'camera':'microphone').checked=true;
+  element('join-form').listeners.submit({preventDefault(){}});
+  await waitFor(()=>!element('leave').disabled);
+  assert.equal(element(kind==='video'?'microphone-device':'camera-device').disabled,true,'inactive media device selector must be disabled in a call');
+  assert.equal(calls[0][kind].deviceId.exact,'cam-0');
+  element(kind==='video'?'camera-toggle':'mute').listeners.click();
+  element(selectID).value='cam-1';element(selectID).listeners.change();
+  await waitFor(()=>typeof releaseSwap==='function');
+  assert.equal(replacement.enabled,false,'replacement stays muted while switching');
+  element(kind==='video'?'camera-toggle':'mute').listeners.click();releaseSwap();
+  await waitFor(()=>sender.track===replacement);
+  assert.equal(original.stopped,true);assert.equal(replacement.enabled,true,'latest mute state must survive switching');
+  element(kind==='video'?'camera-toggle':'mute').listeners.click();assert.equal(replacement.enabled,false);
+  assert.equal(commands.filter(x=>x==='publish').length,1);assert.equal(commands.filter(x=>x==='offer').length,1);
+  sender.rejectNext=true;
+  element(selectID).value='cam-2';element(selectID).listeners.change();
+  await waitFor(()=>!element('error').hidden);
+  assert.equal(element(selectID).value,'cam-1');assert.equal(sender.track,replacement);assert.equal(replacement.stopped,false);assert.equal(rejected.stopped,true);
+  element('error').hidden=true;element(selectID).value='cam-2';element(selectID).listeners.change();
+  await waitFor(()=>!element('error').hidden);
+  assert.equal(element(selectID).value,'cam-1');assert.equal(sender.track,replacement);assert.equal(replacement.stopped,false);
+  element(selectID).value='cam-2';element(selectID).listeners.change();
+  await waitFor(()=>typeof resolveLate==='function');element('leave').listeners.click();resolveLate();
+  await waitFor(()=>late.stopped);assert.equal(replacement.stopped,true,'leave must stop the active device');
+});
