@@ -112,10 +112,14 @@
     if(!value){const username=$('nvr-username').value, password=$('nvr-password').value;if(!username||!password)throw new Error('请输入 NVR 用户名和密码');value=btoa(`${username}:${password}`);}
     return `Basic ${value}`;
   }
-  async function nvrRequest(path,options={}) {
-    const response=await fetch(path,{...options,headers:{'Authorization':nvrAuth(),'Content-Type':'application/json',...(options.headers||{})},cache:'no-store'});
+  async function nvrRequest(path,options={},retryBody=false) {
+    let response;const authorization=nvrAuth();
+    try { response=await fetch(path,{...options,headers:{'Authorization':authorization,'Content-Type':'application/json',...(options.headers||{})},cache:'no-store'}); }
+    catch (_) { const err=new Error('网络连接失败');err.network=true;throw err; }
     if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(body.error||`请求失败 (${response.status})`);}
-    return response.status===204?null:response.json();
+    if(response.status===204)return null;
+    try { return await response.json(); }
+    catch (err) { if(!retryBody)throw err;const failure=new Error('网络连接失败');failure.network=true;throw failure; }
   }
   let bridgeManagementBusy=false;
   async function manageBridges(action, id) {
@@ -209,11 +213,22 @@
     }
   }
   async function wait(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
+  function bridgeRequestKey() {
+    const bytes=new Uint8Array(16);crypto.getRandomValues(bytes);
+    return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+  }
+  async function createBridge(p,audio) {
+    const key=bridgeRequestKey(),body=JSON.stringify({publication_id:p.ID,...(audio?{audio_publication_id:audio.ID}:{})});
+    for(let attempt=0;attempt<3;attempt++){
+      try { return await nvrRequest('/api/sfu/bridges/',{method:'POST',headers:{'Idempotency-Key':key},body},true); }
+      catch(err) { if(!err.network||attempt===2)throw err;await wait(attempt===0?100:500); }
+    }
+  }
   async function startBridge(c,p,audio) {
     const bridge={publication:p.ID,source:p.Source,label:'正在创建',busy:true,pc:null,location:'',abort:new AbortController()};
     c.bridges.set(p.ID,bridge);renderBridgeTracks(c.snapshot,c);
     try {
-      const result=await nvrRequest('/api/sfu/bridges/',{method:'POST',body:JSON.stringify({publication_id:p.ID,...(audio?{audio_publication_id:audio.ID}:{})})});
+      const result=await createBridge(p,audio);
       bridge.id=result.id;
       if(current!==c||bridge.closeRequested||bridge.abort.signal.aborted){await stopBridge(c,bridge,true);return;}
       bridge.label='等待媒体';bridge.busy=false;renderBridgeTracks(c.snapshot,c);
@@ -240,7 +255,7 @@
       bridge.label='正在连接播放器';renderBridgeTracks(c.snapshot,c);
     } catch(err) {
       if(bridge.abort.signal.aborted)return;
-      bridge.label='播放失败';bridge.busy=false;if(current===c){$('bridge-status').textContent=err.message||'桥接失败';renderBridgeTracks(c.snapshot,c);}
+      bridge.label='播放失败';bridge.busy=false;if(current===c){$('bridge-status').textContent=err.network?'网络连接失败，请在“我的桥接”中检查并停止可能遗留的桥接。':err.message||'桥接失败';renderBridgeTracks(c.snapshot,c);}
     }
   }
   async function stopBridge(c,bridge,quiet) {
