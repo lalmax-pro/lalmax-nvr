@@ -421,6 +421,52 @@ test('NVR reconnects with a new ticket, preserves muted capture and cancels on l
   assert.equal(element('nvr-room').disabled,false);
 });
 
+test('media disconnect recovers briefly and reconnects only after its grace period', async () => {
+  class Element {
+    constructor(){this.listeners={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(){}querySelector(){return new Element();}replaceChildren(){}append(){}remove(){}
+  }
+  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const peers=[],deadlines=[];let retryCallback,socketCount=0;
+  class Socket {
+    static OPEN=1;
+    constructor(){this.readyState=1;socketCount++;setImmediate(()=>this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Generation:'original',Participants:[],Publications:[]}})}));}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';this.closed=false;peers.push(this);}
+    createDataChannel(){}async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){this.closed=true;}
+    transition(state){this.connectionState=state;this.onconnectionstatechange();}
+  }
+  const schedule=(fn,ms)=>{
+    const peer=peers[peers.length-1];
+    if(ms===10000&&peer?.connectionState==='disconnected'&&!peer.closed){const timer={kind:'media',fn,active:true};deadlines.push(timer);return timer;}
+    if(ms===1000){retryCallback=fn;return 'retry';}
+    return setTimeout(fn,ms);
+  };
+  const cancel=id=>{if(id==='retry')retryCallback=null;else if(id?.kind==='media')id.active=false;else clearTimeout(id);};
+  const context={document:{getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'http:',host:'localhost'},navigator:{},fetch:async()=>({ok:true}),WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},setTimeout:schedule,clearTimeout:cancel,Map,Set,Promise,Error};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  peers[0].transition('disconnected');peers[0].transition('disconnected');assert.equal(deadlines.length,1);
+  peers[0].transition('connecting');assert.equal(deadlines[0].active,true,'checking does not count as a recovered connection');
+  peers[0].transition('connected');assert.equal(deadlines[0].active,false);
+  peers[0].transition('disconnected');assert.equal(deadlines.length,2);
+  deadlines[0].fn();assert.equal(peers[0].closed,false,'a stale timer must not end the newer connection');
+  peers[0].transition('connecting');
+  deadlines[1].fn();assert.equal(peers[0].closed,true);assert.equal(typeof retryCallback,'function');
+  const retry=retryCallback;retryCallback=null;retry();await waitFor(()=>socketCount===2 && !element('share').disabled);
+  assert.equal(peers.length,2);
+  peers[1].transition('disconnected');assert.equal(deadlines.length,3);
+  peers[1].transition('failed');assert.equal(deadlines[2].active,false);assert.equal(peers[1].closed,true);
+  const retryFailed=retryCallback;retryCallback=null;retryFailed();await waitFor(()=>socketCount===3 && !element('share').disabled);
+  peers[2].transition('disconnected');assert.equal(deadlines.length,4);
+  element('leave').listeners.click();assert.equal(deadlines[3].active,false);
+  deadlines[3].fn();assert.equal(retryCallback,null,'leaving cancels pending reconnect');
+});
+
 test('reconnect refuses a replacement room generation before publishing', async () => {
   class Element {
     constructor(){this.listeners={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
