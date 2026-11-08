@@ -24,6 +24,12 @@ var ErrInvalid = errors.New("invalid sfu bridge configuration")
 // profile and no-B-frame constraint. Publication metadata alone is insufficient.
 type SourceValidator func(context.Context, sfu.Publication) error
 
+// OutputStore persists output identities, never media credentials.
+type OutputStore interface {
+	RegisterSFUBridgeOutput(context.Context, string) error
+	ListSFUBridgeOutputIDs(context.Context) ([]string, error)
+}
+
 type Service struct {
 	mu        sync.Mutex
 	closed    bool
@@ -39,6 +45,7 @@ type Service struct {
 	publisher bridge.Publisher
 	grants    *auth.MediaAuthorizer
 	validate  SourceValidator
+	outputs   OutputStore
 }
 
 // New requires a trusted policy and source validator; no permissive defaults are supplied.
@@ -48,6 +55,28 @@ func New(room *sfu.Room, policy access.Authorizer, publisher bridge.Publisher, g
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{room: room, policy: policy, publisher: publisher, grants: grants, validate: validate, limit: limit, ctx: ctx, cancel: cancel, closeDone: make(chan struct{})}, nil
+}
+
+// NewPersistent restores retired output names before constructing a service.
+// All application playback and publish paths must use the same authorizer, and
+// startup must fail closed if the identity store cannot be read.
+func NewPersistent(ctx context.Context, room *sfu.Room, policy access.Authorizer, publisher bridge.Publisher, grants *auth.MediaAuthorizer, validate SourceValidator, limit int, outputs OutputStore) (*Service, error) {
+	if ctx == nil || outputs == nil || grants == nil {
+		return nil, ErrInvalid
+	}
+	ids, err := outputs.ListSFUBridgeOutputIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load SFU output identities: %w", err)
+	}
+	for _, id := range ids {
+		grants.RestoreInternalStream(id)
+	}
+	service, err := New(room, policy, publisher, grants, validate, limit)
+	if err != nil {
+		return nil, err
+	}
+	service.outputs = outputs
+	return service, nil
 }
 
 // Handle is a trusted service capability, not a client-facing authorization
@@ -124,6 +153,13 @@ func (s *Service) Start(requestCtx context.Context, principal, publicationID str
 			s.grants.RevokeInternalStream(target)
 		}
 	}()
+	// Persist the name before exposing it to any publisher. On error the
+	// deferred revocation keeps this identity denied until this process exits.
+	if s.outputs != nil {
+		if err = s.outputs.RegisterSFUBridgeOutput(requestCtx, target); err != nil {
+			return nil, fmt.Errorf("record output identity: %w", err)
+		}
+	}
 	session, err := access.JoinRoom(requestCtx, s.room, s.policy, principal, sfu.Participant{ID: "bridge_" + id})
 	if err != nil {
 		return nil, err
