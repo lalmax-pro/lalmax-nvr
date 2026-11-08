@@ -293,11 +293,19 @@
     const bytes=new Uint8Array(16);crypto.getRandomValues(bytes);
     return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
   }
-  async function createBridge(p,audio,key) {
+  async function createBridge(p,audio,key,signal) {
     const body=JSON.stringify({publication_id:p.ID,...(audio?{audio_publication_id:audio.ID}:{})});
     for(let attempt=0;attempt<3;attempt++){
-      try { return await nvrRequest('/api/sfu/bridges/',{method:'POST',headers:{'Idempotency-Key':key},body},true); }
-      catch(err) { if(!err.network||attempt===2)throw err;await wait(attempt===0?100:500); }
+      if(signal.aborted)throw new Error('桥接创建已取消');
+      const controller=new AbortController(),abort=()=>controller.abort();
+      signal.addEventListener('abort',abort,{once:true});
+      const timer=setTimeout(abort,12000);
+      let failure;
+      try { return await nvrRequest('/api/sfu/bridges/',{method:'POST',headers:{'Idempotency-Key':key},body,signal:controller.signal},true); }
+      catch(err) { if(controller.signal.aborted&&!signal.aborted){failure=new Error('桥接创建请求超时');failure.network=true;}else failure=err; }
+      finally { clearTimeout(timer);signal.removeEventListener('abort',abort); }
+      if(signal.aborted||!failure.network||attempt===2)throw failure;
+      await wait(attempt===0?100:500);
     }
   }
   async function startBridge(c,p,audio) {
@@ -305,7 +313,7 @@
     c.bridges.set(p.ID,bridge);renderBridgeTracks(c.snapshot,c);
     try {
       bridge.requestKey=bridgeRequestKey();
-      const result=await createBridge(p,audio,bridge.requestKey);
+      const result=await createBridge(p,audio,bridge.requestKey,bridge.abort.signal);
       if(typeof result?.id!=='string'||!result.id)throw new Error('桥接创建响应无效');
       bridge.id=result.id;
       if(current!==c||bridge.closeRequested||bridge.abort.signal.aborted){await stopBridge(c,bridge,true);return;}

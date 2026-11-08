@@ -605,7 +605,7 @@ for (const outcome of ['pending-then-found','missing','mismatched','manual-stop'
     calls.push({url,options});
     if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'ticket',ice_servers:[]})};
     if(url==='/api/sfu/bridges/'&&options.method==='POST'){
-      if(outcome==='hung-create')return await new Promise(()=>{});
+      if(outcome==='hung-create')return await new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(new Error('aborted'))));
       throw new TypeError('response lost');
     }
     if(url==='/api/sfu/bridge-requests'){
@@ -863,4 +863,89 @@ for (const point of ['meeting-stop','meeting-status-body','meeting-delete','mana
   }
   assert.ok(calls.some(c=>c.url.startsWith('/api/sfu/bridges/')));
   element('leave').listeners.click();
+});
+
+for (const scenario of ['request-timeout','body-timeout','error-body-timeout','all-timeout','leave-during-request','leave-during-backoff','server-error']) test(`bridge creation ${scenario} is bounded and preserves its request identity`, async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(name,value){this.attributes[name]=value;}querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;}append(...children){this.children.push(...children);}remove(){}play(){return Promise.resolve();}
+  }
+  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  let socket,createAttempts=0,serverCreates=0,backoff,createSignal;const calls=[],timers=new Set(),requestKeys=new Set();
+  class Socket {
+    static OPEN=1;
+    constructor(){socket=this;this.readyState=1;setImmediate(()=>this.snapshot([]));}
+    snapshot(publications){this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[{ID:'remote'}],Publications:publications}})});}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';}createDataChannel(){}
+    addTransceiver(){return{stop(){}};}async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){}
+  }
+  const waitForAbort=signal=>new Promise((_,reject)=>{createSignal=signal;signal.addEventListener('abort',()=>reject(new Error('aborted')));});
+  const fetch=async(url,options={})=>{
+    calls.push({url,options});
+    if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'ticket',ice_servers:[]})};
+    if(url==='/api/sfu/bridges/' && options.method==='POST'){
+      createAttempts++;
+      const key=options.headers['Idempotency-Key'];
+      if(!requestKeys.has(key)){requestKeys.add(key);serverCreates++;}
+      if(scenario==='server-error')return{ok:false,status:403,json:async()=>({error:'denied'})};
+      if(scenario==='leave-during-backoff'&&createAttempts===1)throw new TypeError('offline');
+      if(scenario==='all-timeout'||scenario==='leave-during-request'||(scenario==='request-timeout'&&createAttempts===1))return await waitForAbort(options.signal);
+      if(scenario==='body-timeout'&&createAttempts===1)return{ok:true,status:202,json:async()=>await waitForAbort(options.signal)};
+      if(scenario==='error-body-timeout'&&createAttempts===1)return{ok:false,status:503,json:async()=>await waitForAbort(options.signal)};
+      return{ok:true,status:202,json:async()=>({id:'own-bridge'})};
+    }
+    if(url==='/api/sfu/bridge-requests')return{ok:true,status:200,json:async()=>({id:'own-bridge',publication_id:'pub-1',state:'pending'})};
+    if(url==='/api/sfu/bridges/own-bridge/stop')return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/own-bridge'&&options.method==='DELETE')return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/own-bridge')return{ok:true,status:200,json:async()=>({state:'stopped'})};
+    if(url==='/api/sfu/bridges/own-bridge/whep')return{ok:true,status:201,headers:{get:()=>'/api/sfu/bridges/own-bridge/whep/session'},text:async()=> 'answer'};
+    if(url==='/api/sfu/bridges/own-bridge/whep/session')return{ok:true,status:204};
+    throw new Error(`unexpected request ${url}`);
+  };
+  const schedule=(fn,ms)=>{
+    if(ms===12000){const timer={fn};timers.add(timer);return timer;}
+    if(ms===100&&scenario==='leave-during-backoff'){backoff=fn;return 'backoff';}
+    return setTimeout(fn,[100,500].includes(ms)?0:ms);
+  };
+  const cancel=id=>{if(timers.has(id))timers.delete(id);else if(id!=='backoff')clearTimeout(id);};
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,crypto:require('node:crypto').webcrypto,setTimeout:schedule,clearTimeout:cancel,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  socket.snapshot([{ID:'pub-1',ParticipantID:'remote',Source:'microphone',Kind:'audio',Codec:'audio/opus',RTPReady:true}]);
+  element('bridge-list').children[0].children[1].listeners.click();
+  if(['request-timeout','body-timeout','error-body-timeout','all-timeout'].includes(scenario)){
+    const count=scenario==='all-timeout'?3:1;
+    for(let i=1;i<=count;i++){
+      await waitFor(()=>createAttempts===i && createSignal && timers.size===1);
+      const oldSignal=createSignal;createSignal=null;[...timers][0].fn();assert.equal(oldSignal.aborted,true);
+    }
+    if(scenario==='all-timeout'){
+      await waitFor(()=>element('bridge-status').textContent.includes('网络连接失败'));
+      assert.equal(element('bridge-list').children[0].children[1].disabled,false);
+      element('bridge-list').children[0].children[1].listeners.click();
+      await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/own-bridge'&&c.options.method==='DELETE'));
+    } else await waitFor(()=>element('bridge-list').children[0].children[0].children[1].textContent==='正在连接播放器');
+  } else if(scenario==='leave-during-request'){
+    await waitFor(()=>!!createSignal);const original=createSignal;element('leave').listeners.click();assert.equal(original.aborted,true);
+    await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/own-bridge'&&c.options.method==='DELETE'));
+  } else if(scenario==='leave-during-backoff'){
+    await waitFor(()=>typeof backoff==='function');element('leave').listeners.click();backoff();
+    await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/own-bridge'&&c.options.method==='DELETE'));
+  } else await waitFor(()=>element('bridge-status').textContent==='denied');
+  assert.equal(serverCreates,1,'retries must refer to one server operation');
+  assert.equal(requestKeys.size,1);
+  const creates=calls.filter(c=>c.url==='/api/sfu/bridges/'&&c.options.method==='POST');
+  assert.equal(creates.length,scenario==='all-timeout'?3:['request-timeout','body-timeout','error-body-timeout'].includes(scenario)?2:1);
+  assert.ok(creates.every(c=>c.options.body===creates[0].options.body));
+  const key=creates[0].options.headers['Idempotency-Key'];
+  assert.ok(calls.filter(c=>c.url==='/api/sfu/bridge-requests').every(c=>c.options.headers['Idempotency-Key']===key));
+  assert.ok(!calls.some(c=>c.url.includes('other-bridge')));
+  await waitFor(()=>timers.size===0); // Allow any concurrent subscription negotiation to settle too.
+  if(!['leave-during-request','leave-during-backoff'].includes(scenario))element('leave').listeners.click();
 });
