@@ -15,7 +15,7 @@ type testRoomManager struct{ principal, id, generation string }
 
 func (m *testRoomManager) ListRooms(_ context.Context, p string) ([]sfu.Snapshot, error) {
 	m.principal = p
-	return []sfu.Snapshot{{Key: sfu.Key{ID: "room"}, Generation: "gen", Participants: []sfu.Participant{{ID: "secret"}}}}, nil
+	return []sfu.Snapshot{{Key: sfu.Key{ID: "room"}, Generation: "gen", Participants: []sfu.Participant{{ID: "secret"}, {ID: "bridge_worker"}}}}, nil
 }
 func (m *testRoomManager) CreateRoom(_ context.Context, p, id string) (sfu.Snapshot, error) {
 	m.principal = p
@@ -52,7 +52,7 @@ func TestSFURoomRoutes(t *testing.T) {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = sfuRequest(router, "GET", "/api/sfu/rooms/", "", "")
-	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "secret") || rec.Header().Get("Cache-Control") != "no-store" {
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "secret") || !strings.Contains(rec.Body.String(), `"participants":1`) || rec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = sfuRequest(router, "POST", "/api/sfu/ticket", `{"room_id":"room"}`, "application/json")

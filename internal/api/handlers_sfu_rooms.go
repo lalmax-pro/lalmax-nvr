@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
@@ -25,7 +26,13 @@ type sfuRoomResponse struct {
 }
 
 func sfuRoomStatus(s sfu.Snapshot) sfuRoomResponse {
-	return sfuRoomResponse{ID: s.Key.ID, Generation: s.Generation, Participants: len(s.Participants)}
+	participants := 0
+	for _, p := range s.Participants {
+		if !strings.HasPrefix(p.ID, "bridge_") {
+			participants++
+		}
+	}
+	return sfuRoomResponse{ID: s.Key.ID, Generation: s.Generation, Participants: participants}
 }
 func (h *Handler) sfuRoomRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
 	w.Header().Set("Cache-Control", "no-store")

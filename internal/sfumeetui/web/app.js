@@ -7,9 +7,11 @@
   const join = $('join'), leave = $('leave'), mute = $('mute'), cameraToggle = $('camera-toggle'), share = $('share'), error = $('error');
   const tiles = $('tiles'), audioContainer = $('audio-container'), trackList = $('track-list');
   const nvrMode = document.documentElement?.dataset?.mode === 'nvr';
-  if (nvrMode) { token.required=false; token.hidden=true; $('token-label').hidden=true; $('back-nvr').hidden=false; $('bridge-panel').hidden=false; $('mode-pill').textContent='NVR 会议'; $('mode-instructions').textContent='使用 NVR 管理员账号加入。'; $('nvr-login').hidden=!!sessionStorage.getItem('nvr_auth'); $('room-description').textContent='默认房间 · Opus / H.264'; $('mode-footer').textContent='NVR SFU'; }
+  if (nvrMode) { token.required=false; token.hidden=true; $('token-label').hidden=true; $('back-nvr').hidden=false; $('bridge-panel').hidden=false; $('nvr-room-controls').hidden=false; $('join').textContent='加入会议 →'; $('mode-pill').textContent='NVR 会议'; $('mode-instructions').textContent='使用 NVR 管理员账号加入。'; $('nvr-login').hidden=!!sessionStorage.getItem('nvr_auth'); $('room-description').textContent='默认房间 · Opus / H.264'; $('mode-footer').textContent='NVR SFU'; }
   let current = null;
   let deviceRefresh = 0;
+  let roomBusy = false;
+  const roomGenerations = new Map();
 
   function deviceConstraint(id) { return id ? {deviceId:{exact:id}} : true; }
   async function refreshDevices() {
@@ -76,7 +78,7 @@
     audioContainer.replaceChildren(); trackList.replaceChildren(); const empty=document.createElement('p');empty.className='track-empty';empty.textContent='加入会议后显示远端轨道。';trackList.append(empty); $('enable-audio').hidden = true; $('refresh-notice').hidden = true;
     if(nvrMode){$('bridge-list').replaceChildren();$('bridge-status').textContent='';$('bridge-video').srcObject=null;$('bridge-video').hidden=true;}
     leave.disabled = true; mute.disabled = true; cameraToggle.disabled = true; share.disabled = true;micDevice.disabled=false;cameraDevice.disabled=false;
-    mute.textContent = '◉ 静音'; mute.setAttribute('aria-pressed', 'false'); cameraToggle.textContent = '◈ 关闭摄像头'; cameraToggle.setAttribute('aria-pressed', 'false'); share.textContent = '▣ 共享屏幕'; join.disabled = false;
+    mute.textContent = '◉ 静音'; mute.setAttribute('aria-pressed', 'false'); cameraToggle.textContent = '◈ 关闭摄像头'; cameraToggle.setAttribute('aria-pressed', 'false'); share.textContent = '▣ 共享屏幕'; join.disabled = false; if(nvrMode)updateRoomControls();
   }
   function renderTracks(snapshot, c) {
     const members = new Map((snapshot.Participants || []).map((p, index) => [p.ID, p.Name || `成员 ${index + 1}`]));
@@ -106,6 +108,42 @@
     const response=await fetch(path,{...options,headers:{'Authorization':nvrAuth(),'Content-Type':'application/json',...(options.headers||{})},cache:'no-store'});
     if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(body.error||`请求失败 (${response.status})`);}
     return response.status===204?null:response.json();
+  }
+  function updateRoomControls() {
+    if(!nvrMode)return;
+    const disabled=roomBusy||!!current;
+    if(!current){$('room-title').textContent=$('nvr-room').value||'default';$('room-description').textContent='NVR 房间 · Opus / H.264';}
+    for(const id of ['nvr-room','nvr-room-new','nvr-rooms-refresh','nvr-room-create'])$(id).disabled=disabled;
+    $('nvr-room-close').disabled=disabled||$('nvr-room').value==='default'||!roomGenerations.has($('nvr-room').value);
+    if(roomBusy)join.disabled=true;else if(!current)join.disabled=false;
+  }
+  async function loadRooms(selected) {
+    const rooms=await nvrRequest('/api/sfu/rooms/');
+    if(!Array.isArray(rooms))throw new Error('房间列表无效');
+    const options=[];roomGenerations.clear();
+    for(const room of rooms){if(typeof room.id!=='string'||typeof room.generation!=='string')throw new Error('房间列表无效');const option=document.createElement('option');option.value=room.id;option.textContent=`${room.id} · ${room.participants} 人`;options.push(option);roomGenerations.set(room.id,room.generation);}
+    if(!roomGenerations.has('default'))throw new Error('默认房间不可用');
+    $('nvr-room').replaceChildren(...options);$('nvr-room').value=roomGenerations.has(selected)?selected:'default';
+  }
+  async function roomAction(action) {
+    if(current||roomBusy)return;
+    roomBusy=true;updateRoomControls();error.hidden=true;
+    try {
+      const selected=$('nvr-room').value||'default';
+      if(action==='create'){
+        const id=$('nvr-room-new').value.trim();if(!/^[A-Za-z0-9_-]{1,64}$/.test(id))throw new Error('房间 ID 只能包含 1–64 个字母、数字、下划线或连字符');
+        await nvrRequest('/api/sfu/rooms/',{method:'POST',body:JSON.stringify({id})});$('nvr-room-new').value='';await loadRooms(id);$('nvr-room-status').textContent=`已创建房间 ${id}`;
+      } else if(action==='close') {
+        const generation=roomGenerations.get(selected);if(selected==='default'||!generation)throw new Error('请先刷新房间列表');
+        await nvrRequest(`/api/sfu/rooms/${encodeURIComponent(selected)}?generation=${encodeURIComponent(generation)}`,{method:'DELETE'});await loadRooms('default');$('nvr-room-status').textContent=`已关闭房间 ${selected}`;
+      } else { await loadRooms(selected);$('nvr-room-status').textContent='房间列表已更新'; }
+    } catch(err){showError(err.message||'房间操作失败');}finally{roomBusy=false;updateRoomControls();}
+  }
+  if(nvrMode){
+    $('nvr-rooms-refresh').addEventListener('click',()=>void roomAction('refresh'));
+    $('nvr-room-create').addEventListener('click',()=>void roomAction('create'));
+    $('nvr-room-close').addEventListener('click',()=>void roomAction('close'));
+    $('nvr-room').addEventListener('change',updateRoomControls);updateRoomControls();
   }
   function renderBridgeTracks(snapshot,c) {
     const list=$('bridge-list');list.replaceChildren();
@@ -253,12 +291,13 @@
     const entry=c.own.get(id);if(!entry)return;c.own.delete(id);c.pc.removeTrack(entry.sender);entry.track.stop();await request(c,'unpublish',{publication_id:id});await negotiate(c);if(c.snapshot)render(c.snapshot,c);
   }
   async function connect() {
+    if(roomBusy)return;
     closeCurrent();error.hidden=true;join.disabled=true;micDevice.disabled=true;cameraDevice.disabled=true;state('正在连接');
-    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(),bridges:new Map(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false,deviceSelection:{audio:micDevice.value,video:cameraDevice.value}};current=c;
+    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(),bridges:new Map(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false,deviceSelection:{audio:micDevice.value,video:cameraDevice.value}};current=c;if(nvrMode)updateRoomControls();
     try {
       if(!nvrMode){const login=await fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token.value})});if(!login.ok)throw new Error('访问口令无效，请检查终端中的口令');}
       if(micOption.checked||cameraOption.checked){if(!navigator.mediaDevices?.getUserMedia)throw new Error('当前浏览器无法访问媒体设备');c.stream=await navigator.mediaDevices.getUserMedia({audio:micOption.checked?deviceConstraint(micDevice.value):false,video:cameraOption.checked?deviceConstraint(cameraDevice.value):false});if(current!==c){c.stream.getTracks().forEach(t=>t.stop());return;}void refreshDevices();}
-      if(nvrMode){const auth=nvrAuth();const ticket=await nvrRequest('/api/sfu/ticket',{method:'POST',body:'{}'});sessionStorage.setItem('nvr_auth',auth.slice(6));$('nvr-password').value='';$('nvr-login').hidden=true;c.ticket=ticket.ticket;c.iceServers=ticket.ice_servers||[];}
+      if(nvrMode){const auth=nvrAuth();const roomID=$('nvr-room').value||'default';const ticket=await nvrRequest('/api/sfu/ticket',{method:'POST',body:JSON.stringify({room_id:roomID})});$('room-title').textContent=roomID;$('room-description').textContent='NVR 房间 · Opus / H.264';sessionStorage.setItem('nvr_auth',auth.slice(6));$('nvr-password').value='';$('nvr-login').hidden=true;c.ticket=ticket.ticket;c.iceServers=ticket.ice_servers||[];}
       await openSocket(c);if(current!==c)return;
       const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});c.pc=pc;
       pc.onconnectionstatechange=()=>{if(current!==c)return;if(pc.connectionState==='connected')state('媒体连接正常',true);else if(['failed','disconnected'].includes(pc.connectionState)){state('连接中断');showError('媒体连接中断，请重新加入。');}};
