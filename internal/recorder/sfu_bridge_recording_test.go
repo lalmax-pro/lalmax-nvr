@@ -163,7 +163,7 @@ func testSFUAVBridgeThroughGroupToRecording(t *testing.T, sourceTime, audioGap b
 		edit := bytes.Index(data, []byte("elst"))
 		require.GreaterOrEqual(t, edit, 0)
 		require.GreaterOrEqual(t, len(data), edit+16)
-		require.Equal(t, uint32(100), binary.BigEndian.Uint32(data[edit+12:edit+16]))
+		require.Equal(t, uint32(20), binary.BigEndian.Uint32(data[edit+12:edit+16]))
 		if audioGap {
 			first := bytes.Index(data, []byte("stsz"))
 			require.GreaterOrEqual(t, first, 0)
@@ -171,7 +171,7 @@ func testSFUAVBridgeThroughGroupToRecording(t *testing.T, sourceTime, audioGap b
 			require.GreaterOrEqual(t, second, 0)
 			second += first + 4
 			require.GreaterOrEqual(t, len(data), second+16)
-			require.Equal(t, uint32(24), binary.BigEndian.Uint32(data[second+12:second+16]), "20 input packets plus 4 silence packets")
+			require.Equal(t, uint32(25), binary.BigEndian.Uint32(data[second+12:second+16]), "20 input packets, four gap fillers and one priming packet")
 		}
 	}
 	if artifact := os.Getenv("SFU_BRIDGE_TEST_MP4"); artifact != "" {

@@ -16,6 +16,7 @@ import (
 // defaultTimescale is the timescale used for MP4 timestamps (ticks per second).
 const defaultTimescale = 1000
 const opusTimescale = 48000
+const opusPriming = 80 * time.Millisecond
 
 // track holds per-track state for the MP4 muxer.
 type track struct {
@@ -26,6 +27,7 @@ type track struct {
 	isH265      bool
 	isAudio     bool
 	audioCodec  string // "aac", "g711" or "opus"
+	opusPrimed  bool
 	audioConfig []byte // AAC AudioSpecificConfig bytes
 	g711MULaw   bool   // true=μ-law, false=A-law
 	g711Rate    int    // sample rate (typically 8000)
@@ -215,6 +217,17 @@ func (m *MP4Muxer) ensureFileLocked() error {
 }
 
 func (m *MP4Muxer) appendSampleLocked(t *track, data []byte, pts, duration, cts time.Duration, audio bool) error {
+	if audio && t.audioCodec == "opus" && !t.opusPrimed {
+		// The edit list removes 80 ms of decoder priming. Supply it as silence
+		// rather than discarding the first 80 ms of the live source.
+		t.opusPrimed = true
+		priming := []byte{0xfb, 0x04, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe}
+		if err := m.appendSampleLocked(t, priming, pts, opusPriming, 0, true); err != nil {
+			t.opusPrimed = false
+			return err
+		}
+		m.totalDuration -= opusPriming
+	}
 	if err := m.ensureFileLocked(); err != nil {
 		return err
 	}
@@ -1341,6 +1354,9 @@ func trackOffsetMs(tr *track, origin time.Duration) uint32 {
 
 func movieTrackDurationMs(tr *track, offset uint32) uint32 {
 	duration := uint64(trackDurationMs(tr)) + uint64(offset)
+	if tr.opusPrimed {
+		duration -= uint64(opusPriming.Milliseconds())
+	}
 	if duration > math.MaxUint32 {
 		return math.MaxUint32
 	}
@@ -1719,7 +1735,7 @@ func writeRawBox(w *mp4.Writer, kind string, data []byte) error {
 	return err
 }
 
-// An empty edit preserves the track offset; Opus also covers decoder priming.
+// An empty edit preserves the track offset; Opus media starts after the synthetic priming.
 func writeTrackEdit(w *mp4.Writer, tr *track, offset uint32) error {
 	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("edts")}); err != nil {
 		return err
@@ -1732,7 +1748,7 @@ func writeTrackEdit(w *mp4.Writer, tr *track, offset uint32) error {
 			skip = duration
 		}
 	}
-	gap := uint64(offset) + uint64(skip)
+	gap := uint64(offset)
 	if gap > math.MaxUint32 {
 		gap = math.MaxUint32
 	}

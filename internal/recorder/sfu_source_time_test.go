@@ -73,7 +73,7 @@ func TestSFURecordingPreservesSourceTimeline(t *testing.T) {
 	edit := bytes.Index(data, []byte("elst"))
 	require.GreaterOrEqual(t, edit, 0)
 	require.GreaterOrEqual(t, len(data), edit+16)
-	require.Equal(t, uint32(100), binary.BigEndian.Uint32(data[edit+12:edit+16]), "20 ms audio offset plus 80 ms Opus priming")
+	require.Equal(t, uint32(20), binary.BigEndian.Uint32(data[edit+12:edit+16]), "audio keeps its 20 ms source offset")
 	if artifact := os.Getenv("SFU_TIMELINE_TEST_MP4"); artifact != "" {
 		require.NoError(t, os.WriteFile(artifact, data, 0o600))
 	}
@@ -155,14 +155,14 @@ func TestSFURecordingKeepsFractionalOpusDurations(t *testing.T) {
 	second += first + 4
 	require.GreaterOrEqual(t, len(data), second+24)
 	require.Equal(t, uint32(48000), binary.BigEndian.Uint32(data[second+16:second+20]))
-	require.Equal(t, uint32(48000), binary.BigEndian.Uint32(data[second+20:second+24]), "400 packets must span one second")
+	require.Equal(t, uint32(51840), binary.BigEndian.Uint32(data[second+20:second+24]), "one second of source plus 80 ms of priming")
 	stsz := bytes.Index(data, []byte("stsz"))
 	require.GreaterOrEqual(t, stsz, 0)
 	audioStsz := bytes.Index(data[stsz+4:], []byte("stsz"))
 	require.GreaterOrEqual(t, audioStsz, 0)
 	audioStsz += stsz + 4
 	require.GreaterOrEqual(t, len(data), audioStsz+16)
-	require.Equal(t, uint32(400), binary.BigEndian.Uint32(data[audioStsz+12:audioStsz+16]), "timestamp rounding must not insert silence")
+	require.Equal(t, uint32(401), binary.BigEndian.Uint32(data[audioStsz+12:audioStsz+16]), "one priming packet; timestamp rounding must not insert additional silence")
 	if artifact := os.Getenv("SFU_FRACTIONAL_RECORDING_MP4"); artifact != "" {
 		require.NoError(t, os.WriteFile(artifact, data, 0o600))
 	}
@@ -214,14 +214,14 @@ func TestSFURecordingFillsFractionalOpusGap(t *testing.T) {
 	second += first + 4
 	require.GreaterOrEqual(t, len(data), second+24)
 	require.Equal(t, uint32(48000), binary.BigEndian.Uint32(data[second+16:second+20]))
-	require.Equal(t, uint32(48000), binary.BigEndian.Uint32(data[second+20:second+24]), "400 packets must span one second")
+	require.Equal(t, uint32(51840), binary.BigEndian.Uint32(data[second+20:second+24]), "one second of source plus 80 ms of priming")
 	stsz := bytes.Index(data, []byte("stsz"))
 	require.GreaterOrEqual(t, stsz, 0)
 	audioStsz := bytes.Index(data[stsz+4:], []byte("stsz"))
 	require.GreaterOrEqual(t, audioStsz, 0)
 	audioStsz += stsz + 4
 	require.GreaterOrEqual(t, len(data), audioStsz+16)
-	require.Equal(t, uint32(399), binary.BigEndian.Uint32(data[audioStsz+12:audioStsz+16]), "three lost packets must be replaced by two silence packets")
+	require.Equal(t, uint32(400), binary.BigEndian.Uint32(data[audioStsz+12:audioStsz+16]), "one priming packet and two gap fillers replace three lost packets")
 	if artifact := os.Getenv("SFU_FRACTIONAL_GAP_RECORDING_MP4"); artifact != "" {
 		require.NoError(t, os.WriteFile(artifact, data, 0o600))
 	}
