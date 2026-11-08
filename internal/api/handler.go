@@ -149,6 +149,7 @@ type snapshotCache struct {
 
 type Handler struct {
 	sfuBridges            SFUBridgeRegistry
+	sfuWHEPKey            []byte
 	isInternalMediaStream func(string) bool
 	transcodePlayback     derivedPlaybackProvider
 	transcodeService      *transcode.Service
@@ -291,6 +292,7 @@ func NewHandler(db storage.APIRepository, store *storage.Manager, authMW func(ht
 		},
 		transcodeProbe:       transcode.NewProbeService(nil),
 		homeAssistantWHEPKey: []byte(rand.Text()),
+		sfuWHEPKey:           []byte(rand.Text()),
 		eventHub:             event.NewLiveHub(),
 		logRing:              middleware.DefaultLogRing(),
 	}
@@ -388,6 +390,8 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/", h.createSFUBridge)
 			r.Get("/{id}", h.getSFUBridge)
 			r.Get("/{id}/playback", h.getSFUBridgePlayback)
+			r.Post("/{id}/whep", h.createSFUBridgeWHEP)
+			r.Delete("/{id}/whep/{session}", h.deleteSFUBridgeWHEP)
 			r.Post("/{id}/stop", h.stopSFUBridge)
 			r.Delete("/{id}", h.removeSFUBridge)
 		})
