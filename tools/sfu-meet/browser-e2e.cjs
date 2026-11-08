@@ -76,6 +76,8 @@ const assert = require('node:assert/strict');
     }
     await viewer.locator('#tiles').scrollIntoViewIfNeeded();
     await viewer.waitForFunction(() => document.querySelector('#audio-container audio') && [...document.querySelectorAll('#tiles video')].some(v=>v.videoWidth>0), null, {timeout:20000});
+    const framesAfterReconnect = await viewer.evaluate(() => [...document.querySelectorAll('#tiles video')].find(v => v.videoWidth > 0).getVideoPlaybackQuality().totalVideoFrames);
+    await viewer.waitForFunction(previous => [...document.querySelectorAll('#tiles video')].some(v => v.getVideoPlaybackQuality().totalVideoFrames > previous + 2), framesAfterReconnect, {timeout:15000});
     if (process.env.LK_BRIDGE_TEST) {
       await viewer.waitForFunction(() => [...document.querySelector('#bridge-track').options].some(o => o.text.includes('摄像头')) && [...document.querySelector('#bridge-audio').options].some(o => o.text.includes('麦克风')));
       await viewer.selectOption('#bridge-track', {label: await viewer.locator('#bridge-track option').filter({hasText:'摄像头'}).first().textContent()});
