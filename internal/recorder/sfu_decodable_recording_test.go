@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,12 +29,25 @@ import (
 // TestSFUDecodableBridgeRecording is opt-in because it needs FFmpeg and libx264.
 // It generates test video and Opus silence, and never opens an audio/video device.
 func TestSFUDecodableBridgeRecording(t *testing.T) {
+	testSFUDecodableBridgeRecording(t, false)
+}
+
+func TestSFUDecodableBridgeRecordingWithLongOpusGap(t *testing.T) {
+	testSFUDecodableBridgeRecording(t, true)
+}
+
+func testSFUDecodableBridgeRecording(t *testing.T, longGap bool) {
+	t.Helper()
 	if os.Getenv("SFU_DECODE_RECORDING_TEST") != "1" {
 		t.Skip("set SFU_DECODE_RECORDING_TEST=1 to run the FFmpeg integration test")
 	}
 	dir := t.TempDir()
 	input := filepath.Join(dir, "input.h264")
-	cmd := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x96:rate=25:duration=1", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-x264-params", "threads=1:slices=1:keyint=25:min-keyint=25:scenecut=0:repeat-headers=1", "-an", "-f", "h264", "-y", input)
+	duration, videoFrames, audioFrames, expectedAudio := "1", 25, 50, "opus,50"
+	if longGap {
+		duration, videoFrames, audioFrames, expectedAudio = "4", 100, 200, "opus,100"
+	}
+	cmd := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x96:rate=25:duration="+duration, "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-x264-params", "threads=1:slices=1:keyint=25:min-keyint=25:scenecut=0:repeat-headers=1", "-an", "-f", "h264", "-y", input)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
 	raw, err := os.ReadFile(input)
@@ -49,13 +64,15 @@ func TestSFUDecodableBridgeRecording(t *testing.T) {
 		require.NoError(t, err)
 		switch nal.Data[0] & 31 {
 		case 7, 8:
-			parameterSets = append(parameterSets, nal.Data)
+			if len(parameterSets) < 2 {
+				parameterSets = append(parameterSets, nal.Data)
+			}
 		case 1, 5:
 			frames = append(frames, nal.Data)
 		}
 	}
 	require.Len(t, parameterSets, 2)
-	require.Len(t, frames, 25)
+	require.Len(t, frames, videoFrames)
 
 	groups := maxlogic.GetGroupManagerInstance()
 	key := maxlogic.NewStreamKey("live", "sfu_test_decodable_recording")
@@ -119,14 +136,20 @@ func TestSFUDecodableBridgeRecording(t *testing.T) {
 	}
 	sendVideo(frames[0], 90000)
 	require.Eventually(t, func() bool { rec.mu.Lock(); defer rec.mu.Unlock(); return rec.muxer != nil }, 2*time.Second, time.Millisecond)
-	for i := 0; i < 50; i++ {
+	for i := 0; i < audioFrames; i++ {
 		if i > 0 && i%2 == 0 {
 			sendVideo(frames[i/2], 90000+uint32(i*1800))
 		}
-		require.NoError(t, audioFan.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: uint16(i + 1), Timestamp: 48000 + uint32(i*960), Marker: true}, Payload: []byte{0xf8, 0xff, 0xfe}}))
+		if !longGap || i < 20 || i >= 140 {
+			require.NoError(t, audioFan.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: uint16(i + 1), Timestamp: 48000 + uint32(i*960), Marker: true}, Payload: []byte{0xf8, 0xff, 0xfe}}))
+		}
 		time.Sleep(3 * time.Millisecond)
 	}
-	require.Eventually(t, func() bool { return received.Load() == 50 }, 3*time.Second, time.Millisecond)
+	expectedReceived := int32(audioFrames)
+	if longGap {
+		expectedReceived -= 120
+	}
+	require.Eventually(t, func() bool { return received.Load() == expectedReceived }, 3*time.Second, time.Millisecond)
 	require.NoError(t, rec.Stop())
 	stopBridge()
 	select {
@@ -141,11 +164,19 @@ func TestSFUDecodableBridgeRecording(t *testing.T) {
 	cmd = exec.Command("ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height,nb_read_frames", "-of", "csv=p=0", files[0])
 	out, err = cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
-	require.Equal(t, "h264,160,96,25", strings.TrimSpace(string(out)))
+	require.Equal(t, fmt.Sprintf("h264,160,96,%d", videoFrames), strings.TrimSpace(string(out)))
 	cmd = exec.Command("ffprobe", "-v", "error", "-count_packets", "-select_streams", "a:0", "-show_entries", "stream=codec_name,nb_read_packets", "-of", "csv=p=0", files[0])
 	out, err = cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
-	require.Equal(t, "opus,50", strings.TrimSpace(string(out)))
+	require.Equal(t, expectedAudio, strings.TrimSpace(string(out)))
+	cmd = exec.Command("ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=duration", "-of", "default=nw=1:nk=1", files[0])
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	audioDuration, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	require.NoError(t, err)
+	expectedDuration, err := strconv.ParseFloat(duration, 64)
+	require.NoError(t, err)
+	require.InDelta(t, expectedDuration, audioDuration, 0.001)
 	cmd = exec.Command("ffmpeg", "-v", "error", "-xerror", "-i", files[0], "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-")
 	out, err = cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
