@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,18 +61,21 @@ func (r *cam2PausableRecorder) Pause()         { r.paused = true }
 func (r *cam2PausableRecorder) Resume()        { r.paused = false }
 func (r *cam2PausableRecorder) IsPaused() bool { return r.paused }
 
-// cam2EventEngine streams media events for MonitorStreamEvents.
-type cam2EventEngine struct {
+type cam2RetryEngine struct {
 	stubMediaEngine
-	events chan media.Event
-	subErr error
+	calls         atomic.Int32
+	first, second chan media.Event
 }
 
-func (e *cam2EventEngine) SubscribeEvents(context.Context, media.EventFilter) (<-chan media.Event, error) {
-	if e.subErr != nil {
-		return nil, e.subErr
+func (e *cam2RetryEngine) SubscribeEvents(context.Context, media.EventFilter) (<-chan media.Event, error) {
+	switch e.calls.Add(1) {
+	case 1:
+		return nil, errors.New("not ready")
+	case 2:
+		return e.first, nil
+	default:
+		return e.second, nil
 	}
-	return e.events, nil
 }
 
 // cam2Subscriber is an in-memory onvif.EventSubscriber.
@@ -446,41 +450,25 @@ func TestCam2MonitorStreamEvents(t *testing.T) {
 	}})
 	require.NotPanics(t, func() { mgr.MonitorStreamEvents(ctx) }, "a manager without an engine must be a no-op")
 
-	engine := &cam2EventEngine{events: make(chan media.Event)}
-	engine.subErr = errors.New("subscribe failed")
+	engine := &cam2RetryEngine{first: make(chan media.Event, 1), second: make(chan media.Event, 1)}
 	mgr.SetMediaEngine(engine)
-	mgr.MonitorStreamEvents(ctx) // logs and returns on subscribe failure
-
-	// Cancellation ends the loop.
-	engine.subErr = nil
+	var reconciled atomic.Int32
+	mgr.SetStreamEventsRestored(func() { reconciled.Add(1) })
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		mgr.MonitorStreamEvents(runCtx)
 	}()
-	time.Sleep(10 * time.Millisecond)
+	require.Eventually(t, func() bool { return engine.calls.Load() >= 2 && reconciled.Load() >= 1 }, 4*time.Second, 10*time.Millisecond)
+	engine.first <- media.Event{Type: media.EventStreamActive, StreamID: "ingest-m"}
+	close(engine.first)
+	require.Eventually(t, func() bool { return engine.calls.Load() >= 3 && reconciled.Load() >= 2 }, 4*time.Second, 10*time.Millisecond)
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("MonitorStreamEvents did not stop on cancellation")
-	}
-
-	// A closed channel ends the loop too.
-	events := make(chan media.Event)
-	engine.events = events
-	done = make(chan struct{})
-	go func() {
-		defer close(done)
-		mgr.MonitorStreamEvents(ctx)
-	}()
-	events <- media.Event{Type: media.EventStreamActive, StreamID: "ingest-m"}
-	close(events)
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("MonitorStreamEvents did not stop on channel close")
 	}
 }
 

@@ -1468,6 +1468,7 @@ func (a *App) Start() error {
 	a.recSched.SetTasks(a.recTasks)
 	a.recSched.SetEventActive(a.eventActive)
 	a.recSched.SetAliveStreams(a.aliveRecordingStreams)
+	a.camMgr.SetStreamEventsRestored(a.recSched.ReconcileNow)
 	if a.groupWriter != nil {
 		a.recSched.SetWriteSwitch(func(streamID string, want bool) bool {
 			cam := a.camMgr.CameraByStream(streamID)

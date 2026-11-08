@@ -566,7 +566,7 @@ for (const outcome of ['pending-then-found','missing','mismatched','manual-stop'
     if(url==='/api/sfu/bridges/own-bridge')return{ok:true,status:200,json:async()=>({state:'stopped'})};
     throw new Error(`unexpected request ${url}`);
   };
-  const schedule=(fn,ms)=>{if(ms===1000&&sockets.length===1){retryCallback=fn;return 'retry';}return setTimeout(fn,0);};
+  const schedule=(fn,ms)=>{if(ms===1000&&sockets.length===1){retryCallback=fn;return 'retry';}return setTimeout(fn,[100,500,1000].includes(ms)?0:ms);};
   const cancel=id=>{if(id==='retry')retryCallback=null;else clearTimeout(id);};
   const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,crypto:require('node:crypto').webcrypto,setTimeout:schedule,clearTimeout:cancel,Map,Set,Promise,Error,encodeURIComponent};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);

@@ -66,16 +66,16 @@ func (lalmaxGroups) Each(fn func(streamName string)) {
 // The subscription stays up while the group exists. Recording plans only flip
 // the per-camera write switch.
 type GroupWriter struct {
-	store  segmentStore
-	db     recordingDB
-	bus    *event.EventBus
-	engine media.Engine
+	store   segmentStore
+	db      recordingDB
+	bus     *event.EventBus
+	engine  media.Engine
 	metrics *metrics.Metrics
-	segDur time.Duration
-	groups groupFinder
-	lookup func(string) (config.CameraConfig, bool)
-	should func(string) bool
-	accept func(config.CameraConfig) bool
+	segDur  time.Duration
+	groups  groupFinder
+	lookup  func(string) (config.CameraConfig, bool)
+	should  func(string) bool
+	accept  func(config.CameraConfig) bool
 
 	mu         sync.Mutex
 	sessions   map[string]*recSession
@@ -96,7 +96,9 @@ func NewGroupWriter(store *storage.Manager, db RecordingDB, bus *event.EventBus,
 		recDB = db
 	}
 	var m *metrics.Metrics
-	if len(metricsOpt) > 0 { m = metricsOpt[0] }
+	if len(metricsOpt) > 0 {
+		m = metricsOpt[0]
+	}
 	return &GroupWriter{
 		store:      store,
 		db:         recDB,
@@ -394,20 +396,13 @@ func (w *GroupWriter) Run(ctx context.Context) {
 
 	w.SyncContext(ctx)
 	var events <-chan media.Event
+	var retryTimer *time.Timer
+	var retry <-chan time.Time
+	retryDelay := time.Second
 	if w.engine != nil {
-		ch, err := w.engine.SubscribeEvents(ctx, media.EventFilter{Types: []media.EventType{
-			media.EventPublisherStarted,
-			media.EventPublisherStopped,
-			media.EventRelayPullStarted,
-			media.EventRelayPullStopped,
-			media.EventStreamActive,
-			media.EventStreamStopped,
-		}})
-		if err != nil {
-			slog.Error("group recorder failed to subscribe to stream events", "error", err)
-		} else {
-			events = ch
-		}
+		retryTimer = time.NewTimer(0)
+		retry = retryTimer.C
+		defer retryTimer.Stop()
 	}
 	tick := time.NewTicker(15 * time.Second)
 	defer tick.Stop()
@@ -417,9 +412,32 @@ func (w *GroupWriter) Run(ctx context.Context) {
 			return
 		case <-tick.C:
 			w.SyncContext(ctx)
+		case <-retry:
+			retry = nil
+			ch, err := w.engine.SubscribeEvents(ctx, media.EventFilter{Types: []media.EventType{
+				media.EventPublisherStarted, media.EventPublisherStopped,
+				media.EventRelayPullStarted, media.EventRelayPullStopped,
+				media.EventStreamActive, media.EventStreamStopped,
+			}})
+			if err != nil || ch == nil {
+				slog.Warn("group recorder failed to subscribe to stream events; retrying", "error", err, "delay", retryDelay)
+				retryTimer.Reset(retryDelay)
+				retry = retryTimer.C
+				retryDelay *= 2
+				if retryDelay > 30*time.Second {
+					retryDelay = 30 * time.Second
+				}
+				continue
+			}
+			events = ch
+			retryDelay = time.Second
+			// Events during a disconnection are not replayed.
+			w.SyncContext(ctx)
 		case ev, ok := <-events:
 			if !ok {
 				events = nil
+				retryTimer.Reset(retryDelay)
+				retry = retryTimer.C
 				continue
 			}
 			w.onEvent(ctx, ev)
