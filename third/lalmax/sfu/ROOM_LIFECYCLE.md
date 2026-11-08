@@ -16,7 +16,8 @@ the room, sends its normal close event where the watcher buffer permits, and
 returns the key and generation that were removed. Recreating a key yields a
 new generation, and stale close requests cannot remove it.
 
-The NVR runtime currently uses one explicitly created room and does not call
-the collector. Reconnection credentials, business policies, persistent room
-configuration, per-room idle timeouts and automatic cleanup scheduling remain
-the embedding application's responsibility.
+The NVR runtime explicitly creates multiple rooms and optionally schedules
+selective idle cleanup using `CloseIfIdle`, excluding the compatibility room.
+Room creation is business-authorized; a timeout is disabled by default and
+can be configured with `sfu.idle_timeout`. Reconnection credentials, persistent
+room configuration and per-room timeout policy remain future work.
