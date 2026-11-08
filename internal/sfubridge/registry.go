@@ -3,6 +3,7 @@ package sfubridge
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 )
@@ -180,6 +181,43 @@ func (r *Registry) allowed(ctx context.Context, principal, id string, action Act
 }
 
 var ErrDenied = errors.New("sfu bridge management denied")
+
+// List returns only this principal's entries that pass the current view
+// policy. Authorization is performed without holding the registry lock.
+// Entries may disappear while the list is being built.
+func (r *Registry) List(ctx context.Context, principal string) ([]Status, error) {
+	if ctx == nil || principal == "" {
+		return nil, ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	ids := make([]string, 0, len(r.entries))
+	for id, entry := range r.entries {
+		if entry.owner == principal {
+			ids = append(ids, id)
+		}
+	}
+	r.mu.Unlock()
+	sort.Strings(ids)
+	statuses := make([]Status, 0, len(ids))
+	for _, id := range ids {
+		r.mu.Lock()
+		entry, err := r.allowed(ctx, principal, id, ActionView)
+		if err == nil {
+			statuses = append(statuses, entry.status)
+		}
+		r.mu.Unlock()
+		if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrDenied) {
+			return nil, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return statuses, nil
+}
 
 // Get does not return playback credentials or raw runtime errors.
 func (r *Registry) Get(ctx context.Context, principal, id string) (Status, error) {

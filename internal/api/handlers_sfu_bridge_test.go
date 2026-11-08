@@ -212,6 +212,16 @@ func TestSFUBridgeHTTPRegistryLifecycle(t *testing.T) {
 		t.Fatal("publisher not started")
 	}
 	other := sfuTestRouter(&model.User{ID: 43, Role: model.RoleSuperAdmin, Enabled: true}, registry)
+	viewer := sfuTestRouter(&model.User{ID: 7, Role: model.RoleUser, Enabled: true}, registry)
+	if rec = sfuRequest(viewer, "GET", "/api/sfu/bridges/", "", ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer list: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec = sfuRequest(other, "GET", "/api/sfu/bridges/", "", ""); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("other user list: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec = sfuRequest(router, "GET", "/api/sfu/bridges/", "", ""); rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Body.String(), status.ID) || strings.Contains(rec.Body.String(), "token") {
+		t.Fatalf("owner list: %d %s", rec.Code, rec.Body.String())
+	}
 	for _, tc := range []struct{ method, suffix, body, contentType string }{
 		{http.MethodGet, "", "", ""},
 		{http.MethodGet, "/playback", "", ""},

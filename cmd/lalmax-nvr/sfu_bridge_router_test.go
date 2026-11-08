@@ -36,6 +36,14 @@ func (f *fakeRoomBridge) Create(_ context.Context, p, pub string) (sfubridge.Sta
 func (f *fakeRoomBridge) CreateAV(ctx context.Context, p, v, a string) (sfubridge.Status, error) {
 	return f.Create(ctx, p, v)
 }
+func (f *fakeRoomBridge) List(_ context.Context, p string) ([]sfubridge.Status, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.owner != p || f.id == "" {
+		return []sfubridge.Status{}, nil
+	}
+	return []sfubridge.Status{{ID: f.id}}, nil
+}
 func (f *fakeRoomBridge) Get(_ context.Context, p, id string) (sfubridge.Status, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -123,6 +131,99 @@ func TestNVRSFUBridgeRouterRoomIsolationAndCloseRace(t *testing.T) {
 	}
 	if err = router.Close(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNVRSFUBridgeRouterListsOnlyAuthorizedOwnerAcrossRooms(t *testing.T) {
+	ctx := context.Background()
+	manager := sfu.NewManager()
+	a, _ := manager.Create(sfu.Key{Namespace: "nvr", ID: "a"}, 4)
+	b, _ := manager.Create(sfu.Key{Namespace: "nvr", ID: "b"}, 4)
+	c, _ := manager.Create(sfu.Key{Namespace: "nvr", ID: "c"}, 4)
+	router := newNVRSFUBridgeRouter(func(_ context.Context, p string) error {
+		if p == "revoked" {
+			return errors.New("revoked")
+		}
+		return nil
+	})
+	for _, item := range []struct {
+		room  *sfu.Room
+		entry *fakeRoomBridge
+	}{{a, &fakeRoomBridge{owner: "alice", id: "z"}}, {b, &fakeRoomBridge{owner: "alice", id: "a"}}, {c, &fakeRoomBridge{owner: "bob", id: "b"}}} {
+		if err := router.add(item.room, item.entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := router.List(ctx, "alice")
+	if err != nil || len(items) != 2 || items[0].ID != "a" || items[1].ID != "z" {
+		t.Fatalf("alice's rooms: %+v, %v", items, err)
+	}
+	items, err = router.List(ctx, "bob")
+	if err != nil || len(items) != 1 || items[0].ID != "b" {
+		t.Fatalf("bob's rooms: %+v, %v", items, err)
+	}
+	if _, err := router.List(ctx, "revoked"); !errors.Is(err, sfubridge.ErrDenied) {
+		t.Fatalf("revoked user: %v", err)
+	}
+	if err := router.remove(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	items, err = router.List(ctx, "alice")
+	if err != nil || len(items) != 1 || items[0].ID != "a" {
+		t.Fatalf("removed room retained: %+v, %v", items, err)
+	}
+	if err = router.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = router.List(ctx, "alice"); !errors.Is(err, sfubridge.ErrClosed) {
+		t.Fatalf("closed router: %v", err)
+	}
+}
+
+type blockingListBridge struct {
+	*fakeRoomBridge
+	entered, release chan struct{}
+}
+
+func (f *blockingListBridge) List(ctx context.Context, p string) ([]sfubridge.Status, error) {
+	close(f.entered)
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return f.fakeRoomBridge.List(ctx, p)
+}
+
+func TestNVRSFUBridgeRouterOmitsRoomRemovedDuringList(t *testing.T) {
+	room, _ := sfu.NewManager().Create(sfu.Key{Namespace: "nvr", ID: "room"}, 4)
+	bridge := &blockingListBridge{fakeRoomBridge: &fakeRoomBridge{owner: "alice", id: "bridge"}, entered: make(chan struct{}), release: make(chan struct{})}
+	router := newNVRSFUBridgeRouter(func(context.Context, string) error { return nil })
+	if err := router.add(room, bridge); err != nil {
+		t.Fatal(err)
+	}
+	type listResult struct {
+		items []sfubridge.Status
+		err   error
+	}
+	result := make(chan listResult, 1)
+	go func() { items, err := router.List(context.Background(), "alice"); result <- listResult{items, err} }()
+	select {
+	case <-bridge.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("list did not reach room registry")
+	}
+	if err := router.remove(context.Background(), room); err != nil {
+		t.Fatal(err)
+	}
+	close(bridge.release)
+	select {
+	case got := <-result:
+		if got.err != nil || len(got.items) != 0 {
+			t.Fatalf("removed room leaked: %+v, %v", got.items, got.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("list blocked after room removal")
 	}
 }
 
