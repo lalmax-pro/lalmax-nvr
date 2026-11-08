@@ -347,7 +347,19 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(request(http.MethodGet, "/api/sfu/bridges/"+bridge.ID, "", http.StatusOK), &status))
 	require.Equal(t, "pending", status.State)
-	request(http.MethodDelete, "/api/recording-plans/"+plan.ID, "", http.StatusOK)
+	sourceEnd := os.Getenv("SFU_NVR_SOURCE_END_TEST") == "1"
+	if sourceEnd {
+		require.NoError(t, ws.WriteJSON(map[string]any{"id": "unpublish-video", "type": "unpublish", "publication_id": videoPub.Publication.ID}))
+		reply := pacingRoomRead(t, ws, "unpublish-video")
+		require.Empty(t, reply.Error)
+		require.Eventually(t, func() bool {
+			err := json.Unmarshal(request(http.MethodGet, "/api/sfu/bridges/"+bridge.ID, "", http.StatusOK), &status)
+			return err == nil && (status.State == "stopped" || status.State == "failed")
+		}, 8*time.Second, 50*time.Millisecond, "source removal did not terminate bridge")
+		request(http.MethodGet, "/api/sfu/bridges/"+bridge.ID+"/playback", "", http.StatusNotFound)
+	} else {
+		request(http.MethodDelete, "/api/recording-plans/"+plan.ID, "", http.StatusOK)
+	}
 	require.Eventually(t, func() bool {
 		for _, id := range app.recTasks.RunningIDs() {
 			if id == bridge.StreamID {
@@ -355,7 +367,10 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 			}
 		}
 		return true
-	}, 8*time.Second, 30*time.Millisecond, "plan removal did not stop recorder")
+	}, 8*time.Second, 30*time.Millisecond, "source or plan removal did not stop recorder")
+	if sourceEnd {
+		request(http.MethodDelete, "/api/recording-plans/"+plan.ID, "", http.StatusOK)
+	}
 	select {
 	case err := <-mediaErrors:
 		t.Fatal(err)

@@ -3,6 +3,8 @@ package recorder
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,6 +48,67 @@ func (e *covGroupEngine) SubscribeEvents(context.Context, media.EventFilter) (<-
 		return nil, e.err
 	}
 	return e.events, nil
+}
+
+type retryGroupEngine struct {
+	*stubTaskEngine
+	calls         atomic.Int32
+	first, second chan media.Event
+}
+
+func (e *retryGroupEngine) SubscribeEvents(context.Context, media.EventFilter) (<-chan media.Event, error) {
+	switch e.calls.Add(1) {
+	case 1:
+		return nil, errors.New("not ready")
+	case 2:
+		return e.first, nil
+	default:
+		return e.second, nil
+	}
+}
+
+type retryGroupFinder struct {
+	mu    sync.Mutex
+	ready bool
+	group subscribeGroup
+}
+
+func (f *retryGroupFinder) Find(id string) (subscribeGroup, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.group, f.ready && id == "cam1"
+}
+
+func (f *retryGroupFinder) Each(fn func(string)) {
+	f.mu.Lock()
+	ready := f.ready
+	f.mu.Unlock()
+	if ready {
+		fn("cam1")
+	}
+}
+
+func TestGroupWriterRetriesEventsAndReconcilesMissedStream(t *testing.T) {
+	store, err := storage.NewManager(t.TempDir())
+	require.NoError(t, err)
+	engine := &retryGroupEngine{stubTaskEngine: &stubTaskEngine{}, first: make(chan media.Event), second: make(chan media.Event)}
+	finder := &retryGroupFinder{group: &fakeGroup{}}
+	w := NewGroupWriter(store, nil, nil, engine, time.Hour)
+	w.groups = finder
+	w.SetLookup(covCameraLookup("cam1"))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); w.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	require.Eventually(t, func() bool { return engine.calls.Load() >= 2 }, 4*time.Second, 10*time.Millisecond)
+	close(engine.first)
+	finder.mu.Lock()
+	finder.ready = true
+	finder.mu.Unlock()
+	require.Eventually(t, func() bool {
+		attached, _ := w.State("cam1")
+		return engine.calls.Load() >= 3 && attached
+	}, 4*time.Second, 10*time.Millisecond)
 }
 
 func newCovGroupWriter(t *testing.T, finder groupFinder) *GroupWriter {
