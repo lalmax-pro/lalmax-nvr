@@ -115,7 +115,7 @@ func TestRoomToLalGroupAndViewerIsolation(t *testing.T) {
 	if group == nil || group.HasInSession() {
 		t.Fatal("publisher not released")
 	}
-	if err = room.WritePublicationRTP("source", pubSession, pub.ID, packet(2, 9001, true, 0x41, 1)); err != nil {
+	if err = room.WritePublicationRTP("source", pubSession, pub.ID, packet(2, 9001, true, 0x41, 0xc0)); err != nil {
 		t.Fatal(err)
 	}
 	select {
