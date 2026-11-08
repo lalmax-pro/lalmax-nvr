@@ -234,6 +234,14 @@ receive:
 		}
 	}()
 	body, _ := json.Marshal(map[string]string{"room_id": "front-door", "room_generation": viewer.SID(), "publication_id": publication.SID()})
+	staleBody, _ := json.Marshal(map[string]string{"room_id": "front-door", "room_generation": "RM_stale", "publication_id": publication.SID()})
+	staleRequest := httptest.NewRequest(http.MethodPost, "/api/sfu/bridges/", bytes.NewReader(staleBody))
+	staleRequest.Header.Set("Content-Type", "application/json")
+	staleResponse := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(staleResponse, staleRequest)
+	if staleResponse.Code != http.StatusNotFound {
+		t.Fatalf("stale room bridge: %d %s", staleResponse.Code, staleResponse.Body.String())
+	}
 	create := func() *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, "/api/sfu/bridges/", bytes.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
@@ -259,6 +267,14 @@ receive:
 	retry := create()
 	if retry.Code != http.StatusAccepted || retry.Body.String() != created.Body.String() {
 		t.Fatalf("idempotent retry: %d", retry.Code)
+	}
+	conflictRequest := httptest.NewRequest(http.MethodPost, "/api/sfu/bridges/", bytes.NewReader(staleBody))
+	conflictRequest.Header.Set("Content-Type", "application/json")
+	conflictRequest.Header.Set("Idempotency-Key", "bridge-test-1")
+	conflictResponse := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(conflictResponse, conflictRequest)
+	if conflictResponse.Code != http.StatusConflict {
+		t.Fatalf("idempotency conflict: %d %s", conflictResponse.Code, conflictResponse.Body.String())
 	}
 	select {
 	case <-hook.messages:
