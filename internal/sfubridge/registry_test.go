@@ -15,6 +15,22 @@ type managementPolicy struct {
 	denied Action
 }
 
+func TestRegistryPruneFinishedKeepsActiveAndRecentEntries(t *testing.T) {
+	now := time.Now()
+	r := &Registry{entries: map[string]*registryEntry{
+		"old":    {status: Status{State: StateStopped}, finishedAt: now.Add(-6 * time.Minute)},
+		"recent": {status: Status{State: StateFailed}, finishedAt: now.Add(-time.Minute)},
+		"active": {status: Status{State: StatePending}},
+	}}
+	r.PruneFinished(now.Add(-5 * time.Minute))
+	if _, ok := r.entries["old"]; ok {
+		t.Fatal("old terminal entry was retained")
+	}
+	if len(r.entries) != 2 || r.entries["recent"] == nil || r.entries["active"] == nil {
+		t.Fatalf("unexpected remaining entries: %+v", r.entries)
+	}
+}
+
 func (p *managementPolicy) allow(_ context.Context, req ManagementRequest) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -232,5 +248,48 @@ func TestRegistryReportsAsynchronousFailure(t *testing.T) {
 	}
 	if err = registry.Remove(context.Background(), "operator", status.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRevalidateOwnersStopsRevokedBridge(t *testing.T) {
+	service, _, publisher, grants, pub := setup(t)
+	registry, err := NewRegistry(service, (&managementPolicy{}).allow, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	status, err := registry.Create(ctx, "operator", pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-publisher.opened:
+	case <-time.After(3 * time.Second):
+		t.Fatal("publisher not opened")
+	}
+	stream, token, err := registry.Playback(ctx, "operator", status.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.RevalidateOwners(ctx, func(context.Context, string) error { return errors.New("revoked") }); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(3 * time.Second)
+	for {
+		current, err := registry.Get(ctx, "operator", status.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.State == StateStopped {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("bridge not stopped")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if err = grants.AuthorizePlayback("rtsp", stream, token); err == nil {
+		t.Fatal("revoked credential accepted")
 	}
 }

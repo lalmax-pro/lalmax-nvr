@@ -48,6 +48,7 @@ type Config struct {
 	RTMP          RTMPConfig          `yaml:"rtmp"`
 	SRT           SRTConfig           `yaml:"srt"`
 	WHIP          WHIPConfig          `yaml:"whip"`
+	SFU           SFUConfig           `yaml:"sfu"`
 	GB28181       GB28181Config       `yaml:"gb28181"`
 	JT808         JT808Config         `yaml:"jt808"`
 	Health        HealthConfig        `yaml:"health"`
@@ -61,6 +62,12 @@ type Config struct {
 	AutoDiscover  AutoDiscoverConfig  `yaml:"auto_discover"`
 	Event         EventConfig         `yaml:"event"`
 	Version       string              `yaml:"version"`
+}
+
+// SFUConfig enables the initial single-room NVR SFU runtime.
+// The runtime is opt-in and currently accepts authenticated administrators.
+type SFUConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
 type SnapshotConfig struct {

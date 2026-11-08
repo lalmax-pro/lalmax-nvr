@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
+	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
 	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/access"
@@ -28,6 +29,49 @@ type SFUBridgeRegistry interface {
 
 // SetSFUBridgeRegistry must be called before serving requests.
 func (h *Handler) SetSFUBridgeRegistry(registry SFUBridgeRegistry) { h.sfuBridges = registry }
+
+// SetSFUSignaling must be called before the handler starts serving requests.
+func (h *Handler) SetSFUSignaling(signaling http.Handler) { h.sfuSignaling = signaling }
+
+type SFUTicketIssuer interface {
+	Issue(context.Context, *model.User) (string, error)
+}
+
+func (h *Handler) SetSFUTicketIssuer(issuer SFUTicketIssuer) { h.sfuTickets = issuer }
+
+func (h *Handler) handleSFUSignaling(w http.ResponseWriter, r *http.Request) {
+	if h.sfuSignaling == nil {
+		writeError(w, http.StatusServiceUnavailable, "SFU signaling unavailable")
+		return
+	}
+	h.sfuSignaling.ServeHTTP(w, r)
+}
+
+func (h *Handler) createSFUTicket(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	user := middleware.ContextUser(r)
+	if _, ok := sfuPrincipal(r); !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if h.sfuTickets == nil {
+		writeError(w, http.StatusServiceUnavailable, "SFU signaling unavailable")
+		return
+	}
+	var input struct{}
+	if !sfuDecodeJSON(w, r, &input) {
+		return
+	}
+	ticket, err := h.sfuTickets.Issue(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "SFU ticket unavailable")
+		return
+	}
+	writeJSON(w, http.StatusCreated, struct {
+		Ticket    string `json:"ticket"`
+		ExpiresIn int    `json:"expires_in"`
+	}{ticket, 30})
+}
 
 func sfuPrincipal(r *http.Request) (string, bool) {
 	user := middleware.ContextUser(r)
