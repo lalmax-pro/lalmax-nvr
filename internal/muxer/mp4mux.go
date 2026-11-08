@@ -332,6 +332,54 @@ func (m *MP4Muxer) WriteAudioSample(trackID int, data []byte, pts time.Duration,
 	return m.appendSampleLocked(t, data, pts, duration, 0, true)
 }
 
+// WriteOpusSampleWithGapFill inserts bounded 20 ms silence packets for gaps
+// aligned to 20 ms. The returned duration is the gap that could not be filled.
+// The caller must supply timestamps from one continuous source clock.
+func (m *MP4Muxer) WriteOpusSampleWithGapFill(trackID int, data []byte, pts, duration time.Duration) (time.Duration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return 0, errors.New("muxer is closed")
+	}
+	t := m.findTrackLocked(trackID)
+	if t == nil || !t.isAudio || t.audioCodec != "opus" || len(data) == 0 || duration < time.Millisecond {
+		return 0, fmt.Errorf("track %d cannot accept Opus sample", trackID)
+	}
+	var unfilled time.Duration
+	if len(t.samples) > 0 {
+		last := t.samples[len(t.samples)-1]
+		end := last.pts + last.duration
+		gap := pts - end
+		if gap < -time.Millisecond {
+			return 0, errors.New("Opus sample timestamp regressed")
+		}
+		if gap > time.Millisecond {
+			const frame = 20 * time.Millisecond
+			const maxFrames = 100
+			if gap > maxFrames*frame+time.Millisecond {
+				unfilled = gap
+			} else {
+				count := int((gap + frame/2) / frame)
+				difference := gap - time.Duration(count)*frame
+				if difference < 0 {
+					difference = -difference
+				}
+				if count == 0 || difference > time.Millisecond {
+					unfilled = gap
+				} else {
+					// A 20 ms Opus silence packet, also used by Pion's WebRTC tests.
+					for i := 0; i < count; i++ {
+						if err := m.appendSampleLocked(t, []byte{0xf8, 0xff, 0xfe}, end+time.Duration(i)*frame, frame, 0, true); err != nil {
+							return 0, err
+						}
+					}
+				}
+			}
+		}
+	}
+	return unfilled, m.appendSampleLocked(t, data, pts, duration, 0, true)
+}
+
 // Duration returns the total duration of all written samples.
 func (m *MP4Muxer) Duration() time.Duration {
 	m.mu.Lock()

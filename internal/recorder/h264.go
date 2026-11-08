@@ -571,6 +571,7 @@ func (r *H264Recorder) writeMediaAudioSample(data []byte, dur, sourcePTS time.Du
 	aid := r.audioTrackID
 	start := r.segStart
 	base, sourceTime := r.segmentSourceStart, r.segmentUsesSourceTime
+	codec := r.audioCodec
 	r.mu.Unlock()
 	if m == nil || aid <= 0 {
 		return
@@ -581,6 +582,15 @@ func (r *H264Recorder) writeMediaAudioSample(data []byte, dur, sourcePTS time.Du
 		if pts < 0 {
 			return
 		}
+	}
+	if sourceTime && codec == "opus" {
+		unfilled, err := m.WriteOpusSampleWithGapFill(aid, data, pts, dur)
+		if err != nil && err.Error() != "muxer is closed" {
+			h264Logger.Error("failed to write Opus sample", "camera_id", r.cfg.CameraID, "error", err)
+		} else if unfilled > 0 {
+			h264Logger.Warn("Opus timestamp gap could not be filled", "camera_id", r.cfg.CameraID, "gap", unfilled)
+		}
+		return
 	}
 	if err := m.WriteAudioSample(aid, data, pts, dur); err != nil && err.Error() != "muxer is closed" {
 		h264Logger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
