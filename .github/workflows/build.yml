@@ -133,6 +133,11 @@ jobs:
           cd third/lalmax
           go test -race -timeout 20m -count=1 ./logic ./rtc ./server ./voip/...
 
+      - name: Test embedded lalmax SFU
+        run: |
+          cd third/lalmax
+          go test -race -timeout 20m -count=1 ./sfu/...
+
       - name: Display coverage
         run: go tool cover -func=coverage.out
 
