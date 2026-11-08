@@ -50,6 +50,7 @@ type TaskManager struct {
 	eventBus   *event.EventBus
 	segmentDur time.Duration
 	ownerOf    StreamOwnerFunc
+	sourceTime func(context.Context, string) (bool, error)
 	shouldRec  func(streamID string) bool
 	playURL    func(ctx context.Context, streamID string) string
 	planMode   func(streamID string) (string, bool)
@@ -80,6 +81,13 @@ func NewTaskManager(engine media.Engine, store SegmentStore, db RecordingDB, m *
 func (m *TaskManager) SetOwnerFunc(fn StreamOwnerFunc) {
 	m.mu.Lock()
 	m.ownerOf = fn
+	m.mu.Unlock()
+}
+
+// SetSourceTimePolicy opts specific in-process streams into a shared source clock.
+func (m *TaskManager) SetSourceTimePolicy(fn func(context.Context, string) (bool, error)) {
+	m.mu.Lock()
+	m.sourceTime = fn
 	m.mu.Unlock()
 }
 
@@ -344,7 +352,16 @@ func (m *TaskManager) newRecorder(ctx context.Context, streamID string) (model.R
 	playURL := m.playURL
 	modeFn := m.planMode
 	adaptFn := m.adaptEvery
+	sourceTimeFn := m.sourceTime
 	m.mu.Unlock()
+	preserveSourceTime := false
+	if sourceTimeFn != nil {
+		var err error
+		preserveSourceTime, err = sourceTimeFn(ctx, streamID)
+		if err != nil {
+			return nil, fmt.Errorf("source clock for stream %q: %w", streamID, err)
+		}
+	}
 	if owner.RTSPURL == "" && playURL != nil {
 		owner.RTSPURL = playURL(ctx, streamID)
 	}
@@ -386,15 +403,16 @@ func (m *TaskManager) newRecorder(ctx context.Context, streamID string) (model.R
 	switch encoding {
 	case string(model.FormatH264):
 		return NewH264Recorder(H264Config{
-			CameraID:     owner.CameraID,
-			StreamID:     streamID,
-			RTSPURL:      owner.RTSPURL,
-			SegmentDur:   m.segmentDur,
-			DB:           m.db,
-			AudioEnabled: owner.AudioEnabled,
-			EventBus:     m.eventBus,
-			FrameSource:  frameSource,
-			Adaptive:     gate,
+			CameraID:                 owner.CameraID,
+			StreamID:                 streamID,
+			RTSPURL:                  owner.RTSPURL,
+			SegmentDur:               m.segmentDur,
+			DB:                       m.db,
+			AudioEnabled:             owner.AudioEnabled,
+			EventBus:                 m.eventBus,
+			FrameSource:              frameSource,
+			PreserveSourceTimestamps: preserveSourceTime,
+			Adaptive:                 gate,
 		}, m.store, m.metrics), nil
 	case string(model.FormatH265):
 		return NewH265Recorder(H265Config{

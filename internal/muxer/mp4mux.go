@@ -273,6 +273,28 @@ func (m *MP4Muxer) WriteSample(trackID int, data []byte, pts time.Duration, dura
 	return m.appendSampleLocked(t, data, pts, duration, 0, false)
 }
 
+// SetLastVideoSampleDuration uses the next decode timestamp to finalize the
+// previous video's duration. Sample bytes are already written; metadata is
+// finalized when the muxer closes.
+func (m *MP4Muxer) SetLastVideoSampleDuration(trackID int, duration time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("muxer is closed")
+	}
+	t := m.findTrackLocked(trackID)
+	if t == nil || t.isAudio || len(t.samples) == 0 {
+		return fmt.Errorf("track %d has no video sample", trackID)
+	}
+	if duration < time.Millisecond {
+		duration = time.Millisecond
+	}
+	last := &t.samples[len(t.samples)-1]
+	m.totalDuration += duration - last.duration
+	last.duration = duration
+	return nil
+}
+
 // WriteTimedSample writes one sample in decode order.
 // duration is the DTS delta used for stts. A non-zero PTS-DTS offset is written as ctts.
 func (m *MP4Muxer) WriteTimedSample(trackID int, data []byte, dts, pts, duration time.Duration) error {

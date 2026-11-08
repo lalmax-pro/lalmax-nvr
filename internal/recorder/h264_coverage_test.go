@@ -89,7 +89,7 @@ func TestCovH264_PauseResumeAndAdaptive(t *testing.T) {
 	require.Nil(t, rec.muxer)
 
 	hxFeedH264(rec, testIDR)
-	rec.frameCh = make(chan []byte, 16)
+	rec.frameCh = make(chan h264QueuedFrame, 16)
 	rec.Resume()
 	require.False(t, rec.IsPaused())
 	require.Equal(t, model.StatusRecording, rec.Status())
@@ -326,7 +326,7 @@ func TestCovH264_CloseSegmentStoreAndMuxerErrors(t *testing.T) {
 func TestCovH264_ConsumeVideoFrames(t *testing.T) {
 	t.Run("video audio and filtering", func(t *testing.T) {
 		rec := NewH264Recorder(H264Config{CameraID: "cam-h264-consume", AudioEnabled: true}, newHXStore(t), metrics.NewMetrics())
-		rec.frameCh = make(chan []byte, 8)
+		rec.frameCh = make(chan h264QueuedFrame, 8)
 		rec.Hub = model.NewStreamHub()
 		sub := newHXSub()
 		alive := make(chan struct{}, 1)
@@ -355,7 +355,7 @@ func TestCovH264_ConsumeVideoFrames(t *testing.T) {
 
 	t.Run("g711u audio frames are configured", func(t *testing.T) {
 		rec := NewH264Recorder(H264Config{CameraID: "cam-h264-consume-g711u", AudioEnabled: true}, newHXStore(t))
-		rec.frameCh = make(chan []byte, 4)
+		rec.frameCh = make(chan h264QueuedFrame, 4)
 		sub := newHXSub()
 		sub.ch <- hxAudioFrame("g711u", []byte{0x01, 0x02})
 		close(sub.ch)
@@ -370,7 +370,7 @@ func TestCovH264_ConsumeVideoFrames(t *testing.T) {
 
 	t.Run("g711a audio frames are configured", func(t *testing.T) {
 		rec := NewH264Recorder(H264Config{CameraID: "cam-h264-consume-g711a", AudioEnabled: true}, newHXStore(t))
-		rec.frameCh = make(chan []byte, 4)
+		rec.frameCh = make(chan h264QueuedFrame, 4)
 		sub := newHXSub()
 		sub.ch <- hxAudioFrame("g711a", []byte{0x03, 0x04})
 		close(sub.ch)
@@ -383,7 +383,7 @@ func TestCovH264_ConsumeVideoFrames(t *testing.T) {
 
 	t.Run("audio disabled drops audio frames", func(t *testing.T) {
 		rec := NewH264Recorder(H264Config{CameraID: "cam-h264-consume-noaudio"}, newHXStore(t))
-		rec.frameCh = make(chan []byte, 4)
+		rec.frameCh = make(chan h264QueuedFrame, 4)
 		sub := newHXSub()
 		sub.ch <- hxAudioFrame("aac", []byte{0x01})
 		close(sub.ch)
@@ -396,7 +396,7 @@ func TestCovH264_ConsumeVideoFrames(t *testing.T) {
 
 	t.Run("ring buffer overflow drops frames", func(t *testing.T) {
 		rec := NewH264Recorder(H264Config{CameraID: "cam-h264-overflow"}, newHXStore(t), metrics.NewMetrics())
-		rec.frameCh = make(chan []byte)
+		rec.frameCh = make(chan h264QueuedFrame)
 		sub := newHXSub()
 		for i := 0; i < 3; i++ {
 			sub.ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", Data: annexB(testIDR)}
@@ -410,7 +410,7 @@ func TestCovH264_ConsumeVideoFrames(t *testing.T) {
 
 	t.Run("subscription error is returned", func(t *testing.T) {
 		rec := NewH264Recorder(H264Config{CameraID: "cam-h264-consume-err"}, newHXStore(t))
-		rec.frameCh = make(chan []byte, 1)
+		rec.frameCh = make(chan h264QueuedFrame, 1)
 		sub := newHXSub()
 		sub.errc <- errors.New("subscription broken")
 		connected := false
@@ -420,7 +420,7 @@ func TestCovH264_ConsumeVideoFrames(t *testing.T) {
 
 	t.Run("context cancellation stops the loop", func(t *testing.T) {
 		rec := NewH264Recorder(H264Config{CameraID: "cam-h264-consume-ctx"}, newHXStore(t))
-		rec.frameCh = make(chan []byte, 1)
+		rec.frameCh = make(chan h264QueuedFrame, 1)
 		sub := newHXSub()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
