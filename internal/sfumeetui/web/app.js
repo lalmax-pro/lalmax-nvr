@@ -174,6 +174,14 @@
     try { return await response.json(); }
     catch (err) { if(!retryBody)throw err;const failure=new Error('网络连接失败');failure.network=true;throw failure; }
   }
+  async function closeBridgePlayer(bridge,quiet=false) {
+    if(!bridge?.location)return;
+    // Player cleanup is best effort: a stalled WHEP request must not prevent
+    // the authoritative bridge stop from revoking playback and ending media.
+    const timeout=new AbortController(),timer=setTimeout(()=>timeout.abort(),5000);
+    try { await fetch(bridge.location,{method:'DELETE',headers:{'Authorization':nvrAuth()},keepalive:quiet,cache:'no-store',signal:timeout.signal}); }
+    catch (_) {} finally { clearTimeout(timer); }
+  }
   let bridgeManagementBusy=false;
   async function manageBridges(action, id) {
     if(bridgeManagementBusy)return;
@@ -185,7 +193,7 @@
         const c=current, local=c&&[...c.bridges.values()].find(bridge=>bridge.id===id);
         // If this tab owns the player, close its WHEP session before the
         // bridge stops and revokes the playback credential.
-        if(local?.location)try{await fetch(local.location,{method:'DELETE',headers:{'Authorization':nvrAuth()},cache:'no-store'});}catch(_){}
+        await closeBridgePlayer(local);
         await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(id)}/stop`,{method:'POST',body:'{}'});
         if(local){local.closeRequested=true;local.abort.abort();local.pc?.close();c.bridges.delete(local.publication);
           if(current===c){$('bridge-video').srcObject=null;$('bridge-video').hidden=true;$('bridge-status').textContent='桥接已停止';if(c.snapshot)renderBridgeTracks(c.snapshot,c);}}
@@ -319,7 +327,7 @@
     if(current===c){$('bridge-video').srcObject=null;$('bridge-video').hidden=true;renderBridgeTracks(c.snapshot,c);}
     try {
       if(!bridge.id && bridge.requestKey)await resolveBridgeRequest(bridge);
-      if(bridge.location)await fetch(bridge.location,{method:'DELETE',headers:{'Authorization':nvrAuth()},keepalive:quiet,cache:'no-store'});
+      await closeBridgePlayer(bridge,quiet);
       if(bridge.id){await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/stop`,{method:'POST',body:'{}',keepalive:quiet});
         for(let i=0;i<30;i++){const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);if(status.state==='stopped'||status.state==='failed')break;await wait(200);}
         await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`,{method:'DELETE',keepalive:quiet});}
