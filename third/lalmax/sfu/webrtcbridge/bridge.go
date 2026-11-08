@@ -7,11 +7,20 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/rtpforward"
 )
+
+var ErrInboundCodecChanged = errors.New("webrtcbridge: inbound codec changed")
+
+type inboundTrack interface {
+	ReadRTP() (*rtp.Packet, interceptor.Attributes, error)
+	SetReadDeadline(time.Time) error
+	Codec() webrtc.RTPCodecParameters
+}
 
 // ForwardInbound exclusively reads a Pion remote track into an enabled Room
 // publication. The caller must validate codec, media identity and permissions
@@ -22,6 +31,19 @@ func ForwardInbound(ctx context.Context, remote *webrtc.TrackRemote, room *sfu.R
 	if ctx == nil || remote == nil || room == nil {
 		return errors.New("webrtcbridge: nil input")
 	}
+	return forwardInbound(ctx, remote, room, participantID, session, publicationID, remote.Codec())
+}
+
+// ForwardInboundWithCodec verifies that the transport still uses the codec
+// captured by the caller before it enabled the publication's RTP fanout.
+func ForwardInboundWithCodec(ctx context.Context, remote *webrtc.TrackRemote, room *sfu.Room, participantID, session, publicationID string, expected webrtc.RTPCodecParameters) error {
+	if ctx == nil || remote == nil || room == nil {
+		return errors.New("webrtcbridge: nil input")
+	}
+	return forwardInbound(ctx, remote, room, participantID, session, publicationID, expected)
+}
+
+func forwardInbound(ctx context.Context, remote inboundTrack, room *sfu.Room, participantID, session, publicationID string, expected webrtc.RTPCodecParameters) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -34,6 +56,10 @@ func ForwardInbound(ctx context.Context, remote *webrtc.TrackRemote, room *sfu.R
 				return ctx.Err()
 			}
 			return fmt.Errorf("read remote RTP: %w", err)
+		}
+		current := remote.Codec()
+		if current.PayloadType != expected.PayloadType || current.MimeType != expected.MimeType || current.ClockRate != expected.ClockRate || current.Channels != expected.Channels || current.SDPFmtpLine != expected.SDPFmtpLine || packet.PayloadType != uint8(expected.PayloadType) {
+			return ErrInboundCodecChanged
 		}
 		if err = room.WritePublicationRTP(participantID, session, publicationID, packet); err != nil {
 			return fmt.Errorf("write room RTP: %w", err)
