@@ -116,7 +116,7 @@
     let response;const authorization=nvrAuth();
     try { response=await fetch(path,{...options,headers:{'Authorization':authorization,'Content-Type':'application/json',...(options.headers||{})},cache:'no-store'}); }
     catch (_) { const err=new Error('网络连接失败');err.network=true;throw err; }
-    if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(body.error||`请求失败 (${response.status})`);}
+    if(!response.ok){const body=await response.json().catch(()=>({}));const err=new Error(body.error||`请求失败 (${response.status})`);err.status=response.status;throw err;}
     if(response.status===204)return null;
     try { return await response.json(); }
     catch (err) { if(!retryBody)throw err;const failure=new Error('网络连接失败');failure.network=true;throw failure; }
@@ -259,7 +259,8 @@
     }
   }
   async function stopBridge(c,bridge,quiet) {
-    if(bridge.stopping)return;bridge.stopping=true;bridge.busy=true;bridge.label='正在停止';bridge.abort.abort();bridge.pc?.close();
+    if(bridge.stopping){await bridge.stopPromise;return;}
+    let finishStop;bridge.stopPromise=new Promise(resolve=>{finishStop=resolve;});bridge.stopping=true;bridge.busy=true;bridge.label='正在停止';bridge.abort.abort();bridge.pc?.close();
     if(current===c){$('bridge-video').srcObject=null;$('bridge-video').hidden=true;renderBridgeTracks(c.snapshot,c);}
     try {
       if(bridge.location)await fetch(bridge.location,{method:'DELETE',headers:{'Authorization':nvrAuth()},keepalive:quiet,cache:'no-store'});
@@ -267,7 +268,15 @@
         for(let i=0;i<30;i++){const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);if(status.state==='stopped'||status.state==='failed')break;await wait(200);}
         await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`,{method:'DELETE',keepalive:quiet});}
       c.bridges.delete(bridge.publication);if(current===c){$('bridge-status').textContent='桥接已停止';renderBridgeTracks(c.snapshot,c);}
-    } catch(err){bridge.stopping=false;bridge.busy=false;bridge.label='停止失败，可重试';if(current===c&&!quiet){$('bridge-status').textContent=err.message||'停止失败';renderBridgeTracks(c.snapshot,c);}}
+    } catch(err){if(err.status===404){c.bridges.delete(bridge.publication);if(current===c){$('bridge-status').textContent='桥接已不存在';renderBridgeTracks(c.snapshot,c);}}else{bridge.busy=false;bridge.label='停止失败，可重试';if(current===c&&!quiet){$('bridge-status').textContent=err.message||'停止失败';renderBridgeTracks(c.snapshot,c);}}}
+    finally {bridge.stopping=false;finishStop();}
+  }
+  async function cleanupRecoveredBridges(r,c) {
+    for(const item of r.bridgeCleanup||[]){
+      if(item.bridge.stopPromise)await item.bridge.stopPromise;
+      if(item.context.bridges.get(item.bridge.publication)===item.bridge && item.bridge.id)await stopBridge(item.context,item.bridge,true);
+    }
+    if(current===c && (r.bridgeCleanup||[]).some(item=>item.context.bridges.get(item.bridge.publication)===item.bridge))showError('部分桥接未能自动清理，请在“我的桥接”中检查并停止。');
   }
   function render(snapshot, c) {
     // NVR bridge workers use reserved IDs and are not meeting participants.
@@ -329,7 +338,7 @@
   function fail(c,err,connectionLost=false) {
     if(current!==c)return;
     if((c.recovery||(c.negotiated&&c.snapshot?.Generation&&(connectionLost||c.ws?.readyState!==WebSocket.OPEN))) && !err.terminal) {
-      const r=c.recovery||{stream:c.stream,roomID:c.roomID,generation:c.snapshot.Generation,disabledTracks:new Set(c.disabledTracks),attempt:0,screenStopped:!!c.screen,hadBridge:nvrMode&&c.bridges.size>0};
+      const r=c.recovery||{stream:c.stream,roomID:c.roomID,generation:c.snapshot.Generation,disabledTracks:new Set(c.disabledTracks),attempt:0,screenStopped:!!c.screen,hadBridge:nvrMode&&c.bridges.size>0,bridgeCleanup:nvrMode?[...c.bridges.values()].map(bridge=>({context:c,bridge})):[]};
       c.stream=null;closeCurrent();recovery=r;
       if(r.attempt<3){
         const delay=1000*2**r.attempt++;
@@ -385,7 +394,7 @@
       };
       if(c.stream){for(const track of c.stream.getTracks())if(track.readyState!=='ended')await publishTrack(c,track,track.kind==='audio'?'microphone':'camera');}
       if(!c.stream?.getTracks().length)pc.createDataChannel('control');
-      await negotiate(c);if(current!==c)return;c.negotiated=true;if(c.snapshot)render(c.snapshot,c);leave.disabled=false;mute.disabled=!c.stream?.getAudioTracks().length;cameraToggle.disabled=!c.stream?.getVideoTracks().length;share.disabled=false;micDevice.disabled=!c.stream?.getAudioTracks().length;cameraDevice.disabled=!c.stream?.getVideoTracks().length;for(const [button,track,on,off] of [[mute,c.stream?.getAudioTracks()[0],'◉ 静音','◎ 取消静音'],[cameraToggle,c.stream?.getVideoTracks()[0],'◈ 关闭摄像头','◈ 开启摄像头']])if(track){button.setAttribute('aria-pressed',String(!track.enabled));button.textContent=track.enabled?on:off;}if(retry){recovery=null;c.recovery=null;const notices=[];if(retry.screenStopped)notices.push('请重新开启屏幕共享');if(retry.hadBridge)notices.push('请确认先前桥接已停止，网络中断可能阻碍清理');if(notices.length)showError(`已重新连接；${notices.join('；')}。`);}state(pc.connectionState==='connected'?'媒体连接正常':'正在建立媒体连接',pc.connectionState==='connected');scheduleSync(c);
+      await negotiate(c);if(current!==c)return;c.negotiated=true;if(c.snapshot)render(c.snapshot,c);leave.disabled=false;mute.disabled=!c.stream?.getAudioTracks().length;cameraToggle.disabled=!c.stream?.getVideoTracks().length;share.disabled=false;micDevice.disabled=!c.stream?.getAudioTracks().length;cameraDevice.disabled=!c.stream?.getVideoTracks().length;for(const [button,track,on,off] of [[mute,c.stream?.getAudioTracks()[0],'◉ 静音','◎ 取消静音'],[cameraToggle,c.stream?.getVideoTracks()[0],'◈ 关闭摄像头','◈ 开启摄像头']])if(track){button.setAttribute('aria-pressed',String(!track.enabled));button.textContent=track.enabled?on:off;}if(retry){recovery=null;c.recovery=null;const notices=[];if(retry.screenStopped)notices.push('请重新开启屏幕共享');if(retry.hadBridge)notices.push('正在检查先前桥接的清理状态');if(notices.length)showError(`已重新连接；${notices.join('；')}。`);void cleanupRecoveredBridges(retry,c);}state(pc.connectionState==='connected'?'媒体连接正常':'正在建立媒体连接',pc.connectionState==='connected');scheduleSync(c);
     } catch(err){fail(c,err);}
   }
   form.addEventListener('submit',event=>{event.preventDefault();void connect();});

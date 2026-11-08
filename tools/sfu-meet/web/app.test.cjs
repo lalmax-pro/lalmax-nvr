@@ -476,3 +476,51 @@ test('failed reconnect stops after three attempts and enables manual join', asyn
   assert.deepEqual(delays,[1000,2000,4000]);assert.equal(attempts,4);assert.equal(retryCallback,null);
   assert.equal(element('join').disabled,false);assert.equal(element('leave').disabled,true);
 });
+
+test('NVR reconnect retries cleanup only for its interrupted bridge', async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(name,value){this.attributes[name]=value;}querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;}append(...children){this.children.push(...children);}remove(){}play(){return Promise.resolve();}
+  }
+  const elements=new Map(), element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const sockets=[],calls=[];let offline=false,retryCallback,whepPending=false;
+  const generation='0123456789abcdef0123456789abcdef';
+  class Socket {
+    static OPEN=1;
+    constructor(){this.readyState=1;sockets.push(this);setImmediate(()=>this.snapshot([]));}
+    snapshot(publications){this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Generation:generation,Participants:[{ID:'remote'}],Publications:publications}})});}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+    disconnect(){this.readyState=3;this.onclose();}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';}
+    createDataChannel(){} addTransceiver(){return{stop(){}};}async createOffer(){return{sdp:'offer'};}
+    async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){}
+  }
+  const fetch=async(url,options={})=>{
+    calls.push({url,method:options.method});
+    if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'ticket',ice_servers:[]})};
+    if(url==='/api/sfu/bridges/'&&options.method==='POST')return{ok:true,status:202,json:async()=>({id:'own-bridge'})};
+    if(url==='/api/sfu/bridges/own-bridge/whep'){whepPending=true;return await new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(new Error('aborted'))));}
+    if(url==='/api/sfu/bridges/own-bridge/stop'){if(offline)throw new TypeError('offline');return{ok:true,status:204};}
+    if(url==='/api/sfu/bridges/own-bridge'&&options.method==='DELETE')return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/own-bridge')return{ok:true,status:200,json:async()=>({state:'stopped'})};
+    throw new Error(`unexpected request ${url}`);
+  };
+  const schedule=(fn,ms)=>{if(ms===1000){retryCallback=fn;return 'retry';}return setTimeout(fn,ms);};
+  const cancel=id=>{if(id==='retry')retryCallback=null;else clearTimeout(id);};
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,crypto:require('node:crypto').webcrypto,setTimeout:schedule,clearTimeout:cancel,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  sockets[0].snapshot([{ID:'pub-1',ParticipantID:'remote',Source:'microphone',Kind:'audio',Codec:'audio/opus',RTPReady:true}]);
+  element('bridge-list').children[0].children[1].listeners.click();await waitFor(()=>whepPending);
+  offline=true;sockets[0].disconnect();await waitFor(()=>calls.some(c=>c.url.endsWith('/own-bridge/stop')));
+  offline=false;const retry=retryCallback;retryCallback=null;retry();
+  await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/own-bridge'&&c.method==='DELETE'));
+  assert.equal(calls.filter(c=>c.url.endsWith('/own-bridge/stop')).length,2);
+  assert.ok(!calls.some(c=>c.url.includes('other-bridge')));
+  element('leave').listeners.click();
+});
