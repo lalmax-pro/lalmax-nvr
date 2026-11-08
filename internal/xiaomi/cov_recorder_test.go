@@ -158,7 +158,9 @@ func TestCovXiaomiRecorderStartStopWithMediaEngine(t *testing.T) {
 	require.NoError(t, r.Start(ctx))
 	require.NotNil(t, r.pubSession)
 	require.Equal(t, pub, r.pubSession)
-	require.Equal(t, model.StatusRecording, r.Status())
+	// The background worker can already have transitioned to reconnecting
+	// after the initial recording state, since this test has no cloud credentials.
+	require.Contains(t, []model.RecorderStatus{model.StatusRecording, model.StatusReconnecting}, r.Status())
 
 	cancel()
 	require.NoError(t, r.Stop())
