@@ -341,3 +341,127 @@ test('stopping a bridge in management also closes its local player', async () =>
   assert.equal(element('bridge-list').children[0].children[1].textContent,'桥接并播放');
   element('leave').listeners.click();
 });
+
+test('NVR reconnects with a new ticket, preserves muted capture and cancels on leave', async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;} setAttribute(name,value){this.attributes[name]=value;} querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;} append(...children){this.children.push(...children);} remove(){} play(){return Promise.resolve();}
+  }
+  class Stream {
+    constructor(tracks=[]){this.tracks=[...tracks];}getTracks(){return [...this.tracks];}getAudioTracks(){return this.tracks.filter(t=>t.kind==='audio');}
+    getVideoTracks(){return this.tracks.filter(t=>t.kind==='video');}removeTrack(track){this.tracks=this.tracks.filter(t=>t!==track);}addTrack(track){this.tracks.push(track);}
+  }
+  const elements=new Map(), element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const microphone={kind:'audio',id:'mic',enabled:true,readyState:'live',stop(){this.readyState='ended';}};
+  const screen={kind:'video',id:'screen',enabled:true,readyState:'live',stop(){this.readyState='ended';}};
+  const generation='0123456789abcdef0123456789abcdef', sockets=[], peers=[], tickets=[], commands=[];
+  let captures=0, ticketFailures=0, publishSequence=0;
+  class Socket {
+    static OPEN=1;
+    constructor(url){this.url=url;this.readyState=1;sockets.push(this);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Generation:generation,Participants:[],Publications:[]}})}));}
+    send(data){const msg=JSON.parse(data);commands.push(msg);setImmediate(()=>this.onmessage({data:JSON.stringify(msg.type==='publish'?{type:'result',id:msg.id,publication:{ID:`pub-${++publishSequence}`}}:{type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+    disconnect(){this.readyState=3;this.onclose();}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';this.transceivers=[];peers.push(this);}
+    addTrack(track){const sender={track};this.transceivers.push({sender});return sender;}getTransceivers(){return this.transceivers;}
+    async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){this.closed=true;}
+  }
+  const fetch=async(url,options)=>{
+    if(url!=='/api/sfu/ticket')throw new Error(`unexpected request ${url}`);
+    tickets.push(JSON.parse(options.body));
+    if(ticketFailures){ticketFailures--;return{ok:false,status:503,json:async()=>({error:'unavailable'})};}
+    return{ok:true,status:201,json:async()=>({ticket:`ticket-${tickets.length}`,ice_servers:[]})};
+  };
+  // Keep the retry timer controllable so leave can cancel it deterministically.
+  let retryCallback;
+  const schedule=(fn,ms)=>{if(ms===1000||ms===2000||ms===4000){retryCallback=fn;return 'retry';}return setTimeout(fn,ms);};
+  const cancel=id=>{if(id==='retry')retryCallback=null;else clearTimeout(id);};
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{mediaDevices:{async getUserMedia(){captures++;return new Stream([microphone]);},async getDisplayMedia(){return new Stream([screen]);}}},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:Stream,AbortController,setTimeout:schedule,clearTimeout:cancel,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('nvr-room').value='default';element('microphone').checked=true;
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('leave').disabled);
+  element('mute').listeners.click();assert.equal(microphone.enabled,false);
+  await element('share').listeners.click();assert.equal(element('share').textContent,'▣ 停止共享');
+  sockets[0].disconnect();assert.equal(peers[0].closed,true);assert.equal(microphone.readyState,'live');
+  assert.equal(screen.readyState,'ended');
+  assert.equal(element('join').disabled,true);assert.equal(element('leave').disabled,false);
+  assert.equal(element('nvr-room').disabled,true);
+  const retry=retryCallback;retryCallback=null;retry();
+  await waitFor(()=>sockets.length===2 && !element('share').disabled);
+  assert.equal(tickets.length,2);assert.equal(tickets[1].room_generation,generation);
+  assert.equal(sockets[1].url,'wss://nvr.test/api/sfu/ws?ticket=ticket-2');
+  assert.equal(captures,1);assert.equal(peers[1].transceivers[0].sender.track,microphone);
+  assert.equal(microphone.enabled,false);assert.equal(element('mute').attributes['aria-pressed'],'true');
+  assert.equal(commands.filter(c=>c.type==='publish').length,3);
+  assert.match(element('error').textContent,/重新开启屏幕共享/);
+  ticketFailures=1;sockets[1].disconnect();assert.equal(typeof retryCallback,'function');
+  const failedRetry=retryCallback;retryCallback=null;failedRetry();
+  await waitFor(()=>tickets.length===3 && typeof retryCallback==='function');
+  assert.equal(microphone.readyState,'live','a failed ticket request must retain capture for the next retry');
+  const nextRetry=retryCallback;retryCallback=null;nextRetry();
+  await waitFor(()=>sockets.length===3 && !element('share').disabled);
+  assert.equal(captures,1);assert.equal(microphone.enabled,false);
+  sockets[2].disconnect();assert.equal(typeof retryCallback,'function');
+  element('leave').listeners.click();assert.equal(retryCallback,null);assert.equal(microphone.readyState,'ended');
+  assert.equal(element('nvr-room').disabled,false);
+});
+
+test('reconnect refuses a replacement room generation before publishing', async () => {
+  class Element {
+    constructor(){this.listeners={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(){}querySelector(){return new Element();}replaceChildren(){}append(){}remove(){}
+  }
+  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const sockets=[],commands=[];let retryCallback,peerCount=0;
+  class Socket {
+    static OPEN=1;
+    constructor(){this.readyState=1;sockets.push(this);const generation=sockets.length===1?'original':'replacement';setImmediate(()=>this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Generation:generation,Participants:[],Publications:[]}})}));}
+    send(data){const msg=JSON.parse(data);commands.push(msg.type);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}disconnect(){this.readyState=3;this.onclose();}
+  }
+  class Peer {constructor(){peerCount++;this.iceGatheringState='complete';this.connectionState='connected';}createDataChannel(){}async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){}}
+  const schedule=(fn,ms)=>{if(ms===1000){retryCallback=fn;return 'retry';}return setTimeout(fn,ms);};
+  const cancel=id=>{if(id==='retry')retryCallback=null;else clearTimeout(id);};
+  const context={document:{getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'http:',host:'localhost'},navigator:{},fetch:async()=>({ok:true}),WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},setTimeout:schedule,clearTimeout:cancel,Map,Set,Promise,Error};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  sockets[0].disconnect();const retry=retryCallback;retryCallback=null;retry();
+  await waitFor(()=>!element('error').hidden && element('error').textContent.includes('房间已关闭或重新创建'));
+  assert.equal(peerCount,1,'replacement generation must not create a peer connection');
+  assert.deepEqual(commands,['offer']);assert.equal(sockets[1].readyState,3);
+  assert.equal(element('join').disabled,false);
+});
+
+test('failed reconnect stops after three attempts and enables manual join', async () => {
+  class Element {
+    constructor(){this.listeners={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(){}querySelector(){return new Element();}replaceChildren(){}append(){}remove(){}
+  }
+  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  let firstSocket, attempts=0, retryCallback;const delays=[];
+  class Socket {
+    static OPEN=1;
+    constructor(){this.readyState=1;attempts++;if(attempts===1){firstSocket=this;setImmediate(()=>this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Generation:'original',Participants:[],Publications:[]}})}));}else setImmediate(()=>{this.onerror();this.onclose();});}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}disconnect(){this.readyState=3;this.onclose();}
+  }
+  class Peer {constructor(){this.iceGatheringState='complete';this.connectionState='connected';}createDataChannel(){}async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){}}
+  const schedule=(fn,ms)=>{if([1000,2000,4000].includes(ms)){delays.push(ms);retryCallback=fn;return 'retry';}return setTimeout(fn,ms);};
+  const cancel=id=>{if(id==='retry')retryCallback=null;else clearTimeout(id);};
+  const context={document:{getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'http:',host:'localhost'},navigator:{},fetch:async()=>({ok:true}),WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},setTimeout:schedule,clearTimeout:cancel,Map,Set,Promise,Error};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);firstSocket.disconnect();
+  for(let attempt=1;attempt<=3;attempt++){
+    await waitFor(()=>typeof retryCallback==='function');const retry=retryCallback;retryCallback=null;retry();
+    await waitFor(()=>attempts===attempt+1);
+  }
+  await waitFor(()=>!element('error').hidden && element('error').textContent.includes('请重新加入'));
+  assert.deepEqual(delays,[1000,2000,4000]);assert.equal(attempts,4);assert.equal(retryCallback,null);
+  assert.equal(element('join').disabled,false);assert.equal(element('leave').disabled,true);
+});

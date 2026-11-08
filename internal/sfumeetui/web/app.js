@@ -9,6 +9,7 @@
   const nvrMode = document.documentElement?.dataset?.mode === 'nvr';
   if (nvrMode) { token.required=false; token.hidden=true; $('token-label').hidden=true; $('back-nvr').hidden=false; $('bridge-panel').hidden=false; $('bridge-management').hidden=false; $('nvr-room-controls').hidden=false; $('join').textContent='加入会议 →'; $('mode-pill').textContent='NVR 会议'; $('mode-instructions').textContent='使用 NVR 管理员账号加入。'; $('nvr-login').hidden=!!sessionStorage.getItem('nvr_auth'); $('room-description').textContent='默认房间 · Opus / H.264'; $('mode-footer').textContent='NVR SFU'; }
   let current = null;
+  let recovery = null;
   let deviceRefresh = 0;
   let roomBusy = false;
   const roomGenerations = new Map();
@@ -68,6 +69,13 @@
     badge.classList.toggle('connected', connected); dot.classList.toggle('on', connected);
   }
   function showError(message) { error.textContent = message; error.hidden = false; }
+  function cancelRecovery() {
+    const r=recovery;recovery=null;
+    if(!r)return;
+    clearTimeout(r.timer);
+    if(current?.stream!==r.stream)r.stream?.getTracks().forEach(t=>t.stop());
+    if(nvrMode)updateRoomControls();
+  }
   function closeCurrent() {
     const c = current; current = null;
     if (c) {
@@ -149,11 +157,11 @@
   if(nvrMode)$('bridge-management-refresh').addEventListener('click',()=>void manageBridges());
   function updateRoomControls() {
     if(!nvrMode)return;
-    const disabled=roomBusy||!!current;
+    const disabled=roomBusy||!!current||!!recovery;
     if(!current){$('room-title').textContent=$('nvr-room').value||'default';$('room-description').textContent='NVR 房间 · Opus / H.264';}
     for(const id of ['nvr-room','nvr-room-new','nvr-rooms-refresh','nvr-room-create'])$(id).disabled=disabled;
     $('nvr-room-close').disabled=disabled||$('nvr-room').value==='default'||!roomGenerations.has($('nvr-room').value);
-    if(roomBusy)join.disabled=true;else if(!current)join.disabled=false;
+    if(roomBusy||recovery)join.disabled=true;else if(!current)join.disabled=false;
   }
   async function loadRooms(selected) {
     const rooms=await nvrRequest('/api/sfu/rooms/');
@@ -281,7 +289,7 @@
         else if(msg.type==='result'){const p=c.pending.get(msg.id);if(!p)return;clearTimeout(p.timer);c.pending.delete(msg.id);if(msg.error)p.reject(new Error(msg.error==='forbidden'?'操作未获授权':`服务返回：${msg.error}`));else p.resolve(msg);}
       };
       ws.onerror=()=>{if(!initialized){clearTimeout(timeout);reject(new Error('无法连接信令服务'));}};
-      ws.onclose=()=>{clearTimeout(timeout);if(!initialized)reject(new Error('信令连接已关闭'));if(current===c){closeCurrent();state('连接已断开');showError('连接已断开，请重新加入。');}};
+      ws.onclose=()=>{clearTimeout(timeout);if(!initialized){reject(new Error('信令连接已关闭'));return;}if(current===c)fail(c,new Error('信令连接已断开'),true);};
     });
   }
   function request(c,type,fields={}) {
@@ -303,8 +311,20 @@
     const offer=await c.pc.createOffer();await c.pc.setLocalDescription(offer);await gather(c.pc);
     const answer=await request(c,'offer',{sdp:c.pc.localDescription.sdp});await c.pc.setRemoteDescription({type:'answer',sdp:answer.sdp});
   }
-  function fail(c,err) {
-    if(current!==c)return;closeCurrent();state('未连接');showError(`${err.message||'连接失败'}，请重新加入。`);
+  function fail(c,err,connectionLost=false) {
+    if(current!==c)return;
+    if((c.recovery||(c.negotiated&&c.snapshot?.Generation&&(connectionLost||c.ws?.readyState!==WebSocket.OPEN))) && !err.terminal) {
+      const r=c.recovery||{stream:c.stream,roomID:c.roomID,generation:c.snapshot.Generation,disabledTracks:new Set(c.disabledTracks),attempt:0,screenStopped:!!c.screen,hadBridge:nvrMode&&c.bridges.size>0};
+      c.stream=null;closeCurrent();recovery=r;
+      if(r.attempt<3){
+        const delay=1000*2**r.attempt++;
+        state(`正在重连 (${r.attempt}/3)`);showError(`连接已断开，正在重连。${r.screenStopped?'屏幕共享已停止，请重连后重新共享。':''}`);
+        join.disabled=true;leave.disabled=false;if(nvrMode)updateRoomControls();
+        r.timer=setTimeout(()=>{r.timer=null;if(recovery===r)void connect(r);},delay);return;
+      }
+      cancelRecovery();
+    } else { closeCurrent();cancelRecovery(); }
+    state('未连接');showError(`${err.message||'连接失败'}，请重新加入。`);
   }
   function enqueue(c,work) {
     const next=c.queue.then(async()=>{if(current!==c)throw new Error('连接已关闭');return work();});
@@ -328,29 +348,33 @@
   async function removeTrack(c,id) {
     const entry=c.own.get(id);if(!entry)return;c.own.delete(id);c.pc.removeTrack(entry.sender);entry.track.stop();await request(c,'unpublish',{publication_id:id});await negotiate(c);if(c.snapshot)render(c.snapshot,c);
   }
-  async function connect() {
+  async function connect(retry = null) {
     if(roomBusy)return;
+    if(retry && recovery!==retry)return;
+    if(!retry)cancelRecovery();
     closeCurrent();error.hidden=true;join.disabled=true;micDevice.disabled=true;cameraDevice.disabled=true;state('正在连接');
-    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(),bridges:new Map(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false,deviceSelection:{audio:micDevice.value,video:cameraDevice.value}};current=c;if(nvrMode)updateRoomControls();
+    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(retry?.disabledTracks||[]),bridges:new Map(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false,recovery:retry,roomID:retry?.roomID,deviceSelection:{audio:micDevice.value,video:cameraDevice.value}};current=c;if(retry){c.stream=retry.stream;leave.disabled=false;}if(nvrMode)updateRoomControls();
     try {
-      if(!nvrMode){const login=await fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token.value})});if(!login.ok)throw new Error('访问口令无效，请检查终端中的口令');}
-      if(micOption.checked||cameraOption.checked){if(!navigator.mediaDevices?.getUserMedia)throw new Error('当前浏览器无法访问媒体设备');c.stream=await navigator.mediaDevices.getUserMedia({audio:micOption.checked?deviceConstraint(micDevice.value):false,video:cameraOption.checked?deviceConstraint(cameraDevice.value):false});if(current!==c){c.stream.getTracks().forEach(t=>t.stop());return;}void refreshDevices();}
-      if(nvrMode){const auth=nvrAuth();const roomID=$('nvr-room').value||'default';const ticket=await nvrRequest('/api/sfu/ticket',{method:'POST',body:JSON.stringify({room_id:roomID,...(roomGenerations.has(roomID)?{room_generation:roomGenerations.get(roomID)}:{})})});$('room-title').textContent=roomID;$('room-description').textContent='NVR 房间 · Opus / H.264';sessionStorage.setItem('nvr_auth',auth.slice(6));$('nvr-password').value='';$('nvr-login').hidden=true;c.ticket=ticket.ticket;c.iceServers=ticket.ice_servers||[];}
+      if(!nvrMode){const login=await fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token.value})});if(!login.ok)throw new Error('访问口令无效，请检查终端中的口令');if(current!==c)return;}
+      if(retry&&c.stream)for(const track of c.stream.getTracks())if(track.readyState==='ended')c.stream.removeTrack(track);
+      if(!retry&&(micOption.checked||cameraOption.checked)){if(!navigator.mediaDevices?.getUserMedia)throw new Error('当前浏览器无法访问媒体设备');c.stream=await navigator.mediaDevices.getUserMedia({audio:micOption.checked?deviceConstraint(micDevice.value):false,video:cameraOption.checked?deviceConstraint(cameraDevice.value):false});if(current!==c){c.stream.getTracks().forEach(t=>t.stop());return;}void refreshDevices();}
+      if(nvrMode){const auth=nvrAuth();const roomID=retry?.roomID||$('nvr-room').value||'default';c.roomID=roomID;const generation=retry?.generation||roomGenerations.get(roomID);const ticket=await nvrRequest('/api/sfu/ticket',{method:'POST',body:JSON.stringify({room_id:roomID,...(generation?{room_generation:generation}:{})})});if(current!==c)return;$('room-title').textContent=roomID;$('room-description').textContent='NVR 房间 · Opus / H.264';sessionStorage.setItem('nvr_auth',auth.slice(6));$('nvr-password').value='';$('nvr-login').hidden=true;c.ticket=ticket.ticket;c.iceServers=ticket.ice_servers||[];}
       await openSocket(c);if(current!==c)return;
+      if(retry && c.snapshot.Generation!==retry.generation){const err=new Error('房间已关闭或重新创建');err.terminal=true;throw err;}
       const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});c.pc=pc;
-      pc.onconnectionstatechange=()=>{if(current!==c)return;if(pc.connectionState==='connected')state('媒体连接正常',true);else if(['failed','disconnected'].includes(pc.connectionState)){state('连接中断');showError('媒体连接中断，请重新加入。');}};
+      pc.onconnectionstatechange=()=>{if(current!==c)return;if(pc.connectionState==='connected')state('媒体连接正常',true);else if(pc.connectionState==='failed')fail(c,new Error('媒体连接失败'),true);else if(pc.connectionState==='disconnected')state('媒体连接中断');};
       pc.ontrack=event=>{if(current!==c)return;const id=[...c.subscribed].find(([,entry])=>entry.transceiver===event.transceiver)?.[0];if(!id)return;
         if(event.track.kind==='audio'){const audio=document.createElement('audio');audio.autoplay=true;audio.srcObject=new MediaStream([event.track]);audioContainer.append(audio);c.media.set(id,audio);audio.play().catch(()=>{showError('浏览器阻止自动播放，请点击“启用声音”。');$('enable-audio').hidden=false;});}
         else {const video=document.createElement('video');video.autoplay=true;video.muted=true;video.playsInline=true;video.srcObject=new MediaStream([event.track]);c.media.set(id,video);if(c.snapshot)render(c.snapshot,c);}
         event.track.onended=()=>{const media=c.media.get(id);if(media){media.remove();c.media.delete(id);}if(current===c&&c.snapshot)render(c.snapshot,c);};
       };
-      if(c.stream){for(const track of c.stream.getTracks())await publishTrack(c,track,track.kind==='audio'?'microphone':'camera');}
+      if(c.stream){for(const track of c.stream.getTracks())if(track.readyState!=='ended')await publishTrack(c,track,track.kind==='audio'?'microphone':'camera');}
       if(!c.stream?.getTracks().length)pc.createDataChannel('control');
-      await negotiate(c);if(current!==c)return;c.negotiated=true;if(c.snapshot)render(c.snapshot,c);leave.disabled=false;mute.disabled=!c.stream?.getAudioTracks().length;cameraToggle.disabled=!c.stream?.getVideoTracks().length;share.disabled=false;micDevice.disabled=!c.stream?.getAudioTracks().length;cameraDevice.disabled=!c.stream?.getVideoTracks().length;state(pc.connectionState==='connected'?'媒体连接正常':'正在建立媒体连接',pc.connectionState==='connected');scheduleSync(c);
+      await negotiate(c);if(current!==c)return;c.negotiated=true;if(c.snapshot)render(c.snapshot,c);leave.disabled=false;mute.disabled=!c.stream?.getAudioTracks().length;cameraToggle.disabled=!c.stream?.getVideoTracks().length;share.disabled=false;micDevice.disabled=!c.stream?.getAudioTracks().length;cameraDevice.disabled=!c.stream?.getVideoTracks().length;for(const [button,track,on,off] of [[mute,c.stream?.getAudioTracks()[0],'◉ 静音','◎ 取消静音'],[cameraToggle,c.stream?.getVideoTracks()[0],'◈ 关闭摄像头','◈ 开启摄像头']])if(track){button.setAttribute('aria-pressed',String(!track.enabled));button.textContent=track.enabled?on:off;}if(retry){recovery=null;c.recovery=null;const notices=[];if(retry.screenStopped)notices.push('请重新开启屏幕共享');if(retry.hadBridge)notices.push('请确认先前桥接已停止，网络中断可能阻碍清理');if(notices.length)showError(`已重新连接；${notices.join('；')}。`);}state(pc.connectionState==='connected'?'媒体连接正常':'正在建立媒体连接',pc.connectionState==='connected');scheduleSync(c);
     } catch(err){fail(c,err);}
   }
   form.addEventListener('submit',event=>{event.preventDefault();void connect();});
-  leave.addEventListener('click',()=>{closeCurrent();state('已离开');tiles.replaceChildren();$('member-count').textContent='0 人在线';});
+  leave.addEventListener('click',()=>{cancelRecovery();closeCurrent();state('已离开');tiles.replaceChildren();$('member-count').textContent='0 人在线';});
   $('refresh').addEventListener('click',()=>void connect());
   mute.addEventListener('click',()=>{const track=current?.stream?.getAudioTracks()[0];if(!track)return;track.enabled=!track.enabled;mute.setAttribute('aria-pressed',String(!track.enabled));mute.textContent=track.enabled?'◉ 静音':'◎ 取消静音';});
   cameraToggle.addEventListener('click',()=>{const track=current?.stream?.getVideoTracks()[0];if(!track)return;track.enabled=!track.enabled;cameraToggle.setAttribute('aria-pressed',String(!track.enabled));cameraToggle.textContent=track.enabled?'◈ 关闭摄像头':'◈ 开启摄像头';});
@@ -370,5 +394,5 @@
     }catch(err){if(current===c){c.screen?.getTracks().forEach(t=>t.stop());c.screen=null;showError(err.message||'屏幕共享失败');}}finally{if(current===c)share.disabled=false;}
   });
   $('enable-audio').addEventListener('click',()=>{for(const audio of audioContainer.querySelectorAll('audio'))void audio.play();$('enable-audio').hidden=true;});
-  window.addEventListener('pagehide',closeCurrent);
+  window.addEventListener('pagehide',()=>{cancelRecovery();closeCurrent();});
 })();
