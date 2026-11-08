@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/rtp"
 	"github.com/pion/turn/v5"
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lalmax/sfu/signaling"
@@ -45,6 +46,31 @@ func TestNVRSFUTURNRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer offerer.Close()
+	video, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", RTCPFeedback: nvrSFUVideoFeedback()}, "relay-video", "relay-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := answerer.AddTrack(video)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			if _, _, err := sender.ReadRTCP(); err != nil {
+				return
+			}
+		}
+	}()
+	if _, err = offerer.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
+		t.Fatal(err)
+	}
+	packets := make(chan *rtp.Packet, 1)
+	offerer.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		packet, _, err := track.ReadRTP()
+		if err == nil {
+			packets <- packet
+		}
+	})
 	channel, err := offerer.CreateDataChannel("relay-test", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -91,5 +117,25 @@ func TestNVRSFUTURNRelay(t *testing.T) {
 	pair, err := offerer.SCTP().Transport().ICETransport().GetSelectedCandidatePair()
 	if err != nil || pair == nil || pair.Local.Typ != webrtc.ICECandidateTypeRelay {
 		t.Fatalf("connection did not use TURN relay: %v %v", pair, err)
+	}
+	deadline := time.After(5 * time.Second)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	var sequence uint16
+	for {
+		select {
+		case packet := <-packets:
+			if len(packet.Payload) != 2 || packet.Payload[0] != 0x41 || packet.Payload[1] != 0x01 {
+				t.Fatalf("unexpected relay RTP: %x", packet.Payload)
+			}
+			return
+		case <-ticker.C:
+			sequence++
+			if err := video.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: sequence, Timestamp: uint32(sequence) * 1800, Marker: true}, Payload: []byte{0x41, 0x01}}); err != nil {
+				t.Fatal(err)
+			}
+		case <-deadline:
+			t.Fatal("no video RTP through TURN relay")
+		}
 	}
 }
