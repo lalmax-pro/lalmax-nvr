@@ -308,6 +308,27 @@
       await wait(attempt===0?100:500);
     }
   }
+  async function createBridgePlayerSession(bridge,pc) {
+    const signal=bridge.abort.signal,controller=new AbortController(),abort=()=>controller.abort();
+    if(signal.aborted)return null;
+    signal.addEventListener('abort',abort,{once:true});
+    const timer=setTimeout(abort,12000);
+    try {
+      const response=await fetch(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/whep`,{method:'POST',headers:{'Authorization':nvrAuth(),'Content-Type':'application/sdp'},body:pc.localDescription.sdp,cache:'no-store',signal:controller.signal});
+      if(response.status===503||response.status===404)return {status:response.status};
+      if(!response.ok)throw new Error(`桥接播放暂不可用 (${response.status||'超时'})`);
+      const location=response.headers.get('Location');
+      if(!location||!location.startsWith(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/whep/`))throw new Error('无效的播放会话');
+      // Save the session before reading the answer: stopping while its body is
+      // stalled must still be able to delete the already-created session.
+      bridge.location=location;
+      if(signal.aborted){await closeBridgePlayer(bridge,true);return null;}
+      return {status:response.status,answer:await response.text()};
+    } catch(err) {
+      if(controller.signal.aborted&&!signal.aborted){const failure=new Error('播放器协商超时');failure.network=true;throw failure;}
+      throw err;
+    } finally {clearTimeout(timer);signal.removeEventListener('abort',abort);}
+  }
   async function startBridge(c,p,audio) {
     const bridge={publication:p.ID,audioPublication:audio?.ID||'',requestKey:'',source:p.Source,label:'正在创建',busy:true,pc:null,location:'',abort:new AbortController()};
     c.bridges.set(p.ID,bridge);renderBridgeTracks(c.snapshot,c);
@@ -325,19 +346,18 @@
       let response;
       for(let attempt=0;attempt<10;attempt++){
         if(bridge.abort.signal.aborted||current!==c)return;
-        response=await fetch(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/whep`,{method:'POST',headers:{'Authorization':nvrAuth(),'Content-Type':'application/sdp'},body:pc.localDescription.sdp,cache:'no-store',signal:bridge.abort.signal});
+        response=await createBridgePlayerSession(bridge,pc);
+        if(!response||bridge.abort.signal.aborted||current!==c)return;
         if(response.status!==503&&response.status!==404)break;
-        const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);
+        const status=await bridgeControlRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);
+        if(bridge.abort.signal.aborted||current!==c)return;
         if(status.state==='failed'||status.state==='stopped')throw new Error('桥接已停止，未能发布媒体');
         if(response.status===404)break;
         await wait(500);
       }
-      if(!response?.ok)throw new Error(`桥接播放暂不可用 (${response?.status||'超时'})`);
-      const locationHeader=response.headers.get('Location');const answer=await response.text();
-      if(!locationHeader||!locationHeader.startsWith(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/whep/`))throw new Error('无效的播放会话');
-      bridge.location=locationHeader;
+      if(!response?.answer)throw new Error(`桥接播放暂不可用 (${response?.status||'超时'})`);
       if(current!==c||bridge.closeRequested||bridge.abort.signal.aborted){await stopBridge(c,bridge,true);return;}
-      await pc.setRemoteDescription({type:'answer',sdp:answer});
+      await pc.setRemoteDescription({type:'answer',sdp:response.answer});
       bridge.label='正在连接播放器';renderBridgeTracks(c.snapshot,c);
     } catch(err) {
       if(bridge.abort.signal.aborted)return;
