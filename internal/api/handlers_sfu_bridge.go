@@ -11,9 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
-	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
 	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/access"
@@ -46,93 +44,6 @@ type sfuBridgeLister interface {
 
 // SetSFUBridgeRegistry must be called before serving requests.
 func (h *Handler) SetSFUBridgeRegistry(registry SFUBridgeRegistry) { h.sfuBridges = registry }
-
-// SetSFUSignaling must be called before the handler starts serving requests.
-func (h *Handler) SetSFUSignaling(signaling http.Handler) { h.sfuSignaling = signaling }
-
-type SFUTicketIssuer interface {
-	Issue(context.Context, *model.User) (string, error)
-}
-
-type sfuRoomTicketIssuer interface {
-	IssueForRoom(context.Context, *model.User, string) (string, error)
-}
-
-type sfuGenerationTicketIssuer interface {
-	IssueForRoomGeneration(context.Context, *model.User, string, string) (string, error)
-}
-
-func (h *Handler) SetSFUTicketIssuer(issuer SFUTicketIssuer) { h.sfuTickets = issuer }
-
-func (h *Handler) handleSFUSignaling(w http.ResponseWriter, r *http.Request) {
-	if h.sfuSignaling == nil {
-		writeError(w, http.StatusServiceUnavailable, "SFU signaling unavailable")
-		return
-	}
-	h.sfuSignaling.ServeHTTP(w, r)
-}
-
-func (h *Handler) createSFUTicket(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	user := middleware.ContextUser(r)
-	if _, ok := sfuPrincipal(r); !ok {
-		writeError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	if h.sfuTickets == nil {
-		writeError(w, http.StatusServiceUnavailable, "SFU signaling unavailable")
-		return
-	}
-	var input struct {
-		RoomID         string `json:"room_id,omitempty"`
-		RoomGeneration string `json:"room_generation,omitempty"`
-	}
-	if !sfuDecodeJSON(w, r, &input) {
-		return
-	}
-	var ticket string
-	var err error
-	if input.RoomGeneration != "" {
-		if len(input.RoomGeneration) != 32 {
-			writeError(w, http.StatusBadRequest, "invalid room generation")
-			return
-		}
-		issuer, ok := h.sfuTickets.(sfuGenerationTicketIssuer)
-		if !ok {
-			writeError(w, http.StatusServiceUnavailable, "room generation validation unavailable")
-			return
-		}
-		roomID := input.RoomID
-		if roomID == "" {
-			roomID = "default"
-		}
-		ticket, err = issuer.IssueForRoomGeneration(r.Context(), user, roomID, input.RoomGeneration)
-	} else if input.RoomID == "" || input.RoomID == "default" {
-		ticket, err = h.sfuTickets.Issue(r.Context(), user)
-	} else if issuer, ok := h.sfuTickets.(sfuRoomTicketIssuer); ok {
-		ticket, err = issuer.IssueForRoom(r.Context(), user, input.RoomID)
-	} else {
-		writeError(w, http.StatusNotFound, "room not found")
-		return
-	}
-	if err != nil {
-		if errors.Is(err, sfu.ErrRoomNotFound) {
-			writeError(w, http.StatusNotFound, "room not found")
-			return
-		}
-		writeError(w, http.StatusServiceUnavailable, "SFU ticket unavailable")
-		return
-	}
-	var servers []config.SFUICEServer
-	if h.config != nil {
-		servers = h.config.SFU.ICEServers
-	}
-	writeJSON(w, http.StatusCreated, struct {
-		Ticket     string                `json:"ticket"`
-		ExpiresIn  int                   `json:"expires_in"`
-		ICEServers []config.SFUICEServer `json:"ice_servers"`
-	}{ticket, 30, servers})
-}
 
 func sfuPrincipal(r *http.Request) (string, bool) {
 	user := middleware.ContextUser(r)

@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,14 +18,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
-	"github.com/pion/interceptor"
-	"github.com/pion/rtcp"
+	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
@@ -107,6 +108,17 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	cfg.Auth.Username = "admin"
 	cfg.Auth.Password = "local-test-password"
 	cfg.SFU.Enabled = true
+	livekitPort := freeTCPPort(t)
+	udp, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	udpPort := udp.LocalAddr().(*net.UDPAddr).Port
+	require.NoError(t, udp.Close())
+	const apiKey, apiSecret = "testkey", "testsecret-testsecret-testsecret-123456"
+	livekitPath := filepath.Join(t.TempDir(), "livekit.yaml")
+	livekitYAML := fmt.Sprintf("development: false\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nrtc:\n  node_ip: 127.0.0.1\n  enable_loopback_candidate: true\n  ips:\n    includes: [127.0.0.1/32]\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", livekitPort, apiKey, apiSecret, udpPort)
+	require.NoError(t, os.WriteFile(livekitPath, []byte(livekitYAML), 0600))
+	livekitURL := fmt.Sprintf("http://127.0.0.1:%d", livekitPort)
+	cfg.SFU.LiveKit = config.SFULiveKitConfig{ConfigFile: livekitPath, APIKey: apiKey, PublicURL: livekitURL}
 	if os.Getenv("SFU_NVR_RECORDING_LONG_TEST") == "1" {
 		cfg.Storage.SegmentDuration = "2m"
 	}
@@ -135,7 +147,7 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 		}
 		signal.Reset(syscall.SIGTERM)
 	})
-	require.Eventually(t, func() bool { return app.sfuRuntime.server.Ready() }, 10*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool { return app.liveKitRuntime.server.IsRunning() }, 10*time.Second, 20*time.Millisecond)
 	origin := "http://" + cfg.Server.Listen
 	request := func(method, path, body string, want int, keys ...string) []byte {
 		t.Helper()
@@ -154,56 +166,19 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 		require.Equal(t, want, resp.StatusCode, "%s", data)
 		return data
 	}
-	var ticket struct {
-		Ticket string `json:"ticket"`
-	}
-	require.NoError(t, json.Unmarshal(request(http.MethodPost, "/api/sfu/ticket", `{}`, http.StatusCreated), &ticket))
-	require.NotEmpty(t, ticket.Ticket)
-	headers := http.Header{"Origin": []string{origin}}
-	ws, _, err := websocket.DefaultDialer.Dial("ws://"+cfg.Server.Listen+"/api/sfu/ws?ticket="+ticket.Ticket, headers)
+	publisher, err := lksdk.ConnectToRoom(livekitURL, lksdk.ConnectInfo{APIKey: apiKey, APISecret: apiSecret, RoomName: "recording", ParticipantIdentity: "publisher"}, lksdk.NewRoomCallback(), lksdk.WithAutoSubscribe(false))
 	require.NoError(t, err)
-	defer ws.Close()
-	require.NoError(t, ws.WriteJSON(map[string]any{"id": "video", "type": "publish", "kind": "video", "source": "camera", "codec": "video/H264", "track_id": "video"}))
-	videoPub := pacingRoomRead(t, ws, "video")
-	require.Empty(t, videoPub.Error)
-	require.NotNil(t, videoPub.Publication)
-	require.NoError(t, ws.WriteJSON(map[string]any{"id": "audio", "type": "publish", "kind": "audio", "source": "microphone", "codec": "audio/opus", "track_id": "audio"}))
-	audioPub := pacingRoomRead(t, ws, "audio")
-	require.Empty(t, audioPub.Error)
-	require.NotNil(t, audioPub.Publication)
-	settings := webrtc.SettingEngine{}
-	settings.SetIncludeLoopbackCandidate(true)
-	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings), webrtc.WithInterceptorRegistry(&interceptor.Registry{})).NewPeerConnection(webrtc.Configuration{})
+	t.Cleanup(publisher.Disconnect)
+	video, err := lksdk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = pc.Close() })
-	video, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, "video", "nvr-record")
+	audio, err := lksdk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2})
 	require.NoError(t, err)
-	audio, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, "audio", "nvr-record")
+	videoPub, err := publisher.LocalParticipant.PublishTrack(video, &lksdk.TrackPublicationOptions{Name: "video", Source: livekit.TrackSource_CAMERA})
 	require.NoError(t, err)
-	videoSender, err := pc.AddTrack(video)
+	audioPub, err := publisher.LocalParticipant.PublishTrack(audio, &lksdk.TrackPublicationOptions{Name: "audio", Source: livekit.TrackSource_MICROPHONE, DisableDTX: true})
 	require.NoError(t, err)
-	audioSender, err := pc.AddTrack(audio)
-	require.NoError(t, err)
-	for _, sender := range []*webrtc.RTPSender{videoSender, audioSender} {
-		go func(s *webrtc.RTPSender) {
-			for {
-				if _, _, err := s.ReadRTCP(); err != nil {
-					return
-				}
-			}
-		}(sender)
-	}
-	require.NoError(t, ws.WriteJSON(map[string]any{"id": "offer", "type": "offer", "sdp": pacingRoomOffer(t, pc)}))
-	answer := pacingRoomRead(t, ws, "offer")
-	require.Empty(t, answer.Error)
-	require.NoError(t, pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer.SDP}))
-	require.Eventually(t, func() bool { return pc.ConnectionState() == webrtc.PeerConnectionStateConnected }, 5*time.Second, 10*time.Millisecond)
-	vParams, aParams := videoSender.GetParameters(), audioSender.GetParameters()
-	require.Len(t, vParams.Encodings, 1)
-	require.Len(t, aParams.Encodings, 1)
 	stop, stopped := make(chan struct{}), make(chan struct{})
 	mediaErrors := make(chan error, 1)
-	var allowNextKeyframe atomic.Bool
 	go func() {
 		defer close(stopped)
 		ticker := time.NewTicker(20 * time.Millisecond)
@@ -218,10 +193,6 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 			case <-ticker.C:
 				if i%2 == 0 {
 					frame := frames[(i/2)%uint32(len(frames))]
-					if frame[0]&31 == 5 && i != 0 && !allowNextKeyframe.Load() {
-						i++
-						continue
-					}
 					if frame[0]&31 == 5 {
 						payloader.Payload(1200, sps)
 						payloader.Payload(1200, pps)
@@ -229,7 +200,7 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 					payloads := payloader.Payload(1200, frame)
 					for j, payload := range payloads {
 						vSeq++
-						if err := video.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: vSeq, Timestamp: 90000 + i*1800, Marker: j == len(payloads)-1}, Payload: payload}); err != nil {
+						if err := video.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: vSeq, Timestamp: 90000 + i*1800, Marker: j == len(payloads)-1}, Payload: payload}, nil); err != nil {
 							mediaErrors <- err
 							return
 						}
@@ -240,34 +211,20 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 				if markers {
 					audioPayload = audioPayloads[i%uint32(len(audioPayloads))]
 				}
-				if err := audio.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: aSeq, Timestamp: 48000 + i*960, Marker: true}, Payload: audioPayload}); err != nil {
+				if err := audio.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: aSeq, Timestamp: 48000 + i*960, Marker: true}, Payload: audioPayload}, nil); err != nil {
 					mediaErrors <- err
 					return
-				}
-				if i%10 == 0 {
-					if err := pc.WriteRTCP([]rtcp.Packet{&rtcp.SenderReport{SSRC: uint32(vParams.Encodings[0].SSRC), NTPTime: 100 << 32, RTPTime: 90000}, &rtcp.SenderReport{SSRC: uint32(aParams.Encodings[0].SSRC), NTPTime: 100 << 32, RTPTime: 48000}}); err != nil {
-						mediaErrors <- err
-						return
-					}
 				}
 				i++
 			}
 		}
 	}()
 	t.Cleanup(func() { close(stop); <-stopped })
-	require.Eventually(t, func() bool {
-		snap := app.sfuRuntime.room.Snapshot()
-		ready := map[string]bool{}
-		for _, p := range snap.Publications {
-			ready[p.ID] = p.RTPReady
-		}
-		return ready[videoPub.Publication.ID] && ready[audioPub.Publication.ID]
-	}, 5*time.Second, 20*time.Millisecond)
 	var bridge struct {
 		ID       string `json:"id"`
 		StreamID string `json:"stream_id"`
 	}
-	body, _ := json.Marshal(map[string]string{"publication_id": videoPub.Publication.ID, "audio_publication_id": audioPub.Publication.ID})
+	body, _ := json.Marshal(map[string]string{"room_id": "recording", "room_generation": publisher.SID(), "publication_id": videoPub.SID(), "audio_publication_id": audioPub.SID()})
 	key := "nvr-recording-test-request"
 	require.NoError(t, json.Unmarshal(request(http.MethodPost, "/api/sfu/bridges/", string(body), http.StatusAccepted, key), &bridge))
 	require.NotEmpty(t, bridge.ID)
@@ -278,7 +235,7 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(request(http.MethodGet, "/api/sfu/bridge-requests", "", http.StatusOK, key), &resolved))
 	require.Equal(t, bridge.ID, resolved.ID)
-	require.Equal(t, videoPub.Publication.ID, resolved.PublicationID)
+	require.Equal(t, videoPub.SID(), resolved.PublicationID)
 	request(http.MethodGet, "/api/sfu/bridge-requests", "", http.StatusNotFound, "unknown-request")
 	// Model a lost create response: recover and stop this request's bridge,
 	// while another bridge for the same publication remains untouched.
@@ -322,13 +279,10 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	planBody, _ := json.Marshal(map[string]any{"stream_id": bridge.StreamID, "name": "SFU test", "mode": "continuous", "enabled": true})
 	require.NoError(t, json.Unmarshal(request(http.MethodPost, "/api/recording-plans", string(planBody), http.StatusCreated), &plan))
 	require.NotEmpty(t, plan.ID)
-	info, err := app.mediaEngine.GetStream(context.Background(), bridge.StreamID)
-	require.NoError(t, err)
-	require.NotNil(t, info)
-	require.Empty(t, info.VideoCodec, "the plan must precede codec availability")
-	// Let the first reconciliation observe the active stream without a codec.
-	time.Sleep(250 * time.Millisecond)
-	allowNextKeyframe.Store(true)
+	require.Eventually(t, func() bool {
+		info, err := app.mediaEngine.GetStream(context.Background(), bridge.StreamID)
+		return err == nil && info != nil && info.VideoCodec == "H264"
+	}, 10*time.Second, 50*time.Millisecond, "bridge video codec did not become available")
 	require.Eventually(t, func() bool {
 		for _, id := range app.recTasks.RunningIDs() {
 			if id == bridge.StreamID {
@@ -349,9 +303,7 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	require.Equal(t, "pending", status.State)
 	sourceEnd := os.Getenv("SFU_NVR_SOURCE_END_TEST") == "1"
 	if sourceEnd {
-		require.NoError(t, ws.WriteJSON(map[string]any{"id": "unpublish-video", "type": "unpublish", "publication_id": videoPub.Publication.ID}))
-		reply := pacingRoomRead(t, ws, "unpublish-video")
-		require.Empty(t, reply.Error)
+		require.NoError(t, publisher.LocalParticipant.UnpublishTrack(videoPub.SID()))
 		require.Eventually(t, func() bool {
 			err := json.Unmarshal(request(http.MethodGet, "/api/sfu/bridges/"+bridge.ID, "", http.StatusOK), &status)
 			return err == nil && (status.State == "stopped" || status.State == "failed")

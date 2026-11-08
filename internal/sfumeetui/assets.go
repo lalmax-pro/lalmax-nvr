@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-//go:embed web/index.html web/app.js web/style.css web/livekit.html web/livekit-app.js web/livekit-sdk.js LIVEKIT-LICENSE LIVEKIT-SDK.md third-party-licenses/*.txt
+//go:embed web/style.css web/livekit.html web/livekit-app.js web/livekit-sdk.js LIVEKIT-LICENSE LIVEKIT-SDK.md third-party-licenses/*.txt
 var Assets embed.FS
 
 // LiveKitNotices returns the bundled SDK and dependency license texts.

@@ -10,26 +10,20 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfumeetui"
 )
 
-// The page is public like the NVR SPA; all signaling and bridge operations
-// require NVR authentication and an issued single-use ticket.
+// The page is public like the NVR SPA; room and bridge operations require
+// NVR authentication, and LiveKit joins use short-lived room credentials.
 func (h *Handler) serveSFUMeet(w http.ResponseWriter, r *http.Request) {
-	names := map[string]string{"/sfu-meet/": "web/index.html", "/sfu-meet/app.js": "web/app.js", "/sfu-meet/style.css": "web/style.css"}
-	liveKitMode := h.config != nil && h.config.SFU.Enabled && h.config.SFU.Backend == "livekit"
-	if liveKitMode {
-		names["/sfu-meet/"] = "web/livekit.html"
-		names["/sfu-meet/app.js"] = "web/livekit-app.js"
-		names["/sfu-meet/livekit-sdk.js"] = "web/livekit-sdk.js"
-		if r.URL.Path == "/sfu-meet/licenses" {
-			content, err := sfumeetui.LiveKitNotices()
-			if err != nil {
-				http.Error(w, "unavailable", http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			http.ServeContent(w, r, "licenses.txt", time.Time{}, bytes.NewReader(content))
+	names := map[string]string{"/sfu-meet/": "web/livekit.html", "/sfu-meet/app.js": "web/livekit-app.js", "/sfu-meet/style.css": "web/style.css", "/sfu-meet/livekit-sdk.js": "web/livekit-sdk.js"}
+	if r.URL.Path == "/sfu-meet/licenses" {
+		content, err := sfumeetui.LiveKitNotices()
+		if err != nil {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
 			return
 		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeContent(w, r, "licenses.txt", time.Time{}, bytes.NewReader(content))
+		return
 	}
 	name, ok := names[r.URL.Path]
 	if !ok {
@@ -41,10 +35,7 @@ func (h *Handler) serveSFUMeet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusInternalServerError)
 		return
 	}
-	if name == "web/index.html" || name == "web/livekit.html" {
-		if name == "web/index.html" {
-			content = bytes.Replace(content, []byte(`<html lang="zh-CN">`), []byte(`<html lang="zh-CN" data-mode="nvr">`), 1)
-		}
+	if name == "web/livekit.html" {
 		w.Header().Set("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()")
 	}
 	if strings.HasSuffix(name, ".js") {
@@ -55,9 +46,8 @@ func (h *Handler) serveSFUMeet(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	connect := "'self' ws: wss:"
-	if liveKitMode {
-		connect = "'self'"
+	connect := "'self'"
+	if h.config != nil && h.config.SFU.Enabled {
 		if u, err := url.Parse(h.config.SFU.LiveKit.PublicURL); err == nil && u.Host != "" {
 			if u.Scheme == "http" || u.Scheme == "ws" {
 				connect += " http://" + u.Host + " ws://" + u.Host

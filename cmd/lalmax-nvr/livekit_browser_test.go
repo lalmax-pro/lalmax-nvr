@@ -59,7 +59,7 @@ func TestLiveKitBrowser(t *testing.T) {
 	}
 	cfg, _ := testConfig(t)
 	isolateEmbeddedMedia(t, cfg)
-	cfg.SFU = config.SFUConfig{Enabled: true, Backend: "livekit", LiveKit: config.SFULiveKitConfig{PublicURL: fmt.Sprintf("http://127.0.0.1:%d", port)}}
+	cfg.SFU = config.SFUConfig{Enabled: true, LiveKit: config.SFULiveKitConfig{PublicURL: fmt.Sprintf("http://127.0.0.1:%d", port)}}
 	engine, err := newMediaEngine(cfg, "")
 	if err != nil {
 		t.Fatal(err)

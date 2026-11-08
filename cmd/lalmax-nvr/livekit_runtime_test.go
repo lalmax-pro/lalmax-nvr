@@ -365,3 +365,13 @@ func TestNVRLiveKitRejectsDevelopmentMode(t *testing.T) {
 		t.Fatal("development mode was accepted")
 	}
 }
+
+func TestNVRSFURequiresLiveKitConfiguration(t *testing.T) {
+	cfg, path := testConfig(t)
+	useHTTPMedia(cfg)
+	cfg.SFU.Enabled = true
+	app, err := NewApp(cfg, path)
+	if err == nil || app != nil || !strings.Contains(err.Error(), "livekit requires") {
+		t.Fatalf("missing LiveKit configuration: app=%v err=%v", app, err)
+	}
+}

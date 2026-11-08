@@ -76,33 +76,16 @@ media:
   #   lal (port 11935):   RTMP, when rtmp.enabled is true
   #   lal (port 15544):   RTSP  (rtsp://{lalmax_public_url host}:15544/live/{camera_id})
 
-# Experimental SFU and browser meeting (embedded media mode only).
+# Experimental SFU and browser meeting. Group bridging requires embedded media.
 # sfu:
 #   enabled: false
-#   # Choose "livekit" to embed LiveKit instead of the legacy SFU.
-#   # backend: livekit
+#   backend: livekit
 #   # livekit:
 #   #   config_file: /etc/lalmax-nvr/livekit.yaml
 #   #   api_key: your-livekit-api-key
 #   #   public_url: wss://livekit.example.com
-#   # Optional: collect non-default rooms after this idle duration (e.g. 10m).
-#   # Empty disables automatic collection; active bridges keep their room alive.
-#   idle_timeout: ""
-#   # Optional observation only; bitrate estimates are logged at debug level.
-#   # This does not pace traffic, select layers or adapt publishing bitrate.
-#   observe_bandwidth: false
-#   # Experimental and disruptive on congestion: a subscription can stop
-#   # when its pacing wait budget or the SFU subscriber queue is exceeded.
-#   # Requires observe_bandwidth: true; no automatic source adaptation exists.
-#   pacing: false
-#   # Optional STUN/TURN for SFU peers and the browser; TURN credentials are
-#   # delivered to authenticated meeting administrators. Use HTTPS and scoped
-#   # credentials. The lalmax WHEP server has its own ICE configuration.
-#   ice_servers:
-#     - urls: ["stun:stun.example.com:3478"]
-#     - urls: ["turn:turn.example.com:3478?transport=udp"]
-#       username: "replace-with-username"
-#       credential: "replace-with-password"
+#   # Configure room timeouts and STUN/TURN in the native LiveKit file.
+#   # The lalmax WHEP server has its own ICE configuration.
 
 # DLNA MediaServer — publishes live streams and recordings to trusted LAN players.
 # The LAN address is detected automatically. port is a dedicated listener,

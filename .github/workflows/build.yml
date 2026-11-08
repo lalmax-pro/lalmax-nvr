@@ -125,8 +125,8 @@ jobs:
       - name: Lint
         run: go vet ./...
 
-      - name: Test SFU Meet UI
-        run: node --test tools/sfu-meet/web/app.test.cjs
+      - name: Check SFU Meet UI
+        run: node --check internal/sfumeetui/web/livekit-app.js
 
       - name: Test
         run: go test -race -timeout 30m -coverprofile=coverage.out ./...

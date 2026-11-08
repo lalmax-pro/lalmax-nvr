@@ -397,7 +397,6 @@ func resolveConfigPath(path string) string {
 //  14. FTP server — depends on Config, Storage, DB
 //  15. HTTP server — depends on Router (which depends on all above)
 type App struct {
-	sfuRuntime       *nvrSFURuntime
 	liveKitRuntime   *nvrLiveKitRuntime
 	transcodeManager *transcode.Manager
 	transcodeService *transcode.Service
@@ -892,15 +891,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	if cfg.SFU.Enabled {
 		if err = cfg.SFU.ValidateBackend(); err == nil {
-			if cfg.SFU.Backend == "livekit" {
-				a.liveKitRuntime, err = newNVRLiveKitRuntime(a, cfg.SFU.LiveKit)
-				if err == nil {
-					if embedded, ok := a.mediaEngine.(*media.EmbeddedLalmax); ok && embedded.Server() != nil {
-						a.liveKitRuntime.bridges, err = newNVRLiveKitBridgeRegistry(a.liveKitRuntime, &nvrSFUPublisher{engine: embedded, server: embedded.Server()}, a.mediaAuth, a.db)
-					}
+			a.liveKitRuntime, err = newNVRLiveKitRuntime(a, cfg.SFU.LiveKit)
+			if err == nil {
+				if embedded, ok := a.mediaEngine.(*media.EmbeddedLalmax); ok && embedded.Server() != nil {
+					a.liveKitRuntime.bridges, err = newNVRLiveKitBridgeRegistry(a.liveKitRuntime, &nvrSFUPublisher{engine: embedded, server: embedded.Server()}, a.mediaAuth, a.db)
 				}
-			} else {
-				a.sfuRuntime, err = newNVRSFURuntime(a)
 			}
 		}
 		if err != nil {
@@ -984,12 +979,6 @@ func (a *App) buildRouter() http.Handler {
 
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.configPath, a.mergeMgr, cloudProxy)
-	if a.sfuRuntime != nil {
-		handler.SetSFUBridgeRegistry(a.sfuRuntime.registry)
-		handler.SetSFURoomManager(a.sfuRuntime.roomAdmin)
-		handler.SetSFUSignaling(a.sfuRuntime.signal)
-		handler.SetSFUTicketIssuer(a.sfuRuntime.tickets)
-	}
 	if a.liveKitRuntime != nil {
 		handler.SetLiveKitJoinIssuer(a.liveKitRuntime)
 		handler.SetSFURoomManager(&nvrLiveKitRoomAdmin{runtime: a.liveKitRuntime})
@@ -1452,9 +1441,6 @@ func (a *App) Start() error {
 			return fmt.Errorf("start LiveKit: %w", err)
 		}
 	}
-	if a.sfuRuntime != nil {
-		a.sfuRuntime.Start(ctx)
-	}
 	if a.jt808Svr != nil {
 		if err := a.jt808Svr.Start(); err != nil {
 			cancel()
@@ -1714,11 +1700,6 @@ func (a *App) Stop() error {
 		if a.transcodeManager != nil {
 			if err := a.transcodeManager.Close(shutdownCtx); err != nil {
 				log.Warn("transcoding shutdown incomplete", "error", err)
-			}
-		}
-		if a.sfuRuntime != nil {
-			if err := a.sfuRuntime.Close(shutdownCtx); err != nil {
-				log.Warn("SFU shutdown incomplete", "error", err)
 			}
 		}
 		if a.liveKitRuntime != nil {

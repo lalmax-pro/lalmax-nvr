@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -14,6 +16,14 @@ import (
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/livekitsfu"
 )
+
+func randomID() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
 
 func run() error {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")

@@ -86,11 +86,17 @@ type SFULiveKitConfig struct {
 }
 
 func (c SFUConfig) ValidateBackend() error {
-	if c.Backend != "" && c.Backend != "legacy" && c.Backend != "livekit" {
-		return fmt.Errorf("sfu: invalid backend")
+	if !c.Enabled && c.Backend == "legacy" {
+		return nil // An unused old configuration must not prevent NVR startup.
 	}
-	if !c.Enabled || c.Backend != "livekit" {
+	if c.Backend != "" && c.Backend != "livekit" {
+		return fmt.Errorf("sfu: backend must be livekit; migrate legacy SFU configuration")
+	}
+	if !c.Enabled {
 		return nil
+	}
+	if len(c.ICEServers) != 0 || c.IdleTimeout != "" || c.ObserveBandwidth || c.Pacing {
+		return fmt.Errorf("sfu: legacy ice_servers, idle_timeout, observe_bandwidth and pacing settings are unsupported; configure LiveKit instead")
 	}
 	u, err := url.Parse(c.LiveKit.PublicURL)
 	if c.LiveKit.ConfigFile == "" || c.LiveKit.APIKey == "" || err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ws" && u.Scheme != "wss") {

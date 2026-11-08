@@ -13,7 +13,7 @@ func TestSFUMeetPageAllowsSameOriginCamera(t *testing.T) {
 	h := &Handler{}
 	w := httptest.NewRecorder()
 	h.serveSFUMeet(w, httptest.NewRequest(http.MethodGet, "/sfu-meet/", nil))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `data-mode="nvr"`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "livekit-sdk.js") {
 		t.Fatalf("unexpected page response: %d", w.Code)
 	}
 	if got := w.Header().Get("Permissions-Policy"); got != "camera=(self), microphone=(self), geolocation=()" {
@@ -37,5 +37,11 @@ func TestSFUMeetServesLiveKitAssets(t *testing.T) {
 		if path == "/sfu-meet/" && !strings.Contains(w.Header().Get("Content-Security-Policy"), "https://sfu.example.test:7880 wss://sfu.example.test:7880") {
 			t.Fatal("LiveKit origin missing from content security policy")
 		}
+	}
+	h.config.SFU.Backend = ""
+	w := httptest.NewRecorder()
+	h.serveSFUMeet(w, httptest.NewRequest(http.MethodGet, "/sfu-meet/", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "livekit-sdk.js") {
+		t.Fatalf("default backend served the wrong meeting page: %d", w.Code)
 	}
 }
