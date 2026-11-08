@@ -60,6 +60,8 @@ short-lived shared-secret credentials and force the viewer to use a relay
 candidate. The TLS test uses a temporary self-signed certificate with a
 per-key browser exception; it does not verify a production certificate chain.
 Public NAT and deployment-specific connectivity still require separate testing.
+Set `LK_SIMULCAST_TEST=1` to additionally check that the browser publisher
+negotiates multiple video encodings.
 
 To exercise the full NVR recording plan and decode a synthetic recording,
 run `TestNVRLiveKitRecordingBrowser` with the same build tag and executable.

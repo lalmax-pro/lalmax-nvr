@@ -38,6 +38,15 @@ async function waitForAsync(page, predicate, argument, timeout, description) {
   let udpProxy;
   const errors=[];
   try {
+    if (process.env.LK_SIMULCAST_TEST) {
+      await publisher.addInitScript(() => {
+        const NativePeerConnection = window.RTCPeerConnection;
+        window.__simulcastPeerConnections = [];
+        window.RTCPeerConnection = class extends NativePeerConnection {
+          constructor(...args) { super(...args); window.__simulcastPeerConnections.push(this); }
+        };
+      });
+    }
     if (process.env.LK_UDP_LOSS_TEST) {
       const targetPort = Number(process.env.LK_LIVEKIT_UDP_PORT);
       if (!targetPort) throw new Error('LK_UDP_LOSS_TEST requires LK_LIVEKIT_UDP_PORT');
@@ -124,6 +133,12 @@ async function waitForAsync(page, predicate, argument, timeout, description) {
     await viewer.waitForFunction(() => document.querySelectorAll('#track-list .track-row').length>=2 && [...document.querySelectorAll('#tiles video')].some(v=>v.videoWidth>0), null, {timeout:25000});
     await viewer.waitForSelector('#audio-container audio', {state:'attached', timeout:15000});
     await viewer.locator('#tiles').scrollIntoViewIfNeeded();
+    if (process.env.LK_SIMULCAST_TEST) {
+      const encodings = await publisher.evaluate(() => window.__simulcastPeerConnections.flatMap(pc => pc.getSenders())
+        .filter(sender => sender.track?.kind === 'video')
+        .flatMap(sender => sender.getParameters().encodings.map(encoding => ({rid:encoding.rid, active:encoding.active}))));
+      assert.ok(new Set(encodings.map(encoding => encoding.rid).filter(Boolean)).size >= 2, `browser did not negotiate simulcast encodings: ${JSON.stringify(encodings)}`);
+    }
     if (process.env.LK_TURN_TEST) {
       const expectedTransport = ['tcp', 'tls'].includes(process.env.LK_TURN_TEST) ? process.env.LK_TURN_TEST : 'udp';
       try {
