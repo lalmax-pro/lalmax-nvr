@@ -8,6 +8,8 @@ NVR 在进程内运行 LiveKit。按 `config/config.example.yaml` 启用 `sfu`�
 
 会议采用 LiveKit 的房间、成员和 Track，支持仅观看、多轨发布和按轨道订阅。NVR 签发有效期五分钟、限定房间的 LiveKit 凭证；账号被撤权后不能再签发新凭证，但已签发的凭证仍可能在有效期内使用。LiveKit 自身负责连接恢复及媒体转发。公网地址、STUN/TURN、房间空闲时间和其他媒体参数在原生 LiveKit 配置中设置；lalmax 的 WHEP 播放使用单独的 ICE 配置。
 
+当前固定版本默认启用 LiveKit 拥塞控制和接收端反馈带宽估计，默认发包路径为直接转发，并不提供按估计码率排队整形。Simulcast 选层已有本机合成 RTP 验证；弱网下自动码率调整、发包整形和公网效果尚未完成验收，不应据此承诺带宽或并发容量。
+
 管理员可通过 Meet 页面或受保护的 API 管理临时房间：
 
 - `GET /api/sfu/rooms/` 列出房间 ID、运行代次和可见成员数。
