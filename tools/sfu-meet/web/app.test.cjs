@@ -231,3 +231,34 @@ for (const kind of ['audio','video']) test(`switching ${kind} preserves publicat
   await waitFor(()=>typeof resolveLate==='function');element('leave').listeners.click();resolveLate();
   await waitFor(()=>late.stopped);assert.equal(replacement.stopped,true,'leave must stop the active device');
 });
+
+test('NVR room controls create, join and close the selected generation', async () => {
+  class Element {
+    constructor(id=''){this.id=id;this.children=[];this.listeners={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;} setAttribute(){} querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;} append(...children){this.children.push(...children);} remove(){}
+  }
+  const elements=new Map(), element=id=>{if(!elements.has(id))elements.set(id,new Element(id));return elements.get(id);};
+  let rooms=[{id:'default',generation:'default-gen',participants:0}],ticketBody,deleteURL;const calls=[];
+  const fetch=async(url,options={})=>{
+    calls.push({url,options});
+    if(url==='/api/sfu/rooms/' && options.method==='POST'){const {id}=JSON.parse(options.body);rooms.push({id,generation:'generation-1',participants:0});return{ok:true,status:201,json:async()=>({id})};}
+    if(url==='/api/sfu/rooms/')return{ok:true,status:200,json:async()=>rooms};
+    if(url.startsWith('/api/sfu/rooms/') && options.method==='DELETE'){deleteURL=url;rooms=rooms.filter(r=>r.id!=='room-1');return{ok:true,status:204};}
+    if(url==='/api/sfu/ticket'){ticketBody=JSON.parse(options.body);return{ok:true,status:201,json:async()=>({ticket:'ticket',ice_servers:[]})};}
+    throw new Error(`unexpected request ${url}`);
+  };
+  class Socket {static OPEN=1;constructor(){this.readyState=1;setImmediate(()=>this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[],Publications:[]}})}));}send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}close(){this.readyState=3;}}
+  class Peer {constructor(){this.iceGatheringState='complete';this.connectionState='connected';}createDataChannel(){} async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){}}
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('nvr-room').value='default';element('nvr-room-new').value='room-1';element('nvr-room-create').listeners.click();
+  await waitFor(()=>element('nvr-room').value==='room-1' && !element('join').disabled);
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  assert.equal(ticketBody.room_id,'room-1');assert.equal(element('nvr-room').disabled,true);
+  element('leave').listeners.click();assert.equal(element('nvr-room').disabled,false);
+  element('nvr-room-close').listeners.click();await waitFor(()=>!!deleteURL && !element('join').disabled);
+  assert.equal(deleteURL,'/api/sfu/rooms/room-1?generation=generation-1');assert.equal(element('nvr-room').value,'default');
+  assert.equal(calls.filter(c=>c.url==='/api/sfu/rooms/' && c.options.method==='POST').length,1);
+});
