@@ -391,6 +391,7 @@
       RoomEvent.LocalTrackPublished, RoomEvent.LocalTrackUnpublished,
       RoomEvent.AudioPlaybackStatusChanged]) room.on(event, update);
     room.on(RoomEvent.Reconnecting, () => { if (current === state) status('正在重连'); });
+    room.on(RoomEvent.SignalReconnecting, () => { if (current === state) status('正在重连'); });
     room.on(RoomEvent.Reconnected, () => { if (current === state) { status('已连接', true); render(state); } });
     room.on(RoomEvent.Disconnected, () => { if (current === state) cleanup(state, '连接已结束'); });
   }

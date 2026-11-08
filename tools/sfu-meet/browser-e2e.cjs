@@ -4,6 +4,13 @@ const assert = require('node:assert/strict');
   const browser = await chromium.launch({executablePath:process.env.LIVEKIT_BROWSER_EXECUTABLE,headless:true,args:['--no-sandbox','--mute-audio','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
   const context = await browser.newContext({permissions:['camera','microphone']});
   await context.addInitScript(() => {
+    const NativeWebSocket = window.WebSocket;
+    window.WebSocket = class extends NativeWebSocket {
+      constructor(url, protocols) {
+        super(url, protocols);
+        window.__liveKitTestSocket = this;
+      }
+    };
     navigator.mediaDevices.getDisplayMedia = async () => {
       const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180;
       const ctx = canvas.getContext('2d'); let n = 0;
@@ -54,6 +61,21 @@ const assert = require('node:assert/strict');
     }
     await viewer.locator('#tiles').scrollIntoViewIfNeeded();
     await viewer.waitForFunction(() => document.querySelector('#audio-container audio') && [...document.querySelectorAll('#tiles video')].some(v=>v.videoWidth>0), null, {timeout:15000});
+    await viewer.evaluate(() => {
+      window.__testConnectionStates = [];
+      new MutationObserver(() => window.__testConnectionStates.push(document.querySelector('#status-text').textContent))
+        .observe(document.querySelector('#status-text'), {childList:true, subtree:true, characterData:true});
+      if (!window.__liveKitTestSocket || window.__liveKitTestSocket.readyState !== WebSocket.OPEN) throw new Error('LiveKit signaling socket unavailable');
+      window.__liveKitTestSocket.close(4000, 'synthetic interruption');
+    });
+    try {
+      await viewer.waitForFunction(() => window.__testConnectionStates.includes('正在重连') && document.querySelector('#status-text').textContent === '已连接', null, {timeout:30000});
+    } catch (error) {
+      const state = await viewer.evaluate(() => ({events:window.__testConnectionStates, status:document.querySelector('#status-text').textContent, socketState:window.__liveKitTestSocket?.readyState, socketPath:window.__liveKitTestSocket ? new URL(window.__liveKitTestSocket.url).pathname : ''}));
+      throw new Error(`reconnect failed: ${JSON.stringify(state)}: ${error.message}`);
+    }
+    await viewer.locator('#tiles').scrollIntoViewIfNeeded();
+    await viewer.waitForFunction(() => document.querySelector('#audio-container audio') && [...document.querySelectorAll('#tiles video')].some(v=>v.videoWidth>0), null, {timeout:20000});
     if (process.env.LK_BRIDGE_TEST) {
       await viewer.waitForFunction(() => [...document.querySelector('#bridge-track').options].some(o => o.text.includes('摄像头')) && [...document.querySelector('#bridge-audio').options].some(o => o.text.includes('麦克风')));
       await viewer.selectOption('#bridge-track', {label: await viewer.locator('#bridge-track option').filter({hasText:'摄像头'}).first().textContent()});
