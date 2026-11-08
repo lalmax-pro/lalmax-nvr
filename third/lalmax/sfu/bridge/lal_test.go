@@ -48,7 +48,7 @@ func TestRunH264ToLalFeedsAndCleansUp(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- RunH264ToLal(ctx, sub, publisher, "target") }()
-	if err := f.WriteRTP(packet(1, 1, true, stap([]byte{0x67, 1}, []byte{0x68, 2}, []byte{0x65, 3})...)); err != nil {
+	if err := f.WriteRTP(packet(1, 1, true, stap([]byte{0x67, 1}, []byte{0x68, 2}, []byte{0x65, 0xb0})...)); err != nil {
 		t.Fatal(err)
 	}
 	select {
