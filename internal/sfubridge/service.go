@@ -105,6 +105,18 @@ func randomID() (string, error) {
 // handle must remain in a server-side ownership registry; do not expose Stop
 // without authorizing the requesting principal. requestCtx controls setup only.
 func (s *Service) Start(requestCtx context.Context, principal, publicationID string) (*Handle, error) {
+	return s.start(requestCtx, principal, publicationID, "")
+}
+
+// StartAV creates one output from same-participant video and audio tracks.
+func (s *Service) StartAV(requestCtx context.Context, principal, videoID, audioID string) (*Handle, error) {
+	if audioID == "" || audioID == videoID {
+		return nil, ErrInvalid
+	}
+	return s.start(requestCtx, principal, videoID, audioID)
+}
+
+func (s *Service) start(requestCtx context.Context, principal, publicationID, audioID string) (*Handle, error) {
 	if requestCtx == nil || principal == "" || publicationID == "" {
 		return nil, ErrInvalid
 	}
@@ -157,11 +169,19 @@ func (s *Service) Start(requestCtx context.Context, principal, publicationID str
 	if err = session.Subscribe(requestCtx, publicationID); err != nil {
 		return nil, err
 	}
+	if audioID != "" {
+		if err = session.Subscribe(requestCtx, audioID); err != nil {
+			return nil, err
+		}
+	}
 	var pub sfu.Publication
+	var audio sfu.Publication
 	for _, p := range s.room.Snapshot().Publications {
 		if p.ID == publicationID {
 			pub = p
-			break
+		}
+		if p.ID == audioID {
+			audio = p
 		}
 	}
 	if pub.ID == "" {
@@ -169,6 +189,17 @@ func (s *Service) Start(requestCtx context.Context, principal, publicationID str
 	}
 	if err = s.validate(requestCtx, pub); err != nil {
 		return nil, err
+	}
+	if audioID != "" {
+		if audio.ID == "" {
+			return nil, sfu.ErrPublicationNotFound
+		}
+		if pub.Kind != "video" || audio.Kind != "audio" || pub.ParticipantID != audio.ParticipantID {
+			return nil, ErrInvalid
+		}
+		if err = s.validate(requestCtx, audio); err != nil {
+			return nil, err
+		}
 	}
 	if err = s.grants.ReserveInternalStream(target, publish, playback); err != nil {
 		return nil, fmt.Errorf("reserve output: %w", err)
@@ -187,7 +218,9 @@ func (s *Service) Start(requestCtx context.Context, principal, publicationID str
 	}
 	lifetime, cancel := context.WithCancel(s.ctx)
 	var done <-chan error
-	if pub.Kind == "audio" {
+	if audioID != "" {
+		done, err = session.StartAVBridgeWithContexts(requestCtx, lifetime, audioID, publicationID, target, s.publisher)
+	} else if pub.Kind == "audio" {
 		done, err = session.StartOpusBridgeWithContexts(requestCtx, lifetime, publicationID, target, s.publisher)
 	} else {
 		done, err = session.StartH264BridgeWithContexts(requestCtx, lifetime, publicationID, target, s.publisher)

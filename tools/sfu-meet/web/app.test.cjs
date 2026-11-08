@@ -131,7 +131,7 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
   class Socket {
     static OPEN=1;
     constructor(url){socket=this;this.url=url;this.readyState=1;setImmediate(()=>this.snapshot([]));}
-    snapshot(publications){this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[{ID:'remote'}],Publications:publications}})});}
+    snapshot(publications,participants=[{ID:'remote'}]){this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:participants,Publications:publications}})});}
     send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
     close(){this.readyState=3;}
   }
@@ -156,6 +156,10 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
   assert.equal(peerConfig.iceServers[0].urls[0],'stun:example.test:3478');
   assert.equal(socket.url,'wss://nvr.test/api/sfu/ws?ticket=short-ticket');
   assert.equal(calls[0].options.headers.Authorization,'Basic encoded-credentials');
+  const existingTiles=element('tiles').children;
+  socket.snapshot([],[{ID:'remote'},{ID:'bridge_internal'}]);
+  assert.equal(element('tiles').children,existingTiles,'internal bridge join must not remount meeting media');
+  assert.equal(element('member-count').textContent,'1 人在线');
   socket.snapshot([{ID:'video-publication',ParticipantID:'remote',Source:'camera',Kind:'video',Codec:'video/H264',RTPReady:true}]);
   await waitFor(()=>element('bridge-list').children.length>0);
   element('bridge-list').children[0].children[1].listeners.click();

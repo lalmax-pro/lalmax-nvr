@@ -23,8 +23,8 @@ const (
 // ManagementRequest contains server-side identity and bridge scope. A policy
 // must fail closed and not derive Principal from untrusted request parameters.
 type ManagementRequest struct {
-	Principal, Owner, BridgeID, PublicationID, StreamID string
-	Action                                              Action
+	Principal, Owner, BridgeID, PublicationID, AudioPublicationID, StreamID string
+	Action                                                                  Action
 }
 type ManagementAuthorizer func(context.Context, ManagementRequest) error
 
@@ -39,6 +39,7 @@ const (
 
 type Status struct {
 	ID, PublicationID, StreamID string
+	AudioPublicationID          string
 	State                       State
 }
 type registryEntry struct {
@@ -72,6 +73,17 @@ func NewRegistry(service *Service, authorize ManagementAuthorizer, maxEntries in
 // Create accepts a trusted authenticated principal. Success means queued;
 // use Get to observe terminal failure or stop. The stream ID is server assigned.
 func (r *Registry) Create(ctx context.Context, principal, publicationID string) (Status, error) {
+	return r.create(ctx, principal, publicationID, "")
+}
+
+func (r *Registry) CreateAV(ctx context.Context, principal, videoID, audioID string) (Status, error) {
+	if audioID == "" || audioID == videoID {
+		return Status{}, ErrInvalid
+	}
+	return r.create(ctx, principal, videoID, audioID)
+}
+
+func (r *Registry) create(ctx context.Context, principal, publicationID, audioID string) (Status, error) {
 	if ctx == nil || principal == "" || publicationID == "" {
 		return Status{}, ErrInvalid
 	}
@@ -86,7 +98,13 @@ func (r *Registry) Create(ctx context.Context, principal, publicationID string) 
 	}
 	r.creating++
 	r.mu.Unlock()
-	handle, err := r.service.Start(ctx, principal, publicationID)
+	var handle *Handle
+	var err error
+	if audioID == "" {
+		handle, err = r.service.Start(ctx, principal, publicationID)
+	} else {
+		handle, err = r.service.StartAV(ctx, principal, publicationID, audioID)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.creating--
@@ -97,7 +115,7 @@ func (r *Registry) Create(ctx context.Context, principal, publicationID string) 
 		handle.Stop()
 		return Status{}, ErrClosed
 	}
-	status := Status{ID: handle.StreamID, StreamID: handle.StreamID, PublicationID: publicationID, State: StatePending}
+	status := Status{ID: handle.StreamID, StreamID: handle.StreamID, PublicationID: publicationID, AudioPublicationID: audioID, State: StatePending}
 	entry := &registryEntry{owner: principal, status: status, handle: handle}
 	r.entries[status.ID] = entry
 	go r.observe(entry)
@@ -140,7 +158,7 @@ func (r *Registry) allowed(ctx context.Context, principal, id string, action Act
 	if entry == nil || entry.owner != principal {
 		return nil, ErrNotFound
 	}
-	req := ManagementRequest{Principal: principal, Owner: entry.owner, BridgeID: id, PublicationID: entry.status.PublicationID, StreamID: entry.status.StreamID, Action: action}
+	req := ManagementRequest{Principal: principal, Owner: entry.owner, BridgeID: id, PublicationID: entry.status.PublicationID, AudioPublicationID: entry.status.AudioPublicationID, StreamID: entry.status.StreamID, Action: action}
 	// Policies can be slow or call other services. Never hold the registry lock
 	// during authorization; verify the entry still exists after reacquiring it.
 	r.mu.Unlock()
