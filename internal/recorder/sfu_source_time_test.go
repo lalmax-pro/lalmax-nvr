@@ -167,3 +167,62 @@ func TestSFURecordingKeepsFractionalOpusDurations(t *testing.T) {
 		require.NoError(t, os.WriteFile(artifact, data, 0o600))
 	}
 }
+
+func TestSFURecordingFillsFractionalOpusGap(t *testing.T) {
+	store := newTestManager(t)
+	frames := make(chan media.MediaFrame, 128)
+	rec := NewH264Recorder(H264Config{
+		CameraID: "sfu-fractional-gap", SegmentDur: time.Minute, AudioEnabled: true, PreserveSourceTimestamps: true,
+		FrameSource: func(context.Context) (media.FrameSubscription, error) { return &fakeFrameSub{ch: frames}, nil },
+	}, store)
+	rec.Hub = model.NewStreamHub()
+	var audioFrames atomic.Int32
+	require.NoError(t, rec.Hub.SubscribeAudio("fractional-gap-test", func(_ int64, codec model.AudioCodec, _ []byte) {
+		if codec == model.AudioOpus {
+			audioFrames.Add(1)
+		}
+	}))
+	t.Cleanup(func() { rec.Hub.UnsubscribeAudio("fractional-gap-test") })
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	require.NoError(t, rec.Start(ctx))
+	t.Cleanup(func() { _ = rec.Stop() })
+	frames <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", Data: annexB(testSPS)}
+	frames <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", Data: annexB(testPPS)}
+	frames <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", IsKey: true, Data: annexB(testIDR)}
+	require.Eventually(t, func() bool { rec.mu.Lock(); defer rec.mu.Unlock(); return rec.muxer != nil }, time.Second, time.Millisecond)
+	for i := range 400 {
+		if i >= 100 && i < 103 {
+			continue // Three lost 2.5 ms packets require 5 ms + 2.5 ms silence.
+		}
+		// RTMP timestamps are integral milliseconds, while Opus packets are 2.5 ms.
+		pts := time.Duration(i*5/2) * time.Millisecond
+		frames <- media.MediaFrame{Kind: media.FrameAudio, Codec: "opus", PTS: pts, Data: []byte{0xe0, 0xff, 0xfe}}
+		time.Sleep(time.Millisecond)
+	}
+	require.Eventually(t, func() bool { return audioFrames.Load() == 397 }, 5*time.Second, time.Millisecond)
+	require.NoError(t, rec.Stop())
+	files, err := store.ListFiles("sfu-fractional-gap")
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	data, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	first := bytes.Index(data, []byte("mdhd"))
+	require.GreaterOrEqual(t, first, 0)
+	second := bytes.Index(data[first+4:], []byte("mdhd"))
+	require.GreaterOrEqual(t, second, 0)
+	second += first + 4
+	require.GreaterOrEqual(t, len(data), second+24)
+	require.Equal(t, uint32(48000), binary.BigEndian.Uint32(data[second+16:second+20]))
+	require.Equal(t, uint32(48000), binary.BigEndian.Uint32(data[second+20:second+24]), "400 packets must span one second")
+	stsz := bytes.Index(data, []byte("stsz"))
+	require.GreaterOrEqual(t, stsz, 0)
+	audioStsz := bytes.Index(data[stsz+4:], []byte("stsz"))
+	require.GreaterOrEqual(t, audioStsz, 0)
+	audioStsz += stsz + 4
+	require.GreaterOrEqual(t, len(data), audioStsz+16)
+	require.Equal(t, uint32(399), binary.BigEndian.Uint32(data[audioStsz+12:audioStsz+16]), "three lost packets must be replaced by two silence packets")
+	if artifact := os.Getenv("SFU_FRACTIONAL_GAP_RECORDING_MP4"); artifact != "" {
+		require.NoError(t, os.WriteFile(artifact, data, 0o600))
+	}
+}

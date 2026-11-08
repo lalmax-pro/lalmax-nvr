@@ -333,8 +333,8 @@ func (m *MP4Muxer) WriteAudioSample(trackID int, data []byte, pts time.Duration,
 	return m.appendSampleLocked(t, data, pts, duration, 0, true)
 }
 
-// WriteOpusSampleWithGapFill inserts bounded 20 ms silence packets for gaps
-// aligned to 20 ms. The returned duration is the gap that could not be filled.
+// WriteOpusSampleWithGapFill inserts bounded Opus silence packets for gaps
+// aligned to 2.5 ms. The returned duration is the gap that could not be filled.
 // The caller must supply timestamps from one continuous source clock.
 func (m *MP4Muxer) WriteOpusSampleWithGapFill(trackID int, data []byte, pts, duration time.Duration) (time.Duration, error) {
 	m.mu.Lock()
@@ -355,24 +355,35 @@ func (m *MP4Muxer) WriteOpusSampleWithGapFill(trackID int, data []byte, pts, dur
 			return 0, errors.New("Opus sample timestamp regressed")
 		}
 		if gap > time.Millisecond {
-			const frame = 20 * time.Millisecond
-			const maxFrames = 100
-			if gap > maxFrames*frame+time.Millisecond {
+			const quantum = 2500 * time.Microsecond
+			const maxGap = 2 * time.Second
+			units := (gap + quantum/2) / quantum
+			fill := units * quantum
+			difference := gap - fill
+			if difference < 0 {
+				difference = -difference
+			}
+			if fill == 0 || fill > maxGap || difference > time.Millisecond {
 				unfilled = gap
 			} else {
-				count := int((gap + frame/2) / frame)
-				difference := gap - time.Duration(count)*frame
-				if difference < 0 {
-					difference = -difference
+				// CELT-only Opus silence frames, largest first to bound packet count.
+				// The 20 ms form is also used by Pion's WebRTC tests.
+				frames := [...]struct {
+					duration time.Duration
+					toc      byte
+				}{
+					{20 * time.Millisecond, 0xf8},
+					{10 * time.Millisecond, 0xf0},
+					{5 * time.Millisecond, 0xe8},
+					{quantum, 0xe0},
 				}
-				if count == 0 || difference > time.Millisecond {
-					unfilled = gap
-				} else {
-					// A 20 ms Opus silence packet, also used by Pion's WebRTC tests.
-					for i := 0; i < count; i++ {
-						if err := m.appendSampleLocked(t, []byte{0xf8, 0xff, 0xfe}, end+time.Duration(i)*frame, frame, 0, true); err != nil {
+				for _, frame := range frames {
+					for fill >= frame.duration {
+						if err := m.appendSampleLocked(t, []byte{frame.toc, 0xff, 0xfe}, end, frame.duration, 0, true); err != nil {
 							return 0, err
 						}
+						end += frame.duration
+						fill -= frame.duration
 					}
 				}
 			}
