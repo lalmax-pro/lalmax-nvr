@@ -6,6 +6,8 @@ The embedding server must supply all of: an existing room manager, trusted authe
 
 After a successful upgrade the client receives a `snapshot`. The `Snapshot` Go struct is encoded with its exported JSON field names; generation and sequence come from the room. Later updates are full filtered snapshots. If the bounded room watcher overflows, the connection closes: reconnect and obtain a new snapshot. Event and command response ordering may interleave.
 
+An authenticator that issues room-scoped credentials can set `Identity.RoomGeneration`; the handler rejects a credential if that room key now refers to another generation. An empty generation retains compatibility for trusted authenticators that intentionally authorize the current room instead. A stale room pointer still rejects a concurrent join after closure.
+
 Client commands are JSON with a nonempty `id` and a `type`:
 
 - `publish`: `kind`, `source`, `codec`, and optional `track_id` (the client WebRTC track ID).
