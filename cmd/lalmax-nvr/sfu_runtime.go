@@ -32,19 +32,21 @@ func nvrSFUVideoFeedback() []webrtc.RTCPFeedback {
 }
 
 type nvrSFURuntime struct {
-	rooms    *sfu.Manager
-	room     *sfu.Room
-	registry *sfubridge.Registry
-	signal   http.Handler
-	tickets  *nvrSFUTickets
-	policy   *nvrSFUPolicy
-	engine   *media.EmbeddedLalmax
-	server   *lalmaxserver.LalMaxServer
+	rooms     *sfu.Manager
+	roomAdmin *nvrSFURoomAdmin
+	room      *sfu.Room
+	registry  *sfubridge.Registry
+	signal    http.Handler
+	tickets   *nvrSFUTickets
+	policy    *nvrSFUPolicy
+	engine    *media.EmbeddedLalmax
+	server    *lalmaxserver.LalMaxServer
 }
 
 type nvrSFUPolicy struct {
 	app        *App
 	generation string
+	rooms      *sfu.Manager
 }
 
 // The bridge is tied to the media-server instance on which it was created.
@@ -88,7 +90,12 @@ func (p *nvrSFUPolicy) check(ctx context.Context, principal string) error {
 	}
 }
 func (p *nvrSFUPolicy) Authorize(ctx context.Context, r access.Request) error {
-	if r.Room != nvrSFURoom || r.RoomGeneration != p.generation || r.ParticipantID == "" {
+	validRoom := r.Room == nvrSFURoom && r.RoomGeneration == p.generation
+	if p.rooms != nil {
+		room, ok := p.rooms.Get(r.Room)
+		validRoom = ok && r.Room.Namespace == nvrSFURoom.Namespace && room.Snapshot().Generation == r.RoomGeneration
+	}
+	if !validRoom || r.ParticipantID == "" {
 		return errors.New("scope denied")
 	}
 	if err := p.check(ctx, r.Principal); err != nil {
@@ -213,11 +220,12 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 		return nil, errors.New("SFU requires embedded media engine")
 	}
 	rooms := sfu.NewManager()
-	room, err := rooms.CreateWithLimits(nvrSFURoom, sfu.RoomLimits{MaxParticipants: 32, MaxPublicationsPerParticipant: 3, MaxSubscriptions: 256, MaxWatchers: 32})
+	room, err := rooms.CreateWithLimits(nvrSFURoom, nvrSFURoomLimits)
 	if err != nil {
 		return nil, err
 	}
-	policy := &nvrSFUPolicy{app: a, generation: room.Snapshot().Generation}
+	policy := &nvrSFUPolicy{app: a, generation: room.Snapshot().Generation, rooms: rooms}
+	roomAdmin := newNVRSFURoomAdmin(rooms, room, policy)
 	server := embedded.Server()
 	service, err := sfubridge.NewPersistent(context.Background(), room, policy, &nvrSFUPublisher{engine: embedded, server: server}, a.mediaAuth, nvrSFUValidateBridge, 8, a.db)
 	if err != nil {
@@ -270,6 +278,7 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 		}()
 	}}
 	tickets := newNVRSFUTickets(policy)
+	tickets.resolveRoom = roomAdmin.resolve
 	type identityKey struct{}
 	handler := &signaling.Handler{Rooms: rooms, Policy: policy, CheckOrigin: nvrSFUOrigin, Authenticate: func(r *http.Request) (signaling.Identity, error) {
 		identity, ok := r.Context().Value(identityKey{}).(signaling.Identity)
@@ -320,7 +329,7 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 		}()
 		handler.ServeHTTP(w, r.WithContext(context.WithValue(ctx, identityKey{}, identity)))
 	})
-	return &nvrSFURuntime{rooms: rooms, room: room, registry: registry, signal: guarded, tickets: tickets, policy: policy, engine: embedded, server: server}, nil
+	return &nvrSFURuntime{rooms: rooms, room: room, roomAdmin: roomAdmin, registry: registry, signal: guarded, tickets: tickets, policy: policy, engine: embedded, server: server}, nil
 }
 
 // Start monitors account revocation and embedded media server replacement.
@@ -352,9 +361,9 @@ func (s *nvrSFURuntime) Start(ctx context.Context) {
 }
 func (s *nvrSFURuntime) Close(ctx context.Context) error {
 	s.tickets.Close()
-	err := s.rooms.Close(nvrSFURoom, s.room.Snapshot().Generation)
-	if err != nil && !errors.Is(err, sfu.ErrRoomNotFound) {
-		return fmt.Errorf("close SFU room: %w", err)
+	err := s.roomAdmin.closeAll()
+	if err != nil {
+		return fmt.Errorf("close SFU rooms: %w", err)
 	}
 	return s.registry.Close(ctx)
 }

@@ -149,6 +149,7 @@ type snapshotCache struct {
 
 type Handler struct {
 	sfuBridges            SFUBridgeRegistry
+	sfuRooms              SFURoomManager
 	sfuSignaling          http.Handler
 	sfuTickets            SFUTicketIssuer
 	sfuWHEPKey            []byte
@@ -407,6 +408,12 @@ func (h *Handler) Routes() http.Handler {
 			r.Delete("/{id}", h.removeSFUBridge)
 		})
 		r.With(middleware.RequireOperatePermission()).Post("/api/sfu/ticket", h.createSFUTicket)
+		r.Route("/api/sfu/rooms", func(r chi.Router) {
+			r.Use(middleware.RequireOperatePermission())
+			r.Get("/", h.listSFURooms)
+			r.Post("/", h.createSFURoom)
+			r.Delete("/{id}", h.closeSFURoom)
+		})
 		r.Post("/api/auth/logout", h.handleLogout)
 		r.Get("/api/health/details", h.handleHealthDetails)
 		r.Route("/api/recordings", func(r chi.Router) {

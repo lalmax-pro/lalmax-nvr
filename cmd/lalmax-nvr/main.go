@@ -974,6 +974,7 @@ func (a *App) buildRouter() http.Handler {
 	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.configPath, a.mergeMgr, cloudProxy)
 	if a.sfuRuntime != nil {
 		handler.SetSFUBridgeRegistry(a.sfuRuntime.registry)
+		handler.SetSFURoomManager(a.sfuRuntime.roomAdmin)
 		handler.SetSFUSignaling(a.sfuRuntime.signal)
 		handler.SetSFUTicketIssuer(a.sfuRuntime.tickets)
 	}

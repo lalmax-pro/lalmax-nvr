@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/signaling"
 )
 
@@ -17,10 +18,11 @@ type nvrSFUTicket struct {
 	expires  time.Time
 }
 type nvrSFUTickets struct {
-	mu      sync.Mutex
-	closed  bool
-	policy  *nvrSFUPolicy
-	tickets map[string]nvrSFUTicket
+	mu          sync.Mutex
+	closed      bool
+	policy      *nvrSFUPolicy
+	tickets     map[string]nvrSFUTicket
+	resolveRoom func(string) (sfu.Key, string, bool)
 }
 
 func newNVRSFUTickets(policy *nvrSFUPolicy) *nvrSFUTickets {
@@ -30,6 +32,11 @@ func newNVRSFUTickets(policy *nvrSFUPolicy) *nvrSFUTickets {
 // Issue accepts only server-authenticated user data and returns a 30-second,
 // single-use random ticket; user passwords are never embedded in it.
 func (t *nvrSFUTickets) Issue(ctx context.Context, user *model.User) (string, error) {
+	return t.IssueForRoom(ctx, user, "default")
+}
+
+// IssueForRoom binds a one-use credential to a currently existing Room.
+func (t *nvrSFUTickets) IssueForRoom(ctx context.Context, user *model.User, roomID string) (string, error) {
 	if ctx == nil {
 		return "", errors.New("invalid context")
 	}
@@ -40,6 +47,15 @@ func (t *nvrSFUTickets) Issue(ctx context.Context, user *model.User) (string, er
 	identity.RoomGeneration = t.policy.generation
 	if err = t.policy.check(ctx, identity.Principal); err != nil {
 		return "", err
+	}
+	if t.resolveRoom != nil {
+		room, generation, ok := t.resolveRoom(roomID)
+		if !ok {
+			return "", sfu.ErrRoomNotFound
+		}
+		identity.Room, identity.RoomGeneration = room, generation
+	} else if roomID != "default" {
+		return "", sfu.ErrRoomNotFound
 	}
 	var value [32]byte
 	if _, err = rand.Read(value[:]); err != nil {
