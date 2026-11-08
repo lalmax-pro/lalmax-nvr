@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/livekitsfu/bridge"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/lalmax-pro/lalmax-nvr/internal/testutil/rtpforward"
 	"github.com/pion/rtp"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
 	"github.com/q191201771/lal/pkg/remux"
 	maxlogic "github.com/q191201771/lalmax/logic"
-	"github.com/q191201771/lalmax/sfu/bridge"
-	"github.com/q191201771/lalmax/sfu/rtpforward"
 	"github.com/stretchr/testify/require"
 )
 

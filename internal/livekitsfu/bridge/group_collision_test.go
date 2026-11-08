@@ -6,10 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/testutil/rtpforward"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/logic"
-	"github.com/q191201771/lalmax/sfu/rtpforward"
 )
+
+type groupHook struct{ messages chan base.RtmpMsg }
+
+func (h *groupHook) OnMsg(m base.RtmpMsg) { h.messages <- m.Clone() }
+func (h *groupHook) OnStop()              {}
 
 // A duplicate target must leave an existing publisher and its viewers intact,
 // including when both tracks of an AV bridge must be released on failure.

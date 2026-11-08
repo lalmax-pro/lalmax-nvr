@@ -141,6 +141,19 @@ func TestH264PaddingOnlyPacketsPreserveSequenceAndAssembly(t *testing.T) {
 		t.Fatalf("unpadded empty packet: %v", err)
 	}
 }
+
+func TestH264PaddingDuringSequenceWrap(t *testing.T) {
+	h := NewH264()
+	mustPush(t, h, packet(65533, 100, true, stap([]byte{0x67, 1}, []byte{0x68, 2})...))
+	mustPush(t, h, packet(65534, 200, false, 0x7c, 0x85, 0xb0))
+	padding := packet(65535, 0, true)
+	padding.Padding, padding.PaddingSize = true, 1
+	mustPush(t, h, padding)
+	frame := mustPush(t, h, packet(0, 200, true, 0x7c, 0x45, 0xbb))
+	if frame == nil || !bytes.HasSuffix(frame.Payload, []byte{0, 0, 0, 1, 0x65, 0xb0, 0xbb}) {
+		t.Fatalf("padding across sequence wrap interrupted frame: %+v", frame)
+	}
+}
 func TestH264TimestampChangeDiscardsIncompleteAccessUnit(t *testing.T) {
 	h := NewH264()
 	mustPush(t, h, packet(1, 100, true, stap([]byte{0x67, 1}, []byte{0x68, 2}, []byte{0x65, 0xb0})...))

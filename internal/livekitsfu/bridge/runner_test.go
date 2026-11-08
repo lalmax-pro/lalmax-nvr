@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/testutil/rtpforward"
 	"github.com/q191201771/lal/pkg/base"
-	"github.com/q191201771/lalmax/sfu/rtpforward"
 )
 
 func TestRunnerSlowSinkDoesNotBlockOtherSubscribers(t *testing.T) {

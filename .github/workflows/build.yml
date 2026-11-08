@@ -136,10 +136,8 @@ jobs:
           cd third/lalmax
           go test -race -timeout 20m -count=1 ./logic ./rtc ./server ./voip/...
 
-      - name: Test embedded lalmax SFU
-        run: |
-          cd third/lalmax
-          go test -race -timeout 20m -count=1 ./sfu/...
+      - name: Test embedded LiveKit SFU
+        run: go test -race -timeout 20m -tags livekit_integration -count=1 ./internal/livekitsfu/...
 
       - name: Test embedded lal RTMP
         run: |

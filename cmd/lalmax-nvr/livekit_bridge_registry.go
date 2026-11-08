@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/auth"
+	"github.com/lalmax-pro/lalmax-nvr/internal/livekitsfu/bridge"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
 	"github.com/livekit/protocol/livekit"
-	"github.com/q191201771/lalmax/sfu/bridge"
 )
 
 type liveKitRoomKey struct{ name, sid string }

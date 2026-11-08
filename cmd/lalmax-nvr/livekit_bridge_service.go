@@ -13,11 +13,11 @@ import (
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/livekitsfu"
+	"github.com/lalmax-pro/lalmax-nvr/internal/livekitsfu/bridge"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
 	"github.com/livekit/livekit-server/pkg/service"
 	"github.com/livekit/protocol/livekit"
-	"github.com/q191201771/lalmax/sfu/bridge"
 )
 
 type liveKitBridgeService struct {

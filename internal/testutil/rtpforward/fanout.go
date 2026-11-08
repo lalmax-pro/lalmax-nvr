@@ -1,4 +1,5 @@
-// Package rtpforward provides a bounded, transport-independent RTP fanout.
+// Package rtpforward provides a bounded synthetic RTP source for tests.
+// It is not used by the LiveKit runtime or its production media path.
 package rtpforward
 
 import (

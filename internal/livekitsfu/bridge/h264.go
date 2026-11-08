@@ -36,6 +36,7 @@ type H264 struct {
 	ssrc                uint32
 	seqSet              bool
 	lastSeq             uint16
+	paddingCount        uint16
 	discarding          bool
 	discardTimestamp    uint32
 	timestampSet        bool
@@ -84,6 +85,7 @@ func (h *H264) Push(pkt *rtp.Packet) (*base.AvPacket, error) {
 	// WebRTC bandwidth probing can send padding-only RTP packets. They occupy
 	// sequence numbers but do not belong to an H264 access unit or its clock.
 	if len(pkt.Payload) == 0 {
+		h.paddingCount++
 		return nil, nil
 	}
 	if h.discarding {
@@ -98,7 +100,12 @@ func (h *H264) Push(pkt *rtp.Packet) (*base.AvPacket, error) {
 	}
 	h.timestampSet = !pkt.Marker
 	h.lastPacketTimestamp = pkt.Timestamp
-	nalus, err := h.decoder.Decode(pkt)
+	// The decoder tracks contiguous media packets but never sees padding-only
+	// packets. Normalize their sequence numbers without modifying the input;
+	// actual loss was already detected above using the original RTP sequence.
+	mediaPacket := *pkt
+	mediaPacket.SequenceNumber -= h.paddingCount
+	nalus, err := h.decoder.Decode(&mediaPacket)
 	if err != nil {
 		if errors.Is(err, rtph264.ErrMorePacketsNeeded) {
 			if pkt.Marker {

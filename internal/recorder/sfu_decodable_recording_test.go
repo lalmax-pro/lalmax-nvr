@@ -15,14 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/livekitsfu/bridge"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/lalmax-pro/lalmax-nvr/internal/testutil/rtpforward"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4/pkg/media/h264reader"
 	maxlogic "github.com/q191201771/lalmax/logic"
-	"github.com/q191201771/lalmax/sfu/bridge"
-	"github.com/q191201771/lalmax/sfu/rtpforward"
 	"github.com/stretchr/testify/require"
 )
 
