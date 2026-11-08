@@ -35,10 +35,23 @@ type nvrSFUBridgeRouter struct {
 	retiring  map[*nvrRoomBridgeEntry]struct{}
 	closed    bool
 	authorize func(context.Context, string) error
+	requests  map[bridgeRequestKey]*bridgeRequest
 }
 
+type bridgeRequestKey struct{ principal, key string }
+type bridgeRequest struct {
+	video, audio string
+	done         chan struct{}
+	status       sfubridge.Status
+	err          error
+	completed    time.Time
+}
+
+const bridgeRequestRetention = 24 * time.Hour
+const maxBridgeRequests = 4096
+
 func newNVRSFUBridgeRouter(check func(context.Context, string) error) *nvrSFUBridgeRouter {
-	return &nvrSFUBridgeRouter{entries: make(map[*sfu.Room]*nvrRoomBridgeEntry), retiring: make(map[*nvrRoomBridgeEntry]struct{}), authorize: check}
+	return &nvrSFUBridgeRouter{entries: make(map[*sfu.Room]*nvrRoomBridgeEntry), retiring: make(map[*nvrRoomBridgeEntry]struct{}), requests: make(map[bridgeRequestKey]*bridgeRequest), authorize: check}
 }
 func (r *nvrSFUBridgeRouter) add(room *sfu.Room, registry nvrRoomBridge) error {
 	if room == nil || registry == nil {
@@ -100,6 +113,66 @@ func (r *nvrSFUBridgeRouter) CreateAV(ctx context.Context, principal, video, aud
 		return sfubridge.Status{}, sfubridge.ErrInvalid
 	}
 	return r.create(ctx, principal, video, audio)
+}
+
+// CreateIdempotent retains the result for 24 hours after completion. A client
+// disconnect does not cancel an accepted operation; retries can recover its ID.
+func (r *nvrSFUBridgeRouter) CreateIdempotent(ctx context.Context, principal, video, audio, key string) (sfubridge.Status, error) {
+	if ctx == nil || principal == "" || video == "" || key == "" || (audio != "" && audio == video) {
+		return sfubridge.Status{}, sfubridge.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return sfubridge.Status{}, err
+	}
+	if err := r.authorize(ctx, principal); err != nil {
+		return sfubridge.Status{}, sfubridge.ErrDenied
+	}
+	k := bridgeRequestKey{principal, key}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return sfubridge.Status{}, sfubridge.ErrClosed
+	}
+	now := time.Now()
+	for existingKey, request := range r.requests {
+		if !request.completed.IsZero() && now.Sub(request.completed) >= bridgeRequestRetention {
+			delete(r.requests, existingKey)
+		}
+	}
+	request := r.requests[k]
+	if request != nil && (request.video != video || request.audio != audio) {
+		r.mu.Unlock()
+		return sfubridge.Status{}, sfubridge.ErrIdempotencyConflict
+	}
+	if request == nil {
+		if len(r.requests) >= maxBridgeRequests {
+			r.mu.Unlock()
+			return sfubridge.Status{}, sfubridge.ErrLimit
+		}
+		request = &bridgeRequest{video: video, audio: audio, done: make(chan struct{})}
+		r.requests[k] = request
+		// Keep the operation alive across HTTP disconnects, but bound its duration.
+		operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		go func() {
+			defer cancel()
+			status, err := r.create(operationCtx, principal, video, audio)
+			r.mu.Lock()
+			request.status, request.err, request.completed = status, err, time.Now()
+			close(request.done)
+			r.mu.Unlock()
+		}()
+	}
+	r.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return sfubridge.Status{}, ctx.Err()
+	case <-request.done:
+		if request.err != nil {
+			return sfubridge.Status{}, request.err
+		}
+		// Get repeats ownership and current management authorization checks.
+		return r.Get(ctx, principal, request.status.ID)
+	}
 }
 func (r *nvrSFUBridgeRouter) create(ctx context.Context, principal, pub, audio string) (sfubridge.Status, error) {
 	if ctx == nil || principal == "" || pub == "" {

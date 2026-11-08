@@ -10,6 +10,7 @@ import (
 
 var ErrNotFound = errors.New("sfu bridge not found")
 var ErrNotFinished = errors.New("sfu bridge has not finished")
+var ErrIdempotencyConflict = errors.New("sfu bridge idempotency key reused with different publications")
 
 // Action is independently authorized for each management operation.
 type Action string
