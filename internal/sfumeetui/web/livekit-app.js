@@ -38,6 +38,66 @@
     }
     return response.status === 204 ? null : response.json();
   }
+  function closeBridgePlayer(state) {
+    const player = state?.bridgePlayer;
+    if (!player) return;
+    state.bridgePlayer = null;
+    player.controller.abort();
+    player.pc.close();
+    $('bridge-player').srcObject = null;
+    $('bridge-player').hidden = true;
+    $('bridge-player-close').hidden = true;
+    if (player.location) fetch(player.location, { method: 'DELETE', headers: { Authorization: `Basic ${state.auth}` }, cache: 'no-store', keepalive: true }).catch(() => {});
+  }
+  async function playBridge(state, id) {
+    closeBridgePlayer(state);
+    const pc = new RTCPeerConnection();
+    const player = { id, pc, controller: new AbortController(), location: '' };
+    state.bridgePlayer = player;
+    const active = () => current === state && state.bridgePlayer === player;
+    try {
+      const media = new MediaStream();
+      pc.ontrack = ({ track }) => { if (active()) media.addTrack(track); };
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+      await pc.setLocalDescription(await pc.createOffer());
+      await new Promise((resolve, reject) => {
+        if (pc.iceGatheringState === 'complete') { resolve(); return; }
+        const timer = setTimeout(() => reject(new Error('播放连接准备超时')), 10000);
+        const done = () => { if (pc.iceGatheringState === 'complete') { clearTimeout(timer); resolve(); } };
+        pc.addEventListener('icegatheringstatechange', done);
+        player.controller.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('播放已取消')); }, { once: true });
+      });
+      if (!active()) return;
+      const path = `/api/sfu/bridges/${encodeURIComponent(id)}/whep`;
+      let response;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        response = await fetch(path, { method: 'POST', signal: player.controller.signal, cache: 'no-store', headers: { Authorization: `Basic ${state.auth}`, 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp });
+        if (response.status !== 503 || attempt === 4) break;
+        await new Promise(resolve => setTimeout(resolve, 500));
+        if (!active()) return;
+      }
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `播放失败 (${response.status})`);
+      }
+      const location = new URL(response.headers.get('Location') || '', window.location.href);
+      if (location.origin !== window.location.origin || !location.pathname.startsWith(`${path}/`)) throw new Error('播放会话地址无效');
+      player.location = location.href;
+      if (!active()) {
+        fetch(player.location, { method: 'DELETE', headers: { Authorization: `Basic ${state.auth}` }, cache: 'no-store', keepalive: true }).catch(() => {});
+        return;
+      }
+      await pc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+      if (!active()) return;
+      $('bridge-player').srcObject = media;
+      $('bridge-player').hidden = false;
+      $('bridge-player-close').hidden = false;
+      bridgeError('');
+    } catch (error) {
+      if (active()) { closeBridgePlayer(state); bridgeError(error.message || '播放失败'); }
+    }
+  }
   function renderBridgeTracks(room) {
     if (localMode) return;
     const main = $('bridge-track');
@@ -69,6 +129,7 @@
     try {
       const entries = await bridgeRequest('/api/sfu/bridges/');
       if (current !== state) return;
+      if (state.bridgePlayer && !entries.some(entry => entry.id === state.bridgePlayer.id && entry.state === 'pending')) closeBridgePlayer(state);
       const list = $('bridge-list');
       list.replaceChildren();
       for (const entry of entries) {
@@ -92,11 +153,21 @@
           try {
             const path = `/api/sfu/bridges/${encodeURIComponent(entry.id)}`;
             await bridgeRequest(terminal ? path : `${path}/stop`, terminal ? { method: 'DELETE' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            if (state.bridgePlayer?.id === entry.id) closeBridgePlayer(state);
             bridgeError('');
             await refreshBridges(state);
           } catch (error) { bridgeError(error.message); button.disabled = false; }
         });
-        row.append(info, button);
+        row.append(info);
+        if (entry.state === 'pending') {
+          const play = document.createElement('button');
+          play.type = 'button';
+          play.className = 'track-toggle';
+          play.textContent = '播放';
+          play.addEventListener('click', () => playBridge(state, entry.id));
+          row.append(play);
+        }
+        row.append(button);
         list.append(row);
       }
     } catch (error) {
@@ -288,6 +359,7 @@
     if (current !== state) return;
     current = null;
     clearInterval(state.bridgeTimer);
+    closeBridgePlayer(state);
     $('bridge-track').disabled = true;
     $('bridge-audio').disabled = true;
     $('bridge-create').disabled = true;
@@ -367,6 +439,7 @@
   $('share').addEventListener('click', () => action((room) => room.localParticipant.setScreenShareEnabled(!room.localParticipant.isScreenShareEnabled, { audio: $('screen-audio').checked })));
   $('enable-audio').addEventListener('click', () => action((room) => room.startAudio()));
   $('leave').addEventListener('click', () => { const state = current; if (state) { cleanup(state, '已离开'); state.room.disconnect().catch(() => {}); } });
+  $('bridge-player-close').addEventListener('click', () => closeBridgePlayer(current));
   $('bridge-create').addEventListener('click', async () => {
     const state = current;
     if (!state || state.bridgeBusy) return;

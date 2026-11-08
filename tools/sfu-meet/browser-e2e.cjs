@@ -82,9 +82,15 @@ const assert = require('node:assert/strict');
         return result;
       }, stream);
       assert.ok(outcome.width > 0 && outcome.audioBytes > 0, JSON.stringify(outcome));
-      await viewer.locator('#bridge-list button').first().click();
-      await viewer.waitForFunction(() => document.querySelector('#bridge-list button')?.textContent === '移除', null, {timeout:15000});
-      await viewer.locator('#bridge-list button').first().click();
+      await viewer.getByRole('button', {name:'播放', exact:true}).click();
+      await viewer.waitForFunction(() => {
+        const video = document.querySelector('#bridge-player');
+        return video.videoWidth > 0 && video.srcObject?.getAudioTracks().some(track => track.readyState === 'live' && !track.muted);
+      }, null, {timeout:25000});
+      await viewer.getByRole('button', {name:'停止', exact:true}).click();
+      await viewer.getByRole('button', {name:'移除', exact:true}).waitFor({timeout:15000});
+      assert.equal(await viewer.locator('#bridge-player').isHidden(), true);
+      await viewer.getByRole('button', {name:'移除', exact:true}).click();
     }
     await publisher.check('#screen-audio'); await publisher.click('#share');
     await viewer.waitForFunction(() => document.querySelectorAll('#track-list .track-row').length>=4, null, {timeout:20000});
