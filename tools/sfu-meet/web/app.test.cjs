@@ -949,3 +949,85 @@ for (const scenario of ['request-timeout','body-timeout','error-body-timeout','a
   await waitFor(()=>timers.size===0); // Allow any concurrent subscription negotiation to settle too.
   if(!['leave-during-request','leave-during-backoff'].includes(scenario))element('leave').listeners.click();
 });
+
+for (const scenario of ['request-timeout','answer-timeout','leave-during-answer','status-timeout','not-ready-then-success','terminal-status','invalid-location','late-response']) test(`WHEP ${scenario} remains recoverable`, async () => {
+  class Element {
+    constructor(){this.children=[];this.listeners={};this.attributes={};this.disabled=false;this.hidden=true;this.checked=false;this.value='';this.textContent='';this.classList={toggle(){}};}
+    addEventListener(type,fn){this.listeners[type]=fn;}setAttribute(name,value){this.attributes[name]=value;}querySelector(){return new Element();}
+    replaceChildren(...children){this.children=children;}append(...children){this.children.push(...children);}remove(){}play(){return Promise.resolve();}
+  }
+  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const calls=[],timers=new Set(),peers=[];let socket,whepAttempts=0,waitingSignal,releaseLate,stopRequested=false;
+  const location='/api/sfu/bridges/bridge-1/whep/session';
+  class Socket {
+    static OPEN=1;
+    constructor(){socket=this;this.readyState=1;setImmediate(()=>this.snapshot([]));}
+    snapshot(publications){this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[{ID:'remote'}],Publications:publications}})});}
+    send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}
+    close(){this.readyState=3;}
+  }
+  class Peer {
+    constructor(){this.iceGatheringState='complete';this.connectionState='connected';peers.push(this);}createDataChannel(){}
+    addTransceiver(){return{stop(){}};}async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){this.closed=true;}
+  }
+  const waitForAbort=signal=>new Promise((_,reject)=>{waitingSignal=signal;signal.addEventListener('abort',()=>reject(new Error('aborted')));});
+  const answer=()=>({ok:true,status:201,headers:{get:()=>location},text:async()=> 'answer'});
+  const fetch=async(url,options={})=>{
+    const method=options.method||'GET';calls.push({url,method});
+    if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'ticket',ice_servers:[]})};
+    if(url==='/api/sfu/bridges/'&&method==='POST')return{ok:true,status:202,json:async()=>({id:'bridge-1'})};
+    if(url==='/api/sfu/bridges/bridge-1/whep'){
+      whepAttempts++;
+      if(scenario==='request-timeout')return await waitForAbort(options.signal);
+      if(scenario==='answer-timeout'||scenario==='leave-during-answer')return{ok:true,status:201,headers:{get:()=>location},text:async()=>await waitForAbort(options.signal)};
+      if(scenario==='late-response')return await new Promise(resolve=>{waitingSignal=options.signal;releaseLate=()=>resolve(answer());});
+      if(scenario==='invalid-location')return{ok:true,status:201,headers:{get:()=>'/another/session'},text:async()=> 'answer'};
+      if(scenario==='status-timeout'||scenario==='terminal-status'||(scenario==='not-ready-then-success'&&whepAttempts===1))return{ok:false,status:503};
+      return answer();
+    }
+    if(url===location&&method==='DELETE')return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/bridge-1/stop'){stopRequested=true;return{ok:true,status:204};}
+    if(url==='/api/sfu/bridges/bridge-1'&&method==='DELETE')return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/bridge-1'){
+      if(!stopRequested&&scenario==='status-timeout')return await waitForAbort(options.signal);
+      return{ok:true,status:200,json:async()=>({state:stopRequested||scenario==='terminal-status'?'stopped':'pending'})};
+    }
+    throw new Error(`unexpected request ${url}`);
+  };
+  const schedule=(fn,ms)=>{if(ms===12000||ms===5000){const timer={fn,ms};timers.add(timer);return timer;}return setTimeout(fn,ms===500?0:ms);};
+  const cancel=id=>{if(timers.has(id))timers.delete(id);else clearTimeout(id);};
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,crypto:require('node:crypto').webcrypto,setTimeout:schedule,clearTimeout:cancel,Map,Set,Promise,Error,encodeURIComponent};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
+  const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
+  element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
+  socket.snapshot([{ID:'pub-1',ParticipantID:'remote',Source:'microphone',Kind:'audio',Codec:'audio/opus',RTPReady:true}]);
+  element('bridge-list').children[0].children[1].listeners.click();
+  if(['request-timeout','answer-timeout','status-timeout'].includes(scenario)){
+    const ms=scenario==='status-timeout'?5000:12000;
+    await waitFor(()=>waitingSignal&&[...timers].filter(timer=>timer.ms===ms).length===1);
+    const signal=waitingSignal;[...timers].find(timer=>timer.ms===ms).fn();assert.equal(signal.aborted,true);
+    await waitFor(()=>element('bridge-status').textContent.includes('网络连接失败'));
+    assert.equal(whepAttempts,1,'an ambiguous WHEP result must not create another session');
+    element('bridge-list').children[0].children[1].listeners.click();
+    await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/bridge-1'&&c.method==='DELETE'));
+  } else if(scenario==='leave-during-answer'||scenario==='late-response'){
+    await waitFor(()=>!!waitingSignal);const signal=waitingSignal;element('leave').listeners.click();assert.equal(signal.aborted,true);
+    await waitFor(()=>stopRequested);
+    if(scenario==='late-response')releaseLate();
+    await waitFor(()=>calls.some(c=>c.url===location&&c.method==='DELETE'));
+  } else if(scenario==='not-ready-then-success'){
+    await waitFor(()=>element('bridge-list').children[0].children[0].children[1].textContent==='正在连接播放器');
+    assert.equal(whepAttempts,2);element('bridge-list').children[0].children[1].listeners.click();await waitFor(()=>stopRequested);
+  } else {
+    await waitFor(()=>element('bridge-status').textContent.includes(scenario==='terminal-status'?'桥接已停止':'无效的播放会话'));
+    assert.equal(whepAttempts,1);element('bridge-list').children[0].children[1].listeners.click();await waitFor(()=>stopRequested);
+  }
+  if(['answer-timeout','leave-during-answer','not-ready-then-success'].includes(scenario)){
+    const playerDelete=calls.findIndex(c=>c.url===location&&c.method==='DELETE'),bridgeStop=calls.findIndex(c=>c.url==='/api/sfu/bridges/bridge-1/stop');
+    assert.ok(playerDelete>=0&&playerDelete<bridgeStop,'known WHEP session must be deleted before bridge stop');
+  }
+  if(['request-timeout','status-timeout','terminal-status','invalid-location'].includes(scenario))assert.ok(!calls.some(c=>c.url===location));
+  await waitFor(()=>timers.size===0);
+  assert.equal(peers[1].closed,true);
+  if(!['leave-during-answer','late-response'].includes(scenario))element('leave').listeners.click();
+});
