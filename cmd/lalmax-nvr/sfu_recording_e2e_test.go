@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -37,7 +39,12 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	t.Chdir(t.TempDir())
 	dir := t.TempDir()
 	videoPath := filepath.Join(dir, "source.h264")
-	cmd := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x96:rate=25:duration=1", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-x264-params", "threads=1:slices=1:keyint=25:min-keyint=25:scenecut=0:repeat-headers=1", "-an", "-f", "h264", "-y", videoPath)
+	videoFilter := "testsrc2=size=160x96:rate=25:duration=1"
+	markers := os.Getenv("SFU_NVR_RECORDING_MARKERS_TEST") == "1"
+	if markers {
+		videoFilter = `color=c=black:s=160x96:r=25:d=1,drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='between(t,0.48,0.52)'`
+	}
+	cmd := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", videoFilter, "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-x264-params", "threads=1:slices=1:keyint=25:min-keyint=25:scenecut=0:repeat-headers=1", "-an", "-f", "h264", "-y", videoPath)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
 	raw, err := os.ReadFile(videoPath)
@@ -64,6 +71,35 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	require.NotEmpty(t, sps)
 	require.NotEmpty(t, pps)
 	require.Len(t, frames, 25)
+	var audioPayloads [][]byte
+	if markers {
+		audioPath := filepath.Join(dir, "markers.opus")
+		filter := `aevalsrc=if(between(t\,0.48\,0.50)\,0.5*sin(2*PI*1000*t)\,0):s=48000:d=1`
+		cmd = exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", filter, "-ac", "2", "-c:a", "libopus", "-frame_duration", "20", "-b:a", "64k", "-y", audioPath)
+		out, err = cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		cmd = exec.Command("ffprobe", "-v", "error", "-select_streams", "a:0", "-show_packets", "-show_data", "-show_entries", "packet=data", "-of", "json", audioPath)
+		out, err = cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		var packets struct {
+			Packets []struct {
+				Data string `json:"data"`
+			} `json:"packets"`
+		}
+		require.NoError(t, json.Unmarshal(out, &packets))
+		require.GreaterOrEqual(t, len(packets.Packets), 50)
+		for _, packet := range packets.Packets[:50] {
+			var payload []byte
+			for _, line := range strings.Split(strings.TrimSpace(packet.Data), "\n") {
+				parts := strings.SplitN(line, ":", 2)
+				require.Len(t, parts, 2)
+				chunk, err := hex.DecodeString(strings.ReplaceAll(strings.TrimSpace(strings.SplitN(parts[1], "  ", 2)[0]), " ", ""))
+				require.NoError(t, err)
+				payload = append(payload, chunk...)
+			}
+			audioPayloads = append(audioPayloads, payload)
+		}
+	}
 
 	cfg, cfgPath := testConfig(t)
 	isolateEmbeddedMedia(t, cfg)
@@ -197,7 +233,11 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 					}
 				}
 				aSeq++
-				if err := audio.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: aSeq, Timestamp: 48000 + i*960, Marker: true}, Payload: []byte{0xf8, 0xff, 0xfe}}); err != nil {
+				audioPayload := []byte{0xf8, 0xff, 0xfe}
+				if markers {
+					audioPayload = audioPayloads[i%uint32(len(audioPayloads))]
+				}
+				if err := audio.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: aSeq, Timestamp: 48000 + i*960, Marker: true}, Payload: audioPayload}); err != nil {
 					mediaErrors <- err
 					return
 				}
@@ -328,6 +368,57 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	cmd = exec.Command("ffmpeg", "-v", "error", "-xerror", "-i", files[0], "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-")
 	out, err = cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
+	if markers {
+		cmd = exec.Command("ffmpeg", "-v", "error", "-xerror", "-i", files[0], "-map", "0:v:0", "-fps_mode", "passthrough", "-pix_fmt", "gray", "-f", "rawvideo", "-")
+		pixels, err := cmd.Output()
+		require.NoError(t, err)
+		const frameSize = 160 * 96
+		require.Zero(t, len(pixels)%frameSize)
+		cmd = exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_frames", "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", files[0])
+		out, err = cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		var videoTimes struct {
+			Frames []struct {
+				Timestamp string `json:"best_effort_timestamp_time"`
+			} `json:"frames"`
+		}
+		require.NoError(t, json.Unmarshal(out, &videoTimes))
+		require.Len(t, videoTimes.Frames, len(pixels)/frameSize)
+		var flashes []float64
+		for i := 0; i < len(pixels)/frameSize; i++ {
+			var sum int
+			for _, value := range pixels[i*frameSize : (i+1)*frameSize] {
+				sum += int(value)
+			}
+			at, err := strconv.ParseFloat(videoTimes.Frames[i].Timestamp, 64)
+			require.NoError(t, err)
+			if sum/frameSize > 200 && (len(flashes) == 0 || at-flashes[len(flashes)-1] > 0.2) {
+				flashes = append(flashes, at)
+			}
+		}
+		cmd = exec.Command("ffmpeg", "-v", "error", "-xerror", "-i", files[0], "-map", "0:a:0", "-af", "aresample=async=1:first_pts=0", "-ac", "1", "-f", "f32le", "-")
+		pcm, err := cmd.Output()
+		require.NoError(t, err)
+		const sampleRate, window = 48000, 480
+		var signals []float64
+		for start := 0; start+window*4 <= len(pcm); start += window * 4 {
+			var power float64
+			for j := start; j < start+window*4; j += 4 {
+				x := float64(math.Float32frombits(binary.LittleEndian.Uint32(pcm[j:])))
+				power += x * x
+			}
+			at := float64(start/4) / sampleRate
+			if math.Sqrt(power/window) > 0.03 && (len(signals) == 0 || at-signals[len(signals)-1] > 0.2) {
+				signals = append(signals, at)
+			}
+		}
+		t.Logf("decoded markers: video=%v audio=%v", flashes, signals)
+		require.GreaterOrEqual(t, len(flashes), 2)
+		require.Equal(t, len(flashes), len(signals))
+		for i := range flashes {
+			require.InDelta(t, flashes[i], signals[i], 0.04, "decoded marker alignment")
+		}
+	}
 	if artifact := os.Getenv("SFU_NVR_RECORDING_MP4"); artifact != "" {
 		data, err := os.ReadFile(files[0])
 		require.NoError(t, err)
