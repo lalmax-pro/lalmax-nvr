@@ -47,14 +47,18 @@ func (p *bridgeRecordingPublisher) AddCustomizePubSession(string) (logic.ICustom
 func (*bridgeRecordingPublisher) DelCustomizePubSession(logic.ICustomizePubSessionContext) {}
 
 func TestSFUAVBridgeThroughGroupToRecording(t *testing.T) {
-	testSFUAVBridgeThroughGroupToRecording(t, false)
+	testSFUAVBridgeThroughGroupToRecording(t, false, false)
 }
 
 func TestSFUAVBridgeRecordingPreservesSourceTime(t *testing.T) {
-	testSFUAVBridgeThroughGroupToRecording(t, true)
+	testSFUAVBridgeThroughGroupToRecording(t, true, false)
 }
 
-func testSFUAVBridgeThroughGroupToRecording(t *testing.T, sourceTime bool) {
+func TestSFUAVBridgeRecordingFillsOpusGap(t *testing.T) {
+	testSFUAVBridgeThroughGroupToRecording(t, true, true)
+}
+
+func testSFUAVBridgeThroughGroupToRecording(t *testing.T, sourceTime, audioGap bool) {
 	t.Helper()
 	groups := maxlogic.GetGroupManagerInstance()
 	key := maxlogic.NewStreamKey("live", "sfu_test_bridge_recording")
@@ -113,8 +117,14 @@ func testSFUAVBridgeThroughGroupToRecording(t *testing.T, sourceTime bool) {
 	}
 	require.NoError(t, videoFan.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: 1, Timestamp: 90000, Marker: true}, Payload: payload}))
 	require.Eventually(t, func() bool { rec.mu.Lock(); defer rec.mu.Unlock(); return rec.muxer != nil }, 2*time.Second, time.Millisecond, "no recorded video")
-	for i := 1; i <= 20; i++ {
-		require.NoError(t, audioFan.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: uint16(i), Timestamp: 48000 + uint32(i*960), Marker: true}, Payload: []byte{0xf8, 0xff, 0xfe}}))
+	videoFrames := 20
+	if audioGap {
+		videoFrames = 24
+	}
+	for i := 1; i <= videoFrames; i++ {
+		if !audioGap || i <= 10 || i >= 15 {
+			require.NoError(t, audioFan.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: uint16(i), Timestamp: 48000 + uint32(i*960), Marker: true}, Payload: []byte{0xf8, 0xff, 0xfe}}))
+		}
 		require.NoError(t, videoFan.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: uint16(i + 1), Timestamp: 90000 + uint32(i*1800), Marker: true}, Payload: []byte{0x41, 0xc0}}))
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -148,12 +158,21 @@ func testSFUAVBridgeThroughGroupToRecording(t *testing.T, sourceTime bool) {
 			samples += n
 			duration += n * d
 		}
-		require.Equal(t, uint32(21), samples)
-		require.Equal(t, uint32(420), duration)
+		require.Equal(t, uint32(videoFrames+1), samples)
+		require.Equal(t, uint32((videoFrames+1)*20), duration)
 		edit := bytes.Index(data, []byte("elst"))
 		require.GreaterOrEqual(t, edit, 0)
 		require.GreaterOrEqual(t, len(data), edit+16)
 		require.Equal(t, uint32(100), binary.BigEndian.Uint32(data[edit+12:edit+16]))
+		if audioGap {
+			first := bytes.Index(data, []byte("stsz"))
+			require.GreaterOrEqual(t, first, 0)
+			second := bytes.Index(data[first+4:], []byte("stsz"))
+			require.GreaterOrEqual(t, second, 0)
+			second += first + 4
+			require.GreaterOrEqual(t, len(data), second+16)
+			require.Equal(t, uint32(24), binary.BigEndian.Uint32(data[second+12:second+16]), "20 input packets plus 4 silence packets")
+		}
 	}
 	if artifact := os.Getenv("SFU_BRIDGE_TEST_MP4"); artifact != "" {
 		require.NoError(t, os.WriteFile(artifact, data, 0o600))
