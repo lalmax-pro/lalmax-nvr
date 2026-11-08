@@ -70,6 +70,7 @@ func TestOpusPrimingPreservesSourceStart(t *testing.T) {
 		}
 		return peak
 	}
+	require.Less(t, windowPeak(0, 10*time.Millisecond), 0.05, "source silence before the first signal must remain")
 	require.Greater(t, windowPeak(20*time.Millisecond, 60*time.Millisecond), 0.05, "first signal must survive Opus priming")
 	require.Greater(t, windowPeak(500*time.Millisecond, 540*time.Millisecond), 0.05, "later signal must stay on the same timeline")
 }
