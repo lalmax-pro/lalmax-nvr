@@ -132,7 +132,7 @@
     const c = current; current = null;clearNetworkStats();
     if (c) {
       for (const pending of c.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('连接已关闭')); }
-      if(nvrMode) for(const bridge of c.bridges.values()) { bridge.closeRequested=true; if(bridge.id) void stopBridge(c,bridge,true); }
+      if(nvrMode) for(const bridge of c.bridges.values()) { bridge.closeRequested=true; void stopBridge(c,bridge,true); }
       c.pending.clear(); c.ws?.close(); c.pc?.close(); c.stream?.getTracks().forEach(t => t.stop()); c.screen?.getTracks().forEach(t => t.stop());
     }
     audioContainer.replaceChildren(); trackList.replaceChildren(); const empty=document.createElement('p');empty.className='track-empty';empty.textContent='加入会议后显示远端轨道。';trackList.append(empty); $('enable-audio').hidden = true; $('refresh-notice').hidden = true;
@@ -269,18 +269,20 @@
     const bytes=new Uint8Array(16);crypto.getRandomValues(bytes);
     return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
   }
-  async function createBridge(p,audio) {
-    const key=bridgeRequestKey(),body=JSON.stringify({publication_id:p.ID,...(audio?{audio_publication_id:audio.ID}:{})});
+  async function createBridge(p,audio,key) {
+    const body=JSON.stringify({publication_id:p.ID,...(audio?{audio_publication_id:audio.ID}:{})});
     for(let attempt=0;attempt<3;attempt++){
       try { return await nvrRequest('/api/sfu/bridges/',{method:'POST',headers:{'Idempotency-Key':key},body},true); }
       catch(err) { if(!err.network||attempt===2)throw err;await wait(attempt===0?100:500); }
     }
   }
   async function startBridge(c,p,audio) {
-    const bridge={publication:p.ID,source:p.Source,label:'正在创建',busy:true,pc:null,location:'',abort:new AbortController()};
+    const bridge={publication:p.ID,audioPublication:audio?.ID||'',requestKey:'',source:p.Source,label:'正在创建',busy:true,pc:null,location:'',abort:new AbortController()};
     c.bridges.set(p.ID,bridge);renderBridgeTracks(c.snapshot,c);
     try {
-      const result=await createBridge(p,audio);
+      bridge.requestKey=bridgeRequestKey();
+      const result=await createBridge(p,audio,bridge.requestKey);
+      if(typeof result?.id!=='string'||!result.id)throw new Error('桥接创建响应无效');
       bridge.id=result.id;
       if(current!==c||bridge.closeRequested||bridge.abort.signal.aborted){await stopBridge(c,bridge,true);return;}
       bridge.label='等待媒体';bridge.busy=false;renderBridgeTracks(c.snapshot,c);
@@ -315,18 +317,41 @@
     let finishStop;bridge.stopPromise=new Promise(resolve=>{finishStop=resolve;});bridge.stopping=true;bridge.busy=true;bridge.label='正在停止';bridge.abort.abort();bridge.pc?.close();
     if(current===c){$('bridge-video').srcObject=null;$('bridge-video').hidden=true;renderBridgeTracks(c.snapshot,c);}
     try {
+      if(!bridge.id && bridge.requestKey)await resolveBridgeRequest(bridge);
       if(bridge.location)await fetch(bridge.location,{method:'DELETE',headers:{'Authorization':nvrAuth()},keepalive:quiet,cache:'no-store'});
       if(bridge.id){await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/stop`,{method:'POST',body:'{}',keepalive:quiet});
         for(let i=0;i<30;i++){const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);if(status.state==='stopped'||status.state==='failed')break;await wait(200);}
         await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`,{method:'DELETE',keepalive:quiet});}
       c.bridges.delete(bridge.publication);if(current===c){$('bridge-status').textContent='桥接已停止';renderBridgeTracks(c.snapshot,c);}
-    } catch(err){if(err.status===404){c.bridges.delete(bridge.publication);if(current===c){$('bridge-status').textContent='桥接已不存在';renderBridgeTracks(c.snapshot,c);}}else{bridge.busy=false;bridge.label='停止失败，可重试';if(current===c&&!quiet){$('bridge-status').textContent=err.message||'停止失败';renderBridgeTracks(c.snapshot,c);}}}
+    } catch(err){if(err.status===404&&!err.unresolved){c.bridges.delete(bridge.publication);if(current===c){$('bridge-status').textContent='桥接已不存在';renderBridgeTracks(c.snapshot,c);}}else{bridge.busy=false;bridge.label='停止失败，可重试';if(current===c&&!quiet){$('bridge-status').textContent=err.message||'停止失败';renderBridgeTracks(c.snapshot,c);}}}
     finally {bridge.stopping=false;finishStop();}
+  }
+  async function resolveBridgeRequest(bridge) {
+    let missing=0;
+    for(let attempt=0;attempt<32&&!bridge.id;attempt++){
+      let result;const timeout=new AbortController(),timer=setTimeout(()=>timeout.abort(),5000);
+      try { result=await nvrRequest('/api/sfu/bridge-requests',{headers:{'Idempotency-Key':bridge.requestKey},signal:timeout.signal}); }
+      catch(err) {
+        if(bridge.id)return;
+        if(err.status===404&&++missing<3){await wait(500);continue;}
+        if(err.status===404){const unresolved=new Error('无法确认桥接是否创建，请在“我的桥接”中检查。');unresolved.unresolved=true;throw unresolved;}
+        err.unresolved=true;throw err;
+      } finally { clearTimeout(timer); }
+      if(bridge.id)return;
+      if(typeof result?.id==='string'&&result.id){
+        if(result.publication_id!==bridge.publication || (result.audio_publication_id||'')!==bridge.audioPublication)throw new Error('桥接请求不匹配');
+        bridge.id=result.id;return;
+      }
+      if(result?.state!=='pending')throw new Error('桥接请求状态无效');
+      await wait(1000);
+    }
+    if(!bridge.id)throw new Error('桥接创建仍在处理中，请稍后重试');
   }
   async function cleanupRecoveredBridges(r,c) {
     for(const item of r.bridgeCleanup||[]){
       if(item.bridge.stopPromise)await item.bridge.stopPromise;
-      if(item.context.bridges.get(item.bridge.publication)===item.bridge && item.bridge.id)await stopBridge(item.context,item.bridge,true);
+      const bridge=item.bridge;
+      if(item.context.bridges.get(bridge.publication)===bridge)await stopBridge(item.context,bridge,true);
     }
     if(current===c && (r.bridgeCleanup||[]).some(item=>item.context.bridges.get(item.bridge.publication)===item.bridge))showError('部分桥接未能自动清理，请在“我的桥接”中检查并停止。');
   }

@@ -35,6 +35,48 @@ func (s *testIdempotentBridgeRegistry) CreateIdempotent(ctx context.Context, p, 
 	s.key, s.audio = key, audio
 	return s.Create(ctx, p, pub)
 }
+func (s *testIdempotentBridgeRegistry) ResolveIdempotent(_ context.Context, p, key string) (sfubridge.Status, error) {
+	s.principal, s.key, s.action = p, key, "resolve"
+	return sfubridge.Status{ID: "bridge", PublicationID: "video", StreamID: "stream", State: sfubridge.StatePending}, s.err
+}
+
+func TestSFUBridgeRequestLookup(t *testing.T) {
+	mock := &testIdempotentBridgeRegistry{testSFUBridgeRegistry: &testSFUBridgeRegistry{}}
+	router := sfuTestRouter(&model.User{ID: 42, Role: model.RoleSuperAdmin, Enabled: true}, mock)
+	request := func(handler http.Handler, keys ...string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/sfu/bridge-requests", nil)
+		for _, key := range keys {
+			req.Header.Add("Idempotency-Key", key)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := request(router, "request-1"); rec.Code != 200 || mock.key != "request-1" || mock.principal != "user:42" || mock.action != "resolve" || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Body.String(), `"id":"bridge"`) {
+		t.Fatalf("resolve: %d %s", rec.Code, rec.Body.String())
+	}
+	mock.err = sfubridge.ErrRequestPending
+	if rec := request(router, "request-1"); rec.Code != 202 || strings.Contains(rec.Body.String(), `"id"`) {
+		t.Fatalf("pending: %d %s", rec.Code, rec.Body.String())
+	}
+	mock.err = sfubridge.ErrNotFound
+	if rec := request(router, "missing"); rec.Code != 404 {
+		t.Fatalf("missing: %d", rec.Code)
+	}
+	for _, keys := range [][]string{nil, {""}, {"bad key"}, {"a", "b"}} {
+		if rec := request(router, keys...); rec.Code != 400 {
+			t.Fatalf("invalid keys %q: %d", keys, rec.Code)
+		}
+	}
+	viewer := sfuTestRouter(&model.User{ID: 7, Role: model.RoleUser, Enabled: true}, mock)
+	if rec := request(viewer, "request-1"); rec.Code != 403 {
+		t.Fatalf("viewer: %d", rec.Code)
+	}
+	unsupported := sfuTestRouter(&model.User{ID: 42, Role: model.RoleSuperAdmin, Enabled: true}, &testSFUBridgeRegistry{})
+	if rec := request(unsupported, "request-1"); rec.Code != 503 {
+		t.Fatalf("unsupported: %d", rec.Code)
+	}
+}
 
 func TestSFUBridgeIdempotencyHeader(t *testing.T) {
 	mock := &testIdempotentBridgeRegistry{testSFUBridgeRegistry: &testSFUBridgeRegistry{}}

@@ -34,6 +34,9 @@ type sfuAVBridgeRegistry interface {
 type sfuIdempotentBridgeRegistry interface {
 	CreateIdempotent(context.Context, string, string, string, string) (sfubridge.Status, error)
 }
+type sfuBridgeRequestResolver interface {
+	ResolveIdempotent(context.Context, string, string) (sfubridge.Status, error)
+}
 type sfuBridgeLister interface {
 	List(context.Context, string) ([]sfubridge.Status, error)
 }
@@ -205,6 +208,32 @@ type sfuBridgeStatusResponse struct {
 
 func sfuStatus(s sfubridge.Status) sfuBridgeStatusResponse {
 	return sfuBridgeStatusResponse{ID: s.ID, PublicationID: s.PublicationID, AudioPublicationID: s.AudioPublicationID, StreamID: s.StreamID, State: s.State}
+}
+func (h *Handler) getSFUBridgeRequest(w http.ResponseWriter, r *http.Request) {
+	registry, principal, ok := h.sfuBridgeRequest(w, r)
+	if !ok {
+		return
+	}
+	keys := r.Header.Values("Idempotency-Key")
+	if len(keys) != 1 || !validSFUIdempotencyKey(keys[0]) {
+		writeError(w, http.StatusBadRequest, "invalid idempotency key")
+		return
+	}
+	resolver, ok := registry.(sfuBridgeRequestResolver)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "SFU bridge request lookup unavailable")
+		return
+	}
+	status, err := resolver.ResolveIdempotent(r.Context(), principal, keys[0])
+	if errors.Is(err, sfubridge.ErrRequestPending) {
+		writeJSON(w, http.StatusAccepted, map[string]string{"state": "pending"})
+		return
+	}
+	if err != nil {
+		sfuBridgeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sfuStatus(status))
 }
 func (h *Handler) listSFUBridges(w http.ResponseWriter, r *http.Request) {
 	registry, principal, ok := h.sfuBridgeRequest(w, r)
