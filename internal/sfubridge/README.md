@@ -1,13 +1,12 @@
-# NVR SFU bridge service
+# SFU bridge registry
 
-This trusted service creates a dedicated Room participant and a bridge for each output. It generates the target stream ID and separate random publish/playback credentials, reserves the internal output before starting, and revokes it after the bridge has actually stopped. The existing Room policy checks join, subscription and `manage_bridge` for the generated target. A required source validator must verify the actual negotiated codec, including H.264 profile, packetization mode and no-B-frame constraint; the publication MIME type is not enough. A maximum concurrent bridge count is required.
+The registry owns server-side bridge handles and enforces the authenticated
+owner and management policy on each view, stop, playback and remove operation.
+Credentials are never included in status or list responses. A terminal result
+is reported only after the service revokes its playback grant and releases the
+publisher. Finished entries remain available briefly and can be removed or
+pruned; active entries are never pruned.
 
-`Start` accepts an authenticated principal from server-side state and an authorization request context. The returned handle represents queued work, not successful lal registration; `Done` provides the terminal error. The caller must keep handles and playback credentials in a server-side registry and authorize every status/stop/playback operation. Never expose a handle as a public capability. `Close` rejects new starts and waits for cleanup up to its context deadline; a blocked synchronous lal write can delay resource release. On policy revocation the owning service must stop the affected handles. An internal grant is revoked only after the publisher exits.
-
-The NVR runtime wires this package to its management API and WHEP player. It supports one H.264 video, one Opus audio, or a same-participant audio/video pair per output; validation of negotiated codecs belongs to the runtime. Combined output uses sender-report clocks; synchronization accuracy and long-running behavior require further validation.
-
-`Registry` is a trusted server-side owner for handles. It requires an additional management authorizer and checks ownership as well as policy on view, stop, playback credential retrieval and removal. Creation still requires the `Service` Room policy. Unknown and other users' IDs are indistinguishable. The registry bounds both in-flight creations and retained entries; callers must explicitly remove terminal entries. Playback credentials are returned only via a separately authorized method and removed after bridge cleanup. APIs must disable response caching and never log them. `pending` means accepted, not publisher-ready; failure and stop are reported after cleanup. The NVR runtime supplies business identity, Room setup, and a source validator.
-
-`List` returns a best-effort snapshot of the caller's own entries after the same per-entry view authorization as `Get`; it never returns credentials. Entries removed during authorization are omitted. The NVR router aggregates active room registries and excludes rooms removed during the operation. Re-query before acting: a listed bridge may have already stopped, been pruned, or lost authorization.
-
-Production assembly should use `NewPersistent`, supplying the same media authorizer used by all publish/playback paths and a persistent output identity store. It restores historical output IDs as deny-only grants before accepting requests and records new IDs before starting publishers. No credentials are stored. Failure to load or record identities prevents startup or bridge creation. The original `New` has no restart protection and is suitable only for isolated tests or an embedding that implements equivalent durable protection separately.
+The LiveKit integration in `cmd/lalmax-nvr` validates the room generation,
+track identity and codec, subscribes as a hidden participant, and generates a
+protected Group stream ID. Its media adapter is in `internal/livekitsfu`.

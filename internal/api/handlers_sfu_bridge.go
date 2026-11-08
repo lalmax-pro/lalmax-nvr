@@ -14,7 +14,6 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
-	"github.com/q191201771/lalmax/sfu/access"
 )
 
 // SFUBridgeRegistry is supplied by the trusted runtime during bootstrap.
@@ -95,9 +94,9 @@ func sfuBridgeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, sfubridge.ErrNotFound), errors.Is(err, sfu.ErrTrackNotFound), errors.Is(err, sfu.ErrRoomNotFound):
 		writeError(w, http.StatusNotFound, "bridge or publication not found")
-	case errors.Is(err, sfubridge.ErrDenied), errors.Is(err, access.ErrDenied):
+	case errors.Is(err, sfubridge.ErrDenied):
 		writeError(w, http.StatusForbidden, "operation denied")
-	case errors.Is(err, sfubridge.ErrInvalid), errors.Is(err, access.ErrInvalid), errors.Is(err, access.ErrBridgeCodec):
+	case errors.Is(err, sfubridge.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid bridge request")
 	case errors.Is(err, sfubridge.ErrLimit):
 		writeError(w, http.StatusTooManyRequests, "bridge limit reached")
@@ -105,7 +104,7 @@ func sfuBridgeError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "bridge has not stopped")
 	case errors.Is(err, sfubridge.ErrIdempotencyConflict):
 		writeError(w, http.StatusConflict, "idempotency key reused with different publications")
-	case errors.Is(err, sfubridge.ErrClosed), errors.Is(err, access.ErrClosed):
+	case errors.Is(err, sfubridge.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, "SFU bridge service unavailable")
 	default:
 		writeError(w, http.StatusInternalServerError, "bridge operation failed")

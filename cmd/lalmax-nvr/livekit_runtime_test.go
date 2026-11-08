@@ -32,6 +32,16 @@ import (
 
 type liveKitBridgeHook struct{ messages chan base.RtmpMsg }
 
+type failingSFUOutputStore struct{ attempted chan string }
+
+func (s *failingSFUOutputStore) RegisterSFUBridgeOutput(_ context.Context, id string) error {
+	s.attempted <- id
+	return errors.New("storage unavailable")
+}
+func (*failingSFUOutputStore) ListSFUBridgeOutputIDs(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (h *liveKitBridgeHook) OnMsg(msg base.RtmpMsg) {
 	select {
 	case h.messages <- msg.Clone():
@@ -233,6 +243,31 @@ receive:
 			}
 		}
 	}()
+	// A failed output identity write must prevent publication and revoke the
+	// reserved playback grant even after the LiveKit subscription succeeded.
+	failingStore := &failingSFUOutputStore{attempted: make(chan string, 1)}
+	failingRegistry, err := newNVRLiveKitBridgeRegistry(runtime, lalManager, grants, failingStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := failingRegistry.CreateForRoom(ctx, principal, "front-door", viewer.SID(), publication.SID(), "", ""); err == nil {
+		t.Fatal("bridge succeeded despite failed output persistence")
+	}
+	var failedStream string
+	select {
+	case failedStream = <-failingStore.attempted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bridge failed before output registration")
+	}
+	if group := lalManager.GetGroup("live", failedStream); group != nil && group.HasInSession() {
+		t.Fatal("failed output created a publisher")
+	}
+	if !grants.InternalPlaybackRequired(failedStream) || grants.AuthorizePlayback("webrtc", failedStream, "anything") == nil {
+		t.Fatal("failed output playback was not revoked")
+	}
+	if err := failingRegistry.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
 	body, _ := json.Marshal(map[string]string{"room_id": "front-door", "room_generation": viewer.SID(), "publication_id": publication.SID()})
 	staleBody, _ := json.Marshal(map[string]string{"room_id": "front-door", "room_generation": "RM_stale", "publication_id": publication.SID()})
 	staleRequest := httptest.NewRequest(http.MethodPost, "/api/sfu/bridges/", bytes.NewReader(staleBody))

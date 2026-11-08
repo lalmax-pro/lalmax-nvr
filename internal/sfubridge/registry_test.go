@@ -3,178 +3,168 @@ package sfubridge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/q191201771/lal/pkg/logic"
 )
 
-type managementPolicy struct {
-	mu     sync.Mutex
-	denied Action
+// registryTestService models lifecycle completion independently of the SFU
+// implementation; the embedded LiveKit tests exercise actual media and grants.
+type registryTestService struct {
+	mu      sync.Mutex
+	closed  bool
+	next    int
+	cancels []context.CancelFunc
+	wg      sync.WaitGroup
+	fail    chan struct{}
 }
 
-func TestRegistryPruneFinishedKeepsActiveAndRecentEntries(t *testing.T) {
-	now := time.Now()
-	r := &Registry{entries: map[string]*registryEntry{
-		"old":    {status: Status{State: StateStopped}, finishedAt: now.Add(-6 * time.Minute)},
-		"recent": {status: Status{State: StateFailed}, finishedAt: now.Add(-time.Minute)},
-		"active": {status: Status{State: StatePending}},
-	}}
-	r.PruneFinished(now.Add(-5 * time.Minute))
-	if _, ok := r.entries["old"]; ok {
-		t.Fatal("old terminal entry was retained")
+func (s *registryTestService) Start(ctx context.Context, _, _ string) (*Handle, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if len(r.entries) != 2 || r.entries["recent"] == nil || r.entries["active"] == nil {
-		t.Fatalf("unexpected remaining entries: %+v", r.entries)
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, ErrClosed
 	}
-}
-
-func (p *managementPolicy) allow(_ context.Context, req ManagementRequest) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if req.Principal != "operator" || req.Owner != req.Principal || req.Action == p.denied {
-		return errors.New("no")
-	}
-	return nil
-}
-func (p *managementPolicy) deny(action Action) { p.mu.Lock(); p.denied = action; p.mu.Unlock() }
-func TestRegistryOwnershipAuthorizationAndLifecycle(t *testing.T) {
-	service, _, publisher, grants, pub := setup(t)
-	policy := &managementPolicy{}
-	registry, err := NewRegistry(service, policy.allow, 1)
+	s.next++
+	id := fmt.Sprintf("stream-%d", s.next)
+	life, cancel := context.WithCancel(context.Background())
+	s.cancels = append(s.cancels, cancel)
+	s.wg.Add(1)
+	s.mu.Unlock()
+	done := make(chan error, 1)
+	handle, err := NewHandle(id, "secret", done, cancel)
 	if err != nil {
-		t.Fatal(err)
+		s.wg.Done()
+		cancel()
+		return nil, err
 	}
-	ctx := context.Background()
-	status, err := registry.Create(ctx, "operator", pub)
-	if err != nil {
-		t.Fatal(err)
+	go func() {
+		defer s.wg.Done()
+		select {
+		case <-life.Done():
+			done <- life.Err()
+		case <-s.fail:
+			done <- errors.New("source failed")
+		}
+	}()
+	return handle, nil
+}
+func (s *registryTestService) StartAV(ctx context.Context, p, v, _ string) (*Handle, error) {
+	return s.Start(ctx, p, v)
+}
+func (s *registryTestService) Close(ctx context.Context) error {
+	s.mu.Lock()
+	s.closed = true
+	for _, cancel := range s.cancels {
+		cancel()
 	}
-	if status.State != StatePending {
-		t.Fatalf("unexpected readiness: %s", status.State)
-	}
-	items, err := registry.List(ctx, "operator")
-	if err != nil || len(items) != 1 || items[0].ID != status.ID {
-		t.Fatalf("owner list: %+v %v", items, err)
-	}
-	items, err = registry.List(ctx, "other")
-	if err != nil || len(items) != 0 {
-		t.Fatalf("cross-user list: %+v %v", items, err)
-	}
-	policy.deny(ActionView)
-	items, err = registry.List(ctx, "operator")
-	if err != nil || len(items) != 0 {
-		t.Fatalf("denied view in list: %+v %v", items, err)
-	}
-	policy.deny("")
-	canceled, cancel := context.WithCancel(ctx)
-	cancel()
-	if _, err = registry.List(canceled, "operator"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled list: %v", err)
-	}
+	s.mu.Unlock()
+	done := make(chan struct{})
+	go func() { s.wg.Wait(); close(done) }()
 	select {
-	case <-publisher.opened:
-	case <-time.After(3 * time.Second):
-		t.Fatal("publisher not opened")
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	if _, err = registry.Get(ctx, "other", status.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("cross-user access: %v", err)
+}
+
+func waitRegistryState(t *testing.T, r *Registry, id string, want State) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err := r.Get(context.Background(), "owner", id)
+		if err == nil && status.State == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
 	}
-	if _, _, err = registry.Playback(ctx, "other", status.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("cross-user token: %v", err)
+	t.Fatalf("bridge %s did not reach %s", id, want)
+}
+
+func TestRegistryOwnershipLifecycleAndRevocation(t *testing.T) {
+	service := &registryTestService{fail: make(chan struct{})}
+	r, err := NewRegistry(service, func(_ context.Context, request ManagementRequest) error {
+		if request.Principal != request.Owner {
+			return errors.New("denied")
+		}
+		return nil
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err = registry.Stop(ctx, "other", status.ID); !errors.Is(err, ErrNotFound) {
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	ctx := context.Background()
+	status, err := r.CreateAV(ctx, "owner", "video", "audio")
+	if err != nil || status.AudioPublicationID != "audio" {
+		t.Fatalf("create: %+v %v", status, err)
+	}
+	if _, err = r.Get(ctx, "other", status.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-user get: %v", err)
+	}
+	if _, _, err = r.Playback(ctx, "other", status.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-user playback: %v", err)
+	}
+	if err = r.Stop(ctx, "other", status.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-user stop: %v", err)
 	}
-	policy.deny(ActionPlayback)
-	if _, _, err = registry.Playback(ctx, "operator", status.ID); !errors.Is(err, ErrDenied) {
-		t.Fatalf("playback policy: %v", err)
+	if _, err = r.Create(ctx, "owner", "other"); !errors.Is(err, ErrLimit) {
+		t.Fatalf("limit: %v", err)
 	}
-	policy.deny("")
-	stream, token, err := registry.Playback(ctx, "operator", status.ID)
-	if err != nil {
+	if err = r.Remove(ctx, "owner", status.ID); !errors.Is(err, ErrNotFinished) {
+		t.Fatalf("remove active: %v", err)
+	}
+	if stream, token, err := r.Playback(ctx, "owner", status.ID); err != nil || stream != status.ID || token != "secret" {
+		t.Fatalf("playback: %q %q %v", stream, token, err)
+	}
+	if err = r.RevalidateOwners(ctx, func(context.Context, string) error { return errors.New("revoked") }); err != nil {
 		t.Fatal(err)
 	}
-	if stream != status.StreamID || grants.AuthorizePlayback("rtsp", stream, token) != nil {
-		t.Fatal("invalid credential")
+	waitRegistryState(t, r, status.ID, StateStopped)
+	if _, _, err = r.Playback(ctx, "owner", status.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stopped token: %v", err)
 	}
-	if _, err = registry.Create(ctx, "operator", pub); !errors.Is(err, ErrLimit) {
-		t.Fatalf("registry cap: %v", err)
+	if err = r.Stop(ctx, "owner", status.ID); err != nil {
+		t.Fatalf("repeat stop: %v", err)
 	}
-	if err = registry.Remove(ctx, "operator", status.ID); !errors.Is(err, ErrNotFinished) {
-		t.Fatalf("removed active bridge: %v", err)
-	}
-	policy.deny(ActionStop)
-	if err = registry.Stop(ctx, "operator", status.ID); !errors.Is(err, ErrDenied) {
-		t.Fatalf("stop policy: %v", err)
-	}
-	policy.deny("")
-	if err = registry.Stop(ctx, "operator", status.ID); err != nil {
+	if err = r.Remove(ctx, "owner", status.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err = registry.Stop(ctx, "operator", status.ID); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.After(3 * time.Second)
-	for {
-		state, err := registry.Get(ctx, "operator", status.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if state.State == StateStopped {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("bridge did not stop")
-		case <-time.After(time.Millisecond):
-		}
-	}
-	if _, _, err = registry.Playback(ctx, "operator", status.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("stopped credential: %v", err)
-	}
-	if err = grants.AuthorizePlayback("rtsp", stream, token); err == nil {
-		t.Fatal("credential not revoked")
-	}
-	if err = registry.Remove(ctx, "operator", status.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = registry.Get(ctx, "operator", status.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatal(err)
+	if !r.Empty() {
+		t.Fatal("removed registry not empty")
 	}
 }
-func TestRegistryShutdownRejectsCreate(t *testing.T) {
-	service, _, publisher, _, pub := setup(t)
-	registry, err := NewRegistry(service, (&managementPolicy{}).allow, 2)
+
+func TestRegistryReportsFailureAndPrunes(t *testing.T) {
+	service := &registryTestService{fail: make(chan struct{})}
+	r, err := NewRegistry(service, func(context.Context, ManagementRequest) error { return nil }, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = registry.Create(context.Background(), "operator", pub); err != nil {
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	status, err := r.Create(context.Background(), "owner", "video")
+	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-publisher.opened:
-	case <-time.After(3 * time.Second):
-		t.Fatal("publisher not opened")
+	close(service.fail)
+	waitRegistryState(t, r, status.ID, StateFailed)
+	if _, _, err = r.Playback(context.Background(), "owner", status.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("failed token: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err = registry.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = registry.Create(ctx, "operator", pub); !errors.Is(err, ErrClosed) {
-		t.Fatalf("create after close: %v", err)
+	if removed := r.PruneFinishedIDs(time.Now().Add(time.Second)); len(removed) != 1 || removed[0] != status.ID || !r.Empty() {
+		t.Fatalf("prune: %v", removed)
 	}
 }
 
 func TestSlowAuthorizationDoesNotBlockStop(t *testing.T) {
-	service, _, publisher, _, pub := setup(t)
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	policy := func(ctx context.Context, req ManagementRequest) error {
-		if req.Action == ActionView {
+	service := &registryTestService{fail: make(chan struct{})}
+	entered, release := make(chan struct{}), make(chan struct{})
+	r, err := NewRegistry(service, func(ctx context.Context, request ManagementRequest) error {
+		if request.Action == ActionView {
 			close(entered)
 			select {
 			case <-release:
@@ -183,54 +173,49 @@ func TestSlowAuthorizationDoesNotBlockStop(t *testing.T) {
 			}
 		}
 		return nil
-	}
-	registry, err := NewRegistry(service, policy, 1)
+	}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, err := registry.Create(context.Background(), "operator", pub)
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	status, err := r.Create(context.Background(), "owner", "video")
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-publisher.opened:
-	case <-time.After(3 * time.Second):
-		t.Fatal("publisher not opened")
-	}
-	done := make(chan error, 1)
-	go func() { _, err := registry.Get(context.Background(), "operator", status.ID); done <- err }()
+	viewDone := make(chan error, 1)
+	go func() { _, err := r.Get(context.Background(), "owner", status.ID); viewDone <- err }()
 	select {
 	case <-entered:
 	case <-time.After(3 * time.Second):
-		t.Fatal("policy not called")
+		t.Fatal("authorization not called")
 	}
-	stopped := make(chan error, 1)
-	go func() { stopped <- registry.Stop(context.Background(), "operator", status.ID) }()
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- r.Stop(context.Background(), "owner", status.ID) }()
 	select {
-	case err = <-stopped:
+	case err := <-stopDone:
 		if err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("slow policy blocked stop")
+		t.Fatal("stop blocked on authorization")
 	}
 	close(release)
 	select {
-	case err = <-done:
+	case err := <-viewDone:
 		if err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("view stuck")
+		t.Fatal("view did not finish")
 	}
 }
 
-func TestRegistryListOmitsEntryRemovedDuringAuthorization(t *testing.T) {
+func TestListOmitsEntryRemovedDuringAuthorization(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	r := &Registry{entries: map[string]*registryEntry{
-		"bridge": {owner: "operator", status: Status{ID: "bridge", State: StateStopped}},
-	}, authorize: func(ctx context.Context, req ManagementRequest) error {
-		if req.Action == ActionView {
+		"bridge": {owner: "owner", status: Status{ID: "bridge", State: StateStopped}},
+	}, authorize: func(ctx context.Context, request ManagementRequest) error {
+		if request.Action == ActionView {
 			close(entered)
 			select {
 			case <-release:
@@ -240,115 +225,73 @@ func TestRegistryListOmitsEntryRemovedDuringAuthorization(t *testing.T) {
 		}
 		return nil
 	}}
-	type listResult struct {
+	type result struct {
 		items []Status
 		err   error
 	}
-	result := make(chan listResult, 1)
-	go func() { items, err := r.List(context.Background(), "operator"); result <- listResult{items, err} }()
+	done := make(chan result, 1)
+	go func() { items, err := r.List(context.Background(), "owner"); done <- result{items, err} }()
 	select {
 	case <-entered:
 	case <-time.After(3 * time.Second):
-		t.Fatal("list did not reach authorization")
+		t.Fatal("view authorization not reached")
 	}
-	if err := r.Remove(context.Background(), "operator", "bridge"); err != nil {
+	if err := r.Remove(context.Background(), "owner", "bridge"); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
 	select {
-	case got := <-result:
+	case got := <-done:
 		if got.err != nil || len(got.items) != 0 {
-			t.Fatalf("removed entry leaked: %+v, %v", got.items, got.err)
+			t.Fatalf("removed entry leaked: %+v", got)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("list blocked after removal")
+		t.Fatal("list did not finish")
 	}
 }
 
-type failingPublisher struct{}
-
-func (failingPublisher) AddCustomizePubSession(string) (logic.ICustomizePubSessionContext, error) {
-	return nil, errors.New("occupied input")
-}
-func (failingPublisher) DelCustomizePubSession(logic.ICustomizePubSessionContext) {
-	panic("must not delete unowned session")
-}
-func TestRegistryReportsAsynchronousFailure(t *testing.T) {
-	service, _, _, grants, pub := setup(t)
-	service.publisher = failingPublisher{}
-	registry, err := NewRegistry(service, (&managementPolicy{}).allow, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	status, err := registry.Create(context.Background(), "operator", pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.After(3 * time.Second)
-	for {
-		current, err := registry.Get(context.Background(), "operator", status.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if current.State == StateFailed {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("asynchronous failure not recorded")
-		case <-time.After(time.Millisecond):
-		}
-	}
-	if _, _, err = registry.Playback(context.Background(), "operator", status.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatal(err)
-	}
-	if !grants.InternalPlaybackRequired(status.StreamID) {
-		t.Fatal("output identity not revoked")
-	}
-	if err = registry.Remove(context.Background(), "operator", status.ID); err != nil {
-		t.Fatal(err)
-	}
+type delayedBridgeService struct {
+	started, release, canceled chan struct{}
 }
 
-func TestRevalidateOwnersStopsRevokedBridge(t *testing.T) {
-	service, _, publisher, grants, pub := setup(t)
-	registry, err := NewRegistry(service, (&managementPolicy{}).allow, 2)
+func (s *delayedBridgeService) Start(context.Context, string, string) (*Handle, error) {
+	close(s.started)
+	<-s.release
+	return NewHandle("late", "secret", make(chan error, 1), func() { close(s.canceled) })
+}
+func (s *delayedBridgeService) StartAV(ctx context.Context, p, v, _ string) (*Handle, error) {
+	return s.Start(ctx, p, v)
+}
+func (*delayedBridgeService) Close(context.Context) error { return nil }
+
+func TestCreationRacingCloseReleasesLateHandle(t *testing.T) {
+	service := &delayedBridgeService{started: make(chan struct{}), release: make(chan struct{}), canceled: make(chan struct{})}
+	r, err := NewRegistry(service, func(context.Context, ManagementRequest) error { return nil }, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
-	status, err := registry.Create(ctx, "operator", pub)
-	if err != nil {
+	result := make(chan error, 1)
+	go func() { _, err := r.Create(context.Background(), "owner", "track"); result <- err }()
+	select {
+	case <-service.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("creation did not start")
+	}
+	if err := r.Close(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	close(service.release)
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("late creation: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("late creation did not finish")
 	}
 	select {
-	case <-publisher.opened:
+	case <-service.canceled:
 	case <-time.After(3 * time.Second):
-		t.Fatal("publisher not opened")
-	}
-	stream, token, err := registry.Playback(ctx, "operator", status.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = registry.RevalidateOwners(ctx, func(context.Context, string) error { return errors.New("revoked") }); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.After(3 * time.Second)
-	for {
-		current, err := registry.Get(ctx, "operator", status.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if current.State == StateStopped {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("bridge not stopped")
-		case <-time.After(time.Millisecond):
-		}
-	}
-	if err = grants.AuthorizePlayback("rtsp", stream, token); err == nil {
-		t.Fatal("revoked credential accepted")
+		t.Fatal("late handle not canceled")
 	}
 }
