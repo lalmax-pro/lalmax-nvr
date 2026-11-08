@@ -543,7 +543,8 @@ func TestDLNASSDPAndStartup(t *testing.T) {
 	client := udpLoopback(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	go svc.readSearches(ctx, nil, send)
-	go svc.readSearches(ctx, sock, send)
+	searchDone := make(chan struct{})
+	go func() { defer close(searchDone); svc.readSearches(ctx, sock, send) }()
 	_, err = client.WriteToUDP([]byte("NOTIFY * HTTP/1.1\r\n\r\n"), sock.LocalAddr().(*net.UDPAddr))
 	require.NoError(t, err)
 	_, err = client.WriteToUDP([]byte("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n\r\n"), sock.LocalAddr().(*net.UDPAddr))
@@ -556,6 +557,11 @@ func TestDLNASSDPAndStartup(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(buf[:n]), "HTTP/1.1 200 OK")
 	cancel()
+	select {
+	case <-searchDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("search loop did not stop")
+	}
 	svc.respondSearch(nil, client.LocalAddr().(*net.UDPAddr), "ssdp:all")
 	svc.respondSearch(send, nil, "ssdp:all")
 	closed := udpLoopback(t)
