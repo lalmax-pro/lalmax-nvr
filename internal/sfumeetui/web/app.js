@@ -7,7 +7,7 @@
   const join = $('join'), leave = $('leave'), mute = $('mute'), cameraToggle = $('camera-toggle'), share = $('share'), error = $('error');
   const tiles = $('tiles'), audioContainer = $('audio-container'), trackList = $('track-list');
   const nvrMode = document.documentElement?.dataset?.mode === 'nvr';
-  if (nvrMode) { token.required=false; token.hidden=true; $('token-label').hidden=true; $('back-nvr').hidden=false; $('bridge-panel').hidden=false; $('nvr-room-controls').hidden=false; $('join').textContent='加入会议 →'; $('mode-pill').textContent='NVR 会议'; $('mode-instructions').textContent='使用 NVR 管理员账号加入。'; $('nvr-login').hidden=!!sessionStorage.getItem('nvr_auth'); $('room-description').textContent='默认房间 · Opus / H.264'; $('mode-footer').textContent='NVR SFU'; }
+  if (nvrMode) { token.required=false; token.hidden=true; $('token-label').hidden=true; $('back-nvr').hidden=false; $('bridge-panel').hidden=false; $('bridge-management').hidden=false; $('nvr-room-controls').hidden=false; $('join').textContent='加入会议 →'; $('mode-pill').textContent='NVR 会议'; $('mode-instructions').textContent='使用 NVR 管理员账号加入。'; $('nvr-login').hidden=!!sessionStorage.getItem('nvr_auth'); $('room-description').textContent='默认房间 · Opus / H.264'; $('mode-footer').textContent='NVR SFU'; }
   let current = null;
   let deviceRefresh = 0;
   let roomBusy = false;
@@ -109,6 +109,44 @@
     if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(body.error||`请求失败 (${response.status})`);}
     return response.status===204?null:response.json();
   }
+  let bridgeManagementBusy=false;
+  async function manageBridges(action, id) {
+    if(bridgeManagementBusy)return;
+    bridgeManagementBusy=true;const refresh=$('bridge-management-refresh'), list=$('bridge-management-list'), message=$('bridge-management-status');
+    refresh.disabled=true;for(const button of list.querySelectorAll('button'))button.disabled=true;
+    message.textContent=action==='stop'?'正在停止桥接…':action==='remove'?'正在删除记录…':'正在加载桥接…';
+    try {
+      if(action==='stop'){
+        const c=current, local=c&&[...c.bridges.values()].find(bridge=>bridge.id===id);
+        // If this tab owns the player, close its WHEP session before the
+        // bridge stops and revokes the playback credential.
+        if(local?.location)try{await fetch(local.location,{method:'DELETE',headers:{'Authorization':nvrAuth()},cache:'no-store'});}catch(_){}
+        await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(id)}/stop`,{method:'POST',body:'{}'});
+        if(local){local.closeRequested=true;local.abort.abort();local.pc?.close();c.bridges.delete(local.publication);
+          if(current===c){$('bridge-video').srcObject=null;$('bridge-video').hidden=true;$('bridge-status').textContent='桥接已停止';if(c.snapshot)renderBridgeTracks(c.snapshot,c);}}
+      }
+      if(action==='remove')await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(id)}`,{method:'DELETE'});
+      const bridges=await nvrRequest('/api/sfu/bridges/');
+      if(!Array.isArray(bridges)||bridges.some(b=>typeof b.id!=='string'||typeof b.publication_id!=='string'||!['pending','stopping','stopped','failed'].includes(b.state)))throw new Error('桥接列表无效');
+      list.replaceChildren();
+      if(!bridges.length){message.textContent='没有可管理的桥接。';return;}
+      const labels={pending:'运行中或等待媒体',stopping:'正在停止',stopped:'已停止',failed:'已失败'};
+      for(const bridge of bridges){
+        const row=document.createElement('div');row.className='track-row';
+        const info=document.createElement('div');info.className='track-info';
+        const title=document.createElement('strong');title.textContent=`桥接 ${bridge.id}`;
+        const detail=document.createElement('small');detail.textContent=`${labels[bridge.state]} · 轨道 ${bridge.publication_id}`;info.append(title,detail);
+        const button=document.createElement('button');button.type='button';button.className='track-toggle';
+        const terminal=bridge.state==='stopped'||bridge.state==='failed';button.textContent=terminal?'删除记录':'停止桥接';
+        button.setAttribute('aria-label',`${button.textContent} ${bridge.id}`);
+        button.addEventListener('click',()=>void manageBridges(terminal?'remove':'stop',bridge.id));
+        row.append(info,button);list.append(row);
+      }
+      message.textContent=action==='stop'?'已请求停止；如仍在停止中，请稍后刷新。':action==='remove'?'记录已删除。':`找到 ${bridges.length} 条桥接。`;
+    } catch(err) { message.textContent=err.message||'桥接管理失败，请重试。'; }
+    finally { bridgeManagementBusy=false;refresh.disabled=false;for(const button of list.querySelectorAll('button'))button.disabled=false; }
+  }
+  if(nvrMode)$('bridge-management-refresh').addEventListener('click',()=>void manageBridges());
   function updateRoomControls() {
     if(!nvrMode)return;
     const disabled=roomBusy||!!current;
