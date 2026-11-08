@@ -2,12 +2,64 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const form = $('join-form'), token = $('token'), micOption = $('microphone'), cameraOption = $('camera');
+  const micDevice=$('microphone-device'), cameraDevice=$('camera-device');
   const status = $('status-text'), badge = $('connection-badge'), dot = $('status-dot');
   const join = $('join'), leave = $('leave'), mute = $('mute'), cameraToggle = $('camera-toggle'), share = $('share'), error = $('error');
   const tiles = $('tiles'), audioContainer = $('audio-container'), trackList = $('track-list');
   const nvrMode = document.documentElement?.dataset?.mode === 'nvr';
   if (nvrMode) { token.required=false; token.hidden=true; $('token-label').hidden=true; $('back-nvr').hidden=false; $('bridge-panel').hidden=false; $('mode-pill').textContent='NVR 会议'; $('mode-instructions').textContent='使用 NVR 管理员账号加入。'; $('nvr-login').hidden=!!sessionStorage.getItem('nvr_auth'); $('room-description').textContent='默认房间 · Opus / H.264'; $('mode-footer').textContent='NVR SFU'; }
   let current = null;
+  let deviceRefresh = 0;
+
+  function deviceConstraint(id) { return id ? {deviceId:{exact:id}} : true; }
+  async function refreshDevices() {
+    if(!navigator.mediaDevices?.enumerateDevices)return;
+    const request=++deviceRefresh;
+    try {
+      const devices=await navigator.mediaDevices.enumerateDevices();
+      if(request!==deviceRefresh)return;
+      for(const [select,kind,fallback] of [[micDevice,'audioinput','麦克风'],[cameraDevice,'videoinput','摄像头']]) {
+        const previous=select.value, options=[];let count=0;
+        const system=document.createElement('option');system.value='';system.textContent='系统默认';options.push(system);
+        for(const device of devices)if(device.kind===kind&&device.deviceId){const option=document.createElement('option');option.value=device.deviceId;option.textContent=device.label||`${fallback} ${++count}`;options.push(option);}
+        select.replaceChildren(...options);select.value=options.some(o=>o.value===previous)?previous:'';
+      }
+    } catch(_) { /* Device enumeration is optional until permission is granted. */ }
+  }
+
+  async function switchDevice(kind,select) {
+    const c=current;
+    if(!c?.negotiated)return;
+    const source=kind==='audio'?'microphone':'camera';
+    const entry=[...c.own.values()].find(item=>item.source===source);
+    if(!entry)return;
+    const old=entry.track, previous=c.deviceSelection[kind], selected=select.value;
+    let replacement;
+    select.disabled=true;
+    try {
+      const stream=await navigator.mediaDevices.getUserMedia({[kind]:deviceConstraint(selected)});
+      const tracks=stream.getTracks();replacement=tracks.find(t=>t.kind===kind);
+      for(const track of tracks)if(track!==replacement)track.stop();
+      if(!replacement)throw new Error('未找到所选设备');
+      if(current!==c){replacement.stop();return;}
+      // Keep the replacement silent until the swap completes, then read the
+      // current mute state in case it changed while replaceTrack was pending.
+      replacement.enabled=false;
+      await entry.sender.replaceTrack(replacement);
+      if(current!==c){replacement.stop();return;}
+      replacement.enabled=old.enabled;
+      c.stream.removeTrack(old);c.stream.addTrack(replacement);entry.track=replacement;c.deviceSelection[kind]=selected;old.stop();
+      c.tileSignature=undefined;if(c.snapshot)render(c.snapshot,c);
+      error.hidden=true;void refreshDevices();
+    } catch(_) {
+      replacement?.stop();
+      if(current===c){select.value=previous;showError('设备切换失败，请检查设备和浏览器权限。');}
+    } finally { if(current===c)select.disabled=false; }
+  }
+  micDevice.addEventListener('change',()=>void switchDevice('audio',micDevice));
+  cameraDevice.addEventListener('change',()=>void switchDevice('video',cameraDevice));
+  navigator.mediaDevices?.addEventListener?.('devicechange',()=>void refreshDevices());
+  void refreshDevices();
 
   function state(text, connected = false) {
     status.textContent = text; badge.querySelector('span').textContent = connected ? '已连接' : text;
@@ -23,7 +75,7 @@
     }
     audioContainer.replaceChildren(); trackList.replaceChildren(); const empty=document.createElement('p');empty.className='track-empty';empty.textContent='加入会议后显示远端轨道。';trackList.append(empty); $('enable-audio').hidden = true; $('refresh-notice').hidden = true;
     if(nvrMode){$('bridge-list').replaceChildren();$('bridge-status').textContent='';$('bridge-video').srcObject=null;$('bridge-video').hidden=true;}
-    leave.disabled = true; mute.disabled = true; cameraToggle.disabled = true; share.disabled = true;
+    leave.disabled = true; mute.disabled = true; cameraToggle.disabled = true; share.disabled = true;micDevice.disabled=false;cameraDevice.disabled=false;
     mute.textContent = '◉ 静音'; mute.setAttribute('aria-pressed', 'false'); cameraToggle.textContent = '◈ 关闭摄像头'; cameraToggle.setAttribute('aria-pressed', 'false'); share.textContent = '▣ 共享屏幕'; join.disabled = false;
   }
   function renderTracks(snapshot, c) {
@@ -197,11 +249,11 @@
     const entry=c.own.get(id);if(!entry)return;c.own.delete(id);c.pc.removeTrack(entry.sender);entry.track.stop();await request(c,'unpublish',{publication_id:id});await negotiate(c);if(c.snapshot)render(c.snapshot,c);
   }
   async function connect() {
-    closeCurrent();error.hidden=true;join.disabled=true;state('正在连接');
-    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(),bridges:new Map(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false};current=c;
+    closeCurrent();error.hidden=true;join.disabled=true;micDevice.disabled=true;cameraDevice.disabled=true;state('正在连接');
+    const c={pending:new Map(),requestID:0,subscribed:new Map(),own:new Map(),media:new Map(),disabledTracks:new Set(),bridges:new Map(),queue:Promise.resolve(),negotiated:false,syncPending:false,syncRunning:false,deviceSelection:{audio:micDevice.value,video:cameraDevice.value}};current=c;
     try {
       if(!nvrMode){const login=await fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token.value})});if(!login.ok)throw new Error('访问口令无效，请检查终端中的口令');}
-      if(micOption.checked||cameraOption.checked){if(!navigator.mediaDevices?.getUserMedia)throw new Error('当前浏览器无法访问媒体设备');c.stream=await navigator.mediaDevices.getUserMedia({audio:micOption.checked,video:cameraOption.checked});if(current!==c){c.stream.getTracks().forEach(t=>t.stop());return;}}
+      if(micOption.checked||cameraOption.checked){if(!navigator.mediaDevices?.getUserMedia)throw new Error('当前浏览器无法访问媒体设备');c.stream=await navigator.mediaDevices.getUserMedia({audio:micOption.checked?deviceConstraint(micDevice.value):false,video:cameraOption.checked?deviceConstraint(cameraDevice.value):false});if(current!==c){c.stream.getTracks().forEach(t=>t.stop());return;}void refreshDevices();}
       if(nvrMode){const auth=nvrAuth();const ticket=await nvrRequest('/api/sfu/ticket',{method:'POST',body:'{}'});sessionStorage.setItem('nvr_auth',auth.slice(6));$('nvr-password').value='';$('nvr-login').hidden=true;c.ticket=ticket.ticket;c.iceServers=ticket.ice_servers||[];}
       await openSocket(c);if(current!==c)return;
       const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});c.pc=pc;
@@ -213,7 +265,7 @@
       };
       if(c.stream){for(const track of c.stream.getTracks())await publishTrack(c,track,track.kind==='audio'?'microphone':'camera');}
       if(!c.stream?.getTracks().length)pc.createDataChannel('control');
-      await negotiate(c);if(current!==c)return;c.negotiated=true;if(c.snapshot)render(c.snapshot,c);leave.disabled=false;mute.disabled=!c.stream?.getAudioTracks().length;cameraToggle.disabled=!c.stream?.getVideoTracks().length;share.disabled=false;state(pc.connectionState==='connected'?'媒体连接正常':'正在建立媒体连接',pc.connectionState==='connected');scheduleSync(c);
+      await negotiate(c);if(current!==c)return;c.negotiated=true;if(c.snapshot)render(c.snapshot,c);leave.disabled=false;mute.disabled=!c.stream?.getAudioTracks().length;cameraToggle.disabled=!c.stream?.getVideoTracks().length;share.disabled=false;micDevice.disabled=!c.stream?.getAudioTracks().length;cameraDevice.disabled=!c.stream?.getVideoTracks().length;state(pc.connectionState==='connected'?'媒体连接正常':'正在建立媒体连接',pc.connectionState==='connected');scheduleSync(c);
     } catch(err){fail(c,err);}
   }
   form.addEventListener('submit',event=>{event.preventDefault();void connect();});
