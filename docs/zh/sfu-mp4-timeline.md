@@ -13,6 +13,6 @@ ffprobe -v quiet -show_entries stream=codec_name,start_time,duration -of json /t
 
 已登记的 SFU 桥接输出在 H.264 进程内录像路径中使用源视频时间戳和同一来源的音频时间戳；其他流及 RTSP 回退保持原有墙钟行为。暂停后的预录帧不含源时间，包含预录帧的当前片段继续使用墙钟；下一片段可恢复源时间。突发输入的合成测试中，20 ms 媒体间隔以 3 ms 实际间隔送入，21 帧视频覆盖 0.420 s（末帧沿用前一帧间隔），20 包音频的媒体时长为 0.400 s，音频源时间从 20 ms 开始。
 
-对使用源时间的 Opus 音轨，录像器会为不超过 2 秒且与 20 ms 对齐（允许 1 ms 舍入误差）的中途间隙插入 20 ms 静音包，使用 [Pion WebRTC 测试中的静音包](https://github.com/pion/webrtc/blob/v4.2.23/e2e/e2e_test.go)。静音只能保留时间轴，不能还原丢失的声音。超过上限或无法对齐的间隙会记录警告，仍可能造成漂移；不会影响会议转发。
+对使用源时间的 Opus 音轨，录像器会为不超过 2 秒且与 2.5 ms 对齐（允许 1 ms 舍入误差）的中途间隙插入 20、10、5 和 2.5 ms 静音包；20 ms 格式也用于 [Pion WebRTC 测试](https://github.com/pion/webrtc/blob/v4.2.23/e2e/e2e_test.go)。各种补包已在 FFmpeg 离线解码为全零 PCM。静音只能保留时间轴，不能还原丢失的声音。超过上限或无法对齐的间隙会记录警告，仍可能造成漂移；不会影响会议转发。
 
 Opus 音轨采用 48 kHz 媒体时间基准，以保留 2.5 ms 等非整数毫秒帧的时长；movie 时间基准仍为毫秒，因此轨道起始和最终总时长仍存在最多约 1 ms 的量化。该选择与 [Opus ISOBMFF 封装说明](https://opus-codec.org/docs/opus_in_isobmff.html)中的媒体时间基准一致。合成 RTP 的短间隙及 2.5 ms 帧测试已用 FFmpeg 静默解码，真实设备听感、其他播放器兼容性、弱网和长时间同步仍待验收。
