@@ -29,7 +29,7 @@ func (m *testRoomManager) CloseRoom(_ context.Context, p, id, gen string) error 
 	return nil
 }
 
-type testRoomIssuer struct{ room string }
+type testRoomIssuer struct{ room, generation string }
 
 func (i *testRoomIssuer) Issue(_ context.Context, _ *model.User) (string, error) {
 	i.room = "default"
@@ -37,6 +37,10 @@ func (i *testRoomIssuer) Issue(_ context.Context, _ *model.User) (string, error)
 }
 func (i *testRoomIssuer) IssueForRoom(_ context.Context, _ *model.User, room string) (string, error) {
 	i.room = room
+	return "ticket", nil
+}
+func (i *testRoomIssuer) IssueForRoomGeneration(_ context.Context, _ *model.User, room, generation string) (string, error) {
+	i.room, i.generation = room, generation
 	return "ticket", nil
 }
 func TestSFURoomRoutes(t *testing.T) {
@@ -58,6 +62,15 @@ func TestSFURoomRoutes(t *testing.T) {
 	rec = sfuRequest(router, "POST", "/api/sfu/ticket", `{"room_id":"room"}`, "application/json")
 	if rec.Code != http.StatusCreated || issuer.room != "room" {
 		t.Fatalf("ticket: %d %s", rec.Code, rec.Body.String())
+	}
+	gen := strings.Repeat("a", 32)
+	rec = sfuRequest(router, "POST", "/api/sfu/ticket", `{"room_id":"room","room_generation":"`+gen+`"}`, "application/json")
+	if rec.Code != http.StatusCreated || issuer.room != "room" || issuer.generation != gen {
+		t.Fatalf("scoped ticket: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = sfuRequest(router, "POST", "/api/sfu/ticket", `{"room_id":"room","room_generation":"bad"}`, "application/json")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid generation: %d", rec.Code)
 	}
 	rec = sfuRequest(router, "DELETE", "/api/sfu/rooms/room?generation=gen", "", "")
 	if rec.Code != http.StatusNoContent || m.id != "room" || m.generation != "gen" {

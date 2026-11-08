@@ -37,6 +37,11 @@ func (t *nvrSFUTickets) Issue(ctx context.Context, user *model.User) (string, er
 
 // IssueForRoom binds a one-use credential to a currently existing Room.
 func (t *nvrSFUTickets) IssueForRoom(ctx context.Context, user *model.User, roomID string) (string, error) {
+	return t.IssueForRoomGeneration(ctx, user, roomID, "")
+}
+
+// IssueForRoomGeneration also rejects a stale room selection when expected is set.
+func (t *nvrSFUTickets) IssueForRoomGeneration(ctx context.Context, user *model.User, roomID, expected string) (string, error) {
 	if ctx == nil {
 		return "", errors.New("invalid context")
 	}
@@ -55,6 +60,9 @@ func (t *nvrSFUTickets) IssueForRoom(ctx context.Context, user *model.User, room
 		}
 		identity.Room, identity.RoomGeneration = room, generation
 	} else if roomID != "default" {
+		return "", sfu.ErrRoomNotFound
+	}
+	if expected != "" && expected != identity.RoomGeneration {
 		return "", sfu.ErrRoomNotFound
 	}
 	var value [32]byte

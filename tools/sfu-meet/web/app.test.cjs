@@ -256,7 +256,7 @@ test('NVR room controls create, join and close the selected generation', async (
   element('nvr-room').value='default';element('nvr-room-new').value='room-1';element('nvr-room-create').listeners.click();
   await waitFor(()=>element('nvr-room').value==='room-1' && !element('join').disabled);
   element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
-  assert.equal(ticketBody.room_id,'room-1');assert.equal(element('nvr-room').disabled,true);
+  assert.equal(ticketBody.room_id,'room-1');assert.equal(ticketBody.room_generation,'generation-1');assert.equal(element('nvr-room').disabled,true);
   element('leave').listeners.click();assert.equal(element('nvr-room').disabled,false);
   element('nvr-room-close').listeners.click();await waitFor(()=>!!deleteURL && !element('join').disabled);
   assert.equal(deleteURL,'/api/sfu/rooms/room-1?generation=generation-1');assert.equal(element('nvr-room').value,'default');
