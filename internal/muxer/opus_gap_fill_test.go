@@ -129,6 +129,24 @@ func TestOpusGapFillCapsPacketCount(t *testing.T) {
 	unfilled, err := m.WriteOpusSampleWithGapFill(audio, []byte{0xf8, 0xff, 0xfe}, 2020*time.Millisecond, 20*time.Millisecond)
 	require.NoError(t, err)
 	require.Zero(t, unfilled)
-	require.Len(t, m.findTrackLocked(audio).samples, 103, "two seconds require at most 100 filler packets")
+	require.Len(t, m.findTrackLocked(audio).samples, 23, "two seconds need sixteen 120 ms packets and four 20 ms packets")
+	require.NoError(t, m.Close())
+}
+
+func TestOpusGapFillLongAndBounded(t *testing.T) {
+	m := NewMP4Muxer(filepath.Join(t.TempDir(), "long-gap.mp4"))
+	audio, err := m.AddAudioTrack("opus", nil)
+	require.NoError(t, err)
+	packet := []byte{0xf8, 0xff, 0xfe}
+	_, err = m.WriteOpusSampleWithGapFill(audio, packet, 0, 20*time.Millisecond)
+	require.NoError(t, err)
+	unfilled, err := m.WriteOpusSampleWithGapFill(audio, packet, 60*time.Second+20*time.Millisecond, 20*time.Millisecond)
+	require.NoError(t, err)
+	require.Zero(t, unfilled)
+	require.Len(t, m.findTrackLocked(audio).samples, 503, "60 seconds is bounded to 500 filler packets")
+	unfilled, err = m.WriteOpusSampleWithGapFill(audio, packet, 121*time.Second+40*time.Millisecond, 20*time.Millisecond)
+	require.NoError(t, err)
+	require.Equal(t, 61*time.Second, unfilled)
+	require.Len(t, m.findTrackLocked(audio).samples, 504, "unsupported gaps must not expand into unbounded packets")
 	require.NoError(t, m.Close())
 }
