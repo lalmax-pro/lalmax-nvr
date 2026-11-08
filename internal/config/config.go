@@ -65,11 +65,24 @@ type Config struct {
 	Version       string              `yaml:"version"`
 }
 
-// SFUConfig enables the initial single-room NVR SFU runtime.
+// SFUConfig configures the experimental NVR SFU runtime.
 // The runtime is opt-in and currently accepts authenticated administrators.
 type SFUConfig struct {
-	Enabled    bool           `yaml:"enabled" json:"enabled"`
-	ICEServers []SFUICEServer `yaml:"ice_servers" json:"-"`
+	Enabled     bool           `yaml:"enabled" json:"enabled"`
+	ICEServers  []SFUICEServer `yaml:"ice_servers" json:"-"`
+	IdleTimeout string         `yaml:"idle_timeout,omitempty" json:"idle_timeout,omitempty"`
+}
+
+// RoomIdleTimeout returns zero when automatic room collection is disabled.
+func (c SFUConfig) RoomIdleTimeout() (time.Duration, error) {
+	if c.IdleTimeout == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(c.IdleTimeout)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("sfu: idle_timeout must be a positive duration")
+	}
+	return d, nil
 }
 
 // SFUICEServer credentials are returned only to authenticated SFU users.
@@ -808,6 +821,9 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("config is nil")
 	}
 	if err := cfg.SFU.ValidateICE(); err != nil {
+		return err
+	}
+	if _, err := cfg.SFU.RoomIdleTimeout(); err != nil {
 		return err
 	}
 	for id := range cfg.Xiaomi.Accounts {

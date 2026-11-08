@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -32,15 +33,16 @@ func nvrSFUVideoFeedback() []webrtc.RTCPFeedback {
 }
 
 type nvrSFURuntime struct {
-	rooms     *sfu.Manager
-	roomAdmin *nvrSFURoomAdmin
-	room      *sfu.Room
-	registry  *nvrSFUBridgeRouter
-	signal    http.Handler
-	tickets   *nvrSFUTickets
-	policy    *nvrSFUPolicy
-	engine    *media.EmbeddedLalmax
-	server    *lalmaxserver.LalMaxServer
+	rooms       *sfu.Manager
+	roomAdmin   *nvrSFURoomAdmin
+	room        *sfu.Room
+	registry    *nvrSFUBridgeRouter
+	signal      http.Handler
+	tickets     *nvrSFUTickets
+	policy      *nvrSFUPolicy
+	engine      *media.EmbeddedLalmax
+	server      *lalmaxserver.LalMaxServer
+	idleTimeout time.Duration
 }
 
 type nvrSFUPolicy struct {
@@ -215,6 +217,10 @@ func nvrSFUNewPeer(servers []webrtc.ICEServer) func(context.Context, signaling.I
 	}
 }
 func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
+	idleTimeout, err := a.cfg.SFU.RoomIdleTimeout()
+	if err != nil {
+		return nil, err
+	}
 	embedded, ok := a.mediaEngine.(*media.EmbeddedLalmax)
 	if !ok || embedded.Server() == nil {
 		return nil, errors.New("SFU requires embedded media engine")
@@ -342,7 +348,7 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 		}()
 		handler.ServeHTTP(w, r.WithContext(context.WithValue(ctx, identityKey{}, identity)))
 	})
-	return &nvrSFURuntime{rooms: rooms, room: room, roomAdmin: roomAdmin, registry: registry, signal: guarded, tickets: tickets, policy: policy, engine: embedded, server: server}, nil
+	return &nvrSFURuntime{rooms: rooms, room: room, roomAdmin: roomAdmin, registry: registry, signal: guarded, tickets: tickets, policy: policy, engine: embedded, server: server, idleTimeout: idleTimeout}, nil
 }
 
 // Start monitors account revocation and embedded media server replacement.
@@ -368,6 +374,13 @@ func (s *nvrSFURuntime) Start(ctx context.Context) {
 				checkCtx, done := context.WithTimeout(ctx, 3*time.Second)
 				_ = s.registry.RevalidateOwners(checkCtx, s.policy.check)
 				done()
+				if s.idleTimeout > 0 {
+					cleanupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+					if err := s.roomAdmin.collectIdle(cleanupCtx, s.idleTimeout); err != nil && ctx.Err() == nil {
+						slog.Warn("SFU idle room cleanup incomplete", "error", err)
+					}
+					cancel()
+				}
 			}
 		}
 	}()
