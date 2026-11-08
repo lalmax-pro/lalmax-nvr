@@ -220,6 +220,9 @@ func nvrSFUNewPeer(servers []webrtc.ICEServer) func(context.Context, signaling.I
 			return nil, err
 		}
 		registry := &interceptor.Registry{}
+		if err := webrtc.ConfigureTWCCHeaderExtensionSender(engine, registry); err != nil {
+			return nil, err
+		}
 		if err := webrtc.RegisterDefaultInterceptors(engine, registry); err != nil {
 			return nil, err
 		}
