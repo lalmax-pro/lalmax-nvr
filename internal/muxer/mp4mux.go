@@ -417,8 +417,9 @@ func writeMoov(w *mp4.Writer, tracks []*track) error {
 	if err := writeMvhd(w, tracks); err != nil {
 		return err
 	}
+	origin := earliestTrackTime(tracks)
 	for _, tr := range tracks {
-		if err := writeTrak(w, tr); err != nil {
+		if err := writeTrak(w, tr, trackOffsetMs(tr, origin)); err != nil {
 			return err
 		}
 	}
@@ -434,11 +435,12 @@ func writeMvhd(w *mp4.Writer, tracks []*track) error {
 
 	nextID := uint32(1)
 	maxDur := uint32(0)
+	origin := earliestTrackTime(tracks)
 	for _, tr := range tracks {
 		if uint32(tr.id) >= nextID {
 			nextID = uint32(tr.id) + 1
 		}
-		d := trackDurationMs(tr)
+		d := movieTrackDurationMs(tr, trackOffsetMs(tr, origin))
 		if d > maxDur {
 			maxDur = d
 		}
@@ -464,7 +466,7 @@ func writeMvhd(w *mp4.Writer, tracks []*track) error {
 	return err
 }
 
-func writeTrak(w *mp4.Writer, tr *track) error {
+func writeTrak(w *mp4.Writer, tr *track, offset uint32) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("trak")})
 	if err != nil {
 		return err
@@ -477,7 +479,7 @@ func writeTrak(w *mp4.Writer, tr *track) error {
 	}
 	tkhd := &mp4.Tkhd{
 		TrackID:    uint32(tr.id),
-		DurationV0: trackDurationMs(tr),
+		DurationV0: movieTrackDurationMs(tr, offset),
 		Width:      uint32(tr.width) << 16,
 		Height:     uint32(tr.height) << 16,
 		Matrix: [9]int32{
@@ -494,8 +496,8 @@ func writeTrak(w *mp4.Writer, tr *track) error {
 	}
 	_ = bi2
 
-	if tr.isAudio && tr.audioCodec == "opus" {
-		if err := writeOpusEdit(w, tr); err != nil {
+	if offset > 0 || (tr.isAudio && tr.audioCodec == "opus") {
+		if err := writeTrackEdit(w, tr, offset); err != nil {
 			return err
 		}
 	}
@@ -1181,6 +1183,40 @@ func trackDurationMs(tr *track) uint32 {
 	return d
 }
 
+// All tracks share the earliest first decode timestamp as their movie origin.
+func earliestTrackTime(tracks []*track) time.Duration {
+	var earliest time.Duration
+	found := false
+	for _, tr := range tracks {
+		if len(tr.samples) > 0 && (!found || tr.samples[0].pts < earliest) {
+			earliest, found = tr.samples[0].pts, true
+		}
+	}
+	return earliest
+}
+
+func trackOffsetMs(tr *track, origin time.Duration) uint32 {
+	if len(tr.samples) == 0 {
+		return 0
+	}
+	delta := tr.samples[0].pts.Milliseconds() - origin.Milliseconds()
+	if delta <= 0 {
+		return 0
+	}
+	if delta > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(delta)
+}
+
+func movieTrackDurationMs(tr *track, offset uint32) uint32 {
+	duration := uint64(trackDurationMs(tr)) + uint64(offset)
+	if duration > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(duration)
+}
+
 // --- SPS Resolution Parser ---
 
 // bitReader reads bits from a byte slice, MSB first.
@@ -1553,20 +1589,26 @@ func writeRawBox(w *mp4.Writer, kind string, data []byte) error {
 	return err
 }
 
-// Keep the media timeline aligned with video while using the first packets
-// for decoder priming. An empty edit covers the discarded startup interval.
-func writeOpusEdit(w *mp4.Writer, tr *track) error {
+// An empty edit preserves the track offset; Opus also covers decoder priming.
+func writeTrackEdit(w *mp4.Writer, tr *track, offset uint32) error {
 	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("edts")}); err != nil {
 		return err
 	}
 	duration := trackDurationMs(tr)
-	skip := uint32(80)
-	if duration < skip {
-		skip = duration
+	skip := uint32(0)
+	if tr.isAudio && tr.audioCodec == "opus" {
+		skip = 80
+		if duration < skip {
+			skip = duration
+		}
+	}
+	gap := uint64(offset) + uint64(skip)
+	if gap > math.MaxUint32 {
+		gap = math.MaxUint32
 	}
 	data := make([]byte, 32)
 	binary.BigEndian.PutUint32(data[4:], 2)
-	binary.BigEndian.PutUint32(data[8:], skip)
+	binary.BigEndian.PutUint32(data[8:], uint32(gap))
 	binary.BigEndian.PutUint32(data[12:], math.MaxUint32)
 	binary.BigEndian.PutUint16(data[16:], 1)
 	binary.BigEndian.PutUint32(data[20:], duration-skip)
