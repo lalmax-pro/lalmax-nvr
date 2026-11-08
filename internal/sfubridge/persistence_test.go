@@ -9,6 +9,7 @@ import (
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/auth"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
+	"github.com/q191201771/lalmax/sfu/access"
 )
 
 func TestPersistentOutputRestoredAsDeniedAfterRestart(t *testing.T) {
@@ -100,5 +101,28 @@ func TestPersistentStorageFailureFailsClosed(t *testing.T) {
 	case <-publisher.opened:
 		t.Fatal("publisher started without identity persistence")
 	default:
+	}
+}
+
+type countingStore struct{ calls int }
+
+func (s *countingStore) ListSFUBridgeOutputIDs(context.Context) ([]string, error) { return nil, nil }
+func (s *countingStore) RegisterSFUBridgeOutput(context.Context, string) error    { s.calls++; return nil }
+func TestDeniedSourceDoesNotPersistAnOutput(t *testing.T) {
+	original, policy, publisher, grants, publication := setup(t)
+	store := &countingStore{}
+	svc, err := NewPersistent(context.Background(), original.room, policy, publisher, grants, original.validate, 1, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close(context.Background())
+	policy.mu.Lock()
+	policy.deny = access.Subscribe
+	policy.mu.Unlock()
+	if _, err = svc.Start(context.Background(), "operator", publication); !errors.Is(err, access.ErrDenied) {
+		t.Fatalf("denied subscription: %v", err)
+	}
+	if store.calls != 0 {
+		t.Fatalf("unauthorized request persisted %d identities", store.calls)
 	}
 }
