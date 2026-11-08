@@ -8,6 +8,16 @@ import (
 
 var ErrInvalidTrack = errors.New("sfu: invalid track kind or source")
 
+// NegotiatedCodec is a value copy of the transport's selected codec. It is
+// distinct from the publisher's declared Codec and does not prove the encoded
+// bitstream conforms to the negotiated profile.
+type NegotiatedCodec struct {
+	MimeType  string
+	ClockRate uint32
+	Channels  uint16
+	FMTP      string
+}
+
 // Publication is a server-assigned media identity scoped to one room generation.
 type Publication struct {
 	ID            string
@@ -15,7 +25,8 @@ type Publication struct {
 	Kind          string // audio or video
 	Source        string // camera, microphone or screen
 	Codec         string
-	RTPReady      bool // fanout is enabled; does not imply that media is decodable
+	RTPReady      bool            // fanout is enabled; does not imply that media is decodable
+	Negotiated    NegotiatedCodec // zero value when the transport did not provide it
 }
 type Subscription struct{ ParticipantID, PublicationID string }
 type subscriptionKey struct{ participantID, publicationID string }
