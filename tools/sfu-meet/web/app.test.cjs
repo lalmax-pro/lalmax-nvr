@@ -138,6 +138,8 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
     if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'short-ticket'})};
     if(url==='/api/sfu/bridges/')return await new Promise(resolve=>{releaseCreate=()=>resolve({ok:true,status:202,json:async()=>({id:'bridge-1'})});});
     if(url==='/api/sfu/bridges/bridge-1/stop')return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/bridge-1' && options.method==='DELETE')return{ok:true,status:204};
+    if(url==='/api/sfu/bridges/bridge-1')return{ok:true,status:200,json:async()=>({state:'stopped'})};
     throw new Error(`unexpected fetch ${url}`);
   };
   const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded-credentials',setItem() {}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
@@ -154,6 +156,6 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
   element('leave').listeners.click();
   assert.equal(element('bridge-list').children.length,0,'leaving must clear stale bridge tracks');
   releaseCreate();
-  await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/bridge-1/stop'));
+  await waitFor(()=>calls.some(c=>c.url==='/api/sfu/bridges/bridge-1' && c.options.method==='DELETE'));
   assert.ok(!calls.some(c=>c.url.includes('/whep')),'closed room must not start a player');
 });

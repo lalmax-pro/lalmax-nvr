@@ -15,6 +15,22 @@ type managementPolicy struct {
 	denied Action
 }
 
+func TestRegistryPruneFinishedKeepsActiveAndRecentEntries(t *testing.T) {
+	now := time.Now()
+	r := &Registry{entries: map[string]*registryEntry{
+		"old":    {status: Status{State: StateStopped}, finishedAt: now.Add(-6 * time.Minute)},
+		"recent": {status: Status{State: StateFailed}, finishedAt: now.Add(-time.Minute)},
+		"active": {status: Status{State: StatePending}},
+	}}
+	r.PruneFinished(now.Add(-5 * time.Minute))
+	if _, ok := r.entries["old"]; ok {
+		t.Fatal("old terminal entry was retained")
+	}
+	if len(r.entries) != 2 || r.entries["recent"] == nil || r.entries["active"] == nil {
+		t.Fatalf("unexpected remaining entries: %+v", r.entries)
+	}
+}
+
 func (p *managementPolicy) allow(_ context.Context, req ManagementRequest) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

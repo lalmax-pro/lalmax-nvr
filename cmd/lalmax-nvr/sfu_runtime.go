@@ -312,6 +312,7 @@ func (s *nvrSFURuntime) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				s.registry.PruneFinished(time.Now().Add(-5 * time.Minute))
 				if s.engine.Server() != s.server {
 					closeCtx, done := context.WithTimeout(context.Background(), 15*time.Second)
 					_ = s.Close(closeCtx)

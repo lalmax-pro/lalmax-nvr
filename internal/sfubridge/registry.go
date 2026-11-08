@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 var ErrNotFound = errors.New("sfu bridge not found")
@@ -41,15 +42,16 @@ type Status struct {
 	State                       State
 }
 type registryEntry struct {
-	owner  string
-	status Status
-	handle *Handle
+	owner      string
+	status     Status
+	handle     *Handle
+	finishedAt time.Time
 }
 
 // Registry keeps bridge handles and credentials on the server. Authentication
 // is the embedding application's responsibility. All operations check both
 // ownership and a required policy. Terminal entries count toward maxEntries
-// until explicitly removed, bounding memory while preserving failure status.
+// until explicitly removed or pruned, bounding memory while preserving failure status.
 type Registry struct {
 	mu         sync.Mutex
 	service    *Service
@@ -112,6 +114,19 @@ func (r *Registry) observe(entry *registryEntry) {
 	}
 	// Do not retain the playback secret after the service has revoked the grant.
 	entry.handle.PlaybackToken = ""
+	entry.finishedAt = time.Now()
+}
+
+// PruneFinished removes terminal entries older than before. Active bridges
+// are never removed; callers choose a retention window for status inspection.
+func (r *Registry) PruneFinished(before time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, entry := range r.entries {
+		if !entry.finishedAt.IsZero() && entry.finishedAt.Before(before) {
+			delete(r.entries, id)
+		}
+	}
 }
 func (r *Registry) allowed(ctx context.Context, principal, id string, action Action) (*registryEntry, error) {
 	if ctx == nil || principal == "" || id == "" {

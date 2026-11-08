@@ -86,9 +86,10 @@
       for(let attempt=0;attempt<10;attempt++){
         if(bridge.abort.signal.aborted||current!==c)return;
         response=await fetch(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/whep`,{method:'POST',headers:{'Authorization':nvrAuth(),'Content-Type':'application/sdp'},body:pc.localDescription.sdp,cache:'no-store',signal:bridge.abort.signal});
-        if(response.status!==503)break;
+        if(response.status!==503&&response.status!==404)break;
         const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);
         if(status.state==='failed'||status.state==='stopped')throw new Error('桥接已停止，未能发布视频');
+        if(response.status===404)break;
         await wait(500);
       }
       if(!response?.ok)throw new Error(`桥接播放暂不可用 (${response?.status||'超时'})`);
@@ -109,8 +110,8 @@
     try {
       if(bridge.location)await fetch(bridge.location,{method:'DELETE',headers:{'Authorization':nvrAuth()},keepalive:quiet,cache:'no-store'});
       if(bridge.id){await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}/stop`,{method:'POST',body:'{}',keepalive:quiet});
-        if(!quiet){for(let i=0;i<30;i++){const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);if(status.state==='stopped'||status.state==='failed')break;await wait(200);}
-          await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`,{method:'DELETE'});}}
+        for(let i=0;i<30;i++){const status=await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`);if(status.state==='stopped'||status.state==='failed')break;await wait(200);}
+        await nvrRequest(`/api/sfu/bridges/${encodeURIComponent(bridge.id)}`,{method:'DELETE',keepalive:quiet});}
       c.bridges.delete(bridge.publication);if(current===c){$('bridge-status').textContent='桥接已停止';renderBridgeTracks(c.snapshot,c);}
     } catch(err){bridge.stopping=false;bridge.busy=false;bridge.label='停止失败，可重试';if(current===c&&!quiet){$('bridge-status').textContent=err.message||'停止失败';renderBridgeTracks(c.snapshot,c);}}
   }
