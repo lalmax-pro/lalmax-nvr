@@ -195,8 +195,43 @@ const assert = require('node:assert/strict');
       return peak;
     });
     assert.ok(screenSignal >= 5, `synthetic screen audio was silent (peak ${screenSignal})`);
+    if (process.env.LK_BRIDGE_TEST) {
+      await viewer.waitForFunction(() => [...document.querySelector('#bridge-track').options].some(o => o.text.includes('屏幕共享')) && [...document.querySelector('#bridge-audio').options].some(o => o.text.includes('屏幕音频')));
+      await viewer.selectOption('#bridge-track', {label: await viewer.locator('#bridge-track option').filter({hasText:'屏幕共享'}).first().textContent()});
+      await viewer.selectOption('#bridge-audio', {label: await viewer.locator('#bridge-audio option').filter({hasText:'屏幕音频'}).first().textContent()});
+      await viewer.click('#bridge-create');
+      await viewer.getByRole('button', {name:'播放', exact:true}).waitFor({timeout:20000});
+      await viewer.getByRole('button', {name:'播放', exact:true}).click();
+      await viewer.waitForFunction(() => {
+        const video = document.querySelector('#bridge-player');
+        return video.videoWidth > 0 && video.srcObject?.getAudioTracks().some(track => track.readyState === 'live' && !track.muted);
+      }, null, {timeout:25000});
+      const bridgedSignal = await viewer.evaluate(async () => {
+        const context = new AudioContext();
+        await context.resume();
+        const source = context.createMediaStreamSource(document.querySelector('#bridge-player').srcObject);
+        const analyser = context.createAnalyser();
+        source.connect(analyser); // Deliberately never connect to speakers.
+        const samples = new Uint8Array(analyser.fftSize);
+        let peak = 0;
+        for (let i = 0; i < 30 && peak < 5; i++) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          analyser.getByteTimeDomainData(samples);
+          peak = Math.max(peak, ...samples.map(value => Math.abs(value - 128)));
+        }
+        source.disconnect();
+        await context.close();
+        return peak;
+      });
+      assert.ok(bridgedSignal >= 5, `bridged screen audio was silent (peak ${bridgedSignal})`);
+    }
     await publisher.click('#share');
     await viewer.waitForFunction(() => document.querySelectorAll('#track-list .track-row').length===2, null, {timeout:20000});
+    if (process.env.LK_BRIDGE_TEST) {
+      await viewer.getByRole('button', {name:'移除', exact:true}).waitFor({timeout:20000});
+      assert.equal(await viewer.locator('#bridge-player').isHidden(), true);
+      await viewer.getByRole('button', {name:'移除', exact:true}).click();
+    }
     await viewer.click('#leave'); await publisher.click('#leave');
     if (!process.env.LK_DEMO_LOCAL) {
       const refreshed = viewer.waitForResponse(response => response.url().endsWith('/api/sfu/rooms/') && response.request().method() === 'GET');
@@ -204,6 +239,6 @@ const assert = require('node:assert/strict');
       assert.equal((await refreshed).status(), 200);
     }
     assert.deepEqual(errors, []);
-    console.log(`PASS: browser synthetic camera/microphone, dynamic subscriptions, synthetic screen video/audio${process.env.LK_BRIDGE_TEST ? ', Group WHEP audio/video and bridge cleanup' : ''}, and leave`);
+    console.log(`PASS: browser synthetic camera/microphone, device switching, signal reconnection, dynamic subscriptions, synthetic screen video/audio${process.env.LK_BRIDGE_TEST ? ', camera and screen Group WHEP audio/video and bridge cleanup' : ''}, and leave`);
   } finally { await context.close(); await browser.close(); }
 })().catch(e => { console.error(e.stack || e.message); process.exitCode=1; });

@@ -113,6 +113,27 @@ func TestLiveKitTracksToLalAV(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer viewer.Disconnect()
+	var secondVideo, secondAudio atomic.Int64
+	secondCB := lksdk.NewRoomCallback()
+	secondCB.OnTrackSubscribed = func(track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, _ *lksdk.RemoteParticipant) {
+		go func() {
+			for {
+				if _, _, err := track.ReadRTP(); err != nil {
+					return
+				}
+				if track.Kind() == webrtc.RTPCodecTypeVideo {
+					secondVideo.Add(1)
+				} else if track.Kind() == webrtc.RTPCodecTypeAudio {
+					secondAudio.Add(1)
+				}
+			}
+		}()
+	}
+	secondViewer, err := lksdk.ConnectToRoom(endpoint, lksdk.ConnectInfo{APIKey: key, APISecret: secret, RoomName: "bridge", ParticipantIdentity: "second-viewer"}, secondCB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondViewer.Disconnect()
 	payload := []byte{24}
 	for _, nalu := range [][]byte{{0x67, 0x42, 0xc0, 0x1f, 0x0f, 0xd9, 0x1f, 0x88, 0x88, 0x84, 0, 0, 3, 0, 4, 0, 0, 3, 0, 0xc8, 0x3c, 0x60, 0xc9, 0x20}, {0x68, 0x87, 0xcb, 0x83, 0xcb, 0x20}, {0x65, 0x88, 0x84, 0x0a, 0xf2, 0x62, 0x80, 0, 0xa7, 0xbe}} {
 		var n [2]byte
@@ -202,6 +223,14 @@ func TestLiveKitTracksToLalAV(t *testing.T) {
 			t.Fatalf("group missing media: video=%v audio=%v", gotVideo, gotAudio)
 		}
 	}
+	deadline = time.Now().Add(10 * time.Second)
+	for (secondVideo.Load() == 0 || secondAudio.Load() == 0) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if secondVideo.Load() == 0 || secondAudio.Load() == 0 {
+		t.Fatalf("second viewer missing media alongside the bridge: video=%d audio=%d", secondVideo.Load(), secondAudio.Load())
+	}
+	secondViewer.Disconnect()
 	before := watched.Load()
 	stopBridge()
 	select {

@@ -116,7 +116,7 @@ func TestLiveKitBrowser(t *testing.T) {
 	mux.Handle("/", h.Routes())
 	svr := httptest.NewServer(mux)
 	defer svr.Close()
-	browserCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	browserCtx, cancel := context.WithTimeout(ctx, 150*time.Second)
 	defer cancel()
 	// t.Chdir isolates lal's logs; locate the source script independently of cwd.
 	_, source, _, _ := goruntime.Caller(0)
