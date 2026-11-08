@@ -46,6 +46,10 @@ type sfuRoomTicketIssuer interface {
 	IssueForRoom(context.Context, *model.User, string) (string, error)
 }
 
+type sfuGenerationTicketIssuer interface {
+	IssueForRoomGeneration(context.Context, *model.User, string, string) (string, error)
+}
+
 func (h *Handler) SetSFUTicketIssuer(issuer SFUTicketIssuer) { h.sfuTickets = issuer }
 
 func (h *Handler) handleSFUSignaling(w http.ResponseWriter, r *http.Request) {
@@ -68,14 +72,30 @@ func (h *Handler) createSFUTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		RoomID string `json:"room_id,omitempty"`
+		RoomID         string `json:"room_id,omitempty"`
+		RoomGeneration string `json:"room_generation,omitempty"`
 	}
 	if !sfuDecodeJSON(w, r, &input) {
 		return
 	}
 	var ticket string
 	var err error
-	if input.RoomID == "" || input.RoomID == "default" {
+	if input.RoomGeneration != "" {
+		if len(input.RoomGeneration) != 32 {
+			writeError(w, http.StatusBadRequest, "invalid room generation")
+			return
+		}
+		issuer, ok := h.sfuTickets.(sfuGenerationTicketIssuer)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "room generation validation unavailable")
+			return
+		}
+		roomID := input.RoomID
+		if roomID == "" {
+			roomID = "default"
+		}
+		ticket, err = issuer.IssueForRoomGeneration(r.Context(), user, roomID, input.RoomGeneration)
+	} else if input.RoomID == "" || input.RoomID == "default" {
 		ticket, err = h.sfuTickets.Issue(r.Context(), user)
 	} else if issuer, ok := h.sfuTickets.(sfuRoomTicketIssuer); ok {
 		ticket, err = issuer.IssueForRoom(r.Context(), user, input.RoomID)

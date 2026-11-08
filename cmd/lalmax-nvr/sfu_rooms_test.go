@@ -113,6 +113,12 @@ func TestNVRSFURoomAdministration(t *testing.T) {
 	if fresh.Generation == old {
 		t.Fatal("generation reused")
 	}
+	if _, err = tickets.IssueForRoomGeneration(ctx, user, "room", old); !errors.Is(err, sfu.ErrRoomNotFound) {
+		t.Fatalf("ticket issued for stale room selection: %v", err)
+	}
+	if _, err = tickets.IssueForRoomGeneration(ctx, user, "room", fresh.Generation); err != nil {
+		t.Fatalf("ticket for current selection: %v", err)
+	}
 	if err = admin.CloseRoom(ctx, principal, "room", old); !errors.Is(err, sfu.ErrRoomNotFound) {
 		t.Fatalf("stale close: %v", err)
 	}
