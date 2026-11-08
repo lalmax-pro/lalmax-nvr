@@ -127,7 +127,7 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
     querySelector(){return new Element();} replaceChildren(...children){this.children=children;} append(...children){this.children.push(...children);} remove(){}
   }
   const elements=new Map();const element=id=>{if(!elements.has(id))elements.set(id,new Element(id));return elements.get(id);};
-  const calls=[];let socket,releaseCreate,peerConfig;
+  const calls=[];let socket,releaseCreate,peerConfig,createAttempts=0;
   class Socket {
     static OPEN=1;
     constructor(url){socket=this;this.url=url;this.readyState=1;setImmediate(()=>this.snapshot([]));}
@@ -142,13 +142,16 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
   const fetch=async(url,options={})=>{
     calls.push({url,options});
     if(url==='/api/sfu/ticket')return{ok:true,status:201,json:async()=>({ticket:'short-ticket',ice_servers:[{urls:['stun:example.test:3478']}]})};
-    if(url==='/api/sfu/bridges/')return await new Promise(resolve=>{releaseCreate=()=>resolve({ok:true,status:202,json:async()=>({id:'bridge-1'})});});
+    if(url==='/api/sfu/bridges/'){
+      if(++createAttempts===1)throw new TypeError('response lost');
+      return await new Promise(resolve=>{releaseCreate=()=>resolve({ok:true,status:202,json:async()=>({id:'bridge-1'})});});
+    }
     if(url==='/api/sfu/bridges/bridge-1/stop')return{ok:true,status:204};
     if(url==='/api/sfu/bridges/bridge-1' && options.method==='DELETE')return{ok:true,status:204};
     if(url==='/api/sfu/bridges/bridge-1')return{ok:true,status:200,json:async()=>({state:'stopped'})};
     throw new Error(`unexpected fetch ${url}`);
   };
-  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded-credentials',setItem() {}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded-credentials',setItem() {}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
   element('join-form').listeners.submit({preventDefault(){}});
   const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
@@ -164,6 +167,11 @@ test('NVR uses one-time ticket and cleans bridge created after leaving', async (
   await waitFor(()=>element('bridge-list').children.length>0);
   element('bridge-list').children[0].children[1].listeners.click();
   await waitFor(()=>typeof releaseCreate==='function');
+  const creates=calls.filter(c=>c.url==='/api/sfu/bridges/');
+  assert.equal(creates.length,2);
+  assert.match(creates[0].options.headers['Idempotency-Key'],/^[0-9a-f]{32}$/);
+  assert.equal(creates[0].options.headers['Idempotency-Key'],creates[1].options.headers['Idempotency-Key']);
+  assert.equal(creates[0].options.body,creates[1].options.body);
   element('leave').listeners.click();
   assert.equal(element('bridge-list').children.length,0,'leaving must clear stale bridge tracks');
   releaseCreate();
@@ -250,7 +258,7 @@ test('NVR room controls create, join and close the selected generation', async (
   };
   class Socket {static OPEN=1;constructor(){this.readyState=1;setImmediate(()=>this.onmessage({data:JSON.stringify({type:'snapshot',snapshot:{Participants:[],Publications:[]}})}));}send(data){const msg=JSON.parse(data);setImmediate(()=>this.onmessage({data:JSON.stringify({type:'result',id:msg.id,sdp:'answer'})}));}close(){this.readyState=3;}}
   class Peer {constructor(){this.iceGatheringState='complete';this.connectionState='connected';}createDataChannel(){} async createOffer(){return{sdp:'offer'};}async setLocalDescription(){this.localDescription={sdp:'offer'};}async setRemoteDescription(){}close(){}}
-  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
   const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
   element('nvr-room').value='default';element('nvr-room-new').value='room-1';element('nvr-room-create').listeners.click();
@@ -328,7 +336,7 @@ test('stopping a bridge in management also closes its local player', async () =>
     if(url==='/api/sfu/bridges/bridge-1/whep'){whepPending=true;return await new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(new Error('aborted'))));}
     throw new Error(`unexpected request ${url}`);
   };
-  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
+  const context={document:{documentElement:{dataset:{mode:'nvr'}},getElementById:element,createElement:()=>new Element()},window:{addEventListener(){}},location:{protocol:'https:',host:'nvr.test'},navigator:{},sessionStorage:{getItem:()=> 'encoded',setItem(){}},fetch,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},AbortController,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout,Map,Set,Promise,Error,encodeURIComponent};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../internal/sfumeetui/web/app.js'),'utf8'),context);
   const waitFor=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('operation timed out');};
   element('join-form').listeners.submit({preventDefault(){}});await waitFor(()=>!element('share').disabled);
