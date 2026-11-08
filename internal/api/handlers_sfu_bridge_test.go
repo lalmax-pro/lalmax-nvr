@@ -212,8 +212,23 @@ func TestSFUBridgeHTTPRegistryLifecycle(t *testing.T) {
 		t.Fatal("publisher not started")
 	}
 	other := sfuTestRouter(&model.User{ID: 43, Role: model.RoleSuperAdmin, Enabled: true}, registry)
-	if rec = sfuRequest(other, "GET", "/api/sfu/bridges/"+status.ID+"/playback", "", ""); rec.Code != 404 {
-		t.Fatalf("other user: %d", rec.Code)
+	for _, tc := range []struct{ method, suffix, body, contentType string }{
+		{http.MethodGet, "", "", ""},
+		{http.MethodGet, "/playback", "", ""},
+		{http.MethodPost, "/stop", `{}`, "application/json"},
+		{http.MethodDelete, "", "", ""},
+	} {
+		path := "/api/sfu/bridges/" + status.ID + tc.suffix
+		got := sfuRequest(other, tc.method, path, tc.body, tc.contentType)
+		missing := sfuRequest(other, tc.method, "/api/sfu/bridges/missing"+tc.suffix, tc.body, tc.contentType)
+		if got.Code != http.StatusNotFound || got.Code != missing.Code || got.Body.String() != missing.Body.String() {
+			t.Fatalf("other user %s %s: got %d %s, missing %d %s", tc.method, tc.suffix, got.Code, got.Body.String(), missing.Code, missing.Body.String())
+		}
+	}
+	select {
+	case <-publisher.closed:
+		t.Fatal("another administrator stopped the publisher")
+	default:
 	}
 	rec = sfuRequest(router, "GET", "/api/sfu/bridges/"+status.ID+"/playback", "", "")
 	var playback struct {
@@ -233,6 +248,9 @@ func TestSFUBridgeHTTPRegistryLifecycle(t *testing.T) {
 	if rec.Code != 204 {
 		t.Fatalf("stop: %d", rec.Code)
 	}
+	if rec = sfuRequest(router, "POST", "/api/sfu/bridges/"+status.ID+"/stop", `{}`, "application/json"); rec.Code != http.StatusNoContent {
+		t.Fatalf("repeat stop: %d %s", rec.Code, rec.Body.String())
+	}
 	select {
 	case <-publisher.closed:
 	case <-time.After(3 * time.Second):
@@ -249,12 +267,18 @@ func TestSFUBridgeHTTPRegistryLifecycle(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"stopped"`) {
 		t.Fatalf("status: %s", rec.Body.String())
 	}
+	if rec = sfuRequest(router, "POST", "/api/sfu/bridges/"+status.ID+"/stop", `{}`, "application/json"); rec.Code != http.StatusNoContent {
+		t.Fatalf("stop after completion: %d %s", rec.Code, rec.Body.String())
+	}
 	if err = grants.AuthorizePlayback("rtsp", playback.StreamID, playback.Token); err == nil {
 		t.Fatal("token not revoked")
 	}
 	rec = sfuRequest(router, "DELETE", "/api/sfu/bridges/"+status.ID, "", "")
 	if rec.Code != 204 {
 		t.Fatalf("delete: %d", rec.Code)
+	}
+	if rec = sfuRequest(router, "DELETE", "/api/sfu/bridges/"+status.ID, "", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("repeat delete: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
