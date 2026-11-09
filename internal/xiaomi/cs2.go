@@ -39,7 +39,7 @@ func CS2DialContext(ctx context.Context, host, transport string, idleTimeout tim
 		Conn:  conn,
 		isTCP: isTCP,
 		channels: [4]*cs2DataChannel{
-			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+			newCS2DataChannel(0, 10), newCS2DataChannel(16384, 16384), newCS2DataChannel(250, 100), nil,
 		},
 	}
 	if idleTimeout == 0 {
@@ -62,6 +62,7 @@ type CS2Conn struct {
 	mu        sync.Mutex
 	err       error
 	seqCh0    uint16
+	seqCh1    uint16
 	seqCh3    uint16
 
 	channels [4]*cs2DataChannel
@@ -76,9 +77,10 @@ type CS2Conn struct {
 }
 
 type cs2CommandAck struct {
-	seq  uint16
-	done chan struct{}
-	once sync.Once
+	channel byte
+	seq     uint16
+	done    chan struct{}
+	once    sync.Once
 }
 
 // writeFrame owns the write deadline while holding writeMu. Cancellation of
@@ -205,7 +207,13 @@ func (c *CS2Conn) worker() {
 	c.initSignals()
 	defer close(c.done)
 	defer c.Close()
-	defer func() { c.channels[0].Close(); c.channels[2].Close() }()
+	defer func() {
+		for _, channel := range c.channels {
+			if channel != nil {
+				channel.Close()
+			}
+		}
+	}()
 	defer c.workerExitGuard()
 
 	const (
@@ -270,7 +278,19 @@ func (c *CS2Conn) worker() {
 			}
 			channel := c.channels[ch]
 
-			if c.isTCP {
+			if ch == 1 {
+				if c.isTCP {
+					err = channel.PushRaw(buf[8:n])
+				} else {
+					var pushed int
+					seq := binary.BigEndian.Uint16(buf[6:8])
+					pushed, err = channel.PushRawSeq(seq, buf[8:n])
+					if err == nil && pushed >= 0 {
+						ack := []byte{cs2Magic, cs2MsgDrwAck, 0, 6, cs2MagicDrw, ch, 0, 1, buf[6], buf[7]}
+						_, _ = c.writeFrame(context.Background(), ack)
+					}
+				}
+			} else if c.isTCP {
 				err = channel.Push(buf[8:n])
 			} else {
 				var pushed int
@@ -380,7 +400,7 @@ func (c *CS2Conn) ReadCommand() (cmd uint32, data []byte, err error) {
 // acceptCommandACK matches channel and sequence so unrelated or late ACKs
 // cannot acknowledge the current command.
 func (c *CS2Conn) acceptCommandACK(frame []byte) {
-	if len(frame) < 8 || frame[4] != cs2MagicDrw || frame[5] != 0 {
+	if len(frame) < 8 || frame[4] != cs2MagicDrw {
 		return
 	}
 	count := int(binary.BigEndian.Uint16(frame[6:8]))
@@ -394,7 +414,7 @@ func (c *CS2Conn) acceptCommandACK(frame []byte) {
 		return
 	}
 	for i := 0; i < count; i++ {
-		if binary.BigEndian.Uint16(frame[8+2*i:]) == pending.seq {
+		if frame[5] == pending.channel && binary.BigEndian.Uint16(frame[8+2*i:]) == pending.seq {
 			pending.once.Do(func() { close(pending.done) })
 			return
 		}
@@ -423,7 +443,7 @@ func (c *CS2Conn) WriteCommandContext(ctx context.Context, cmd uint32, data []by
 		_, err := c.writeFrame(ctx, req)
 		return err
 	}
-	pending := &cs2CommandAck{seq: seq, done: make(chan struct{})}
+	pending := &cs2CommandAck{channel: 0, seq: seq, done: make(chan struct{})}
 	c.ackMu.Lock()
 	c.pendingAck = pending
 	c.ackMu.Unlock()
@@ -448,6 +468,30 @@ func (c *CS2Conn) WriteCommandContext(ctx context.Context, cmd uint32, data []by
 	return fmt.Errorf("cs2: command %d was not acknowledged", cmd)
 }
 
+// WriteChannel sends an encrypted data message on a CS2 channel without a MISS command envelope.
+func (c *CS2Conn) WriteChannel(channel byte, payload []byte) error {
+	if channel != 1 {
+		return fmt.Errorf("cs2: unsupported raw channel %d", channel)
+	}
+	c.cmdMu.Lock()
+	defer c.cmdMu.Unlock()
+	seq := c.seqCh1
+	c.seqCh1++
+	return c.writeDataFrame(context.Background(), channel, seq, payload)
+}
+
+func (c *CS2Conn) writeDataFrame(ctx context.Context, channel byte, seq uint16, payload []byte) error {
+	frame := make([]byte, 12+len(payload))
+	frame[0], frame[1] = cs2Magic, cs2MsgDrw
+	binary.BigEndian.PutUint16(frame[2:], uint16(8+len(payload)))
+	frame[4], frame[5] = cs2MagicDrw, channel
+	binary.BigEndian.PutUint16(frame[6:], seq)
+	binary.BigEndian.PutUint32(frame[8:], uint32(len(payload)))
+	copy(frame[12:], payload)
+	_, err := c.writeFrame(ctx, frame)
+	return err
+}
+
 // ReadPacket reads a media packet from channel 2.
 func (c *CS2Conn) ReadPacket() (hdr, payload []byte, err error) {
 	data, ok := c.channels[2].Pop(cs2ReadTimeout)
@@ -461,6 +505,25 @@ func (c *CS2Conn) ReadPacket() (hdr, payload []byte, err error) {
 		return nil, nil, fmt.Errorf("cs2: media header too short: %d", len(data))
 	}
 	return data[:cs2HdrSize], data[cs2HdrSize:], nil
+}
+
+// ReadChannel waits for one raw transport message from a data channel.
+func (c *CS2Conn) ReadChannel(ctx context.Context, channel byte) ([]byte, error) {
+	if int(channel) >= len(c.channels) || c.channels[channel] == nil {
+		return nil, fmt.Errorf("cs2: channel %d is unavailable", channel)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		data, ok := c.channels[channel].Pop(200 * time.Millisecond)
+		if ok {
+			return data, nil
+		}
+		if err := c.getErr(); err != nil {
+			return nil, err
+		}
+	}
 }
 
 // WritePacket writes a media packet on channel 3.
@@ -695,6 +758,45 @@ func (c *cs2DataChannel) Push(b []byte) error {
 		c.waitSize = 0
 	}
 	return nil
+}
+
+func (c *cs2DataChannel) PushRaw(b []byte) error {
+	select {
+	case c.popBuf <- bytes.Clone(b):
+		return nil
+	default:
+		return fmt.Errorf("cs2: raw data channel buffer is full")
+	}
+}
+
+func (c *cs2DataChannel) PushRawSeq(seq uint16, data []byte) (int, error) {
+	diff := int16(seq - c.waitSeq)
+	if diff > 0 {
+		if c.pushSize == 0 {
+			return -1, nil
+		}
+		if c.pushBuf[seq] == nil {
+			if len(c.pushBuf) == c.pushSize {
+				return -1, nil
+			}
+			c.pushBuf[seq] = bytes.Clone(data)
+		}
+		return 0, nil
+	}
+	if diff < 0 {
+		return 0, nil
+	}
+	for i := 1; ; i++ {
+		if err := c.PushRaw(data); err != nil {
+			return i, err
+		}
+		c.waitSeq++
+		if data = c.pushBuf[c.waitSeq]; data != nil {
+			delete(c.pushBuf, c.waitSeq)
+		} else {
+			return i, nil
+		}
+	}
 }
 
 func (c *cs2DataChannel) Pop(timeout time.Duration) ([]byte, bool) {
