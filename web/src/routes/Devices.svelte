@@ -4,7 +4,8 @@
     listGB28181Devices, playGB28181Stream, stopGB28181Stream, deleteGB28181Device, 
     listStreams, listCameras, deleteCamera, permanentlyDeleteCamera,
     startCamera, stopCamera, updateCamera, pauseRecording, resumeRecording,
-    xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap,
+    xiaomiDevices, getXiaomiSDRecordings, getXiaomiSDRecordingPlaybackUrl,
+    listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap,
     enableCamera, disableCamera, getHealthStatus, getSnapshotUrl,
     ApiRequestError, queryDeviceRecords, startDevicePlayback,
     setPlaybackSpeed, seekPlayback, pausePlayback, resumePlayback,
@@ -17,7 +18,7 @@
     listPlatformEvents, getPlatformStatus, getTimelineData
   } from '$lib/api';
   import type { 
-    GB28181Device, StreamInfo, Camera, XiaomiDevice, ProtocolInfo, CameraHealth,
+    GB28181Device, StreamInfo, Camera, XiaomiDevice, XiaomiSDRecording, ProtocolInfo, CameraHealth,
     DeviceRecordItem, GB28181Alarm, ArchiveGroup, Recording,
     GB28181Platform, AddPlatformRequest, PlatformEvent, PlatformStatus,
     DeviceRecordResponse, DiscoveredDevice
@@ -176,6 +177,17 @@
 
   // Xiaomi
   let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
+  let xiaomiSDCameraId = $state('');
+  let xiaomiSDStreamChannel = $derived(getXiaomiCameraChannel(xiaomiCameras.find(camera => camera.id === xiaomiSDCameraId)));
+  let xiaomiSDStorageChannel = $derived(getXiaomiStorageChannel(xiaomiCameras.find(camera => camera.id === xiaomiSDCameraId)));
+  let xiaomiSDDate = $state(dateInputValue(new Date()));
+  let xiaomiSDRecordings = $state<XiaomiSDRecording[]>([]);
+  let xiaomiSDLoading = $state(false);
+  let xiaomiSDQueried = $state(false);
+  let xiaomiSDError = $state('');
+  let xiaomiSDPlaybackUrl = $state('');
+  let xiaomiSDPlayingStart = $state<number | null>(null);
+  let xiaomiSDDayRecordings = $derived(xiaomiSDRecordings.filter(recording => dateInputValue(new Date(recording.start * 1000)) === xiaomiSDDate));
 
   const tabs = [
     { id: 'onvif' as DeviceType, label: 'ONVIF 设备', icon: 'camera' },
@@ -267,11 +279,73 @@
     try {
       const cameras = await listCameras();
       xiaomiCameras = (cameras || []).filter(isXiaomiCamera);
+      if (!xiaomiSDCameraId && xiaomiCameras.length > 0) {
+        xiaomiSDCameraId = xiaomiCameras[0].id;
+      }
     } catch (e) {
       console.error('Failed to load Xiaomi cameras:', e);
     } finally {
       xiaomiCamerasLoading = false;
     }
+  }
+
+  function dateInputValue(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function getXiaomiCameraChannel(camera: Camera | undefined): number {
+    if (!camera) return 0;
+    try {
+      const value = new URL(camera.url).searchParams.get('channel');
+      const channel = Number(value || 0);
+      return Number.isInteger(channel) && channel >= 0 ? channel : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function getXiaomiStorageChannel(camera: Camera | undefined): number {
+    const streamChannel = getXiaomiCameraChannel(camera);
+    if (!camera) return streamChannel;
+    try {
+      const did = new URL(camera.url).hostname;
+      const model = xiaomiDeviceList.find(device => device.did === did)?.model.toLowerCase();
+      if (model === 'xiaomi.camera.082ac1' && streamChannel === 2) return 10;
+    } catch {
+      return streamChannel;
+    }
+    return streamChannel;
+  }
+
+  async function loadXiaomiSDRecordings() {
+    if (!xiaomiSDCameraId) return;
+    xiaomiSDLoading = true;
+    xiaomiSDQueried = false;
+    xiaomiSDError = '';
+    xiaomiSDPlaybackUrl = '';
+    xiaomiSDPlayingStart = null;
+    try {
+      const result = await getXiaomiSDRecordings(xiaomiSDCameraId, xiaomiSDStorageChannel);
+      xiaomiSDRecordings = result.recordings || [];
+      xiaomiSDQueried = true;
+    } catch (e) {
+      xiaomiSDRecordings = [];
+      xiaomiSDError = e instanceof Error ? e.message : '读取 SD 卡录像失败';
+    } finally {
+      xiaomiSDLoading = false;
+    }
+  }
+
+  function playXiaomiSDRecording(recording: XiaomiSDRecording) {
+    xiaomiSDPlayingStart = recording.start;
+    xiaomiSDPlaybackUrl = getXiaomiSDRecordingPlaybackUrl(
+      xiaomiSDCameraId,
+      recording.start,
+      xiaomiSDStorageChannel,
+    );
   }
 
   async function loadOnvifCameras() {
@@ -2229,6 +2303,104 @@
             />
           {/each}
         </div>
+        <section class="mt-6 card border th-border p-4 sm:p-6">
+          <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 class="text-lg font-semibold th-text-primary">SD 卡录像</h2>
+              <p class="text-sm th-text-secondary mt-1">查询摄像机存储卡中的录像片段并直接播放</p>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick={loadXiaomiSDRecordings} disabled={xiaomiSDLoading || !xiaomiSDCameraId}>
+              {#if xiaomiSDLoading}<RefreshCw size={14} class="animate-spin" />{:else}<Search size={14} />{/if}
+              查询录像
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+            <label class="block text-sm th-text-secondary">
+              摄像机
+              <select
+                class="input w-full mt-1"
+                bind:value={xiaomiSDCameraId}
+                onchange={() => {
+                  xiaomiSDRecordings = [];
+                  xiaomiSDQueried = false;
+                  xiaomiSDPlaybackUrl = '';
+                  xiaomiSDPlayingStart = null;
+                  xiaomiSDError = '';
+                }}
+              >
+                {#each xiaomiCameras as camera (camera.id)}
+                  <option value={camera.id}>{camera.name}</option>
+                {/each}
+              </select>
+            </label>
+            <div class="text-sm th-text-secondary">
+              摄像机通道
+              <div class="input w-full mt-1 flex items-center">{xiaomiSDStreamChannel}</div>
+            </div>
+            <div class="text-sm th-text-secondary">
+              SD 存储通道
+              <div class="input w-full mt-1 flex items-center">{xiaomiSDStorageChannel}</div>
+            </div>
+            <label class="block text-sm th-text-secondary">
+              日期
+              <input class="input w-full mt-1" type="date" bind:value={xiaomiSDDate} />
+            </label>
+          </div>
+
+          {#if xiaomiSDError}
+            <div class="rounded-lg border border-red-300 bg-red-50 text-red-800 p-3 text-sm mb-4">{xiaomiSDError}</div>
+          {/if}
+
+          {#if xiaomiSDPlaybackUrl}
+            <div class="mb-5 rounded-lg overflow-hidden bg-black">
+              <video
+                class="w-full max-h-[60vh] object-contain"
+                controls
+                autoplay
+                playsinline
+                src={xiaomiSDPlaybackUrl}
+                onerror={() => { xiaomiSDError = '录像加载失败；请检查设备连接和浏览器的视频编码支持'; }}
+              >
+                <track kind="captions" />
+              </video>
+              <div class="px-3 py-2 text-xs text-white/80">
+                {new Date((xiaomiSDPlayingStart || 0) * 1000).toLocaleString()}
+              </div>
+            </div>
+          {/if}
+
+          {#if !xiaomiSDLoading && xiaomiSDRecordings.length > 0}
+            <div class="flex items-center justify-between text-sm th-text-secondary mb-2">
+              <span>{xiaomiSDDate} · {xiaomiSDDayRecordings.length} 段</span>
+              <span>索引共 {xiaomiSDRecordings.length} 段</span>
+            </div>
+            <div class="max-h-80 overflow-y-auto divide-y th-border rounded-lg border th-border">
+              {#each xiaomiSDDayRecordings as recording (recording.start)}
+                <div class="flex items-center justify-between gap-3 px-3 py-2.5 hover:th-bg-hover">
+                  <div class="min-w-0">
+                    <div class="text-sm font-medium th-text-primary">{new Date(recording.start * 1000).toLocaleTimeString()}</div>
+                    <div class="text-xs th-text-secondary mt-0.5">{recording.duration} 秒{recording.event ? ' · 事件录像' : ''}</div>
+                  </div>
+                  <button
+                    class="btn btn-secondary btn-sm shrink-0"
+                    class:active={xiaomiSDPlayingStart === recording.start}
+                    onclick={() => playXiaomiSDRecording(recording)}
+                    title="播放 SD 卡录像"
+                  >
+                    <Play size={14} /> 播放
+                  </button>
+                </div>
+              {:else}
+                <p class="p-4 text-sm th-text-secondary text-center">所选日期没有录像</p>
+              {/each}
+            </div>
+          {:else if !xiaomiSDLoading && xiaomiSDQueried && xiaomiSDRecordings.length === 0 && !xiaomiSDError}
+            <p class="rounded-lg th-bg-secondary p-5 text-sm th-text-secondary text-center">设备没有返回录像</p>
+          {:else if !xiaomiSDLoading && !xiaomiSDQueried && !xiaomiSDError}
+            <p class="rounded-lg th-bg-secondary p-5 text-sm th-text-secondary text-center">选择摄像机和日期后查询录像</p>
+          {/if}
+        </section>
       {/if}
 
     <!-- Push Streams -->

@@ -105,8 +105,11 @@ type XiaomiRecorder struct {
 	motorActive     bool
 	motorLease      time.Duration
 
-	sdMu     sync.Mutex
-	sdClient *MISSClient
+	sdMu      sync.Mutex
+	sdClient  *MISSClient
+	sdFileKey string
+	sdFile    []byte
+	sdFileAt  time.Time
 
 	// lal custom pub session
 	pubSession media.CustomizePubSession
