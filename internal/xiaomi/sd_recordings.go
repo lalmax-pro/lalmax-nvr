@@ -297,20 +297,24 @@ func parseSDRecordingIndex(payload []byte) ([]SDRecording, error) {
 	return unique, nil
 }
 
-// ReadSDRecordings uses a dedicated MISS connection that is reused between lookups.
+// ReadSDRecordings reuses the active media session when possible. Xiaomi
+// devices may limit concurrent P2P sessions, so opening a third connection
+// while both channels are streaming can make the camera close a session.
 func (r *XiaomiRecorder) ReadSDRecordings(ctx context.Context, storageChannel uint32) ([]SDRecording, error) {
 	if r.cfg.DID == "" {
 		return nil, fmt.Errorf("xiaomi: device ID is not configured")
 	}
 	r.sdMu.Lock()
 	defer r.sdMu.Unlock()
-	if err := r.ensureSDClient(ctx); err != nil {
+	client, dedicated, err := r.sdQueryClient(ctx)
+	if err != nil {
 		return nil, err
 	}
-	clips, err := r.sdClient.ReadSDRecordings(ctx, storageChannel)
+	clips, err := client.ReadSDRecordings(ctx, storageChannel)
 	if err != nil {
-		_ = r.sdClient.Conn.Close()
-		r.sdClient = nil
+		if dedicated {
+			r.closeSDClientLocked()
+		}
 		return nil, err
 	}
 	return clips, nil
@@ -327,13 +331,15 @@ func (r *XiaomiRecorder) ReadSDRecordingFile(ctx context.Context, storageChannel
 	if r.sdFileKey == key && time.Since(r.sdFileAt) < 5*time.Minute && len(r.sdFile) > 0 {
 		return bytes.Clone(r.sdFile), nil
 	}
-	if err := r.ensureSDClient(ctx); err != nil {
+	client, dedicated, err := r.sdQueryClient(ctx)
+	if err != nil {
 		return nil, err
 	}
-	file, err := r.sdClient.ReadSDRecordingFile(ctx, storageChannel, start)
+	file, err := client.ReadSDRecordingFile(ctx, storageChannel, start)
 	if err != nil {
-		_ = r.sdClient.Conn.Close()
-		r.sdClient = nil
+		if dedicated {
+			r.closeSDClientLocked()
+		}
 		return nil, err
 	}
 	if len(file) <= xiaomiSDMaxFile {
@@ -342,6 +348,34 @@ func (r *XiaomiRecorder) ReadSDRecordingFile(ctx context.Context, storageChannel
 		r.sdFileAt = time.Now()
 	}
 	return file, nil
+}
+
+// sdQueryClient returns the current live MISS client when one is available.
+// RDT uses its own CS2 data channel, leaving the media packet channel intact.
+// A short-lived dedicated client remains the fallback for a stopped recorder.
+// The caller must hold sdMu while using the returned client.
+func (r *XiaomiRecorder) sdQueryClient(ctx context.Context) (*MISSClient, bool, error) {
+	client := r.activeMISSClient()
+	if client != nil {
+		if r.sdClient != nil && r.sdClient != client {
+			_ = r.sdClient.Conn.Close()
+			r.sdClient = nil
+		}
+		return client, false, nil
+	}
+	if err := r.ensureSDClient(ctx); err != nil {
+		return nil, false, err
+	}
+	return r.sdClient, true, nil
+}
+
+// activeMISSClient reads the live media client under the same lock used by
+// Xiaomi PTZ controls. The session is attached only after media startup
+// succeeds and detached before it is closed.
+func (r *XiaomiRecorder) activeMISSClient() *MISSClient {
+	r.motorMu.Lock()
+	defer r.motorMu.Unlock()
+	return r.motorClient
 }
 
 func (r *XiaomiRecorder) ensureSDClient(ctx context.Context) error {
@@ -363,9 +397,14 @@ func (r *XiaomiRecorder) ensureSDClient(ctx context.Context) error {
 func (r *XiaomiRecorder) closeSDClient() {
 	r.sdMu.Lock()
 	defer r.sdMu.Unlock()
+	r.closeSDClientLocked()
+	r.sdFileKey, r.sdFile, r.sdFileAt = "", nil, time.Time{}
+}
+
+// closeSDClientLocked closes the fallback client while sdMu is held.
+func (r *XiaomiRecorder) closeSDClientLocked() {
 	if r.sdClient != nil {
 		_ = r.sdClient.Conn.Close()
 		r.sdClient = nil
 	}
-	r.sdFileKey, r.sdFile, r.sdFileAt = "", nil, time.Time{}
 }

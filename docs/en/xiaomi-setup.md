@@ -65,7 +65,7 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 - **Audio sample rate**: Received 16 kHz G.711/PCM is low-pass filtered and resampled to the downstream 8 kHz rate; Opus retains its encoding.
 - **Pan/Tilt**: Direction, speed and stop controls for motor-equipped models.
 - **Two-way Audio**: Send audio to camera speaker via WebSocket
-- **Dual-lens Devices**: Uses the default lens; main/secondary channel selection is not exposed in configuration or the UI yet
+- **Dual-lens Devices**: Main and secondary lenses can be configured as separate channels; SD-card queries map the selected camera channel to the device storage channel
 - **Auto Fallback**: HD to SD fallback when the first video frame times out, including audio-only connections
 
 ## Setup Methods
@@ -159,6 +159,69 @@ The recorder keeps an authenticated cloud session for up to 10 minutes and the d
 Pan and tilt are normalized to `[-1,1]`; the larger axis wins when both are set. Magnitude maps to native speeds `1–10` (approximately `3/5/10` for the three UI settings). A zero vector stops movement. Only continuous movement is supported, and zoom must be zero.
 
 Movement expires after two seconds. Clients must renew commands to continue moving; the Web UI renews every 500 ms. The server attempts an automatic stop if a stop request is lost.
+
+## SD Card Recordings: Search and Playback
+
+On **Cameras → Xiaomi Devices**, select a camera and date in the **SD Card Recordings** panel, then query the camera's SD-card index and play a selected clip. This reads recordings stored on the camera, not recordings saved locally by the NVR; querying the index does not import clips into NVR storage. The date filter is applied in the UI to the full index; the API currently has no date or pagination parameters.
+
+### Recordings List API
+
+```http
+GET /api/cameras/{camera_id}/sd-recordings?channel={storage_channel}
+```
+
+`channel` is the camera's **SD storage channel**, from `0` to `255`; it defaults to `0` when omitted. A dual-lens camera's live channel number may differ from its storage channel. The UI maps known models. For example, live channel `2` maps to storage channel `10` on `xiaomi.camera.082ac1`. Other models may use different mappings.
+
+Requests use the standard NVR API authentication. Success returns HTTP `200`; a missing camera returns `404`; a malformed channel or non-Xiaomi camera returns `400`; an unavailable recorder returns `503`; a device connection/protocol error returns `502`; a read timeout returns `504`. Results are sorted by start time ascending and deduplicated by start time.
+
+The endpoint returns JSON. This redacted example uses illustrative timestamps and counts:
+
+```json
+{
+  "camera_id": "cam-REDACTED",
+  "storage_channel": 10,
+  "recordings": [
+    {
+      "start": 1760000000,
+      "duration": 59
+    },
+    {
+      "start": 1760000060,
+      "duration": 64,
+      "event": true
+    }
+  ],
+  "total": 2
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `camera_id` | Camera record ID in NVR; redacted in the example |
+| `storage_channel` | Device storage channel used for this query |
+| `recordings[].start` | Clip start time as Unix seconds; used to locate the clip for playback |
+| `recordings[].duration` | Clip duration in seconds |
+| `recordings[].event` | Whether the clip is an event recording; omitted for ordinary clips (`false`) |
+| `total` | Number of indexed clips returned |
+
+The camera's recording index does not include media codec, resolution, frame rate, bitrate, or file size, so the list API does not return those properties. The UI formats dates and times from `start`.
+
+### Recording Playback API
+
+```http
+GET /api/cameras/{camera_id}/sd-recordings/{start}/playback?channel={storage_channel}
+```
+
+`start` must be the Unix-seconds timestamp returned by the list API, and `channel` must match the storage channel used to query the list. On success, the response body is an MP4 byte stream with `Content-Type: video/mp4`; HTTP Range requests are supported. The server generates a display filename such as `xiaomi-recording-{start}.mp4`; the camera does not supply a filename.
+
+### Xiaomi Device Request Flow
+
+1. This feature requires MISS/CS2 transport; legacy transport does not support SD index or file retrieval. NVR connects over an authenticated Xiaomi session. Recording queries reuse the camera's active live session when available, avoiding an additional P2P session alongside live video. If the camera is not streaming, a cached dedicated query session is used; each query does not log in again.
+2. Index and file requests use CS2 RDT data channel `1` and are encrypted with the current MISS session key. The RDT header contains a command number and payload length. The index command is `6`, with a 24-byte payload and the storage channel at offset 8. The file command is `1`, with a 12-byte payload, the start time at offset 0, and the storage channel at offset 8.
+3. The camera returns a binary index: a 4-byte header followed by 8-byte entries. Each entry contains a 32-bit little-endian Unix start time and a 32-bit little-endian flags field. The low 8 bits of the flags field contain duration in seconds; bit 8 marks an event recording. NVR parses these entries into the JSON fields above.
+4. A file request returns MP4 data. Recording requests use a separate data channel from live video and do not change live streaming or PTZ state during normal operation.
+
+The list request has a 45-second timeout and playback has a 2-minute timeout. A camera disconnect, protocol error, or timeout is returned as an API gateway or timeout error.
 
 ## Two-way Audio (Talk)
 
