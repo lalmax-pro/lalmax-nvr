@@ -483,6 +483,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Post("/ptz/stop", h.handlePTZStop)
 				r.Get("/ptz/status", h.handlePTZStatus)
 				r.Get("/sd-recordings", h.handleXiaomiSDRecordings)
+				r.Get("/sd-recordings/{start}/playback", h.handleXiaomiSDRecordingPlayback)
 				r.Get("/ptz/presets", h.handlePTZGetPresets)
 				r.With(middleware.RequireOperatePermission()).Post("/ptz/presets", h.handlePTZCreatePreset)
 				r.With(middleware.RequireOperatePermission()).Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
