@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/xiaomi/tutk"
@@ -96,6 +97,7 @@ type MISSClient struct {
 	key    []byte
 	model  string
 	legacy bool
+	rdtMu  sync.Mutex
 }
 
 // MISSPacket is a decoded media packet from a Xiaomi camera.
