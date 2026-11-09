@@ -4,7 +4,7 @@
   const form = $('join-form'), token = $('token'), micOption = $('microphone'), cameraOption = $('camera');
   const micDevice=$('microphone-device'), cameraDevice=$('camera-device');
   const status = $('status-text'), badge = $('connection-badge'), dot = $('status-dot');
-  const join = $('join'), leave = $('leave'), mute = $('mute'), cameraToggle = $('camera-toggle'), share = $('share'), error = $('error');
+  const join = $('join'), leave = $('leave'), mute = $('mute'), cameraToggle = $('camera-toggle'), share = $('share'), shareAudio=$('share-audio'), error = $('error');
   const tiles = $('tiles'), audioContainer = $('audio-container'), trackList = $('track-list');
   const networkPanel=$('network-stats'), networkStatus=$('network-status');
   const nvrMode = document.documentElement?.dataset?.mode === 'nvr';
@@ -138,7 +138,7 @@
     }
     audioContainer.replaceChildren(); trackList.replaceChildren(); const empty=document.createElement('p');empty.className='track-empty';empty.textContent='加入会议后显示远端轨道。';trackList.append(empty); $('enable-audio').hidden = true; $('refresh-notice').hidden = true;
     if(nvrMode){$('bridge-list').replaceChildren();$('bridge-status').textContent='';$('bridge-video').srcObject=null;$('bridge-video').hidden=true;}
-    leave.disabled = true; mute.disabled = true; cameraToggle.disabled = true; share.disabled = true;micDevice.disabled=false;cameraDevice.disabled=false;
+    leave.disabled = true; mute.disabled = true; cameraToggle.disabled = true; share.disabled = true;shareAudio.disabled=false;micDevice.disabled=false;cameraDevice.disabled=false;
     mute.textContent = '◉ 静音'; mute.setAttribute('aria-pressed', 'false'); cameraToggle.textContent = '◈ 关闭摄像头'; cameraToggle.setAttribute('aria-pressed', 'false'); share.textContent = '▣ 共享屏幕'; join.disabled = false; if(nvrMode)updateRoomControls();
   }
   function renderTracks(snapshot, c) {
@@ -149,7 +149,7 @@
     for (const p of tracks) {
       const row=document.createElement('div');row.className='track-row';
       const info=document.createElement('div');info.className='track-info';
-      const title=document.createElement('strong');const source=p.Source==='screen'?'屏幕共享':p.Source==='camera'?'摄像头':'麦克风';
+      const title=document.createElement('strong');const source=p.Source==='screen'?(p.Kind==='audio'?'屏幕音频':'屏幕共享'):p.Source==='camera'?'摄像头':'麦克风';
       title.textContent=`${members.get(p.ParticipantID)||'远端成员'} · ${source}`;
       const detail=document.createElement('small');detail.textContent=`${p.Codec} · ${p.ID.slice(0,8)}`;info.append(title,detail);
       const button=document.createElement('button');button.type='button';button.className='track-toggle';
@@ -273,17 +273,30 @@
   }
   function renderBridgeTracks(snapshot,c) {
     const list=$('bridge-list');list.replaceChildren();
-    const tracks=(snapshot.Publications||[]).filter(p=>(p.Kind==='video'||p.Kind==='audio')&&p.RTPReady);
-    for(const [id,b] of c.bridges)if(!tracks.some(p=>p.ID===id))tracks.push({ID:id,Source:b.source,RTPReady:false});
+    const publications=snapshot.Publications||[],ids=new Set(publications.map(p=>p.ID));
+    for(const bridge of c.bridges.values()){
+      if(!ids.has(bridge.publication)||(bridge.audioPublication&&!ids.has(bridge.audioPublication)))bridge.sourceEnded=true;
+      if(bridge.sourceEnded){
+        bridge.label='源已结束';
+        if(bridge.id&&!bridge.sourceEndedHandled){
+          bridge.sourceEndedHandled=true;bridge.abort.abort();bridge.pc?.close();
+          if(current===c){$('bridge-video').srcObject=null;$('bridge-video').hidden=true;$('bridge-status').textContent='源已结束，请停止桥接并清理记录。';}
+          void closeBridgePlayer(bridge,true);
+        }
+      }
+    }
+    const tracks=publications.filter(p=>(p.Kind==='video'||p.Kind==='audio')&&p.RTPReady);
+    for(const [id,b] of c.bridges)if(!tracks.some(p=>p.ID===id))tracks.push({ID:id,Kind:b.kind,Source:b.source,RTPReady:false});
     if(!tracks.length){const empty=document.createElement('p');empty.className='track-empty';empty.textContent='没有可桥接的音视频轨道。';list.append(empty);return;}
     for(const p of tracks){
       const row=document.createElement('div');row.className='track-row';
       const info=document.createElement('div');info.className='track-info';
-      const title=document.createElement('strong');title.textContent=`${p.Source==='screen'?'屏幕':p.Source==='microphone'?'麦克风':'摄像头'} · ${p.ID.slice(0,8)}`;
+      const title=document.createElement('strong');title.textContent=`${p.Source==='screen'?(p.Kind==='audio'?'屏幕音频':'屏幕'):p.Source==='microphone'?'麦克风':'摄像头'} · ${p.ID.slice(0,8)}`;
       const detail=document.createElement('small');const b=c.bridges.get(p.ID);detail.textContent=b?b.label:(p.RTPReady?'已就绪':'源已结束');info.append(title,detail);
       const button=document.createElement('button');button.type='button';button.className='track-toggle';button.disabled=!!b?.busy||(!b&&(!p.RTPReady||c.bridges.size>0));button.textContent=b?'停止桥接':'桥接并播放';
       button.addEventListener('click',()=>{if(current!==c)return;if(b)void stopBridge(c,b,false);else void startBridge(c,p);});row.append(info,button);
-      const audio=(snapshot.Publications||[]).find(track=>track.Kind==='audio'&&track.ParticipantID===p.ParticipantID&&track.RTPReady);
+      const audioSource=p.Source==='screen'?'screen':'microphone';
+      const audio=(snapshot.Publications||[]).find(track=>track.Kind==='audio'&&track.Source===audioSource&&track.ParticipantID===p.ParticipantID&&track.RTPReady);
       if(p.Kind==='video'&&audio&&!b){const av=document.createElement('button');av.type='button';av.className='track-toggle';av.textContent='音视频桥接';av.disabled=!p.RTPReady||c.bridges.size>0;av.addEventListener('click',()=>{if(current===c)void startBridge(c,p,audio);});row.append(av);}
       list.append(row);
     }
@@ -330,7 +343,7 @@
     } finally {clearTimeout(timer);signal.removeEventListener('abort',abort);}
   }
   async function startBridge(c,p,audio) {
-    const bridge={publication:p.ID,audioPublication:audio?.ID||'',requestKey:'',source:p.Source,label:'正在创建',busy:true,pc:null,location:'',abort:new AbortController()};
+    const bridge={publication:p.ID,audioPublication:audio?.ID||'',requestKey:'',kind:p.Kind,source:p.Source,label:'正在创建',busy:true,pc:null,location:'',abort:new AbortController()};
     c.bridges.set(p.ID,bridge);renderBridgeTracks(c.snapshot,c);
     try {
       bridge.requestKey=bridgeRequestKey();
@@ -339,9 +352,10 @@
       bridge.id=result.id;
       if(current!==c||bridge.closeRequested||bridge.abort.signal.aborted){await stopBridge(c,bridge,true);return;}
       bridge.label='等待媒体';bridge.busy=false;renderBridgeTracks(c.snapshot,c);
+      if(bridge.sourceEnded)return;
       const pc=new RTCPeerConnection({iceServers:c.iceServers||[]});bridge.pc=pc;const transceiver=pc.addTransceiver(p.Kind,{direction:'recvonly'});if(p.Kind==='video')preferH264(transceiver);if(audio)pc.addTransceiver('audio',{direction:'recvonly'});
-      const video=$('bridge-video');video.muted=p.Kind!=='audio'&&!audio;video.controls=p.Kind==='audio'||!!audio;video.hidden=false;video.onplaying=()=>{if(current===c){if(error.textContent==='浏览器阻止了播放，请使用播放器控件重试。')error.hidden=true;bridge.label='播放中';$('bridge-status').textContent='WHEP 播放中';renderBridgeTracks(c.snapshot,c);}};
-      const media=new MediaStream();pc.ontrack=event=>{if(current!==c)return;media.addTrack(event.track);video.srcObject=media;void video.play().catch(err=>{if(current===c&&err.name!=='AbortError'&&video.paused)showError('浏览器阻止了播放，请使用播放器控件重试。');});};
+      const video=$('bridge-video');video.muted=p.Kind!=='audio'&&!audio;video.controls=p.Kind==='audio'||!!audio;video.hidden=false;video.onplaying=()=>{if(current===c&&!bridge.sourceEnded&&!bridge.closeRequested){if(error.textContent==='浏览器阻止了播放，请使用播放器控件重试。')error.hidden=true;bridge.label='播放中';$('bridge-status').textContent='WHEP 播放中';renderBridgeTracks(c.snapshot,c);}};
+      const media=new MediaStream();pc.ontrack=event=>{if(current!==c||bridge.sourceEnded||bridge.closeRequested)return;media.addTrack(event.track);video.srcObject=media;void video.play().catch(err=>{if(current===c&&!bridge.sourceEnded&&err.name!=='AbortError'&&video.paused)showError('浏览器阻止了播放，请使用播放器控件重试。');});};
       const offer=await pc.createOffer();await pc.setLocalDescription(offer);await gather(pc);
       let response;
       for(let attempt=0;attempt<10;attempt++){
@@ -545,18 +559,40 @@
   cameraToggle.addEventListener('click',()=>{const track=current?.stream?.getVideoTracks()[0];if(!track)return;track.enabled=!track.enabled;cameraToggle.setAttribute('aria-pressed',String(!track.enabled));cameraToggle.textContent=track.enabled?'◈ 关闭摄像头':'◈ 开启摄像头';});
   share.addEventListener('click',async()=>{
     const c=current;if(!c||!c.negotiated)return;
-    if(c.screenPublication){share.disabled=true;try{await enqueue(c,()=>removeTrack(c,c.screenPublication));c.screenPublication='';c.screen=null;share.textContent='▣ 共享屏幕';}catch{}finally{if(current===c)share.disabled=false;}return;}
-    share.disabled=true;
+    if(c.screenSession){share.disabled=true;try{await enqueue(c,()=>c.screenSession?.stop());}catch{}finally{if(current===c)share.disabled=false;}return;}
+    share.disabled=true;shareAudio.disabled=true;
     try {
       if(!navigator.mediaDevices?.getDisplayMedia)throw new Error('当前浏览器不支持屏幕共享');
-      const stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});if(current!==c){stream.getTracks().forEach(t=>t.stop());return;}
-      const track=stream.getVideoTracks()[0];if(!track){stream.getTracks().forEach(t=>t.stop());throw new Error('未获得屏幕画面');}c.screen=stream;
-      let id='', ended=track.readyState==='ended';
-      const stopScreen=async()=>{if(c.screenPublication!==id)return;await removeTrack(c,id);c.screenPublication='';c.screen=null;share.textContent='▣ 共享屏幕';};
-      track.onended=()=>{ended=true;if(current===c&&id)void enqueue(c,stopScreen).catch(()=>{});};
-      await enqueue(c,async()=>{if(ended){c.screen=null;return;}id=await publishTrack(c,track,'screen');c.screenPublication=id;if(ended){await stopScreen();return;}await negotiate(c);});
-      if(current===c&&c.screenPublication&&!ended)share.textContent='▣ 停止共享';
-    }catch(err){if(current===c){c.screen?.getTracks().forEach(t=>t.stop());c.screen=null;showError(err.message||'屏幕共享失败');}}finally{if(current===c)share.disabled=false;}
+      const withAudio=shareAudio.checked,stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:withAudio});if(current!==c){stream.getTracks().forEach(t=>t.stop());return;}
+      const video=stream.getVideoTracks()[0],audio=withAudio?stream.getTracks().find(t=>t.kind==='audio'):null;
+      if(!video){stream.getTracks().forEach(t=>t.stop());throw new Error('未获得屏幕画面');}
+      for(const track of stream.getTracks())if(track!==video&&track!==audio)track.stop();
+      const session={stream,videoID:'',audioID:'',ended:video.readyState==='ended',audioEnded:!audio||audio.readyState==='ended'};
+      c.screen=stream;c.screenSession=session;
+      session.stop=async()=>{
+        if(c.screenSession!==session)return;
+        session.ended=true;stream.getTracks().forEach(t=>t.stop());
+        for(const id of [session.audioID,session.videoID])if(id)await removeTrack(c,id);
+        if(c.screenSession===session){c.screenSession=null;c.screen=null;shareAudio.disabled=false;share.textContent='▣ 共享屏幕';}
+      };
+      video.onended=()=>{session.ended=true;if(current===c&&session.videoID)void enqueue(c,session.stop).catch(()=>{});};
+      if(audio)audio.onended=()=>{
+        session.audioEnded=true;const id=session.audioID;
+        if(current===c&&id)void enqueue(c,async()=>{if(c.screenSession!==session||session.ended||session.audioID!==id)return;session.audioID='';await removeTrack(c,id);if(current===c)showError('屏幕音频已停止，画面仍在共享。');}).catch(()=>{});
+      };
+      await enqueue(c,async()=>{
+        if(session.ended){await session.stop();return;}
+        session.videoID=await publishTrack(c,video,'screen');
+        if(session.ended){await session.stop();return;}
+        if(audio&&!session.audioEnded){
+          session.audioID=await publishTrack(c,audio,'screen');
+          if(session.ended){await session.stop();return;}
+          if(session.audioEnded){const id=session.audioID;session.audioID='';await removeTrack(c,id);}
+        }
+        await negotiate(c);
+      });
+      if(current===c&&c.screenSession===session&&!session.ended){share.textContent='▣ 停止共享';if(withAudio&&(!audio||session.audioEnded))showError('浏览器未提供屏幕音频，已仅共享画面。');}
+    }catch(err){if(current===c){c.screen?.getTracks().forEach(t=>t.stop());c.screen=null;c.screenSession=null;showError(err.message||'屏幕共享失败');}}finally{if(current===c){share.disabled=false;shareAudio.disabled=!!c.screenSession;}}
   });
   $('enable-audio').addEventListener('click',()=>{for(const audio of audioContainer.querySelectorAll('audio'))void audio.play();$('enable-audio').hidden=true;});
   window.addEventListener('pagehide',()=>{cancelRecovery();closeCurrent();});

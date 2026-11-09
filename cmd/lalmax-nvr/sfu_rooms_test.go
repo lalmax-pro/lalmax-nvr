@@ -213,3 +213,36 @@ func TestNVRSFURoomIdleCleanupPreservesDefaultAndActive(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNVRSFURoomAllowsFourSourcesAndEnforcesLimit(t *testing.T) {
+	room, err := sfu.NewManager().CreateWithLimits(sfu.Key{Namespace: "test", ID: "screen-av"}, nvrSFURoomLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = room.Join(sfu.Participant{ID: "publisher"}); err != nil {
+		t.Fatal(err)
+	}
+	sources := []struct{ kind, source, codec string }{
+		{"audio", "microphone", "audio/opus"}, {"video", "camera", "video/H264"},
+		{"video", "screen", "video/H264"}, {"audio", "screen", "audio/opus"},
+	}
+	var screenAudio string
+	for _, source := range sources {
+		publication, err := room.Publish("publisher", source.kind, source.source, source.codec)
+		if err != nil {
+			t.Fatalf("publish %s/%s: %v", source.kind, source.source, err)
+		}
+		if source.kind == "audio" && source.source == "screen" {
+			screenAudio = publication.ID
+		}
+	}
+	if _, err = room.Publish("publisher", "audio", "screen", "audio/opus"); !errors.Is(err, sfu.ErrPublicationLimit) {
+		t.Fatalf("fifth publication: %v", err)
+	}
+	if err = room.Unpublish("publisher", screenAudio); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = room.Publish("publisher", "audio", "screen", "audio/opus"); err != nil {
+		t.Fatalf("slot not released: %v", err)
+	}
+}

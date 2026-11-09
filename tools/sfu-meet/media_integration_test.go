@@ -89,6 +89,13 @@ func gatheredOffer(t *testing.T, pc *webrtc.PeerConnection) string {
 	return pc.LocalDescription().SDP
 }
 func TestDemoServerOpusThroughTwoPeers(t *testing.T) {
+	for _, source := range []string{"microphone", "screen"} {
+		t.Run(source, func(t *testing.T) { testDemoServerOpusThroughTwoPeers(t, source) })
+	}
+}
+
+func testDemoServerOpusThroughTwoPeers(t *testing.T, source string) {
+	t.Helper()
 	_, origin := setup(t)
 	resp := login(t, origin, testSecret, origin)
 	cookie := resp.Cookies()[0]
@@ -97,7 +104,7 @@ func TestDemoServerOpusThroughTwoPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer publisher.Close()
-	if err = publisher.WriteJSON(map[string]any{"id": "publish", "type": "publish", "kind": "audio", "source": "microphone", "codec": "audio/opus", "track_id": "audio"}); err != nil {
+	if err = publisher.WriteJSON(map[string]any{"id": "publish", "type": "publish", "kind": "audio", "source": source, "codec": "audio/opus", "track_id": "audio"}); err != nil {
 		t.Fatal(err)
 	}
 	published := readResult(t, publisher, "publish")

@@ -31,7 +31,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This opt-in test uses synthetic video and silent Opus; it never opens a media device.
+// This opt-in test uses synthetic video and Opus (silent or offline-generated
+// markers); it never opens a media device. SFU_NVR_SCREEN_AUDIO_TEST selects
+// screen video and audio sources instead of camera and microphone.
 func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	if os.Getenv("SFU_NVR_RECORDING_TEST") != "1" {
 		t.Skip("set SFU_NVR_RECORDING_TEST=1 to run the NVR/FFmpeg integration")
@@ -163,11 +165,15 @@ func TestNVRSFUBridgeRecordingPlanEndToEnd(t *testing.T) {
 	ws, _, err := websocket.DefaultDialer.Dial("ws://"+cfg.Server.Listen+"/api/sfu/ws?ticket="+ticket.Ticket, headers)
 	require.NoError(t, err)
 	defer ws.Close()
-	require.NoError(t, ws.WriteJSON(map[string]any{"id": "video", "type": "publish", "kind": "video", "source": "camera", "codec": "video/H264", "track_id": "video"}))
+	videoSource, audioSource := "camera", "microphone"
+	if os.Getenv("SFU_NVR_SCREEN_AUDIO_TEST") == "1" {
+		videoSource, audioSource = "screen", "screen"
+	}
+	require.NoError(t, ws.WriteJSON(map[string]any{"id": "video", "type": "publish", "kind": "video", "source": videoSource, "codec": "video/H264", "track_id": "video"}))
 	videoPub := pacingRoomRead(t, ws, "video")
 	require.Empty(t, videoPub.Error)
 	require.NotNil(t, videoPub.Publication)
-	require.NoError(t, ws.WriteJSON(map[string]any{"id": "audio", "type": "publish", "kind": "audio", "source": "microphone", "codec": "audio/opus", "track_id": "audio"}))
+	require.NoError(t, ws.WriteJSON(map[string]any{"id": "audio", "type": "publish", "kind": "audio", "source": audioSource, "codec": "audio/opus", "track_id": "audio"}))
 	audioPub := pacingRoomRead(t, ws, "audio")
 	require.Empty(t, audioPub.Error)
 	require.NotNil(t, audioPub.Publication)
