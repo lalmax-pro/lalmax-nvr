@@ -207,5 +207,8 @@ replace github.com/pion/webrtc/v4 => github.com/livekit/webrtc-pion/v4 v4.2.25-w
 
 replace github.com/pion/ice/v4 => github.com/livekit/ice/v4 v4.4.8-warp.2
 
-// Temporary upstream race fix; see docs/zh/sfu-nvr.md for the pinned commit and removal criteria.
-replace github.com/livekit/livekit-server => github.com/lalmax-pro/livekit v1.13.12-0.20261108220453-8e29689ea7fd
+// Temporary upstream fixes and embedded join authorization; see docs/zh/sfu-nvr.md.
+replace github.com/livekit/livekit-server => github.com/lalmax-pro/livekit v1.13.12-0.20261109011605-513475dea12f
+
+// Darwin CPU statistics without CGO; see third/go-osstat/LOCAL_PATCHES.md.
+replace github.com/mackerelio/go-osstat => ./third/go-osstat

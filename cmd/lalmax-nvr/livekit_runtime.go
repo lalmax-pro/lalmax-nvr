@@ -15,6 +15,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/livekitsfu"
 	lkconfig "github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/service"
+	"github.com/livekit/protocol/livekit"
 )
 
 const liveKitTokenValidity = 5 * time.Minute
@@ -27,6 +28,7 @@ type nvrLiveKitRuntime struct {
 	publicURL string
 	apiKey    string
 	bridges   *nvrLiveKitBridgeRegistry
+	sessions  *nvrLiveKitSessions
 	mu        sync.Mutex
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -59,7 +61,9 @@ func newNVRLiveKitRuntime(a *App, cfg config.SFULiveKitConfig) (*nvrLiveKitRunti
 	if err != nil {
 		return nil, errors.New("configured LiveKit API key was not found")
 	}
-	return &nvrLiveKitRuntime{config: conf, issuer: issuer, policy: &nvrSFUPolicy{app: a}, publicURL: cfg.PublicURL, apiKey: cfg.APIKey}, nil
+	runtime := &nvrLiveKitRuntime{config: conf, issuer: issuer, policy: &nvrSFUPolicy{app: a}, publicURL: cfg.PublicURL, apiKey: cfg.APIKey}
+	runtime.sessions = newNVRLiveKitSessions(runtime)
+	return runtime, nil
 }
 
 func (r *nvrLiveKitRuntime) Start(parent context.Context) error {
@@ -81,6 +85,7 @@ func (r *nvrLiveKitRuntime) Start(parent context.Context) error {
 		return err
 	}
 	r.server = server
+	server.SetRTCJoinAuthorizer(r.sessions.authorize)
 	ctx, cancel := context.WithCancel(parent)
 	r.cancel = cancel
 	r.done = make(chan struct{})
@@ -111,6 +116,7 @@ func (r *nvrLiveKitRuntime) Start(parent context.Context) error {
 			if r.bridges != nil {
 				go r.bridges.monitor(ctx)
 			}
+			go r.sessions.monitor(ctx)
 			return nil
 		}
 		select {
@@ -173,6 +179,21 @@ func (r *nvrLiveKitRuntime) IssueLiveKitJoin(ctx context.Context, principal, roo
 	if err := r.policy.check(ctx, principal); err != nil {
 		return api.LiveKitJoin{}, err
 	}
+	current := server.RoomManager().GetRoom(ctx, livekit.RoomName(room))
+	if current == nil || current.IsClosed() {
+		if !r.config.Room.AutoCreate {
+			return api.LiveKitJoin{}, errors.New("room unavailable")
+		}
+		created, err := server.RoomManager().CreateRoom(ctx, &livekit.CreateRoomRequest{Name: room})
+		if err != nil {
+			return api.LiveKitJoin{}, err
+		}
+		current = server.RoomManager().GetRoom(ctx, livekit.RoomName(room))
+		if current == nil || current.IsClosed() || string(current.ID()) != created.Sid {
+			return api.LiveKitJoin{}, errors.New("room unavailable")
+		}
+	}
+	generation := string(current.ID())
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed || r.server != server || !server.IsRunning() {
@@ -188,6 +209,9 @@ func (r *nvrLiveKitRuntime) IssueLiveKitJoin(ctx context.Context, principal, roo
 	identity := "nvr_" + hex.EncodeToString(id[:])
 	token, err := r.issuer.IssueJoin(livekitsfu.JoinGrant{Room: room, Identity: identity, ValidFor: liveKitTokenValidity, CanPublish: true, CanSubscribe: true})
 	if err != nil {
+		return api.LiveKitJoin{}, err
+	}
+	if err := r.sessions.register(identity, principal, room, generation); err != nil {
 		return api.LiveKitJoin{}, err
 	}
 	return api.LiveKitJoin{URL: r.publicURL, Token: token, Room: room, Identity: identity, ExpiresIn: int(liveKitTokenValidity.Seconds())}, nil

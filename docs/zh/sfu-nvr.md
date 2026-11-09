@@ -4,9 +4,9 @@ NVR 在进程内运行 LiveKit。按 `config/config.example.yaml` 启用 `sfu`�
 
 本机合成 RTP 转发的初步容量测量和复现命令见 [SFU 容量基线](sfu-capacity.md)。
 
-服务端依赖暂时使用 [LiveKit 修复分支的固定提交](https://github.com/lalmax-pro/livekit/commit/8e29689ea7fd6750e08ad04a96d9fcf9957eb80a)，修复 RTP 扩展 ID、发布轨道信令和订阅状态的并发访问；上游版本包含等效修复并通过 SFU 和浏览器竞态测试后，应移除 `go.mod` 中的替换并升级到上游版本。
+服务端依赖暂时使用 [LiveKit 修复分支的固定提交](https://github.com/lalmax-pro/livekit/commit/513475dea12f02ace8477e9e713f5d5f4fcef843)，修复 RTP 扩展 ID、发布轨道信令和订阅状态的并发访问，并为内嵌服务提供入会授权回调；上游版本提供等效能力并通过 SFU 和浏览器竞态测试后，应移除 `go.mod` 中的替换并升级到上游版本。`third/go-osstat` 为其间接依赖提供 macOS 无 CGO 的 CPU 统计实现。
 
-会议采用 LiveKit 的房间、成员和 Track，支持仅观看、多轨发布和按轨道订阅。NVR 签发有效期五分钟、限定房间的 LiveKit 凭证；账号被撤权后不能再签发新凭证，但已签发的凭证仍可能在有效期内使用。LiveKit 自身负责连接恢复及媒体转发。公网地址、STUN/TURN、房间空闲时间和其他媒体参数在原生 LiveKit 配置中设置；lalmax 的 WHEP 播放使用单独的 ICE 配置。
+会议采用 LiveKit 的房间、成员和 Track，支持仅观看、多轨发布和按轨道订阅。NVR 签发的初始凭证有效期为五分钟，并绑定账号和具体房间代次；入会及重连时重新检查账号权限，后台定期复核已入会成员，撤权或权限查询失败时移除成员并停止其桥接。NVR 签发的会话保存在本进程中，服务重启后需要重新获取凭证。`nvr_` 身份前缀保留给 NVR；使用其他身份、由运维自行签发的 LiveKit 凭证遵循原生 LiveKit 授权，不受 NVR 账号撤权检查约束。LiveKit 自身负责连接恢复及媒体转发。公网地址、STUN/TURN、房间空闲时间和其他媒体参数在原生 LiveKit 配置中设置；lalmax 的 WHEP 播放使用单独的 ICE 配置。
 
 当前固定版本默认启用 LiveKit 拥塞控制和接收端反馈带宽估计，默认发包路径为直接转发，并不提供按估计码率排队整形。Simulcast 选层已有本机合成 RTP 验证；弱网下自动码率调整、发包整形和公网效果尚未完成验收，不应据此承诺带宽或并发容量。
 

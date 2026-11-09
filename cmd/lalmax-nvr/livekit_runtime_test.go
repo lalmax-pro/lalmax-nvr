@@ -24,6 +24,8 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfu"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
+	"github.com/livekit/protocol/auth"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -66,6 +68,11 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 	if err := db.CreateUser(ctx, user); err != nil {
 		t.Fatal(err)
 	}
+	other := &model.User{Username: "bob", PasswordHash: "hash", Role: model.RoleSuperAdmin, Enabled: true, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := db.CreateUser(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	otherPrincipal := fmt.Sprintf("user:%d", other.ID)
 	tcp, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +90,7 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	const key, secret = "testkey", "testsecret-testsecret-testsecret-123456"
-	data := fmt.Sprintf("development: false\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nroom:\n  max_participants: 3\nrtc:\n  node_ip: 127.0.0.1\n  enable_loopback_candidate: true\n  ips:\n    includes: [127.0.0.1/32]\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
+	data := fmt.Sprintf("development: false\nport: %d\nbind_addresses: [127.0.0.1]\nkeys:\n  %s: %s\nroom:\n  auto_create: false\n  max_participants: 3\nrtc:\n  node_ip: 127.0.0.1\n  enable_loopback_candidate: true\n  ips:\n    includes: [127.0.0.1/32]\n  tcp_port: 0\n  port_range_start: 0\n  port_range_end: 0\n  udp_port: %d\n", port, key, secret, udpPort)
 	configPath := filepath.Join(t.TempDir(), "livekit.yaml")
 	if err := os.WriteFile(configPath, []byte(data), 0600); err != nil {
 		t.Fatal(err)
@@ -129,6 +136,24 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 	if err := roomAdmin.CloseRoom(ctx, principal, "managed", "RM_stale"); !errors.Is(err, sfu.ErrRoomNotFound) {
 		t.Fatalf("stale room close: %v", err)
 	}
+	oldJoin, err := runtime.IssueLiveKitJoin(ctx, principal, "managed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := auth.ParseAPIToken(oldJoin.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, claims, err := verifier.Verify(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.sessions.authorize(ctx, claims, livekit.RoomID(createdRoom.Generation)); err != nil {
+		t.Fatalf("current room generation rejected: %v", err)
+	}
+	if err := runtime.sessions.authorize(ctx, claims, livekit.RoomID("RM_stale")); err == nil {
+		t.Fatal("room routing accepted the wrong generation")
+	}
 	if err := roomAdmin.CloseRoom(ctx, principal, "managed", createdRoom.Generation); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +164,18 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 	if err := roomAdmin.CloseRoom(ctx, principal, "managed", createdRoom.Generation); !errors.Is(err, sfu.ErrRoomNotFound) {
 		t.Fatalf("old generation closed replacement: %v", err)
 	}
+	staleParticipant, err := lksdk.ConnectToRoomWithToken(oldJoin.URL, oldJoin.Token, lksdk.NewRoomCallback(), lksdk.WithAutoSubscribe(false), lksdk.WithConnectTimeout(5*time.Second))
+	if err == nil {
+		staleParticipant.Disconnect()
+		t.Fatal("old room credential joined a replacement generation")
+	}
 	if err := roomAdmin.CloseRoom(ctx, principal, "managed", secondRoom.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.IssueLiveKitJoin(ctx, principal, "front-door"); err == nil {
+		t.Fatal("issued a credential for an uncreated room when auto-create is disabled")
+	}
+	if _, err := roomAdmin.CreateRoom(ctx, principal, "front-door"); err != nil {
 		t.Fatal(err)
 	}
 	lalManager := logic.NewServerManager(func(o *logic.Option) {
@@ -176,8 +212,15 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	received := make(chan []byte, 1)
+	viewerDisconnected := make(chan struct{}, 1)
 	var watched atomic.Int64
 	callback := lksdk.NewRoomCallback()
+	callback.OnDisconnected = func() {
+		select {
+		case viewerDisconnected <- struct{}{}:
+		default:
+		}
+	}
 	callback.OnTrackSubscribed = func(track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, _ *lksdk.RemoteParticipant) {
 		for {
 			packet, _, err := track.ReadRTP()
@@ -191,19 +234,31 @@ func TestNVRLiveKitJoinAndRevocation(t *testing.T) {
 			}
 		}
 	}
-	viewer, err := lksdk.ConnectToRoomWithToken(join.URL, join.Token, callback)
+	viewerJoin, err := runtime.IssueLiveKitJoin(ctx, otherPrincipal, "front-door")
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewer, err := lksdk.ConnectToRoomWithToken(viewerJoin.URL, viewerJoin.Token, callback)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer viewer.Disconnect()
-	pubJoin, err := runtime.IssueLiveKitJoin(ctx, principal, "front-door")
+	pubJoin, err := runtime.IssueLiveKitJoin(ctx, otherPrincipal, "front-door")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if join.Identity == pubJoin.Identity {
 		t.Fatal("participant identities collided")
 	}
-	publisher, err := lksdk.ConnectToRoomWithToken(pubJoin.URL, pubJoin.Token, lksdk.NewRoomCallback(), lksdk.WithAutoSubscribe(false))
+	publisherDisconnected := make(chan struct{}, 1)
+	publisherCallback := lksdk.NewRoomCallback()
+	publisherCallback.OnDisconnected = func() {
+		select {
+		case publisherDisconnected <- struct{}{}:
+		default:
+		}
+	}
+	publisher, err := lksdk.ConnectToRoomWithToken(pubJoin.URL, pubJoin.Token, publisherCallback, lksdk.WithAutoSubscribe(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,10 +426,6 @@ receive:
 	}
 	// Another authorized administrator must neither discover nor control this
 	// owner's bridge, including the endpoint that returns playback credentials.
-	other := &model.User{Username: "bob", PasswordHash: "hash", Role: model.RoleSuperAdmin, Enabled: true, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	if err := db.CreateUser(ctx, other); err != nil {
-		t.Fatal(err)
-	}
 	otherHandler := api.NewHandler(nil, nil, noop, nil, nil, "", nil, nil)
 	otherHandler.SetMultiUserAuthMW(middleware.InjectUser(other))
 	otherHandler.SetSFUBridgeRegistry(bridges)
@@ -461,6 +512,11 @@ receive:
 	if watched.Load() <= beforeRevocation {
 		t.Fatal("independent viewer stopped receiving after bridge revocation")
 	}
+	refused, err := lksdk.ConnectToRoomWithToken(join.URL, join.Token, lksdk.NewRoomCallback(), lksdk.WithAutoSubscribe(false), lksdk.WithConnectTimeout(5*time.Second))
+	if err == nil {
+		refused.Disconnect()
+		t.Fatal("revoked owner reused an issued join token")
+	}
 	user.Role = model.RoleSuperAdmin
 	if err := db.UpdateUser(ctx, user); err != nil {
 		t.Fatal(err)
@@ -485,6 +541,25 @@ receive:
 		t.Fatalf("terminal bridge not pruned: %d rooms, %d IDs", rooms, ids)
 	}
 	stopProducer()
+	// An already-connected participant is also removed on account revocation,
+	// and the original still-valid token cannot be used to rejoin.
+	other.Role = model.RoleUser
+	other.UpdatedAt = time.Now()
+	if err := db.UpdateUser(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	for _, disconnected := range []<-chan struct{}{viewerDisconnected, publisherDisconnected} {
+		select {
+		case <-disconnected:
+		case <-time.After(12 * time.Second):
+			t.Fatal("revoked participant remained connected")
+		}
+	}
+	refused, err = lksdk.ConnectToRoomWithToken(viewerJoin.URL, viewerJoin.Token, lksdk.NewRoomCallback(), lksdk.WithAutoSubscribe(false), lksdk.WithConnectTimeout(5*time.Second))
+	if err == nil {
+		refused.Disconnect()
+		t.Fatal("revoked participant rejoined with an issued token")
+	}
 	if join.Room != "front-door" || join.Identity == "" {
 		t.Fatal("invalid join response")
 	}
