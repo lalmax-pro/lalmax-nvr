@@ -426,7 +426,7 @@
 
   // Get camera associated with a GB28181 channel
   function getGB28181ChannelCamera(device: GB28181Device, channelId: string): Camera | undefined {
-    const streamId = `${device.device_id}_${channelId}`;
+    const streamId = `${device.device_id}:${channelId}`;
     return gb28181Cameras.get(streamId);
   }
 

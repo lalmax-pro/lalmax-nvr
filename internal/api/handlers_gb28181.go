@@ -197,20 +197,38 @@ func (h *Handler) ensureGB28181Camera(ctx context.Context, deviceID, channelID, 
 		cameraURL = fmt.Sprintf("rtsp://127.0.0.1:5544/live/%s", streamID)
 	}
 
-	if existing != nil && existing.Archived {
-		if err := h.db.UnarchiveCameraDB(ctx, streamID); err != nil {
+	cameraEnabled := true
+	if existing != nil {
+		cameraEnabled = existing.Enabled
+	}
+
+	if existing == nil || existing.Archived {
+		if err := h.db.UpsertCamera(
+			ctx,
+			streamID,
+			cameraName,
+			"gb28181", "h264", cameraURL,
+			"", "", cameraEnabled, "", "", "",
+		); err != nil {
 			return err
 		}
 	}
 
-	if err := h.db.UpsertCamera(
-		ctx,
-		streamID,
-		cameraName,
-		"gb28181", "h264", cameraURL,
-		"", "", true, "", "", "",
-	); err != nil {
-		return err
+	if existing != nil && existing.Archived {
+		if h.camMgr != nil {
+			row, err := h.db.GetCamera(ctx, streamID)
+			if err != nil {
+				return err
+			}
+			if row == nil || !row.Archived {
+				return fmt.Errorf("archived GB28181 camera %q disappeared before restore", streamID)
+			}
+			if err := h.camMgr.RestoreArchivedCamera(ctx, row); err != nil {
+				return err
+			}
+		} else if err := h.db.UnarchiveCameraDB(ctx, streamID); err != nil {
+			return err
+		}
 	}
 
 	return h.db.SetCameraStream(ctx, streamID, streamID)

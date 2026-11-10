@@ -28,10 +28,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
+	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/civilcode"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
+	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
@@ -1000,6 +1002,74 @@ func TestIssue74GB28181EnsureCameraFallbacks(t *testing.T) {
 	// A handler without a database still starts play; camera registration is skipped.
 	hNoDB := gb74NewHandler(nil, f.engine, f.srv)
 	gb74Status(t, gb74Call(hNoDB.handleGB28181Play, "POST", "/play", playBody, nil), http.StatusOK)
+}
+
+func TestIssue74GB28181ArchivedPlayRestoresRuntimeState(t *testing.T) {
+	f := gb74NewFixture(t, gb74NewMediaEngine())
+
+	const (
+		deviceID  = "32010000001327000001"
+		channelID = "32010000001327000001"
+		oldName   = "HuaiHai nei"
+		newName   = "银川路沿河桥西-短"
+	)
+	f.seed(deviceID, gb74Channel(channelID, newName))
+	streamID := gb28181.StreamID(deviceID, channelID)
+	ctx := context.Background()
+
+	if err := f.db.UpsertCamera(ctx, streamID, oldName, "gb28181", "h264",
+		"rtsp://127.0.0.1:5544/live/old", "", "", true, "", "", ""); err != nil {
+		t.Fatalf("seed archived camera: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := f.db.InsertRecording(ctx, &model.Recording{
+		ID: streamID + "-recording", CameraID: streamID, FilePath: "/archive/old.mp4",
+		Format: model.FormatH264, StartedAt: now, EndedAt: now.Add(time.Minute),
+		Duration: 60, FileSize: 100,
+	}); err != nil {
+		t.Fatalf("seed recording: %v", err)
+	}
+	if err := f.db.ArchiveCameraDB(ctx, streamID); err != nil {
+		t.Fatalf("archive camera row: %v", err)
+	}
+	if _, err := f.db.ArchiveAllRecordings(ctx, streamID); err != nil {
+		t.Fatalf("archive recordings: %v", err)
+	}
+
+	camMgr := camera.NewCameraManager(&config.Config{
+		Storage: config.StorageConfig{SegmentDuration: "1m"},
+	}, nil, f.db, "")
+	h := gb74NewHandler(f.db, f.engine, f.srv)
+	h.camMgr = camMgr
+
+	body := fmt.Sprintf(`{"device_id":%q,"channel_id":%q}`, deviceID, channelID)
+	gb74Status(t, gb74Call(h.handleGB28181Play, "POST", "/play", body, nil), http.StatusOK)
+
+	cam, err := f.db.GetCamera(ctx, streamID)
+	if err != nil || cam == nil {
+		t.Fatalf("restored camera row missing: %v %v", cam, err)
+	}
+	if cam.Archived {
+		t.Fatal("expected automatic GB28181 play to unarchive the camera row")
+	}
+	if cam.Name != newName {
+		t.Fatalf("expected channel name %q, got %q", newName, cam.Name)
+	}
+	if binding, err := f.db.GetStreamBinding(ctx, streamID); err != nil || binding == nil || binding.CameraID != streamID {
+		t.Fatalf("expected canonical stream binding: %#v %v", binding, err)
+	}
+	if restored := camMgr.GetCameraConfig(streamID); restored == nil {
+		t.Fatal("expected automatic play to restore the camera manager config")
+	} else if restored.Name != newName || restored.URL == "" {
+		t.Fatalf("unexpected restored runtime config: %+v", *restored)
+	}
+	count, size, err := f.db.GetCameraRecordingStats(ctx, streamID)
+	if err != nil || count != 1 || size != 100 {
+		t.Fatalf("expected archived history to remain and be restored: count=%d size=%d err=%v", count, size, err)
+	}
+	if archiveCount, _, err := f.db.GetArchiveGroupStats(ctx, streamID); err != nil || archiveCount != 0 {
+		t.Fatalf("expected no archived history after restore: count=%d err=%v", archiveCount, err)
+	}
 }
 
 func TestIssue74GB28181PlaybackControls(t *testing.T) {
