@@ -47,7 +47,7 @@ func TestLalGroupCollisionPreservesExistingPublisher(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				err = RunAVToLal(context.Background(), first, second, server, "occupied", func(context.Context) (AVReferences, error) { return AVReferences{}, nil })
+				err = RunAVToLal(context.Background(), first, second, server, "occupied", func(context.Context, uint32) (AVReferences, error) { return AVReferences{}, nil })
 			}
 			if !errors.Is(err, base.ErrDupInStream) {
 				t.Fatalf("collision: %v", err)

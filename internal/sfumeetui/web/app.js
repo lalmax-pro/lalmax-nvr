@@ -80,12 +80,12 @@
   let networkTimer=null, networkGeneration=0, networkPrevious=new Map();
   function clearNetworkStats(message='加入会议后可查看。') {
     networkGeneration++;clearTimeout(networkTimer);networkTimer=null;networkPrevious=new Map();
-    for(const id of ['network-send','network-receive','network-loss','network-rtt'])$(id).textContent='—';
+    for(const id of ['network-send','network-receive','network-loss','network-rtt','network-layers','network-layer-state'])$(id).textContent='—';
     networkStatus.textContent=message;
   }
   function networkRate(kbps) { return kbps>=1000?`${(kbps/1000).toFixed(2)} Mbps`:`${kbps.toFixed(0)} kbps`; }
   function updateNetworkStats(report) {
-    const previous=networkPrevious, next=new Map(), all=new Map();let sent=0,received=0,sentKnown=false,receivedKnown=false,lost=0,packets=0,lossKnown=false,hasMedia=false,rtt;
+    const previous=networkPrevious, next=new Map(), all=new Map(), layers=new Map();let sent=0,received=0,sentKnown=false,receivedKnown=false,lost=0,packets=0,lossKnown=false,hasMedia=false,rtt;
     report.forEach(item=>all.set(item.id,item));
     for(const item of all.values()) {
       if(item.type==='transport' && item.selectedCandidatePairId) {
@@ -95,6 +95,18 @@
       if(item.type!=='inbound-rtp' && item.type!=='outbound-rtp')continue;
       if(item.isRemote || (item.kind && item.kind!=='audio' && item.kind!=='video'))continue;
       hasMedia=true;next.set(item.id,item);const old=previous.get(item.id);
+      if(item.type==='outbound-rtp' && item.kind==='video' && typeof item.rid==='string' && item.rid){
+        const layer=layers.get(item.rid)||{kbps:0,known:false,framesEncoded:0,hasFrames:false,active:undefined,width:undefined,height:undefined,quality:undefined};
+        if(old && Number.isFinite(item.timestamp) && Number.isFinite(old.timestamp) && Number.isFinite(item.bytesSent) && Number.isFinite(old.bytesSent) && item.bytesSent>=old.bytesSent){
+          const elapsed=item.timestamp-old.timestamp;if(elapsed>0){layer.kbps+=(item.bytesSent-old.bytesSent)*8/elapsed;layer.known=true;}
+        }
+        if(Number.isFinite(item.framesEncoded)){layer.framesEncoded+=item.framesEncoded;layer.hasFrames=true;}
+        if(Number.isFinite(item.frameWidth)&&item.frameWidth>0)layer.width=item.frameWidth;
+        if(Number.isFinite(item.frameHeight)&&item.frameHeight>0)layer.height=item.frameHeight;
+        if(typeof item.active==='boolean')layer.active=layer.active===undefined?item.active:layer.active||item.active;
+        if(typeof item.qualityLimitationReason==='string'&&item.qualityLimitationReason!=='none')layer.quality=item.qualityLimitationReason;
+        layers.set(item.rid,layer);
+      }
       if(!old || !Number.isFinite(item.timestamp) || !Number.isFinite(old.timestamp))continue;
       const elapsed=item.timestamp-old.timestamp;if(elapsed<=0)continue;
       const key=item.type==='outbound-rtp'?'bytesSent':'bytesReceived';
@@ -110,6 +122,10 @@
     if(rtt===undefined)for(const item of all.values())if(item.type==='candidate-pair' && item.selected===true && Number.isFinite(item.currentRoundTripTime) && item.currentRoundTripTime>=0){rtt=item.currentRoundTripTime;break;}
     networkPrevious=next;
     $('network-send').textContent=sentKnown?networkRate(sent):'—';$('network-receive').textContent=receivedKnown?networkRate(received):'—';
+    const layerOrder={l:0,m:1,h:2};
+    const orderedLayers=[...layers.entries()].sort(([a],[b])=>(layerOrder[a]??3)-(layerOrder[b]??3)||a.localeCompare(b));
+    $('network-layers').textContent=orderedLayers.length?orderedLayers.map(([rid,layer])=>`${rid} ${layer.known?networkRate(layer.kbps):'等待采样'}`).join(' · '):'—';
+    $('network-layer-state').textContent=orderedLayers.length?orderedLayers.map(([rid,layer])=>`${rid} ${[layer.active===undefined?null:(layer.active?'已启用':'已暂停'),layer.hasFrames?`${layer.framesEncoded} 帧`:null,layer.width&&layer.height?`${layer.width}×${layer.height}`:null,layer.quality?`限制 ${layer.quality}`:null].filter(Boolean).join(' · ')||'无编码统计'}`).join(' / '):'—';
     $('network-loss').textContent=lossKnown&&packets>0?`${(lost*100/packets).toFixed(1)}%`:'—';$('network-rtt').textContent=rtt===undefined?'—':`${(rtt*1000).toFixed(0)} ms`;
     networkStatus.textContent=hasMedia?'每 2 秒更新 · 丢包率为接收方向':'暂无媒体流';
   }
@@ -121,7 +137,7 @@
     const collect=async()=>{
       if(generation!==networkGeneration || current!==c || !networkPanel.open)return;
       try {const report=await c.pc.getStats();if(generation!==networkGeneration || current!==c || !networkPanel.open)return;updateNetworkStats(report);}
-      catch(_){if(generation!==networkGeneration || current!==c || !networkPanel.open)return;networkPrevious=new Map();for(const id of ['network-send','network-receive','network-loss','network-rtt'])$(id).textContent='—';networkStatus.textContent='暂时无法获取统计。';}
+      catch(_){if(generation!==networkGeneration || current!==c || !networkPanel.open)return;networkPrevious=new Map();for(const id of ['network-send','network-receive','network-loss','network-rtt','network-layers','network-layer-state'])$(id).textContent='—';networkStatus.textContent='暂时无法获取统计。';}
       networkTimer=setTimeout(collect,2000);
     };
     void collect();
@@ -509,7 +525,18 @@
   }
   async function publishTrack(c,track,source) {
     const video=track.kind==='video';const p=await request(c,'publish',{kind:track.kind,source,codec:video?'video/H264':'audio/opus',track_id:track.id});
-    const sender=c.pc.addTrack(track,new MediaStream([track]));const transceiver=c.pc.getTransceivers().find(t=>t.sender===sender);if(video&&transceiver)preferH264(transceiver);
+    let transceiver,sender;
+    if(video&&source==='camera'){
+      transceiver=c.pc.addTransceiver(track,{direction:'sendrecv',streams:[new MediaStream([track])],sendEncodings:[
+        {rid:'l',scaleResolutionDownBy:4,maxBitrate:150000},
+        {rid:'m',scaleResolutionDownBy:2,maxBitrate:500000},
+        {rid:'h',scaleResolutionDownBy:1,maxBitrate:1500000},
+      ]});
+      sender=transceiver?.sender;
+    }else{
+      sender=c.pc.addTrack(track,new MediaStream([track]));transceiver=c.pc.getTransceivers().find(t=>t.sender===sender);
+    }
+    if(!sender)throw new Error('浏览器无法创建媒体发送器');if(video&&transceiver)preferH264(transceiver);
     c.own.set(p.publication.ID,{track,sender,source});if(c.snapshot)render(c.snapshot,c);return p.publication.ID;
   }
   async function removeTrack(c,id) {

@@ -29,6 +29,12 @@ func (s *Session) StartOutgoing(ctx context.Context, publicationID string, local
 // StartOutgoingWithLifetime additionally exposes a cancellation signal for
 // trusted transport feedback. It closes synchronously when unsubscribed.
 func (s *Session) StartOutgoingWithLifetime(ctx context.Context, publicationID string, local *webrtc.TrackLocalStaticRTP) (<-chan error, <-chan struct{}, error) {
+	return s.StartOutgoingWithLayerChange(ctx, publicationID, local, nil)
+}
+
+// StartOutgoingWithLayerChange also reports downstream encoding changes to
+// trusted transport plumbing, which can request a keyframe from the new RID.
+func (s *Session) StartOutgoingWithLayerChange(ctx context.Context, publicationID string, local *webrtc.TrackLocalStaticRTP, onLayerChange func(string)) (<-chan error, <-chan struct{}, error) {
 	if ctx == nil || local == nil || publicationID == "" {
 		return nil, nil, ErrInvalid
 	}
@@ -53,6 +59,7 @@ func (s *Session) StartOutgoingWithLifetime(ctx context.Context, publicationID s
 		if err != nil {
 			return err
 		}
+		sub.SetOnLayerChange(onLayerChange)
 		bindingCtx, cancel := context.WithCancel(ctx)
 		stopped = bindingCtx.Done()
 		binding := &outgoingBinding{cancel: cancel}

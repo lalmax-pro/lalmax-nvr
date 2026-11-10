@@ -16,10 +16,14 @@ import (
 const testSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func setup(t *testing.T) (*httptest.Server, string) {
+	return setupWithCapacity(t, 8, 8)
+}
+
+func setupWithCapacity(t *testing.T, maxParticipants, maxSubscribers int) (*httptest.Server, string) {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(nil)
 	origin := "http://" + srv.Listener.Addr().String()
-	handler, err := newDemoHandler(origin, testSecret)
+	handler, err := newDemoHandlerWithCapacity(origin, testSecret, maxParticipants, maxSubscribers)
 	if err != nil {
 		t.Fatal(err)
 	}

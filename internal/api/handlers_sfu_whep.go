@@ -155,7 +155,7 @@ func (h *Handler) createSFUBridgeWHEP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "WebRTC playback unavailable")
 		return
 	}
-	resp, err := h.requestHomeAssistantWHEP(r, http.MethodPost, upstream, strings.NewReader(string(body)), true)
+	resp, err := h.requestHomeAssistantWHEP(r, http.MethodPost, upstream, strings.NewReader(string(body)))
 	if err != nil {
 		writeError(w, 502, "WebRTC negotiation failed")
 		return
@@ -194,7 +194,7 @@ func (h *Handler) createSFUBridgeWHEP(w http.ResponseWriter, r *http.Request) {
 		}
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 		defer cancel()
-		if response, err := h.requestHomeAssistantWHEP(r.WithContext(cleanup), http.MethodDelete, target, nil, true); err == nil {
+		if response, err := h.requestHomeAssistantWHEP(r.WithContext(cleanup), http.MethodDelete, target, nil); err == nil {
 			response.Body.Close()
 		}
 	}()
@@ -247,7 +247,7 @@ func (h *Handler) deleteSFUBridgeWHEP(w http.ResponseWriter, r *http.Request) {
 	}
 	target.Path = fmt.Sprintf("/webrtc/whep/%s", session.ID)
 	target.RawQuery = url.Values{"token": []string{token}}.Encode()
-	resp, err := h.requestHomeAssistantWHEP(r, http.MethodDelete, target, nil, true)
+	resp, err := h.requestHomeAssistantWHEP(r, http.MethodDelete, target, nil)
 	if err != nil {
 		writeError(w, 502, "failed to close WebRTC session")
 		return

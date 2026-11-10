@@ -33,12 +33,17 @@ func (r *Room) RecordSenderReport(participantID, session, publicationID string, 
 		return ErrMediaNotEnabled
 	}
 	if r.senderReports == nil {
-		r.senderReports = make(map[string]SenderReport)
+		r.senderReports = make(map[string]map[uint32]SenderReport)
 	}
-	if old, ok := r.senderReports[publicationID]; ok && !report.ReceivedAt.After(old.ReceivedAt) {
+	bySSRC := r.senderReports[publicationID]
+	if bySSRC == nil {
+		bySSRC = make(map[uint32]SenderReport)
+		r.senderReports[publicationID] = bySSRC
+	}
+	if old, ok := bySSRC[report.SSRC]; ok && !report.ReceivedAt.After(old.ReceivedAt) {
 		return nil
 	}
-	r.senderReports[publicationID] = report
+	bySSRC[report.SSRC] = report
 	return nil
 }
 
@@ -56,6 +61,31 @@ func (r *Room) SenderReportSession(participantID, session, publicationID string)
 	if _, ok := r.subscriptions[subscriptionKey{participantID, publicationID}]; !ok {
 		return SenderReport{}, false, ErrSubscriptionNotFound
 	}
-	report, ok := r.senderReports[publicationID]
+	var report SenderReport
+	var ok bool
+	for _, candidate := range r.senderReports[publicationID] {
+		if !ok || candidate.ReceivedAt.After(report.ReceivedAt) {
+			report, ok = candidate, true
+		}
+	}
+	return report, ok, nil
+}
+
+// SenderReportSSRCSession returns the latest report for one source encoding
+// only to a current subscriber. This lets simulcast consumers match an RTP
+// packet to the Sender Report from the same RID/SSRC.
+func (r *Room) SenderReportSSRCSession(participantID, session, publicationID string, ssrc uint32) (SenderReport, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return SenderReport{}, false, ErrRoomClosed
+	}
+	if err := r.checkSessionLocked(participantID, session); err != nil {
+		return SenderReport{}, false, err
+	}
+	if _, ok := r.subscriptions[subscriptionKey{participantID, publicationID}]; !ok {
+		return SenderReport{}, false, ErrSubscriptionNotFound
+	}
+	report, ok := r.senderReports[publicationID][ssrc]
 	return report, ok, nil
 }

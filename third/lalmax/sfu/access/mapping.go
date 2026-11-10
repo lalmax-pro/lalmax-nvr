@@ -15,8 +15,9 @@ var (
 )
 
 // PublishMapped atomically publishes and binds a client-declared WebRTC track
-// ID within this participant session. IDs are unique per session, not global.
-// This does not authenticate the client, validate SDP or support Simulcast.
+// ID within this participant session. Simulcast RIDs sharing a WebRTC track ID
+// map to this publication and remain distinct media layers. IDs are unique per
+// session, not global. This does not authenticate the client or validate SDP.
 func (s *Session) PublishMapped(ctx context.Context, kind, source, codec, trackID string) (sfu.Publication, error) {
 	if trackID == "" || len(trackID) > 256 || strings.TrimSpace(trackID) != trackID || strings.ContainsAny(trackID, "\r\n\x00") {
 		return sfu.Publication{}, ErrInvalid

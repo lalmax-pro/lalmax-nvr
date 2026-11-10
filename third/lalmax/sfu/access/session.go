@@ -6,6 +6,7 @@ package access
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/q191201771/lalmax/sfu"
@@ -74,6 +75,16 @@ func (s *Session) OutgoingActive(publicationID string) bool {
 	return !s.closed && s.outgoing[publicationID] != nil
 }
 
+// SubscriptionLayer returns the RID selected for one active Room subscription.
+func (s *Session) SubscriptionLayer(publicationID string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return "", ErrClosed
+	}
+	return s.room.SubscriptionLayer(s.scope.ParticipantID, s.generation, publicationID)
+}
+
 // JoinRoom checks policy before allocating a participant. The policy must be
 // trusted and the principal authenticated before calling this function.
 func JoinRoom(ctx context.Context, room *sfu.Room, policy Authorizer, principal string, participant sfu.Participant) (*Session, error) {
@@ -138,8 +149,10 @@ func (s *Session) Unpublish(ctx context.Context, id string) error {
 		err := s.room.UnpublishSession(s.scope.ParticipantID, s.generation, id)
 		if err == nil {
 			s.forgetPublicationMappingLocked(id)
-			if binding := s.incoming[id]; binding != nil {
-				binding.cancel()
+			for key, binding := range s.incoming {
+				if strings.HasPrefix(key, id+"\x00") {
+					binding.cancel()
+				}
 			}
 		}
 		return err

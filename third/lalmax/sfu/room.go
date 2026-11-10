@@ -207,9 +207,9 @@ type Room struct {
 	subscriptions    map[subscriptionKey]Subscription
 	sequence         uint64
 	watchers         map[chan Event]struct{}
-	rtpPublications  map[string]*rtpforward.Fanout
-	rtpSubscriptions map[subscriptionKey]*rtpforward.Subscriber
-	senderReports    map[string]SenderReport
+	rtpPublications  map[string]*rtpforward.LayeredFanout
+	rtpSubscriptions map[subscriptionKey]*rtpforward.LayeredSubscriber
+	senderReports    map[string]map[uint32]SenderReport
 }
 
 // Join adds a participant. Connection handlers should use JoinSession and

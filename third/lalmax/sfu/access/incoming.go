@@ -7,10 +7,14 @@ import (
 
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lalmax/sfu"
+	"github.com/q191201771/lalmax/sfu/layerselect"
 	"github.com/q191201771/lalmax/sfu/webrtcbridge"
 )
 
-var ErrCodecMismatch = errors.New("sfu access: incoming track does not match publication")
+var (
+	ErrCodecMismatch  = errors.New("sfu access: incoming track does not match publication")
+	ErrUnsupportedRID = errors.New("sfu access: unsupported simulcast RID")
+)
 
 type incomingBinding struct{ cancel context.CancelFunc }
 
@@ -50,7 +54,18 @@ func (s *Session) StartIncomingWithLifetime(ctx context.Context, publicationID s
 	var stopped <-chan struct{}
 	err := s.withPolicy(ctx, Request{Operation: Publish, PublicationID: publicationID, Kind: publication.Kind, Source: publication.Source, Codec: publication.Codec}, func() error {
 		negotiated := sfu.NegotiatedCodec{MimeType: codec.MimeType, ClockRate: codec.ClockRate, Channels: codec.Channels, FMTP: codec.SDPFmtpLine}
-		if err := s.room.EnablePublicationRTPWithCodec(s.scope.ParticipantID, s.generation, publicationID, maxSubscribers, queueSize, negotiated); err != nil {
+		rid := remote.RID()
+		var err error
+		if rid == "" {
+			err = s.room.EnablePublicationRTPWithCodec(s.scope.ParticipantID, s.generation, publicationID, maxSubscribers, queueSize, negotiated)
+		} else {
+			maxBitrate, ok := layerselect.PresetMaxBitrate(rid)
+			if !ok {
+				return ErrUnsupportedRID
+			}
+			err = s.room.EnablePublicationLayerRTPWithCodec(s.scope.ParticipantID, s.generation, publicationID, maxSubscribers, queueSize, negotiated, rid, maxBitrate)
+		}
+		if err != nil {
 			return err
 		}
 		bindingCtx, cancel := context.WithCancel(ctx)
@@ -59,15 +74,18 @@ func (s *Session) StartIncomingWithLifetime(ctx context.Context, publicationID s
 		if s.incoming == nil {
 			s.incoming = make(map[string]*incomingBinding)
 		}
-		s.incoming[publicationID] = binding
+		bindingKey := incomingLayerKey(publicationID, rid)
+		s.incoming[bindingKey] = binding
 		go func() {
 			err := webrtcbridge.ForwardInboundWithCodec(bindingCtx, remote, s.room, s.scope.ParticipantID, s.generation, publicationID, codec)
 			cancel()
 			s.mu.Lock()
-			if s.incoming[publicationID] == binding {
-				delete(s.incoming, publicationID)
-				s.forgetPublicationMappingLocked(publicationID)
-				_ = s.room.UnpublishSession(s.scope.ParticipantID, s.generation, publicationID)
+			if s.incoming[bindingKey] == binding {
+				delete(s.incoming, bindingKey)
+				ended, removeErr := s.room.RemovePublicationLayer(s.scope.ParticipantID, s.generation, publicationID, rid)
+				if removeErr == nil && ended {
+					s.forgetPublicationMappingLocked(publicationID)
+				}
 			}
 			s.mu.Unlock()
 			result <- err
@@ -80,3 +98,5 @@ func (s *Session) StartIncomingWithLifetime(ctx context.Context, publicationID s
 	}
 	return result, stopped, nil
 }
+
+func incomingLayerKey(publicationID, rid string) string { return publicationID + "\x00" + rid }
