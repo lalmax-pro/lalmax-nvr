@@ -45,6 +45,14 @@ type Subscriber struct {
 	reason  error // protected by owner.mu
 }
 
+// PacketSubscriber is implemented by a bounded single-layer or layered RTP
+// subscription and is shared by forwarding adapters.
+type PacketSubscriber interface {
+	Packets() <-chan *rtp.Packet
+	Err() error
+	Close()
+}
+
 // Subscribe returns a channel owned by the fanout. Packets are independently
 // cloned for each subscriber. Once closed, drain the queue and inspect Err.
 func (f *Fanout) Subscribe(id string) (*Subscriber, error) {

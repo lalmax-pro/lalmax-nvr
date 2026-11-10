@@ -66,6 +66,11 @@ func (k *KeyframeRequester) Handle(outgoingSSRC uint32, packets []rtcp.Packet) e
 	if !matched {
 		return nil
 	}
+	return k.Request()
+}
+
+// Request asks the source for a keyframe, sharing Handle's rate limit.
+func (k *KeyframeRequester) Request() error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	now := time.Now()

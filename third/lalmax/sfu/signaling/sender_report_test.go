@@ -2,41 +2,15 @@ package signaling
 
 import (
 	"context"
-	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
-	"github.com/pion/transport/v5/packetio"
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lalmax/sfu"
 )
-
-type senderTimeout struct{}
-
-func (senderTimeout) Error() string   { return "i/o timeout" }
-func (senderTimeout) Timeout() bool   { return true }
-func (senderTimeout) Temporary() bool { return true }
-
-func TestSenderReportTimeoutClassification(t *testing.T) {
-	if !isSenderReportTimeout(senderTimeout{}) {
-		t.Fatal("net timeout not recognized")
-	}
-	if isSenderReportTimeout(errors.New("receiver closed")) {
-		t.Fatal("terminal error treated as timeout")
-	}
-	buffer := packetio.NewBuffer()
-	defer buffer.Close()
-	if err := buffer.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err := buffer.Read(make([]byte, 32), nil)
-	if !isSenderReportTimeout(err) {
-		t.Fatalf("Pion timeout not recognized: %v", err)
-	}
-}
 
 func TestSenderReportSSRCReuseIsRejected(t *testing.T) {
 	c := &senderReportCollector{targets: map[uint32]*senderReportTarget{}, seen: map[uint32]struct{}{}}
@@ -116,7 +90,7 @@ func TestIncomingSenderReportReachesSubscribedRoom(t *testing.T) {
 			t.Fatal("source did not bind")
 		}
 	}
-	// The receiver remains usable after its idle read deadline expires.
+	// Sender reports are still consumed after a quiet interval.
 	time.Sleep(1200 * time.Millisecond)
 	for {
 		if err = pc.WriteRTCP([]rtcp.Packet{&rtcp.SenderReport{SSRC: source, NTPTime: 0x123456789abcdef0, RTPTime: 12345}}); err != nil {

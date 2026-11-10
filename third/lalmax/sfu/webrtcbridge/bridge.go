@@ -31,7 +31,7 @@ func ForwardInbound(ctx context.Context, remote *webrtc.TrackRemote, room *sfu.R
 	if ctx == nil || remote == nil || room == nil {
 		return errors.New("webrtcbridge: nil input")
 	}
-	return forwardInbound(ctx, remote, room, participantID, session, publicationID, remote.Codec())
+	return forwardInbound(ctx, remote, room, participantID, session, publicationID, remote.RID(), remote.Codec())
 }
 
 // ForwardInboundWithCodec verifies that the transport still uses the codec
@@ -40,10 +40,10 @@ func ForwardInboundWithCodec(ctx context.Context, remote *webrtc.TrackRemote, ro
 	if ctx == nil || remote == nil || room == nil {
 		return errors.New("webrtcbridge: nil input")
 	}
-	return forwardInbound(ctx, remote, room, participantID, session, publicationID, expected)
+	return forwardInbound(ctx, remote, room, participantID, session, publicationID, remote.RID(), expected)
 }
 
-func forwardInbound(ctx context.Context, remote inboundTrack, room *sfu.Room, participantID, session, publicationID string, expected webrtc.RTPCodecParameters) error {
+func forwardInbound(ctx context.Context, remote inboundTrack, room *sfu.Room, participantID, session, publicationID, rid string, expected webrtc.RTPCodecParameters) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -61,7 +61,7 @@ func forwardInbound(ctx context.Context, remote inboundTrack, room *sfu.Room, pa
 		if current.PayloadType != expected.PayloadType || current.MimeType != expected.MimeType || current.ClockRate != expected.ClockRate || current.Channels != expected.Channels || current.SDPFmtpLine != expected.SDPFmtpLine || packet.PayloadType != uint8(expected.PayloadType) {
 			return ErrInboundCodecChanged
 		}
-		if err = room.WritePublicationRTP(participantID, session, publicationID, packet); err != nil {
+		if err = room.WritePublicationLayerRTP(participantID, session, publicationID, rid, packet); err != nil {
 			return fmt.Errorf("write room RTP: %w", err)
 		}
 	}
@@ -73,7 +73,7 @@ func forwardInbound(ctx context.Context, remote inboundTrack, room *sfu.Room, pa
 // reused on another connection. RTP padding is preserved so padding-only
 // bandwidth probes remain valid packets. TrackLocalStaticRTP binds outgoing SSRC and PT.
 // The caller owns SDP, RTCP feedback, codec compatibility and PC lifecycle.
-func ForwardOutbound(ctx context.Context, sub *rtpforward.Subscriber, local *webrtc.TrackLocalStaticRTP) error {
+func ForwardOutbound(ctx context.Context, sub rtpforward.PacketSubscriber, local *webrtc.TrackLocalStaticRTP) error {
 	if ctx == nil || sub == nil || local == nil {
 		return errors.New("webrtcbridge: nil input")
 	}

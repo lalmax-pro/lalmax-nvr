@@ -17,10 +17,12 @@ import (
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfumeetui"
 	"github.com/pion/interceptor"
+	"github.com/pion/interceptor/pkg/twcc"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/access"
+	"github.com/q191201771/lalmax/sfu/bwe"
 	"github.com/q191201771/lalmax/sfu/signaling"
 	"github.com/q191201771/lalmax/sfu/webrtcbridge"
 )
@@ -66,6 +68,12 @@ func equalSecret(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a)
 // newDemoHandler only serves one fixed loopback origin. It is a development
 // tool and intentionally has no production authentication or persistent rooms.
 func newDemoHandler(origin, secret string) (http.Handler, error) {
+	return newDemoHandlerWithCapacity(origin, secret, 8, 8)
+}
+
+// newDemoHandlerWithCapacity keeps the user-facing demo at eight participants
+// while allowing opt-in load tests to exercise the Room's configured capacity.
+func newDemoHandlerWithCapacity(origin, secret string, maxParticipants, maxSubscribers int) (http.Handler, error) {
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return nil, errors.New("invalid demo origin")
@@ -74,14 +82,17 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 	if err != nil || host != "127.0.0.1" || port == "" || len(secret) < 32 {
 		return nil, errors.New("demo requires loopback origin and secret")
 	}
+	if maxParticipants < 2 || maxParticipants > 32 || maxSubscribers < 1 || maxSubscribers > 1024 {
+		return nil, errors.New("invalid demo capacity")
+	}
 	rooms := sfu.NewManager()
-	_, err = rooms.CreateWithLimits(demoRoom, sfu.RoomLimits{MaxParticipants: 8, MaxPublicationsPerParticipant: 4, MaxSubscriptions: 48, MaxWatchers: 8})
+	_, err = rooms.CreateWithLimits(demoRoom, sfu.RoomLimits{MaxParticipants: maxParticipants, MaxPublicationsPerParticipant: 4, MaxSubscriptions: maxParticipants * 6, MaxWatchers: maxParticipants})
 	if err != nil {
 		return nil, err
 	}
 	sameOrigin := func(r *http.Request) bool { return r.Host == u.Host && r.Header.Get("Origin") == origin }
 	factory := &signaling.RoomFactory{
-		NewPeer: func(_ context.Context, _ signaling.Identity) (*webrtc.PeerConnection, error) {
+		NewPeer: func(_ context.Context, identity signaling.Identity) (*webrtc.PeerConnection, error) {
 			engine := webrtc.SettingEngine{}
 			engine.SetIncludeLoopbackCandidate(true)
 			media := &webrtc.MediaEngine{}
@@ -91,8 +102,16 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 			if err := media.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", RTCPFeedback: demoVideoFeedback()}, PayloadType: 96}, webrtc.RTPCodecTypeVideo); err != nil {
 				return nil, err
 			}
+			if err := webrtc.ConfigureSimulcastExtensionHeaders(media); err != nil {
+				return nil, err
+			}
 			registry := &interceptor.Registry{}
-			if err := webrtc.ConfigureTWCCHeaderExtensionSender(media, registry); err != nil {
+			registry.Add(bwe.NewObserverFactory(func(bitrate int) {
+				if room, ok := rooms.Get(identity.Room); ok {
+					_ = room.UpdateSubscriberBandwidth(identity.Participant.ID, bitrate)
+				}
+			}))
+			if err := configureDemoTWCC(media, registry); err != nil {
 				return nil, err
 			}
 			// NACK may resend one cached header concurrently; isolate it before TWCC mutates it.
@@ -110,7 +129,7 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 				return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", RTCPFeedback: demoVideoFeedback()}, nil
 			}
 			return webrtc.RTPCodecCapability{}, errors.New("unsupported codec")
-		}, MaxSubscribers: 8, QueueSize: 64,
+		}, MaxSubscribers: maxSubscribers, QueueSize: 64,
 		OnInboundPeer: func(ctx context.Context, _ signaling.Identity, pc *webrtc.PeerConnection, track *webrtc.TrackRemote, done <-chan error, err error) {
 			if err != nil || track.Kind() != webrtc.RTPCodecTypeVideo {
 				return
@@ -218,4 +237,16 @@ func newDemoHandler(origin, secret string) (http.Handler, error) {
 		}
 		mux.ServeHTTP(w, r)
 	}), nil
+}
+
+func configureDemoTWCC(media *webrtc.MediaEngine, registry *interceptor.Registry) error {
+	if err := webrtc.ConfigureTWCCSender(media, registry); err != nil {
+		return err
+	}
+	headerExtension, err := twcc.NewHeaderExtensionInterceptor()
+	if err != nil {
+		return err
+	}
+	registry.Add(headerExtension)
+	return nil
 }

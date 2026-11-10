@@ -3,6 +3,7 @@ package sfubridge
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -127,7 +128,11 @@ func (r *Registry) create(ctx context.Context, principal, publicationID, audioID
 	return status, nil
 }
 func (r *Registry) observe(entry *registryEntry) {
+	streamID := entry.status.StreamID
 	err := <-entry.handle.Done()
+	if err != nil && !errors.Is(err, context.Canceled) {
+		slog.Warn("SFU bridge runner failed", "stream_id", streamID, "error", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if entry.status.State == StateStopping || errors.Is(err, context.Canceled) {
