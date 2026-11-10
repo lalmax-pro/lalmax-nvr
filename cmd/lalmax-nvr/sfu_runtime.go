@@ -17,6 +17,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/sfubridge"
 	"github.com/pion/interceptor"
+	"github.com/pion/interceptor/pkg/twcc"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lal/pkg/logic"
@@ -31,6 +32,18 @@ var nvrSFURoom = sfu.Key{Namespace: "nvr", ID: "default"}
 
 func nvrSFUVideoFeedback() []webrtc.RTCPFeedback {
 	return []webrtc.RTCPFeedback{{Type: "nack", Parameter: "pli"}, {Type: "ccm", Parameter: "fir"}}
+}
+
+func applyNVRSFUBandwidthEstimate(rooms *sfu.Manager, id signaling.Identity, bitrate int) error {
+	room, ok := rooms.Get(id.Room)
+	if !ok {
+		return nil
+	}
+	err := room.UpdateSubscriberBandwidth(id.Participant.ID, bitrate)
+	if errors.Is(err, sfu.ErrParticipantNotFound) {
+		return nil
+	}
+	return err
 }
 
 type nvrSFURuntime struct {
@@ -212,7 +225,7 @@ func nvrSFUIdentityForUser(user *model.User) (signaling.Identity, error) {
 	return signaling.Identity{Principal: principal, Room: nvrSFURoom, Participant: sfu.Participant{ID: hex.EncodeToString(id[:]), Name: user.DisplayName}}, nil
 }
 func nvrSFUNewPeer(servers []webrtc.ICEServer) func(context.Context, signaling.Identity) (*webrtc.PeerConnection, error) {
-	return nvrSFUNewPeerObservingBWE(servers, nil)
+	return nvrSFUNewPeerObservingBWE(servers, func(signaling.Identity, int) {})
 }
 func nvrSFUNewPeerObservingBWE(servers []webrtc.ICEServer, onEstimate func(signaling.Identity, int)) func(context.Context, signaling.Identity) (*webrtc.PeerConnection, error) {
 	return nvrSFUNewPeerWithPacing(servers, onEstimate, false)
@@ -226,11 +239,14 @@ func nvrSFUNewPeerWithPacing(servers []webrtc.ICEServer, onEstimate func(signali
 		if err := engine.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", RTCPFeedback: nvrSFUVideoFeedback()}, PayloadType: 96}, webrtc.RTPCodecTypeVideo); err != nil {
 			return nil, err
 		}
+		if err := webrtc.ConfigureSimulcastExtensionHeaders(engine); err != nil {
+			return nil, err
+		}
 		registry := &interceptor.Registry{}
 		if onEstimate != nil {
 			registry.Add(&sfuBWEFactory{onEstimate: func(bitrate int) { onEstimate(identity, bitrate) }, pacing: enablePacing})
 		}
-		if err := webrtc.ConfigureTWCCHeaderExtensionSender(engine, registry); err != nil {
+		if err := nvrSFUConfigureTWCC(engine, registry); err != nil {
 			return nil, err
 		}
 		// NACK may resend one cached header concurrently; isolate it before TWCC mutates it.
@@ -243,6 +259,22 @@ func nvrSFUNewPeerWithPacing(servers []webrtc.ICEServer, onEstimate func(signali
 		return webrtc.NewAPI(webrtc.WithSettingEngine(settings), webrtc.WithMediaEngine(engine), webrtc.WithInterceptorRegistry(registry)).NewPeerConnection(webrtc.Configuration{ICEServers: servers})
 	}
 }
+
+// nvrSFUConfigureTWCC both writes transport sequence numbers on outbound RTP
+// and returns arrival feedback for inbound RTP. Pion exposes those as separate
+// interceptors even though they share the negotiated TWCC extension.
+func nvrSFUConfigureTWCC(engine *webrtc.MediaEngine, registry *interceptor.Registry) error {
+	if err := webrtc.ConfigureTWCCSender(engine, registry); err != nil {
+		return err
+	}
+	headerExtension, err := twcc.NewHeaderExtensionInterceptor()
+	if err != nil {
+		return err
+	}
+	registry.Add(headerExtension)
+	return nil
+}
+
 func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 	idleTimeout, err := a.cfg.SFU.RoomIdleTimeout()
 	if err != nil {
@@ -291,12 +323,14 @@ func newNVRSFURuntime(a *App) (*nvrSFURuntime, error) {
 	for _, server := range a.cfg.SFU.ICEServers {
 		iceServers = append(iceServers, webrtc.ICEServer{URLs: append([]string(nil), server.URLs...), Username: server.Username, Credential: server.Credential, CredentialType: webrtc.ICECredentialTypePassword})
 	}
-	newPeer := nvrSFUNewPeer(iceServers)
-	if a.cfg.SFU.ObserveBandwidth {
-		newPeer = nvrSFUNewPeerWithPacing(iceServers, func(id signaling.Identity, bitrate int) {
+	newPeer := nvrSFUNewPeerWithPacing(iceServers, func(id signaling.Identity, bitrate int) {
+		if err := applyNVRSFUBandwidthEstimate(rooms, id, bitrate); err != nil {
+			slog.Debug("apply sfu bandwidth estimate", "participant", id.Participant.ID, "error", err)
+		}
+		if a.cfg.SFU.ObserveBandwidth {
 			slog.Debug("sfu bandwidth estimate", "namespace", id.Room.Namespace, "room", id.Room.ID, "participant", id.Participant.ID, "bitrate_bps", bitrate)
-		}, a.cfg.SFU.Pacing)
-	}
+		}
+	}, a.cfg.SFU.Pacing)
 	factory := &signaling.RoomFactory{NewPeer: newPeer, MaxSubscribers: 32, QueueSize: 64, Codec: func(p sfu.Publication) (webrtc.RTPCodecCapability, error) {
 		if p.Kind == "audio" && strings.EqualFold(p.Codec, "audio/opus") {
 			return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, nil

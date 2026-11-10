@@ -1,9 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"math"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,14 +33,122 @@ func TestDemoSFULoad(t *testing.T) {
 			t.Fatal("SFU_LOAD_DURATION must be between 1s and 30m")
 		}
 	}
-	for _, count := range []int{1, 4, 7} {
-		t.Run(fmt.Sprintf("viewers_%d", count), func(t *testing.T) { testDemoSFULoad(t, count, duration) })
+	viewers := []int{1, 4, 7}
+	if value := os.Getenv("SFU_LOAD_VIEWERS"); value != "" {
+		viewers = nil
+		seen := make(map[int]bool)
+		for _, item := range strings.Split(value, ",") {
+			count, err := strconv.Atoi(strings.TrimSpace(item))
+			if err != nil || count < 1 || count > 31 || seen[count] {
+				t.Fatal("SFU_LOAD_VIEWERS must be a comma-separated list of unique values from 1 to 31")
+			}
+			seen[count] = true
+			viewers = append(viewers, count)
+		}
+	}
+	packetsPerSecond := loadEnvInt(t, "SFU_LOAD_PPS", 30, 1, 1000)
+	payloadBytes := loadEnvInt(t, "SFU_LOAD_PAYLOAD_BYTES", 1000, 100, 1200)
+	for _, count := range viewers {
+		t.Run(fmt.Sprintf("viewers_%d", count), func(t *testing.T) {
+			testDemoSFULoad(t, count, duration, packetsPerSecond, payloadBytes)
+		})
 	}
 }
 
-func testDemoSFULoad(t *testing.T, count int, duration time.Duration) {
+// TestDemoSFULoadServer runs in a helper process so the parent can measure
+// server CPU and RSS without including the synthetic publisher and viewers.
+func TestDemoSFULoadServer(t *testing.T) {
+	if os.Getenv("SFU_LOAD_SERVER_CHILD") != "1" {
+		t.Skip("helper process only")
+	}
+	participants, err := strconv.Atoi(os.Getenv("SFU_LOAD_SERVER_PARTICIPANTS"))
+	if err != nil || participants < 2 || participants > 32 {
+		t.Fatal("invalid helper server participant limit")
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := "http://" + listener.Addr().String()
+	handler, err := newDemoHandlerWithCapacity(origin, testSecret, participants, participants)
+	if err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = server.Serve(listener) }()
+	fmt.Fprintf(os.Stdout, "SFU_LOAD_SERVER_ADDR=%s\n", origin)
+	select {}
+}
+
+func startDemoSFULoadServer(t *testing.T, participants int) (string, *process.Process) {
 	t.Helper()
-	_, origin := setup(t)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, "-test.v", "-test.run=^TestDemoSFULoadServer$")
+	cmd.Env = append(os.Environ(), "SFU_LOAD_SERVER_CHILD=1", fmt.Sprintf("SFU_LOAD_SERVER_PARTICIPANTS=%d", participants))
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	ready := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "SFU_LOAD_SERVER_ADDR=") {
+				ready <- strings.TrimPrefix(line, "SFU_LOAD_SERVER_ADDR=")
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			ready <- "scanner error: " + err.Error()
+			return
+		}
+		ready <- "server process exited before becoming ready"
+	}()
+	var origin string
+	select {
+	case origin = <-ready:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for helper SFU server")
+	}
+	if !strings.HasPrefix(origin, "http://127.0.0.1:") {
+		t.Fatalf("helper SFU server did not report a loopback origin: %q", origin)
+	}
+	serverProcess, err := process.NewProcess(int32(cmd.Process.Pid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return origin, serverProcess
+}
+
+func loadEnvInt(t *testing.T, name string, fallback, minimum, maximum int) int {
+	t.Helper()
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < minimum || parsed > maximum {
+		t.Fatalf("%s must be between %d and %d", name, minimum, maximum)
+	}
+	return parsed
+}
+
+func testDemoSFULoad(t *testing.T, count int, duration time.Duration, packetsPerSecond, payloadBytes int) {
+	t.Helper()
+	origin, proc := startDemoSFULoadServer(t, count+1)
 	resp := login(t, origin, testSecret, origin)
 	if resp.StatusCode != 204 || len(resp.Cookies()) != 1 {
 		t.Fatalf("login: %s", resp.Status)
@@ -82,26 +196,29 @@ func testDemoSFULoad(t *testing.T, count int, duration time.Duration) {
 	var sent atomic.Uint64
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
+	received := make([]atomic.Uint64, count)
+	first := make([]time.Duration, count)
 	go func() {
-		ticker := time.NewTicker(time.Second / 30)
+		ticker := time.NewTicker(time.Second / time.Duration(packetsPerSecond))
 		defer ticker.Stop()
-		payload := make([]byte, 1000)
+		payload := make([]byte, payloadBytes)
 		payload[0] = 0x65
 		var sequence uint16
+		var timestamp uint32
+		clockStep := uint32(90000 / packetsPerSecond)
 		for {
 			select {
 			case <-stop:
 				return
 			case <-ticker.C:
 				sequence++
-				if track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, SequenceNumber: sequence, Timestamp: uint32(sequence) * 3000}, Payload: payload}) == nil {
+				timestamp += clockStep
+				if track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, SequenceNumber: sequence, Timestamp: timestamp}, Payload: payload}) == nil {
 					sent.Add(1)
 				}
 			}
 		}
 	}()
-	var received [7]atomic.Uint64
-	var first [7]time.Duration
 	for i := 0; i < count; i++ {
 		viewer, _, err := dial(t, origin, origin, cookie)
 		if err != nil {
@@ -169,16 +286,12 @@ func testDemoSFULoad(t *testing.T, count int, duration time.Duration) {
 			t.Fatal("no relayed RTP")
 		}
 	}
-	proc, err := process.NewProcess(int32(os.Getpid()))
-	if err != nil {
-		t.Fatal(err)
-	}
 	beforeCPU, err := proc.Times()
 	if err != nil {
 		t.Fatal(err)
 	}
 	startSent := sent.Load()
-	var startReceived [7]uint64
+	startReceived := make([]uint64, count)
 	for i := 0; i < count; i++ {
 		startReceived[i] = received[i].Load()
 	}
@@ -229,5 +342,5 @@ func testDemoSFULoad(t *testing.T, count int, duration time.Duration) {
 	if !math.IsNaN(cpu) && !math.IsInf(cpu, 0) && cpu >= 0 {
 		cpuResult = fmt.Sprintf("%.1f%%", cpu)
 	}
-	t.Logf("viewers=%d duration=%.2fs input_packets=%d packets_per_viewer=%d..%d input_pps=%.1f delivered_pps=%.1f received_payload_bps=%.0f aggregate_process_cpu=%s aggregate_process_peak_rss_bytes=%d first_rtp_ms=%.1f..%.1f", count, elapsed.Seconds(), input, minReceived, maxReceived, float64(input)/elapsed.Seconds(), float64(output)/elapsed.Seconds(), float64(output)*1000*8/elapsed.Seconds(), cpuResult, peakRSS, float64(minFirst.Microseconds())/1000, float64(maxFirst.Microseconds())/1000)
+	t.Logf("viewers=%d duration=%.2fs payload_bytes=%d target_pps=%d input_packets=%d packets_per_viewer=%d..%d input_pps=%.1f delivered_pps=%.1f aggregate_payload_bps=%.0f server_cpu=%s server_peak_rss_bytes=%d first_rtp_ms=%.1f..%.1f", count, elapsed.Seconds(), payloadBytes, packetsPerSecond, input, minReceived, maxReceived, float64(input)/elapsed.Seconds(), float64(output)/elapsed.Seconds(), float64(output)*float64(payloadBytes)*8/elapsed.Seconds(), cpuResult, peakRSS, float64(minFirst.Microseconds())/1000, float64(maxFirst.Microseconds())/1000)
 }

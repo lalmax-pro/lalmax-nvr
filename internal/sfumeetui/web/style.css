@@ -5,6 +5,8 @@
 .tracks-card h2{font-size:16px;margin:14px 0 4px}.tracks-card>p{margin:0}.track-list{display:grid;gap:8px;margin-top:14px}.track-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border:1px solid #354036;border-radius:10px;background:#111813}.track-info{min-width:0}.track-info strong,.track-info small{display:block}.track-info strong{font-size:12px;overflow-wrap:anywhere}.track-info small{color:#95a394;font-size:10px;margin-top:4px}.track-toggle{flex-shrink:0;background:#273526;border:1px solid #45583d;border-radius:8px;color:#ddedcf;padding:8px 10px;font-size:11px}.track-toggle[aria-pressed="false"]{background:#1c2420;color:#aebcad;border-color:#39443a}.track-empty{color:#929d93;font-size:11px;line-height:1.5;margin:0}
 
 #bridge-video { width: 100%; margin-top: 12px; border-radius: 10px; background: #080b09; }
+.network-grid .wide { grid-column: 1 / -1; }
+#network-layers, #network-layer-state { overflow-wrap: anywhere; line-height: 1.5; }
 #back-nvr { color: #c5ed85; font-size: 12px; text-decoration: none; margin-right: 18px; }
 #nvr-username,#nvr-password { width: 100%; border: 1px solid #3b453d; background: #101511; color: #fff; border-radius: 9px; padding: 13px; outline: none; }
 #microphone-device,#camera-device { width: 100%; border: 1px solid #3b453d; background: #101511; color: #fff; border-radius: 9px; padding: 11px; }

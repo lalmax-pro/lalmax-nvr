@@ -149,6 +149,54 @@ func TestPublicationRTPReadinessEvent(t *testing.T) {
 	}
 }
 
+func TestGCCSelectionIsPerSubscriberAndDowngradesImmediately(t *testing.T) {
+	m := NewManager()
+	r, _ := m.Create(Key{Namespace: "n", ID: "simulcast"}, 0)
+	publisher, _ := r.JoinSession(Participant{ID: "publisher"})
+	viewerA, _ := r.JoinSession(Participant{ID: "viewer-a"})
+	viewerB, _ := r.JoinSession(Participant{ID: "viewer-b"})
+	pub, _ := r.PublishSession("publisher", publisher, "video", "camera", "video/H264")
+	codec := NegotiatedCodec{MimeType: "video/H264", ClockRate: 90_000, FMTP: "packetization-mode=1;profile-level-id=42e01f"}
+	if err := r.EnablePublicationLayerRTPWithCodec("publisher", publisher, pub.ID, 4, 8, codec, "l", 150_000); err != nil {
+		t.Fatal(err)
+	}
+	for _, layer := range []rtpforward.LayerInfo{{RID: "m", MaxBitrate: 500_000}, {RID: "h", MaxBitrate: 1_500_000}} {
+		if err := r.EnablePublicationLayerRTPWithCodec("publisher", publisher, pub.ID, 4, 8, codec, layer.RID, layer.MaxBitrate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for participantID, session := range map[string]string{"viewer-a": viewerA, "viewer-b": viewerB} {
+		if err := r.SubscribeSession(participantID, session, pub.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	subA, err := r.OpenSubscriptionRTP("viewer-a", viewerA, pub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subA.Close()
+	subB, err := r.OpenSubscriptionRTP("viewer-b", viewerB, pub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subB.Close()
+	if err = subA.SelectLayer("h"); err != nil {
+		t.Fatal(err)
+	}
+	if err = subB.SelectLayer("h"); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.UpdateSubscriberBandwidth("viewer-a", 400_000); err != nil {
+		t.Fatal(err)
+	}
+	if got := subA.SelectedLayer(); got != "l" {
+		t.Fatalf("viewer-a RID %q after low estimate, want immediate l", got)
+	}
+	if got := subB.SelectedLayer(); got != "h" {
+		t.Fatalf("viewer-b RID changed with another subscriber's estimate: %q", got)
+	}
+}
+
 func TestNegotiatedCodecFollowsPublicationGeneration(t *testing.T) {
 	m := NewManager()
 	r, err := m.Create(Key{"n", "codec"}, 0)

@@ -111,7 +111,7 @@ func testSFUAVBridgeThroughGroupToRecording(t *testing.T, sourceTime, audioGap b
 	bridgeCtx, stopBridge := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() {
-		done <- bridge.RunAVToLal(bridgeCtx, audio, video, publisher, key.StreamName, func(context.Context) (bridge.AVReferences, error) { return refs, nil })
+		done <- bridge.RunAVToLal(bridgeCtx, audio, video, publisher, key.StreamName, func(context.Context, uint32) (bridge.AVReferences, error) { return refs, nil })
 	}()
 	t.Cleanup(stopBridge)
 	select {

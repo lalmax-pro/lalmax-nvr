@@ -2,9 +2,6 @@ package signaling
 
 import (
 	"context"
-	"errors"
-	"net"
-	"os"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -23,9 +20,9 @@ type senderReportCollector struct {
 	seen    map[uint32]struct{}
 }
 
-func isSenderReportTimeout(err error) bool {
-	var netErr net.Error
-	return errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
+type senderReportReaderKey struct {
+	receiver *webrtc.RTPReceiver
+	rid      string
 }
 
 // bind is called with the factory lock held.
@@ -42,19 +39,20 @@ func (c *senderReportCollector) bind(ssrc uint32, target *senderReportTarget) bo
 	return true
 }
 
-// Each receiver has exactly one RTCP reader, even when a transceiver is
+// Each receiver RID has exactly one RTCP reader, even when a transceiver is
 // reused for a replacement track. Bindings are removed conditionally so a
 // delayed callback from the old track cannot remove a new SSRC mapping.
-func (f *RoomFactory) trackSenderReports(ctx context.Context, receiver *webrtc.RTPReceiver, session *access.Session, publication string, ssrc uint32, stopped <-chan struct{}) {
+func (f *RoomFactory) trackSenderReports(ctx context.Context, receiver *webrtc.RTPReceiver, rid string, session *access.Session, publication string, ssrc uint32, stopped <-chan struct{}) {
+	key := senderReportReaderKey{receiver: receiver, rid: rid}
 	f.reportMu.Lock()
 	if f.reportReaders == nil {
-		f.reportReaders = make(map[*webrtc.RTPReceiver]*senderReportCollector)
+		f.reportReaders = make(map[senderReportReaderKey]*senderReportCollector)
 	}
-	collector := f.reportReaders[receiver]
+	collector := f.reportReaders[key]
 	if collector == nil {
 		collector = &senderReportCollector{targets: make(map[uint32]*senderReportTarget), seen: make(map[uint32]struct{})}
-		f.reportReaders[receiver] = collector
-		go f.readSenderReports(ctx, receiver, collector)
+		f.reportReaders[key] = collector
+		go f.readSenderReports(ctx, key, collector)
 	}
 	// RTCP has no publication generation. On SSRC reuse, an in-flight report
 	// from an earlier track cannot be distinguished from the replacement.
@@ -77,31 +75,34 @@ func (f *RoomFactory) trackSenderReports(ctx context.Context, receiver *webrtc.R
 	}()
 }
 
-// Short deadlines let the reader exit after PeerConnection shutdown without
-// closing its RTP receiver. Simulcast is deliberately excluded by the caller.
-func (f *RoomFactory) readSenderReports(ctx context.Context, receiver *webrtc.RTPReceiver, collector *senderReportCollector) {
+// Pion exposes simulcast RTCP streams by RID, so each encoding needs its own
+// reader. Canceling the owning PeerConnection context stops the receiver,
+// which unblocks RTCP reads without racing Pion shutdown through SetReadDeadline.
+func (f *RoomFactory) readSenderReports(ctx context.Context, key senderReportReaderKey, collector *senderReportCollector) {
+	stopReceiver := context.AfterFunc(ctx, func() { _ = key.receiver.Stop() })
+	defer stopReceiver()
 	defer func() {
 		f.reportMu.Lock()
 		defer f.reportMu.Unlock()
-		if f.reportReaders[receiver] == collector {
-			delete(f.reportReaders, receiver)
+		if f.reportReaders[key] == collector {
+			delete(f.reportReaders, key)
 		}
 	}()
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := receiver.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-			return
+		var packets []rtcp.Packet
+		var err error
+		if key.rid == "" {
+			packets, _, err = key.receiver.ReadRTCP()
+		} else {
+			packets, _, err = key.receiver.ReadSimulcastRTCP(key.rid)
 		}
-		packets, _, err := receiver.ReadRTCP()
 		if ctx.Err() != nil {
 			return
 		}
 		if err != nil {
-			if isSenderReportTimeout(err) {
-				continue
-			}
 			return
 		}
 		for _, packet := range packets {

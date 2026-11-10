@@ -19,13 +19,13 @@ type AVReferences struct {
 	Audio, Video         ClockReference
 	AudioSSRC, VideoSSRC uint32
 }
-type AVReferenceProvider func(context.Context) (AVReferences, error)
+type AVReferenceProvider func(context.Context, uint32) (AVReferences, error)
 
 // RunAVToLal publishes authorized H264 and Opus tracks to one custom session.
 // It owns both subscriptions. The provider must reject stale or unrelated
 // reports and ensure they come from a common clock. While reports are missing,
 // incoming packets are drained, not buffered. It starts at a video keyframe.
-func RunAVToLal(ctx context.Context, audio, video *rtpforward.Subscriber, publisher Publisher, stream string, reports AVReferenceProvider) error {
+func RunAVToLal(ctx context.Context, audio, video rtpforward.PacketSubscriber, publisher Publisher, stream string, reports AVReferenceProvider) error {
 	if ctx == nil || audio == nil || video == nil || audio == video || publisher == nil || stream == "" || reports == nil {
 		return ErrInvalidPublisher
 	}
@@ -46,6 +46,9 @@ func RunAVToLal(ctx context.Context, audio, video *rtpforward.Subscriber, publis
 	aDecoder, vDecoder := &Opus{}, NewH264()
 	var clock *avClock
 	var queue avQueue
+	var videoSSRC uint32
+	var lastVideoMS int64
+	var videoTimestampSet bool
 	feed := func(p base.AvPacket) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -57,7 +60,13 @@ func RunAVToLal(ctx context.Context, audio, video *rtpforward.Subscriber, publis
 	startup := time.NewTimer(15 * time.Second)
 	defer startup.Stop()
 	consume := func(packet *rtp.Packet, isVideo bool) error {
-		refs, err := reports(ctx)
+		if isVideo && videoSSRC != packet.SSRC {
+			// A simulcast layer switch changes the source SSRC. Start a fresh
+			// decoder for the new encoding and resume only at its next IDR.
+			videoSSRC = packet.SSRC
+			vDecoder = NewH264()
+		}
+		refs, err := reports(ctx, videoSSRC)
 		if errors.Is(err, ErrAVClockNotReady) {
 			// Preserve H264 parameter sets while waiting for RTCP, but do not
 			// start output on a predicted frame after dropping its keyframe.
@@ -112,7 +121,17 @@ func RunAVToLal(ctx context.Context, audio, video *rtpforward.Subscriber, publis
 		if mapped < 0 {
 			return nil
 		}
-		frame.Timestamp = int64(mapped / time.Millisecond)
+		mappedMS := int64(mapped / time.Millisecond)
+		if isVideo {
+			// RTP clocks can advance by less than one millisecond, and two
+			// simulcast encodings may emit the same capture timestamp around a
+			// layer switch. MP4 requires strictly increasing video DTS values.
+			if videoTimestampSet && mappedMS <= lastVideoMS {
+				return nil
+			}
+			lastVideoMS, videoTimestampSet = mappedMS, true
+		}
+		frame.Timestamp = mappedMS
 		frame.Pts = frame.Timestamp
 		return queue.push(*frame, time.Now(), isVideo)
 	}

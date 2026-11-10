@@ -29,7 +29,7 @@ func TestAVBridgePreservesH264ParametersWhileWaitingForReports(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- RunAVToLal(ctx, a, v, publisher, "combined", func(context.Context) (AVReferences, error) {
+		done <- RunAVToLal(ctx, a, v, publisher, "combined", func(context.Context, uint32) (AVReferences, error) {
 			if !ready.Load() {
 				if calls.Add(1) == 2 {
 					seen <- struct{}{}
@@ -74,7 +74,7 @@ func TestRunAVToLalUsesSenderClockAndReleasesSources(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- RunAVToLal(ctx, a, v, publisher, "combined", func(context.Context) (AVReferences, error) { return refs, nil })
+		done <- RunAVToLal(ctx, a, v, publisher, "combined", func(context.Context, uint32) (AVReferences, error) { return refs, nil })
 	}()
 	if err := vFan.WriteRTP(packet(1, 90000, true, stap([]byte{0x67, 1}, []byte{0x68, 2}, []byte{0x65, 0xb0})...)); err != nil {
 		t.Fatal(err)

@@ -26,9 +26,10 @@ func (pacingRoomPolicy) Authorize(context.Context, access.Request) error { retur
 
 type pacingRoomLoss struct {
 	net.PacketConn
-	armed   atomic.Bool
-	packets atomic.Uint32
-	dropped atomic.Uint32
+	armed     atomic.Bool
+	packets   atomic.Uint32
+	dropped   atomic.Uint32
+	dropEvery uint32
 }
 
 func (c *pacingRoomLoss) ReadFrom(buf []byte) (int, net.Addr, error) {
@@ -37,7 +38,7 @@ func (c *pacingRoomLoss) ReadFrom(buf []byte) (int, net.Addr, error) {
 		if err != nil {
 			return n, addr, err
 		}
-		if n >= 12 && buf[0]>>6 == 2 && buf[1]&0x7f >= 96 && c.armed.Load() && c.packets.Add(1)%3 == 0 {
+		if n >= 12 && buf[0]>>6 == 2 && buf[1]&0x7f >= 96 && c.armed.Load() && c.packets.Add(1)%c.dropEvery == 0 {
 			c.dropped.Add(1)
 			continue
 		}
@@ -82,18 +83,29 @@ func pacingRoomOffer(t *testing.T, pc *webrtc.PeerConnection) string {
 }
 func pacingRoomClient(t *testing.T, loss bool) (*webrtc.PeerConnection, *pacingRoomLoss) {
 	t.Helper()
+	if loss {
+		return pacingRoomClientWithLoss(t, 3)
+	}
 	settings := webrtc.SettingEngine{}
 	settings.SetIncludeLoopbackCandidate(true)
-	var impaired *pacingRoomLoss
-	if loss {
-		conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
-		require.NoError(t, err)
-		impaired = &pacingRoomLoss{PacketConn: conn}
-		mux := webrtc.NewICEUDPMux(nil, impaired)
-		t.Cleanup(func() { _ = mux.Close() })
-		settings.SetICEUDPMux(mux)
-		settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
-	}
+	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(webrtc.Configuration{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pc.Close() })
+	return pc, nil
+}
+
+func pacingRoomClientWithLoss(t *testing.T, dropEvery uint32) (*webrtc.PeerConnection, *pacingRoomLoss) {
+	t.Helper()
+	require.GreaterOrEqual(t, dropEvery, uint32(2))
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	impaired := &pacingRoomLoss{PacketConn: conn, dropEvery: dropEvery}
+	mux := webrtc.NewICEUDPMux(nil, impaired)
+	t.Cleanup(func() { _ = mux.Close() })
+	settings := webrtc.SettingEngine{}
+	settings.SetIncludeLoopbackCandidate(true)
+	settings.SetICEUDPMux(mux)
+	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(webrtc.Configuration{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pc.Close() })

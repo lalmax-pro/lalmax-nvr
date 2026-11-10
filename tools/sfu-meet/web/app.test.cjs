@@ -210,6 +210,7 @@ for (const kind of ['audio','video']) test(`switching ${kind} preserves publicat
   class Peer {
     constructor(){this.iceGatheringState='complete';this.connectionState='connected';this.transceivers=[];}
     addTrack(track){sender={track,async replaceTrack(next){if(this.rejectNext){this.rejectNext=false;throw new Error('replace failed');}if(next===replacement)await new Promise(resolve=>{releaseSwap=resolve;});this.track=next;}};this.transceivers.push({sender});return sender;}
+    addTransceiver(track,init){sender={track,init,async replaceTrack(next){if(this.rejectNext){this.rejectNext=false;throw new Error('replace failed');}if(next===replacement)await new Promise(resolve=>{releaseSwap=resolve;});this.track=next;}};const transceiver={sender};this.transceivers.push(transceiver);return transceiver;}
     getTransceivers(){return this.transceivers;} async createOffer(){return{sdp:'offer'};} async setLocalDescription(){this.localDescription={sdp:'offer'};}
     async setRemoteDescription(){} close(){}
   }
@@ -222,6 +223,7 @@ for (const kind of ['audio','video']) test(`switching ${kind} preserves publicat
   await waitFor(()=>!element('leave').disabled);
   assert.equal(element(kind==='video'?'microphone-device':'camera-device').disabled,true,'inactive media device selector must be disabled in a call');
   assert.equal(calls[0][kind].deviceId.exact,'cam-0');
+  if(kind==='video')assert.equal(JSON.stringify(sender.init.sendEncodings.map(e=>[e.rid,e.maxBitrate,e.scaleResolutionDownBy])),JSON.stringify([['l',150000,4],['m',500000,2],['h',1500000,1]]));
   element(kind==='video'?'camera-toggle':'mute').listeners.click();
   element(selectID).value='cam-1';element(selectID).listeners.change();
   await waitFor(()=>typeof releaseSwap==='function');
@@ -661,7 +663,9 @@ test('network diagnostics sample deltas only while open and ignore results after
     close(){this.readyState=3;}
   }
   const report=(timestamp, sent, audioBytes, videoBytes, received, lost)=>new Map([
-    ['out',{id:'out',type:'outbound-rtp',kind:'video',timestamp,bytesSent:sent}],
+    ['out-l',{id:'out-l',type:'outbound-rtp',kind:'video',rid:'l',timestamp,bytesSent:100,framesEncoded:Math.floor(timestamp/50),frameWidth:320,frameHeight:180,active:true,qualityLimitationReason:'none'}],
+    ['out-m',{id:'out-m',type:'outbound-rtp',kind:'video',rid:'m',timestamp,bytesSent:sent,framesEncoded:Math.floor(timestamp/80),frameWidth:640,frameHeight:360,active:true,qualityLimitationReason:'none'}],
+    ['out-h',{id:'out-h',type:'outbound-rtp',kind:'video',rid:'h',timestamp,bytesSent:200,framesEncoded:0,frameWidth:1280,frameHeight:720,active:true,qualityLimitationReason:'bandwidth'}],
     ['in-a',{id:'in-a',type:'inbound-rtp',kind:'audio',timestamp,bytesReceived:audioBytes,packetsReceived:received,packetsLost:lost}],
     ['in-v',{id:'in-v',type:'inbound-rtp',kind:'video',timestamp,bytesReceived:videoBytes,packetsReceived:50,packetsLost:1}],
     ['transport',{id:'transport',type:'transport',selectedCandidatePairId:'pair'}],
@@ -687,11 +691,15 @@ test('network diagnostics sample deltas only while open and ignore results after
   let next=pendingTimer;pendingTimer=null;next.fn();
   await waitFor(()=>peer.calls===2 && pendingTimer);
   assert.equal(element('network-send').textContent,'16 kbps');
+  assert.equal(element('network-layers').textContent,'l 0 kbps · m 16 kbps · h 0 kbps');
+  assert.equal(element('network-layer-state').textContent,'l 已启用 · 60 帧 · 320×180 / m 已启用 · 37 帧 · 640×360 / h 已启用 · 0 帧 · 1280×720 · 限制 bandwidth');
   assert.equal(element('network-receive').textContent,'20 kbps');
   assert.equal(element('network-loss').textContent,'2.0%');
   next=pendingTimer;pendingTimer=null;next.fn();
   await waitFor(()=>peer.calls===3 && pendingTimer);
   assert.equal(element('network-send').textContent,'—','an error must not leave stale values');
+  assert.equal(element('network-layers').textContent,'—','an error must not leave stale RID rates');
+  assert.equal(element('network-layer-state').textContent,'—','an error must not leave stale RID encoder state');
   assert.equal(element('network-status').textContent,'暂时无法获取统计。');
   next=pendingTimer;pendingTimer=null;next.fn();
   await waitFor(()=>typeof releaseStats==='function');
@@ -699,6 +707,8 @@ test('network diagnostics sample deltas only while open and ignore results after
   releaseStats(report(5000,20000,9000,9000,200,7));
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(element('network-send').textContent,'—','closed panel must ignore late results');
+  assert.equal(element('network-layers').textContent,'—','closed panel must ignore late RID rates');
+  assert.equal(element('network-layer-state').textContent,'—','closed panel must ignore late RID encoder state');
   assert.equal(pendingTimer,null,'closed panel must stop polling');
   releaseStats=undefined;panel.open=true;panel.listeners.toggle();
   await waitFor(()=>typeof releaseStats==='function');
@@ -706,6 +716,8 @@ test('network diagnostics sample deltas only while open and ignore results after
   releaseStats(report(7000,30000,11000,11000,300,9));
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(element('network-send').textContent,'—','late results must not overwrite cleared state');
+  assert.equal(element('network-layers').textContent,'—','late results must not overwrite cleared RID rates');
+  assert.equal(element('network-layer-state').textContent,'—','late results must not overwrite cleared RID encoder state');
   assert.equal(element('network-status').textContent,'加入会议后可查看。');
   assert.equal(pendingTimer,null,'leaving must stop polling');
   assert.equal(socket.readyState,3);

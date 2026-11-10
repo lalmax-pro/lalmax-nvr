@@ -56,7 +56,7 @@ func TestInboundStopsBeforeForwardingChangedCodec(t *testing.T) {
 	next := old
 	next.SDPFmtpLine = "profile-level-id=64001f"
 	track := &changingTrack{codec: old, next: next, packets: []*rtp.Packet{{Header: rtp.Header{PayloadType: 96}, Payload: []byte{1}}, {Header: rtp.Header{PayloadType: 96}, Payload: []byte{2}}}}
-	if err = forwardInbound(context.Background(), track, room, "p", pubSession, p.ID, old); !errors.Is(err, ErrInboundCodecChanged) {
+	if err = forwardInbound(context.Background(), track, room, "p", pubSession, p.ID, "", old); !errors.Is(err, ErrInboundCodecChanged) {
 		t.Fatalf("change: %v", err)
 	}
 	select {
@@ -64,7 +64,7 @@ func TestInboundStopsBeforeForwardingChangedCodec(t *testing.T) {
 		if p.Payload[0] != 1 {
 			t.Fatalf("wrong packet: %v", p.Payload)
 		}
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("first packet lost")
 	}
 	select {

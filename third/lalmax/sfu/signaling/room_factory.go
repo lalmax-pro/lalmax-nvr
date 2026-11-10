@@ -17,8 +17,8 @@ import (
 
 // RoomFactory assembles Pion media for the session's authorized subscriptions.
 // The trusted callbacks must enforce authentication, network and codec policy.
-// It owns RTCP reads for inbound non-simulcast receivers and keeps the most
-// recent Sender Report in the Room while the publication is alive.
+// It owns inbound RTCP reads and keeps the latest Sender Report in the Room
+// while the publication is alive, including sources with multiple RID layers.
 type RoomFactory struct {
 	NewPeer        func(context.Context, Identity) (*webrtc.PeerConnection, error)
 	Codec          func(sfu.Publication) (webrtc.RTPCodecCapability, error)
@@ -29,12 +29,13 @@ type RoomFactory struct {
 	feedbackMu     sync.Mutex
 	feedback       map[feedbackKey]*feedbackBinding
 	reportMu       sync.Mutex
-	reportReaders  map[*webrtc.RTPReceiver]*senderReportCollector
+	reportReaders  map[senderReportReaderKey]*senderReportCollector
 }
 
 type feedbackKey struct {
 	room                    sfu.Key
 	generation, publication string
+	rid                     string
 }
 
 type feedbackBinding struct {
@@ -57,6 +58,21 @@ func (f *RoomFactory) forwardFeedback(key feedbackKey, outgoingSSRC uint32, pack
 	_ = binding.requester.Handle(outgoingSSRC, packets)
 }
 
+func (f *RoomFactory) requestKeyframe(key feedbackKey) {
+	f.feedbackMu.Lock()
+	binding := f.feedback[key]
+	f.feedbackMu.Unlock()
+	if binding == nil {
+		return
+	}
+	select {
+	case <-binding.stopped:
+		return
+	default:
+	}
+	_ = binding.requester.Request()
+}
+
 func (f *RoomFactory) NewNegotiator(ctx context.Context, id Identity, session *access.Session) (Negotiator, error) {
 	if ctx == nil || session == nil || f == nil || f.NewPeer == nil || f.Codec == nil || f.MaxSubscribers < 1 || f.MaxSubscribers > 1024 || f.QueueSize < 1 || f.QueueSize > 256 {
 		return nil, errors.New("signaling: invalid room factory configuration")
@@ -75,11 +91,11 @@ func (f *RoomFactory) NewNegotiator(ctx context.Context, id Identity, session *a
 	bindCtx, cancel := context.WithCancel(ctx)
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		publication, done, stopped, err := session.StartMappedIncomingWithPublication(bindCtx, track, f.MaxSubscribers, f.QueueSize)
-		if err == nil && track.RID() == "" {
-			f.trackSenderReports(bindCtx, receiver, session, publication, uint32(track.SSRC()), stopped)
+		if err == nil {
+			f.trackSenderReports(bindCtx, receiver, track.RID(), session, publication, uint32(track.SSRC()), stopped)
 		}
 		if err == nil && track.Kind() == webrtc.RTPCodecTypeVideo {
-			key := feedbackKey{room: session.RoomKey(), generation: session.RoomGeneration(), publication: publication}
+			key := feedbackKey{room: session.RoomKey(), generation: session.RoomGeneration(), publication: publication, rid: track.RID()}
 			requester, _ := webrtcbridge.NewKeyframeRequester(pc, 0, uint32(track.SSRC()), time.Second)
 			binding := &feedbackBinding{requester: requester, stopped: stopped}
 			f.feedbackMu.Lock()
@@ -204,7 +220,10 @@ func (n *roomNegotiator) syncOutgoing(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		_, stopped, err := n.session.StartOutgoingWithLifetime(n.ctx, p.ID, local)
+		layerChanged := func(rid string) {
+			n.factory.requestKeyframe(feedbackKey{room: n.room, generation: n.generation, publication: p.ID, rid: rid})
+		}
+		_, stopped, err := n.session.StartOutgoingWithLayerChange(n.ctx, p.ID, local, layerChanged)
 		if err != nil {
 			return fmt.Errorf("bind outgoing track: %w", err)
 		}
@@ -218,7 +237,6 @@ func (n *roomNegotiator) syncOutgoing(ctx context.Context) error {
 }
 
 func (n *roomNegotiator) readFeedback(sender *webrtc.RTPSender, publication string, stopped <-chan struct{}) {
-	key := feedbackKey{room: n.room, generation: n.generation, publication: publication}
 	for {
 		packets, _, err := sender.ReadRTCP()
 		if err != nil {
@@ -232,10 +250,15 @@ func (n *roomNegotiator) readFeedback(sender *webrtc.RTPSender, publication stri
 		if !n.session.OutgoingActive(publication) {
 			continue
 		}
+		rid, err := n.session.SubscriptionLayer(publication)
+		if err != nil {
+			continue
+		}
 		params := sender.GetParameters()
 		if len(params.Encodings) != 1 || params.Encodings[0].SSRC == 0 {
 			continue
 		}
+		key := feedbackKey{room: n.room, generation: n.generation, publication: publication, rid: rid}
 		n.factory.forwardFeedback(key, uint32(params.Encodings[0].SSRC), packets)
 	}
 }

@@ -31,6 +31,110 @@ func TestNVRSFUBandwidthObserverWithoutTransportCC(t *testing.T) {
 
 func TestNVRSFUPacingWithoutTransportCC(t *testing.T) { testNVRSFUWithoutTWCC(t, true, true) }
 
+func TestNVRSFUReportsTransportCCForIncomingPublisher(t *testing.T) {
+	settings := webrtc.SettingEngine{}
+	settings.SetIncludeLoopbackCandidate(true)
+	newPeer := nvrSFUNewPeer(nil)
+	server, err := newPeer(context.Background(), signaling.Identity{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = server.Close() })
+
+	media := &webrtc.MediaEngine{}
+	feedbackCaps := append(nvrSFUVideoFeedback(), webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBTransportCC})
+	capability := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", RTCPFeedback: feedbackCaps}
+	require.NoError(t, media.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: capability, PayloadType: 96}, webrtc.RTPCodecTypeVideo))
+	registry := &interceptor.Registry{}
+	require.NoError(t, nvrSFUConfigureTWCC(media, registry))
+	require.NoError(t, webrtc.RegisterDefaultInterceptors(media, registry))
+	publisher, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings), webrtc.WithMediaEngine(media), webrtc.WithInterceptorRegistry(registry)).NewPeerConnection(webrtc.Configuration{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = publisher.Close() })
+	track, err := webrtc.NewTrackLocalStaticRTP(capability, "camera", "publisher")
+	require.NoError(t, err)
+	sender, err := publisher.AddTrack(track)
+	require.NoError(t, err)
+	inboundExtensions := make(chan []uint8, 1)
+	server.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		for {
+			packet, _, readErr := remote.ReadRTP()
+			if readErr != nil {
+				return
+			}
+			select {
+			case inboundExtensions <- packet.GetExtensionIDs():
+			default:
+			}
+		}
+	})
+	feedback := make(chan struct{}, 1)
+	go func() {
+		for {
+			packets, _, readErr := sender.ReadRTCP()
+			if readErr != nil {
+				return
+			}
+			for _, packet := range packets {
+				if report, ok := packet.(*rtcp.TransportLayerCC); ok && report.PacketStatusCount > 0 {
+					select {
+					case feedback <- struct{}{}:
+					default:
+					}
+				}
+			}
+		}
+	}()
+	offer, err := publisher.CreateOffer(nil)
+	require.NoError(t, err)
+	require.Contains(t, offer.SDP, sdp.TransportCCURI, "publisher must offer transport-wide RTP sequence numbers")
+	gather := webrtc.GatheringCompletePromise(publisher)
+	require.NoError(t, publisher.SetLocalDescription(offer))
+	select {
+	case <-gather:
+	case <-time.After(5 * time.Second):
+		t.Fatal("publisher ICE timeout")
+	}
+	require.NoError(t, server.SetRemoteDescription(*publisher.LocalDescription()))
+	answer, err := server.CreateAnswer(nil)
+	require.NoError(t, err)
+	require.Contains(t, answer.SDP, sdp.TransportCCURI, "NVR must accept transport-wide RTP sequence numbers")
+	gather = webrtc.GatheringCompletePromise(server)
+	require.NoError(t, server.SetLocalDescription(answer))
+	select {
+	case <-gather:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server ICE timeout")
+	}
+	require.NoError(t, publisher.SetRemoteDescription(*server.LocalDescription()))
+	require.Eventually(t, func() bool { return publisher.ConnectionState() == webrtc.PeerConnectionStateConnected }, 5*time.Second, 10*time.Millisecond)
+
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.After(5 * time.Second)
+	var sequence uint16
+	for {
+		select {
+		case <-feedback:
+			select {
+			case extensions := <-inboundExtensions:
+				require.NotEmpty(t, extensions, "publisher RTP must carry a transport-wide sequence extension")
+			default:
+				t.Fatal("publisher received TWCC feedback before the server observed RTP")
+			}
+			return
+		case <-ticker.C:
+			sequence++
+			require.NoError(t, track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: sequence, Timestamp: uint32(sequence) * 1800, Marker: true}, Payload: []byte{0x41, 0x01}}))
+		case <-deadline:
+			select {
+			case extensions := <-inboundExtensions:
+				t.Fatalf("NVR did not report arrival feedback for incoming publisher RTP; publisher extensions=%v", extensions)
+			default:
+				t.Fatal("NVR did not report arrival feedback for incoming publisher RTP")
+			}
+		}
+	}
+}
+
 func testNVRSFUTWCCFeedback(t *testing.T, observeBandwidth, enablePacing bool) {
 	t.Helper()
 	estimates := make(chan int, 16)

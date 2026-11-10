@@ -76,7 +76,7 @@ func (s *Session) StartAVBridgeWithContexts(authCtx, lifetimeCtx context.Context
 	}
 	s.bridges[audioID] = binding
 	s.bridges[videoID] = binding
-	refs := func(ctx context.Context) (bridge.AVReferences, error) {
+	refs := func(ctx context.Context, videoSSRC uint32) (bridge.AVReferences, error) {
 		if err := ctx.Err(); err != nil {
 			return bridge.AVReferences{}, err
 		}
@@ -87,7 +87,10 @@ func (s *Session) StartAVBridgeWithContexts(authCtx, lifetimeCtx context.Context
 		if !ok {
 			return bridge.AVReferences{}, bridge.ErrAVClockNotReady
 		}
-		v, ok, err := s.room.SenderReportSession(s.scope.ParticipantID, s.generation, videoID)
+		if videoSSRC == 0 {
+			return bridge.AVReferences{}, bridge.ErrAVClockNotReady
+		}
+		v, ok, err := s.room.SenderReportSSRCSession(s.scope.ParticipantID, s.generation, videoID, videoSSRC)
 		if err != nil {
 			return bridge.AVReferences{}, err
 		}
