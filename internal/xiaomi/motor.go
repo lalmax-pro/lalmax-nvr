@@ -61,7 +61,7 @@ func (r *XiaomiRecorder) armMotorStop(delay time.Duration) {
 // MotorControl uses the recording session, so controls do not open another
 // device connection. Movements expire unless the caller renews them.
 func (r *XiaomiRecorder) MotorControl(ctx context.Context, direction string, speed int) error {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	r.motorMu.Lock()
 	defer r.motorMu.Unlock()
@@ -124,7 +124,7 @@ type MotorProfile struct {
 
 func fixedStepMotorModel(model string) bool {
 	switch model {
-	case ModelCW400, ModelCW500, ModelMJSXJ10CM, ModelMi3602K, ModelC01A01:
+	case ModelCW400, ModelCW500, ModelMJSXJ10CM, ModelMi3602K, ModelC01A01, Model082AC1:
 		return true
 	default:
 		return false
@@ -136,6 +136,9 @@ func MotorProfileForModel(model string) MotorProfile {
 	if fixedStepMotorModel(model) {
 		profile.Control = "fixed_step"
 		profile.Source = "model"
+	}
+	if model == Model082AC1 {
+		profile.DeviceVerified = true
 	}
 	return profile
 }

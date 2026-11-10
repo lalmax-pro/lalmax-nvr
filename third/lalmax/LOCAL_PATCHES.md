@@ -13,7 +13,9 @@ This file records local changes made to `third/lalmax` for lalmax-nvr.
 - Files: `sfu/`.
 - Scope: Room state, RTP routing foundations and opt-in control-only WebSocket signaling; full conference signaling is not implemented.
 - Dependencies: `github.com/gorilla/websocket` for the optional control handler.
-- Test: `go test -race ./sfu`.
+- `sfu/webrtcbridge/header_copy.go`: isolate RTP headers between Pion's NACK cache and TWCC mutation. Registration order matters: add this interceptor after TWCC and before the default NACK responder, so concurrent retransmissions cannot mutate one cached header and each gets a new transport sequence.
+- `sfu/bridge/av_queue.go`: interleave audio and video using separate progress watermarks; retain a bounded queue and a 500 ms wait for a stalled track before draining. This reduces frame loss when track clocks have an offset, but frames later than the bound may still be dropped.
+- Test: `go test -race ./sfu/...`.
 
 ### embed-lifecycle
 

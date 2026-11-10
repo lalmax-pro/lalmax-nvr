@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/xiaomi/tutk"
@@ -70,6 +71,7 @@ const (
 	ModelMJSXJ10CM = "chuangmi.camera.026c05"
 	ModelMi3602K   = "chuangmi.camera.029a02"
 	ModelC01A01    = "xiaomi.camera.c01a01"
+	Model082AC1    = "xiaomi.camera.082ac1"
 )
 
 // missHdrSize is the size of a MISS media packet header.
@@ -95,6 +97,7 @@ type MISSClient struct {
 	key    []byte
 	model  string
 	legacy bool
+	rdtMu  sync.Mutex
 }
 
 // MISSPacket is a decoded media packet from a Xiaomi camera.

@@ -15,6 +15,8 @@ import (
 
 // defaultTimescale is the timescale used for MP4 timestamps (ticks per second).
 const defaultTimescale = 1000
+const opusTimescale = 48000
+const opusPriming = 80 * time.Millisecond
 
 // track holds per-track state for the MP4 muxer.
 type track struct {
@@ -25,6 +27,7 @@ type track struct {
 	isH265      bool
 	isAudio     bool
 	audioCodec  string // "aac", "g711" or "opus"
+	opusPrimed  bool
 	audioConfig []byte // AAC AudioSpecificConfig bytes
 	g711MULaw   bool   // true=μ-law, false=A-law
 	g711Rate    int    // sample rate (typically 8000)
@@ -214,6 +217,17 @@ func (m *MP4Muxer) ensureFileLocked() error {
 }
 
 func (m *MP4Muxer) appendSampleLocked(t *track, data []byte, pts, duration, cts time.Duration, audio bool) error {
+	if audio && t.audioCodec == "opus" && !t.opusPrimed {
+		// The edit list removes 80 ms of decoder priming. Supply it as silence
+		// rather than discarding the first 80 ms of the live source.
+		t.opusPrimed = true
+		priming := []byte{0xfb, 0x04, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe}
+		if err := m.appendSampleLocked(t, priming, pts, opusPriming, 0, true); err != nil {
+			t.opusPrimed = false
+			return err
+		}
+		m.totalDuration -= opusPriming
+	}
 	if err := m.ensureFileLocked(); err != nil {
 		return err
 	}
@@ -273,6 +287,28 @@ func (m *MP4Muxer) WriteSample(trackID int, data []byte, pts time.Duration, dura
 	return m.appendSampleLocked(t, data, pts, duration, 0, false)
 }
 
+// SetLastVideoSampleDuration uses the next decode timestamp to finalize the
+// previous video's duration. Sample bytes are already written; metadata is
+// finalized when the muxer closes.
+func (m *MP4Muxer) SetLastVideoSampleDuration(trackID int, duration time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("muxer is closed")
+	}
+	t := m.findTrackLocked(trackID)
+	if t == nil || t.isAudio || len(t.samples) == 0 {
+		return fmt.Errorf("track %d has no video sample", trackID)
+	}
+	if duration < time.Millisecond {
+		duration = time.Millisecond
+	}
+	last := &t.samples[len(t.samples)-1]
+	m.totalDuration += duration - last.duration
+	last.duration = duration
+	return nil
+}
+
 // WriteTimedSample writes one sample in decode order.
 // duration is the DTS delta used for stts. A non-zero PTS-DTS offset is written as ctts.
 func (m *MP4Muxer) WriteTimedSample(trackID int, data []byte, dts, pts, duration time.Duration) error {
@@ -308,6 +344,72 @@ func (m *MP4Muxer) WriteAudioSample(trackID int, data []byte, pts time.Duration,
 		return fmt.Errorf("track %d is not an audio track", trackID)
 	}
 	return m.appendSampleLocked(t, data, pts, duration, 0, true)
+}
+
+// WriteOpusSampleWithGapFill inserts bounded Opus silence packets for gaps
+// aligned to 2.5 ms and no longer than 60 seconds. The returned duration is
+// the gap that could not be filled.
+// The caller must supply timestamps from one continuous source clock.
+func (m *MP4Muxer) WriteOpusSampleWithGapFill(trackID int, data []byte, pts, duration time.Duration) (time.Duration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return 0, errors.New("muxer is closed")
+	}
+	t := m.findTrackLocked(trackID)
+	if t == nil || !t.isAudio || t.audioCodec != "opus" || len(data) == 0 || duration < time.Millisecond {
+		return 0, fmt.Errorf("track %d cannot accept Opus sample", trackID)
+	}
+	var unfilled time.Duration
+	if len(t.samples) > 0 {
+		last := t.samples[len(t.samples)-1]
+		end := last.pts + last.duration
+		gap := pts - end
+		if gap < -time.Millisecond {
+			return 0, errors.New("Opus sample timestamp regressed")
+		}
+		if gap > time.Millisecond {
+			const quantum = 2500 * time.Microsecond
+			const maxGap = 60 * time.Second
+			// Bound work before rounding, also avoiding duration overflow for a corrupt clock.
+			if gap > maxGap+time.Millisecond {
+				return gap, m.appendSampleLocked(t, data, pts, duration, 0, true)
+			}
+			units := (gap + quantum/2) / quantum
+			fill := units * quantum
+			difference := gap - fill
+			if difference < 0 {
+				difference = -difference
+			}
+			if fill == 0 || fill > maxGap || difference > time.Millisecond {
+				unfilled = gap
+			} else {
+				// CELT-only Opus silence frames, largest first to bound packet count.
+				// The 20 ms form is also used by Pion's WebRTC tests.
+				frames := [...]struct {
+					duration time.Duration
+					packet   []byte
+				}{
+					// Code 3, six equal-size 20 ms CELT frames: 120 ms per packet.
+					{120 * time.Millisecond, []byte{0xfb, 0x06, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe}},
+					{20 * time.Millisecond, []byte{0xf8, 0xff, 0xfe}},
+					{10 * time.Millisecond, []byte{0xf0, 0xff, 0xfe}},
+					{5 * time.Millisecond, []byte{0xe8, 0xff, 0xfe}},
+					{quantum, []byte{0xe0, 0xff, 0xfe}},
+				}
+				for _, frame := range frames {
+					for fill >= frame.duration {
+						if err := m.appendSampleLocked(t, frame.packet, end, frame.duration, 0, true); err != nil {
+							return 0, err
+						}
+						end += frame.duration
+						fill -= frame.duration
+					}
+				}
+			}
+		}
+	}
+	return unfilled, m.appendSampleLocked(t, data, pts, duration, 0, true)
 }
 
 // Duration returns the total duration of all written samples.
@@ -417,8 +519,9 @@ func writeMoov(w *mp4.Writer, tracks []*track) error {
 	if err := writeMvhd(w, tracks); err != nil {
 		return err
 	}
+	origin := earliestTrackTime(tracks)
 	for _, tr := range tracks {
-		if err := writeTrak(w, tr); err != nil {
+		if err := writeTrak(w, tr, trackOffsetMs(tr, origin)); err != nil {
 			return err
 		}
 	}
@@ -434,11 +537,12 @@ func writeMvhd(w *mp4.Writer, tracks []*track) error {
 
 	nextID := uint32(1)
 	maxDur := uint32(0)
+	origin := earliestTrackTime(tracks)
 	for _, tr := range tracks {
 		if uint32(tr.id) >= nextID {
 			nextID = uint32(tr.id) + 1
 		}
-		d := trackDurationMs(tr)
+		d := movieTrackDurationMs(tr, trackOffsetMs(tr, origin))
 		if d > maxDur {
 			maxDur = d
 		}
@@ -464,7 +568,7 @@ func writeMvhd(w *mp4.Writer, tracks []*track) error {
 	return err
 }
 
-func writeTrak(w *mp4.Writer, tr *track) error {
+func writeTrak(w *mp4.Writer, tr *track, offset uint32) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("trak")})
 	if err != nil {
 		return err
@@ -477,7 +581,7 @@ func writeTrak(w *mp4.Writer, tr *track) error {
 	}
 	tkhd := &mp4.Tkhd{
 		TrackID:    uint32(tr.id),
-		DurationV0: trackDurationMs(tr),
+		DurationV0: movieTrackDurationMs(tr, offset),
 		Width:      uint32(tr.width) << 16,
 		Height:     uint32(tr.height) << 16,
 		Matrix: [9]int32{
@@ -494,8 +598,8 @@ func writeTrak(w *mp4.Writer, tr *track) error {
 	}
 	_ = bi2
 
-	if tr.isAudio && tr.audioCodec == "opus" {
-		if err := writeOpusEdit(w, tr); err != nil {
+	if offset > 0 || (tr.isAudio && tr.audioCodec == "opus") {
+		if err := writeTrackEdit(w, tr, offset); err != nil {
 			return err
 		}
 	}
@@ -521,9 +625,15 @@ func writeMdia(w *mp4.Writer, tr *track) error {
 		return err
 	}
 	mdhd := &mp4.Mdhd{
-		Timescale:  defaultTimescale,
-		DurationV0: trackDurationMs(tr),
-		Language:   [3]byte{0x15, 0xC0, 0x00}, // 'und' packed
+		Timescale: trackTimescale(tr),
+		Language:  [3]byte{0x15, 0xC0, 0x00}, // 'und' packed
+	}
+	duration := trackDurationTicks(tr)
+	if duration > math.MaxUint32 {
+		mdhd.SetVersion(1)
+		mdhd.DurationV1 = duration
+	} else {
+		mdhd.DurationV0 = uint32(duration)
 	}
 	if _, err := mp4.Marshal(w, mdhd, mp4.Context{}); err != nil {
 		return err
@@ -690,7 +800,7 @@ func writeStbl(w *mp4.Writer, tr *track) error {
 	for i, s := range tr.samples {
 		sttsEntries[i] = mp4.SttsEntry{
 			SampleCount: 1,
-			SampleDelta: uint32(s.duration.Milliseconds()),
+			SampleDelta: durationTicks(s.duration, trackTimescale(tr)),
 		}
 	}
 	if _, err := mp4.Marshal(w, &mp4.Stts{EntryCount: uint32(len(sttsEntries)), Entries: sttsEntries}, mp4.Context{}); err != nil {
@@ -1174,11 +1284,83 @@ func buildHvcC(vps, sps, pps []byte) *mp4.HvcC {
 // --- Helpers ---
 
 func trackDurationMs(tr *track) uint32 {
+	if tr.isAudio && tr.audioCodec == "opus" {
+		ms := trackDurationTicks(tr) / (opusTimescale / defaultTimescale)
+		if ms > math.MaxUint32 {
+			return math.MaxUint32
+		}
+		return uint32(ms)
+	}
 	d := uint32(0)
 	for _, s := range tr.samples {
 		d += uint32(s.duration.Milliseconds())
 	}
 	return d
+}
+
+func trackTimescale(tr *track) uint32 {
+	if tr.isAudio && tr.audioCodec == "opus" {
+		return opusTimescale
+	}
+	return defaultTimescale
+}
+
+func durationTicks(duration time.Duration, scale uint32) uint32 {
+	if duration <= 0 {
+		return 0
+	}
+	seconds := uint64(duration / time.Second)
+	remainder := uint64(duration % time.Second)
+	ticks := seconds*uint64(scale) + remainder*uint64(scale)/uint64(time.Second)
+	if ticks > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(ticks)
+}
+
+func trackDurationTicks(tr *track) uint64 {
+	var ticks uint64
+	for _, sample := range tr.samples {
+		ticks += uint64(durationTicks(sample.duration, trackTimescale(tr)))
+	}
+	return ticks
+}
+
+// All tracks share the earliest first decode timestamp as their movie origin.
+func earliestTrackTime(tracks []*track) time.Duration {
+	var earliest time.Duration
+	found := false
+	for _, tr := range tracks {
+		if len(tr.samples) > 0 && (!found || tr.samples[0].pts < earliest) {
+			earliest, found = tr.samples[0].pts, true
+		}
+	}
+	return earliest
+}
+
+func trackOffsetMs(tr *track, origin time.Duration) uint32 {
+	if len(tr.samples) == 0 {
+		return 0
+	}
+	delta := tr.samples[0].pts.Milliseconds() - origin.Milliseconds()
+	if delta <= 0 {
+		return 0
+	}
+	if delta > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(delta)
+}
+
+func movieTrackDurationMs(tr *track, offset uint32) uint32 {
+	duration := uint64(trackDurationMs(tr)) + uint64(offset)
+	if tr.opusPrimed {
+		duration -= uint64(opusPriming.Milliseconds())
+	}
+	if duration > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(duration)
 }
 
 // --- SPS Resolution Parser ---
@@ -1553,24 +1735,31 @@ func writeRawBox(w *mp4.Writer, kind string, data []byte) error {
 	return err
 }
 
-// Keep the media timeline aligned with video while using the first packets
-// for decoder priming. An empty edit covers the discarded startup interval.
-func writeOpusEdit(w *mp4.Writer, tr *track) error {
+// An empty edit preserves the track offset; Opus media starts after the synthetic priming.
+func writeTrackEdit(w *mp4.Writer, tr *track, offset uint32) error {
 	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("edts")}); err != nil {
 		return err
 	}
 	duration := trackDurationMs(tr)
-	skip := uint32(80)
-	if duration < skip {
-		skip = duration
+	skip := uint32(0)
+	if tr.isAudio && tr.audioCodec == "opus" {
+		skip = 80
+		if duration < skip {
+			skip = duration
+		}
+	}
+	gap := uint64(offset)
+	if gap > math.MaxUint32 {
+		gap = math.MaxUint32
 	}
 	data := make([]byte, 32)
 	binary.BigEndian.PutUint32(data[4:], 2)
-	binary.BigEndian.PutUint32(data[8:], skip)
+	binary.BigEndian.PutUint32(data[8:], uint32(gap))
 	binary.BigEndian.PutUint32(data[12:], math.MaxUint32)
 	binary.BigEndian.PutUint16(data[16:], 1)
 	binary.BigEndian.PutUint32(data[20:], duration-skip)
-	binary.BigEndian.PutUint32(data[24:], skip)
+	mediaSkip := uint32(uint64(skip) * uint64(trackTimescale(tr)) / defaultTimescale)
+	binary.BigEndian.PutUint32(data[24:], mediaSkip)
 	binary.BigEndian.PutUint16(data[28:], 1)
 	if err := writeRawBox(w, "elst", data); err != nil {
 		return err

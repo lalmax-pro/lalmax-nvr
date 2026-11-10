@@ -10,6 +10,7 @@ package rtmp
 
 import (
 	"crypto/tls"
+	"errors"
 	"net"
 	"sync"
 
@@ -42,7 +43,7 @@ type Server struct {
 	observer IServerObserver
 	mu       sync.Mutex
 	ln       net.Listener
-	disposed bool
+	closed   bool
 }
 
 func NewServer(addr string, observer IServerObserver) *Server {
@@ -52,47 +53,46 @@ func NewServer(addr string, observer IServerObserver) *Server {
 	}
 }
 
-func (server *Server) installListener(ln net.Listener) error {
+func (server *Server) Listen() (err error) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
-	if server.disposed {
+	if server.closed {
 		return net.ErrClosed
 	}
 	if server.ln != nil {
-		return net.ErrClosed
+		return errors.New("rtmp: server already listening")
 	}
-	server.ln = ln
-	return nil
-}
-
-func (server *Server) Listen() (err error) {
-	ln, err := net.Listen("tcp", server.addr)
-	if err != nil {
+	if server.ln, err = net.Listen("tcp", server.addr); err != nil {
 		return
-	}
-	if err = server.installListener(ln); err != nil {
-		_ = ln.Close()
-		return err
 	}
 	Log.Infof("start rtmp server listen. addr=%s", server.addr)
 	return
 }
 
 func (server *Server) ListenWithTLS(certFile, keyFile string) (err error) {
+	server.mu.Lock()
+	closed := server.closed
+	server.mu.Unlock()
+	if closed {
+		return net.ErrClosed
+	}
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		Log.Errorf("start rtmps server listen failed. certFile=%s, keyFile=%s, err=%+v", certFile, keyFile, err)
 		return
 	}
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
-	ln, err := tls.Listen("tcp", server.addr, tlsConfig)
-	if err != nil {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.closed {
+		return net.ErrClosed
+	}
+	if server.ln != nil {
+		return errors.New("rtmp: server already listening")
+	}
+	if server.ln, err = tls.Listen("tcp", server.addr, tlsConfig); err != nil {
 		Log.Errorf("start rtmps server listen failed. addr=%s, err=%+v", server.addr, err)
 		return
-	}
-	if err = server.installListener(ln); err != nil {
-		_ = ln.Close()
-		return err
 	}
 	Log.Infof("start rtmps server listen. addr=%s", server.addr)
 	return
@@ -116,15 +116,17 @@ func (server *Server) RunLoop() error {
 
 func (server *Server) Dispose() {
 	server.mu.Lock()
-	server.disposed = true
-	ln := server.ln
-	server.ln = nil
-	server.mu.Unlock()
-	if ln == nil {
+	if server.closed {
+		server.mu.Unlock()
 		return
 	}
-	if err := ln.Close(); err != nil {
-		Log.Error(err)
+	server.closed = true
+	ln := server.ln
+	server.mu.Unlock()
+	if ln != nil {
+		if err := ln.Close(); err != nil {
+			Log.Error(err)
+		}
 	}
 }
 

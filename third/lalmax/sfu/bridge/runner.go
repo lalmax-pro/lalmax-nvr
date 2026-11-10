@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/pion/rtp"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lalmax/sfu/rtpforward"
 )
@@ -21,11 +22,20 @@ var ErrInvalidRunner = errors.New("bridge: invalid runner arguments")
 // closes sub. The bounded fanout disconnects a slow consumer independently of
 // the source and other subscribers. This function does not create a Group.
 func RunH264(ctx context.Context, sub *rtpforward.Subscriber, sink VideoSink) error {
+	return runTrack(ctx, sub, sink, NewH264().Push)
+}
+
+// RunOpus forwards one authorized Opus subscriber to the sink. It owns sub.
+// Its timestamps are relative to this track and are not synchronized to video.
+func RunOpus(ctx context.Context, sub *rtpforward.Subscriber, sink VideoSink) error {
+	return runTrack(ctx, sub, sink, (&Opus{}).Push)
+}
+
+func runTrack(ctx context.Context, sub *rtpforward.Subscriber, sink VideoSink, decode func(*rtp.Packet) (*base.AvPacket, error)) error {
 	if ctx == nil || sub == nil || sink == nil {
 		return ErrInvalidRunner
 	}
 	defer sub.Close()
-	decoder := NewH264()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -41,7 +51,7 @@ func RunH264(ctx context.Context, sub *rtpforward.Subscriber, sink VideoSink) er
 			if err := sub.Err(); err != nil {
 				return err
 			}
-			frame, err := decoder.Push(packet)
+			frame, err := decode(packet)
 			if err != nil {
 				return fmt.Errorf("bridge: decode: %w", err)
 			}

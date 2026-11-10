@@ -1,7 +1,7 @@
 /**
  * Xiaomi API — cloud auth, device listing, sync
  */
-import { apiRequest } from './client';
+import { apiRequest, getCredentials } from './client';
 
 // --- Types ---
 
@@ -28,6 +28,35 @@ export interface XiaomiAccountInfo {
   id: string;
   region: string;
   authenticated: boolean;
+}
+
+export interface XiaomiSDRecording {
+  start: number;
+  duration: number;
+  event?: boolean;
+}
+
+export interface XiaomiSDRecordingsResponse {
+  camera_id: string;
+  storage_channel: number;
+  recordings: XiaomiSDRecording[];
+  total: number;
+}
+
+export async function getXiaomiSDRecordings(
+  cameraId: string,
+  storageChannel: number,
+  signal?: AbortSignal,
+): Promise<XiaomiSDRecordingsResponse> {
+  const query = new URLSearchParams({ channel: String(storageChannel) });
+  return apiRequest(`/cameras/${encodeURIComponent(cameraId)}/sd-recordings?${query}`, { signal });
+}
+
+export function getXiaomiSDRecordingPlaybackUrl(cameraId: string, start: number, storageChannel: number): string {
+  const query = new URLSearchParams({ channel: String(storageChannel) });
+  const credentials = getCredentials();
+  if (credentials) query.set('token', btoa(`${credentials.username}:${credentials.password}`));
+  return `/api/cameras/${encodeURIComponent(cameraId)}/sd-recordings/${start}/playback?${query}`;
 }
 
 export async function xiaomiAccounts(signal?: AbortSignal): Promise<{ accounts: XiaomiAccountInfo[] }> {

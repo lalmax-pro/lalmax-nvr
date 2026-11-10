@@ -8,6 +8,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
+	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -88,6 +89,13 @@ func gatheredOffer(t *testing.T, pc *webrtc.PeerConnection) string {
 	return pc.LocalDescription().SDP
 }
 func TestDemoServerOpusThroughTwoPeers(t *testing.T) {
+	for _, source := range []string{"microphone", "screen"} {
+		t.Run(source, func(t *testing.T) { testDemoServerOpusThroughTwoPeers(t, source) })
+	}
+}
+
+func testDemoServerOpusThroughTwoPeers(t *testing.T, source string) {
+	t.Helper()
 	_, origin := setup(t)
 	resp := login(t, origin, testSecret, origin)
 	cookie := resp.Cookies()[0]
@@ -96,7 +104,7 @@ func TestDemoServerOpusThroughTwoPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer publisher.Close()
-	if err = publisher.WriteJSON(map[string]any{"id": "publish", "type": "publish", "kind": "audio", "source": "microphone", "codec": "audio/opus", "track_id": "audio"}); err != nil {
+	if err = publisher.WriteJSON(map[string]any{"id": "publish", "type": "publish", "kind": "audio", "source": source, "codec": "audio/opus", "track_id": "audio"}); err != nil {
 		t.Fatal(err)
 	}
 	published := readResult(t, publisher, "publish")
@@ -180,11 +188,18 @@ func TestDemoServerOpusThroughTwoPeers(t *testing.T) {
 	if _, err = viewPeer.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
 		t.Fatal(err)
 	}
-	got := make(chan []byte, 1)
-	viewPeer.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+	type receivedAudio struct{ payload, twcc []byte }
+	got := make(chan receivedAudio, 1)
+	viewPeer.OnTrack(func(remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		packet, _, e := remote.ReadRTP()
 		if e == nil {
-			got <- packet.Payload
+			var twcc []byte
+			for _, extension := range receiver.GetParameters().HeaderExtensions {
+				if extension.URI == sdp.TransportCCURI {
+					twcc = packet.GetExtension(uint8(extension.ID))
+				}
+			}
+			got <- receivedAudio{payload: packet.Payload, twcc: twcc}
 		}
 	})
 	viewOffer := gatheredOffer(t, viewPeer)
@@ -206,9 +221,12 @@ func TestDemoServerOpusThroughTwoPeers(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	select {
-	case payload := <-got:
-		if !bytes.Equal(payload, []byte{0xf8, 0xff, 0xfe}) {
-			t.Fatalf("payload %x", payload)
+	case audio := <-got:
+		if !bytes.Equal(audio.payload, []byte{0xf8, 0xff, 0xfe}) {
+			t.Fatalf("payload %x", audio.payload)
+		}
+		if len(audio.twcc) != 2 {
+			t.Fatalf("missing TWCC extension: %x", audio.twcc)
 		}
 	case <-time.After(8 * time.Second):
 		t.Fatal("no relayed audio")

@@ -158,7 +158,9 @@ func TestCovXiaomiRecorderStartStopWithMediaEngine(t *testing.T) {
 	require.NoError(t, r.Start(ctx))
 	require.NotNil(t, r.pubSession)
 	require.Equal(t, pub, r.pubSession)
-	require.Equal(t, model.StatusRecording, r.Status())
+	// The background worker can already have transitioned to reconnecting
+	// after the initial recording state, since this test has no cloud credentials.
+	require.Contains(t, []model.RecorderStatus{model.StatusRecording, model.StatusReconnecting}, r.Status())
 
 	cancel()
 	require.NoError(t, r.Stop())
@@ -320,7 +322,20 @@ func TestCovXiaomiRecorderConnectAndRecordSuccess(t *testing.T) {
 		ch <- result{err: err, connected: connected}
 	}()
 
-	require.Eventually(t, func() bool { return pub.count() >= 2 }, 5*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool {
+		pub.mu.Lock()
+		defer pub.mu.Unlock()
+		var hasVideo, hasAudio bool
+		for _, p := range pub.packets {
+			switch p.PayloadType {
+			case base.AvPacketPtAvc:
+				hasVideo = true
+			case base.AvPacketPtG711A:
+				hasAudio = true
+			}
+		}
+		return hasVideo && hasAudio
+	}, 5*time.Second, 5*time.Millisecond)
 	cancel()
 
 	select {

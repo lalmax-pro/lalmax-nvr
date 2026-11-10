@@ -158,3 +158,41 @@ func TestDisconnectRemovesParticipant(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestGenerationBoundIdentityCannotJoinRecreatedRoom(t *testing.T) {
+	h, old := newHandler(t)
+	key := old.Snapshot().Key
+	oldGeneration := old.Snapshot().Generation
+	if err := h.Rooms.Close(key, oldGeneration); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := h.Rooms.Create(key, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := Identity{Principal: "member", Participant: sfu.Participant{ID: "member"}, Room: key, RoomGeneration: oldGeneration}
+	h.Authenticate = func(*http.Request) (Identity, error) { return identity, nil }
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	if c, resp, err := dial(t, srv.URL, "member", "https://trusted.example"); err == nil {
+		c.Close()
+		t.Fatal("stale generation accepted")
+	} else if resp == nil || resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("response: %v", resp)
+	}
+	if len(replacement.Snapshot().Participants) != 0 {
+		t.Fatal("stale identity joined replacement")
+	}
+	srv.Close()
+	identity.RoomGeneration = replacement.Snapshot().Generation
+	srv = httptest.NewServer(h)
+	defer srv.Close()
+	c, _, err := dial(t, srv.URL, "member", "https://trusted.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if got := readType(t, c, "snapshot"); got.Snapshot == nil || got.Snapshot.Generation != identity.RoomGeneration {
+		t.Fatalf("snapshot: %+v", got)
+	}
+}

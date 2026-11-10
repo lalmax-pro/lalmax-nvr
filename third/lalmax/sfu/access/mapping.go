@@ -44,20 +44,31 @@ func (s *Session) PublishMapped(ctx context.Context, kind, source, codec, trackI
 // StartIncoming, which rechecks authorization, session generation and codec.
 // A missing or blank TrackRemote ID is rejected rather than guessed.
 func (s *Session) StartMappedIncoming(ctx context.Context, remote *webrtc.TrackRemote, maxSubscribers, queueSize int) (<-chan error, error) {
+	_, done, _, err := s.StartMappedIncomingWithPublication(ctx, remote, maxSubscribers, queueSize)
+	return done, err
+}
+
+// StartMappedIncomingWithPublication also returns the server-assigned publication
+// ID and binding cancellation signal. It is intended for trusted media plumbing.
+func (s *Session) StartMappedIncomingWithPublication(ctx context.Context, remote *webrtc.TrackRemote, maxSubscribers, queueSize int) (string, <-chan error, <-chan struct{}, error) {
 	if ctx == nil || remote == nil {
-		return nil, ErrInvalid
+		return "", nil, nil, ErrInvalid
 	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return nil, ErrClosed
+		return "", nil, nil, ErrClosed
 	}
 	id, ok := s.trackMappings[remote.ID()]
 	s.mu.Unlock()
 	if !ok {
-		return nil, ErrTrackNotMapped
+		return "", nil, nil, ErrTrackNotMapped
 	}
-	return s.StartIncoming(ctx, id, remote, maxSubscribers, queueSize)
+	done, stopped, err := s.StartIncomingWithLifetime(ctx, id, remote, maxSubscribers, queueSize)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return id, done, stopped, nil
 }
 
 // forgetPublicationMappingLocked is called with s.mu held.

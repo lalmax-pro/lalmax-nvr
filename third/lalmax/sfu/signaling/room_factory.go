@@ -6,14 +6,19 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lalmax/sfu"
 	"github.com/q191201771/lalmax/sfu/access"
+	"github.com/q191201771/lalmax/sfu/webrtcbridge"
 )
 
 // RoomFactory assembles Pion media for the session's authorized subscriptions.
 // The trusted callbacks must enforce authentication, network and codec policy.
+// It owns RTCP reads for inbound non-simulcast receivers and keeps the most
+// recent Sender Report in the Room while the publication is alive.
 type RoomFactory struct {
 	NewPeer        func(context.Context, Identity) (*webrtc.PeerConnection, error)
 	Codec          func(sfu.Publication) (webrtc.RTPCodecCapability, error)
@@ -21,6 +26,35 @@ type RoomFactory struct {
 	QueueSize      int
 	OnInbound      func(Identity, *webrtc.TrackRemote, error)
 	OnInboundPeer  func(context.Context, Identity, *webrtc.PeerConnection, *webrtc.TrackRemote, <-chan error, error)
+	feedbackMu     sync.Mutex
+	feedback       map[feedbackKey]*feedbackBinding
+	reportMu       sync.Mutex
+	reportReaders  map[*webrtc.RTPReceiver]*senderReportCollector
+}
+
+type feedbackKey struct {
+	room                    sfu.Key
+	generation, publication string
+}
+
+type feedbackBinding struct {
+	requester *webrtcbridge.KeyframeRequester
+	stopped   <-chan struct{}
+}
+
+func (f *RoomFactory) forwardFeedback(key feedbackKey, outgoingSSRC uint32, packets []rtcp.Packet) {
+	f.feedbackMu.Lock()
+	binding := f.feedback[key]
+	f.feedbackMu.Unlock()
+	if binding == nil {
+		return
+	}
+	select {
+	case <-binding.stopped:
+		return
+	default:
+	}
+	_ = binding.requester.Handle(outgoingSSRC, packets)
 }
 
 func (f *RoomFactory) NewNegotiator(ctx context.Context, id Identity, session *access.Session) (Negotiator, error) {
@@ -39,8 +73,37 @@ func (f *RoomFactory) NewNegotiator(ctx context.Context, id Identity, session *a
 		return nil, errors.New("signaling: peer factory returned nil")
 	}
 	bindCtx, cancel := context.WithCancel(ctx)
-	pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		done, err := session.StartMappedIncoming(bindCtx, track, f.MaxSubscribers, f.QueueSize)
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		publication, done, stopped, err := session.StartMappedIncomingWithPublication(bindCtx, track, f.MaxSubscribers, f.QueueSize)
+		if err == nil && track.RID() == "" {
+			f.trackSenderReports(bindCtx, receiver, session, publication, uint32(track.SSRC()), stopped)
+		}
+		if err == nil && track.Kind() == webrtc.RTPCodecTypeVideo {
+			key := feedbackKey{room: session.RoomKey(), generation: session.RoomGeneration(), publication: publication}
+			requester, _ := webrtcbridge.NewKeyframeRequester(pc, 0, uint32(track.SSRC()), time.Second)
+			binding := &feedbackBinding{requester: requester, stopped: stopped}
+			f.feedbackMu.Lock()
+			if f.feedback == nil {
+				f.feedback = make(map[feedbackKey]*feedbackBinding)
+			}
+			f.feedback[key] = binding
+			f.feedbackMu.Unlock()
+			// Preserve the callback's single termination result while also cleaning
+			// up this exact binding if a source ends or is replaced.
+			callbackDone := make(chan error, 1)
+			go func(sourceDone <-chan error) {
+				<-stopped
+				f.feedbackMu.Lock()
+				if f.feedback[key] == binding {
+					delete(f.feedback, key)
+				}
+				f.feedbackMu.Unlock()
+				result := <-sourceDone
+				callbackDone <- result
+				close(callbackDone)
+			}(done)
+			done = callbackDone
+		}
 		if f.OnInbound != nil {
 			f.OnInbound(id, track, err)
 		}
@@ -54,19 +117,26 @@ func (f *RoomFactory) NewNegotiator(ctx context.Context, id Identity, session *a
 		_ = pc.Close()
 		return nil, err
 	}
-	return &roomNegotiator{pion: negotiator, pc: pc, session: session, factory: f, ctx: bindCtx, cancel: cancel, senders: make(map[string]*webrtc.RTPSender)}, nil
+	return &roomNegotiator{pion: negotiator, pc: pc, session: session, factory: f, room: session.RoomKey(), generation: session.RoomGeneration(), ctx: bindCtx, cancel: cancel, senders: make(map[string]outgoingSender)}, nil
+}
+
+type outgoingSender struct {
+	sender  *webrtc.RTPSender
+	stopped <-chan struct{}
 }
 
 type roomNegotiator struct {
-	mu      sync.Mutex
-	pion    *PionNegotiator
-	pc      *webrtc.PeerConnection
-	session *access.Session
-	factory *RoomFactory
-	ctx     context.Context
-	cancel  context.CancelFunc
-	senders map[string]*webrtc.RTPSender
-	closed  bool
+	mu         sync.Mutex
+	pion       *PionNegotiator
+	pc         *webrtc.PeerConnection
+	session    *access.Session
+	factory    *RoomFactory
+	room       sfu.Key
+	generation string
+	ctx        context.Context
+	cancel     context.CancelFunc
+	senders    map[string]outgoingSender
+	closed     bool
 }
 
 // Answer reconciles the authorized subscription set before each client offer.
@@ -101,9 +171,15 @@ func (n *roomNegotiator) syncOutgoing(ctx context.Context) error {
 	for _, p := range pubs {
 		desired[p.ID] = p
 	}
-	for id, sender := range n.senders {
-		if _, ok := desired[id]; !ok {
-			if err = n.pc.RemoveTrack(sender); err != nil {
+	for id, binding := range n.senders {
+		_, wanted := desired[id]
+		select {
+		case <-binding.stopped:
+			wanted = false
+		default:
+		}
+		if !wanted {
+			if err = n.pc.RemoveTrack(binding.sender); err != nil {
 				return err
 			}
 			delete(n.senders, id)
@@ -128,19 +204,40 @@ func (n *roomNegotiator) syncOutgoing(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		go func() {
-			for {
-				if _, _, err := sender.ReadRTCP(); err != nil {
-					return
-				}
-			}
-		}()
-		if _, err = n.session.StartOutgoing(n.ctx, p.ID, local); err != nil {
+		_, stopped, err := n.session.StartOutgoingWithLifetime(n.ctx, p.ID, local)
+		if err != nil {
 			return fmt.Errorf("bind outgoing track: %w", err)
 		}
-		n.senders[p.ID] = sender
+		go n.readFeedback(sender, p.ID, stopped)
+		// Stop unblocks ReadRTCP even if the client never renegotiates or sends
+		// another packet. RemoveTrack remains safe when the next offer arrives.
+		go func() { <-stopped; _ = sender.Stop() }()
+		n.senders[p.ID] = outgoingSender{sender: sender, stopped: stopped}
 	}
 	return nil
+}
+
+func (n *roomNegotiator) readFeedback(sender *webrtc.RTPSender, publication string, stopped <-chan struct{}) {
+	key := feedbackKey{room: n.room, generation: n.generation, publication: publication}
+	for {
+		packets, _, err := sender.ReadRTCP()
+		if err != nil {
+			return
+		}
+		select {
+		case <-stopped:
+			return
+		default:
+		}
+		if !n.session.OutgoingActive(publication) {
+			continue
+		}
+		params := sender.GetParameters()
+		if len(params.Encodings) != 1 || params.Encodings[0].SSRC == 0 {
+			continue
+		}
+		n.factory.forwardFeedback(key, uint32(params.Encodings[0].SSRC), packets)
+	}
 }
 func (n *roomNegotiator) Close() error {
 	n.mu.Lock()

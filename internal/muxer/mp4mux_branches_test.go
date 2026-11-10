@@ -809,9 +809,9 @@ func TestBoxWritersSurfaceIOErrors(t *testing.T) {
 		{"writeMoov", func(w *mp4.Writer) error { return writeMoov(w, []*track{video, aac}) }},
 		{"writeMvhd", func(w *mp4.Writer) error { return writeMvhd(w, []*track{video, aac}) }},
 		{"writeMvhdEmpty", func(w *mp4.Writer) error { return writeMvhd(w, nil) }},
-		{"writeTrakVideo", func(w *mp4.Writer) error { return writeTrak(w, video) }},
-		{"writeTrakH265", func(w *mp4.Writer) error { return writeTrak(w, h265) }},
-		{"writeTrakOpus", func(w *mp4.Writer) error { return writeTrak(w, opus) }},
+		{"writeTrakVideo", func(w *mp4.Writer) error { return writeTrak(w, video, 0) }},
+		{"writeTrakH265", func(w *mp4.Writer) error { return writeTrak(w, h265, 0) }},
+		{"writeTrakOpus", func(w *mp4.Writer) error { return writeTrak(w, opus, 0) }},
 		{"writeMdiaAudio", func(w *mp4.Writer) error { return writeMdia(w, aac) }},
 		{"writeMinfVideo", func(w *mp4.Writer) error { return writeMinf(w, video) }},
 		{"writeMinfAudio", func(w *mp4.Writer) error { return writeMinf(w, aac) }},
@@ -828,9 +828,9 @@ func TestBoxWritersSurfaceIOErrors(t *testing.T) {
 		{"writeOpusSampleEntry", func(w *mp4.Writer) error { return writeOpusSampleEntry(w) }},
 		{"writeOpusRecovery", func(w *mp4.Writer) error { return writeOpusRecovery(w, opus) }},
 		{"writeRawBox", func(w *mp4.Writer) error { return writeRawBox(w, "free", []byte{1, 2, 3, 4}) }},
-		{"writeOpusEditLong", func(w *mp4.Writer) error { return writeOpusEdit(w, opus) }},
+		{"writeOpusEditLong", func(w *mp4.Writer) error { return writeTrackEdit(w, opus, 0) }},
 		{"writeOpusEditShort", func(w *mp4.Writer) error {
-			return writeOpusEdit(w, &track{id: 8, samples: []sample{{duration: 10 * time.Millisecond}}})
+			return writeTrackEdit(w, &track{id: 8, isAudio: true, audioCodec: "opus", samples: []sample{{duration: 10 * time.Millisecond}}}, 0)
 		}},
 	}
 	for _, tc := range cases {

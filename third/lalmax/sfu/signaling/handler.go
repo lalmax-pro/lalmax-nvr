@@ -17,6 +17,9 @@ type Identity struct {
 	Principal   string
 	Participant sfu.Participant
 	Room        sfu.Key
+	// RoomGeneration binds a credential to one Room instance. Empty preserves
+	// compatibility for trusted authenticators that do not issue such a binding.
+	RoomGeneration string
 }
 type Authenticate func(*http.Request) (Identity, error)
 
@@ -81,6 +84,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	room, ok := h.Rooms.Get(identity.Room)
 	if !ok {
+		http.Error(w, "room not found", http.StatusNotFound)
+		return
+	}
+	if identity.RoomGeneration != "" && room.Snapshot().Generation != identity.RoomGeneration {
 		http.Error(w, "room not found", http.StatusNotFound)
 		return
 	}

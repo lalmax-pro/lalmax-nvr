@@ -9,6 +9,7 @@ import (
 
 	"github.com/bluenviron/gortsplib/v4/pkg/format/rtph264"
 	"github.com/pion/rtp"
+	"github.com/q191201771/lal/pkg/avc"
 	"github.com/q191201771/lal/pkg/base"
 )
 
@@ -17,6 +18,7 @@ var (
 	ErrSSRCChanged          = errors.New("bridge: H264 source SSRC changed")
 	ErrTimestampRegression  = errors.New("bridge: H264 RTP timestamp regressed")
 	ErrParameterSetTooLarge = errors.New("bridge: H264 parameter set too large")
+	ErrUnsupportedSlice     = errors.New("bridge: unsupported H264 slice")
 )
 
 // H264 converts one packetization-mode=1 RTP stream into Annex-B AvPackets.
@@ -61,7 +63,7 @@ func (h *H264) Push(pkt *rtp.Packet) (*base.AvPacket, error) {
 		return nil, ErrSSRCChanged
 	}
 	h.ssrc, h.ssrcSet = pkt.SSRC, true
-	if len(pkt.Payload) == 0 {
+	if len(pkt.Payload) == 0 && (!pkt.Padding || pkt.PaddingSize == 0) {
 		h.resetFrame()
 		h.timestampSet = false
 		return nil, ErrInvalidRTP
@@ -79,6 +81,11 @@ func (h *H264) Push(pkt *rtp.Packet) (*base.AvPacket, error) {
 	}
 	h.seqSet = true
 	h.lastSeq = pkt.SequenceNumber
+	// WebRTC bandwidth probing can send padding-only RTP packets. They occupy
+	// sequence numbers but do not belong to an H264 access unit or its clock.
+	if len(pkt.Payload) == 0 {
+		return nil, nil
+	}
 	if h.discarding {
 		if pkt.Timestamp == h.discardTimestamp {
 			return nil, nil
@@ -132,11 +139,18 @@ func (h *H264) Push(pkt *rtp.Packet) (*base.AvPacket, error) {
 				*dst = bytes.Clone(nalu)
 				h.ready = false
 			}
-		case 5:
-			idr = true
+		case 1, 5:
+			sliceType, err := avc.ParseSliceType(nalu)
+			if err != nil || sliceType == avc.SliceTypeB || (nalu[0]&0x1f == 5 && sliceType != avc.SliceTypeI) {
+				h.resetFrame()
+				return nil, ErrUnsupportedSlice
+			}
+			idr = idr || nalu[0]&0x1f == 5
 			picture = true
-		case 1, 2, 3, 4:
-			picture = true
+		case 2, 3, 4, 19, 20, 21:
+			// Partitioned, auxiliary and extension slices need extra parsing.
+			h.resetFrame()
+			return nil, ErrUnsupportedSlice
 		}
 	}
 	if idr && len(h.sps) > 0 && len(h.pps) > 0 {

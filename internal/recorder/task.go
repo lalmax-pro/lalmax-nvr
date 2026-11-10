@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -19,6 +20,9 @@ import (
 
 var taskLogger = slog.Default().With("component", "record-task")
 
+// ErrStreamCodecNotReady means the live stream has not exposed a video codec yet.
+var ErrStreamCodecNotReady = errors.New("stream video codec not ready")
+
 const (
 	ReasonPlanInactive  = "plan_inactive"
 	ReasonDeviceRemoved = "device_removed"
@@ -35,7 +39,6 @@ type StreamOwner struct {
 	Encoding     string
 	AudioEnabled bool
 	RTSPURL      string
-	Derived      bool // Only explicit derived recordings; never try unauthenticated RTSP fallback.
 }
 
 // StreamOwnerFunc resolves a stream to a recording owner. CameraID may equal StreamID for plan-only streams.
@@ -51,6 +54,7 @@ type TaskManager struct {
 	eventBus   *event.EventBus
 	segmentDur time.Duration
 	ownerOf    StreamOwnerFunc
+	sourceTime func(context.Context, string) (bool, error)
 	shouldRec  func(streamID string) bool
 	playURL    func(ctx context.Context, streamID string) string
 	planMode   func(streamID string) (string, bool)
@@ -81,6 +85,13 @@ func NewTaskManager(engine media.Engine, store SegmentStore, db RecordingDB, m *
 func (m *TaskManager) SetOwnerFunc(fn StreamOwnerFunc) {
 	m.mu.Lock()
 	m.ownerOf = fn
+	m.mu.Unlock()
+}
+
+// SetSourceTimePolicy opts specific in-process streams into a shared source clock.
+func (m *TaskManager) SetSourceTimePolicy(fn func(context.Context, string) (bool, error)) {
+	m.mu.Lock()
+	m.sourceTime = fn
 	m.mu.Unlock()
 }
 
@@ -128,13 +139,14 @@ func (m *TaskManager) SetLifecycleHooks(onStart, onStop func(streamID string, re
 
 // Ensure starts a record task for streamID if one is not already running.
 func (m *TaskManager) Ensure(ctx context.Context, streamID string) error {
-    return m.ensure(ctx, streamID, false)
+	return m.ensure(ctx, streamID, false)
 }
 
-// EnsureDerived is only for an already authorized physical derived output.
-// It bypasses the automatic-recording skip predicate, but never starts media.
+// EnsureDerived starts recording for an already-authorized derived stream.
+// It bypasses the automatic-recording skip predicate but still uses the normal
+// recorder lifecycle and duplicate-task protection.
 func (m *TaskManager) EnsureDerived(ctx context.Context, streamID string) error {
-    return m.ensure(ctx, streamID, true)
+	return m.ensure(ctx, streamID, true)
 }
 
 func (m *TaskManager) ensure(ctx context.Context, streamID string, explicitDerived bool) (retErr error) {
@@ -355,8 +367,17 @@ func (m *TaskManager) newRecorder(ctx context.Context, streamID string) (model.R
 	playURL := m.playURL
 	modeFn := m.planMode
 	adaptFn := m.adaptEvery
+	sourceTimeFn := m.sourceTime
 	m.mu.Unlock()
-	if owner.RTSPURL == "" && playURL != nil && !owner.Derived {
+	preserveSourceTime := false
+	if sourceTimeFn != nil {
+		var err error
+		preserveSourceTime, err = sourceTimeFn(ctx, streamID)
+		if err != nil {
+			return nil, fmt.Errorf("source clock for stream %q: %w", streamID, err)
+		}
+	}
+	if owner.RTSPURL == "" && playURL != nil {
 		owner.RTSPURL = playURL(ctx, streamID)
 	}
 
@@ -379,6 +400,9 @@ func (m *TaskManager) newRecorder(ctx context.Context, streamID string) (model.R
 			}
 		}
 	}
+	if encoding == "" {
+		return nil, fmt.Errorf("stream %q: %w", streamID, ErrStreamCodecNotReady)
+	}
 	if encoding != string(model.FormatH264) && encoding != string(model.FormatH265) {
 		return nil, fmt.Errorf("stream %q codec %q is not recordable", streamID, encoding)
 	}
@@ -397,15 +421,16 @@ func (m *TaskManager) newRecorder(ctx context.Context, streamID string) (model.R
 	switch encoding {
 	case string(model.FormatH264):
 		return NewH264Recorder(H264Config{
-			CameraID:     owner.CameraID,
-			StreamID:     streamID,
-			RTSPURL:      owner.RTSPURL,
-			SegmentDur:   m.segmentDur,
-			DB:           m.db,
-			AudioEnabled: owner.AudioEnabled,
-			EventBus:     m.eventBus,
-			FrameSource:  frameSource,
-			Adaptive:     gate,
+			CameraID:                 owner.CameraID,
+			StreamID:                 streamID,
+			RTSPURL:                  owner.RTSPURL,
+			SegmentDur:               m.segmentDur,
+			DB:                       m.db,
+			AudioEnabled:             owner.AudioEnabled,
+			EventBus:                 m.eventBus,
+			FrameSource:              frameSource,
+			PreserveSourceTimestamps: preserveSourceTime,
+			Adaptive:                 gate,
 		}, m.store, m.metrics), nil
 	case string(model.FormatH265):
 		return NewH265Recorder(H265Config{

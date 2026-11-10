@@ -151,7 +151,7 @@ func TestEmbeddedWebAssets(t *testing.T) {
 	}
 }
 
-func TestDemoAllowsMicrophoneCameraAndScreen(t *testing.T) {
+func TestDemoAllowsMicrophoneCameraAndScreenAV(t *testing.T) {
 	_, origin := setup(t)
 	resp := login(t, origin, testSecret, origin)
 	conn, _, err := dial(t, origin, origin, resp.Cookies()[0])
@@ -163,19 +163,27 @@ func TestDemoAllowsMicrophoneCameraAndScreen(t *testing.T) {
 		{"audio", "microphone", "audio/opus"},
 		{"video", "camera", "video/H264"},
 		{"video", "screen", "video/H264"},
+		{"audio", "screen", "audio/opus"},
 	}
 	var screenID string
 	for _, track := range tracks {
-		if err := conn.WriteJSON(map[string]any{"id": track.source, "type": "publish", "kind": track.kind, "source": track.source, "codec": track.codec, "track_id": track.source}); err != nil {
+		id := track.source + "-" + track.kind
+		if err := conn.WriteJSON(map[string]any{"id": id, "type": "publish", "kind": track.kind, "source": track.source, "codec": track.codec, "track_id": id}); err != nil {
 			t.Fatal(err)
 		}
-		result := readResult(t, conn, track.source)
+		result := readResult(t, conn, id)
 		if result.Error != "" || result.Publication == nil {
 			t.Fatalf("publish %s: %+v", track.source, result)
 		}
-		if track.source == "screen" {
+		if track.source == "screen" && track.kind == "video" {
 			screenID = result.Publication.ID
 		}
+	}
+	if err := conn.WriteJSON(map[string]any{"id": "excess", "type": "publish", "kind": "audio", "source": "screen", "codec": "audio/opus", "track_id": "excess"}); err != nil {
+		t.Fatal(err)
+	}
+	if result := readResult(t, conn, "excess"); result.Error == "" {
+		t.Fatalf("fifth publication should be rejected: %+v", result)
 	}
 	if err := conn.WriteJSON(map[string]any{"id": "unpublish", "type": "unpublish", "publication_id": screenID}); err != nil {
 		t.Fatal(err)

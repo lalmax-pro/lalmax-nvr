@@ -908,6 +908,58 @@ func TestH264Recorder_FrameSourcePreservesAACTrack(t *testing.T) {
 	require.Contains(t, string(data), "soun", "recorded MP4 must expose an audio track")
 }
 
+func TestH264Recorder_FrameSourceRecordsOpus(t *testing.T) {
+	for _, late := range []bool{false, true} {
+		name := "before-video"
+		if late {
+			name = "after-video"
+		}
+		t.Run(name, func(t *testing.T) { testH264RecorderFrameSourceOpus(t, late) })
+	}
+}
+
+func testH264RecorderFrameSourceOpus(t *testing.T, late bool) {
+	t.Helper()
+	mgr := newTestManager(t)
+	ch := make(chan media.MediaFrame, 128)
+	rec := NewH264Recorder(H264Config{
+		CameraID: "opus-frames", SegmentDur: time.Minute, AudioEnabled: true,
+		FrameSource: func(context.Context) (media.FrameSubscription, error) { return &fakeFrameSub{ch: ch}, nil },
+	}, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, rec.Start(ctx))
+	t.Cleanup(func() { _ = rec.Stop() })
+	if !late {
+		ch <- media.MediaFrame{Kind: media.FrameAudio, Codec: "opus", Data: []byte{0xf8, 0xff, 0xfe}}
+	}
+	ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", Data: annexB(testSPS)}
+	ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", Data: annexB(testPPS)}
+	ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", IsKey: true, Data: annexB(testIDR)}
+	require.Eventually(t, func() bool {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return rec.muxer != nil
+	}, time.Second, time.Millisecond, "video segment did not start")
+	for range 20 {
+		ch <- media.MediaFrame{Kind: media.FrameAudio, Codec: "opus", Data: []byte{0xf8, 0xff, 0xfe}}
+		ch <- media.MediaFrame{Kind: media.FrameVideo, Codec: "h264", Data: annexB(testP)}
+		time.Sleep(5 * time.Millisecond)
+	}
+	require.NoError(t, rec.Stop())
+	files, err := mgr.ListFiles("opus-frames")
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	data, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	require.Contains(t, string(data), "Opus", "recorded MP4 must contain an Opus sample entry")
+	require.Contains(t, string(data), "dOps", "recorded MP4 must contain an Opus configuration")
+	require.True(t, bytes.Contains(data, []byte{0xf8, 0xff, 0xfe}), "recorded MP4 must contain Opus samples")
+	if artifact := os.Getenv("SFU_TEST_MP4"); artifact != "" && late {
+		require.NoError(t, os.WriteFile(artifact, data, 0o600))
+	}
+}
+
 func TestH264Recorder_FrameSourceUnsupportedFallsBackToRTSP(t *testing.T) {
 	srv := newTestRTSPServer(t)
 	defer srv.close()

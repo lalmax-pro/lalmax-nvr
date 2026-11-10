@@ -227,12 +227,9 @@ func TestM2VoipWebSocketBranches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Use a unique injected key, not client.LocalAddr().String(). The
-	// server's asynchronously accepted websocket uses that same remote
-	// address as its map key and may overwrite this closed-client fixture.
-	// Writing to that live server-side socket can legitimately succeed until
-	// the peer closure is observed, making this test nondeterministic.
-	key := "closed-client-fixture"
+	// The server concurrently registers the real client address; use a separate
+	// key so it cannot replace the deliberately closed test connection.
+	key := "closed-test-connection"
 	transport.connections.Store(key, &websocketConnection{conn: client, remoteAddr: key, lastActive: time.Now()})
 	_ = client.UnderlyingConn().Close()
 	if err := transport.Send([]byte("x"), TransportAddr{Type: TransportWS, Addr: key}); err == nil {

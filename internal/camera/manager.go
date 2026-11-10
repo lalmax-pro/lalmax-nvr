@@ -94,6 +94,8 @@ type CameraManager struct {
 	// recordTasks owns H264/H265 recording for lalmax streams. When set, this
 	// manager only starts ingest for those protocols.
 	recordTasks *recorder.TaskManager
+	// streamEventsRestored reconciles changes missed while the event feed was down.
+	streamEventsRestored func()
 	// groupWriter subscribes to the lalmax group and flips a write switch.
 	// Adaptive plans stay on recordTasks.
 	groupWriter    *recorder.GroupWriter
@@ -206,6 +208,13 @@ func (cm *CameraManager) groupCovers(cam config.CameraConfig) bool {
 func (cm *CameraManager) SetRecordTasks(t *recorder.TaskManager) {
 	cm.mu.Lock()
 	cm.recordTasks = t
+	cm.mu.Unlock()
+}
+
+// SetStreamEventsRestored supplies a callback for reconciling after event subscription.
+func (cm *CameraManager) SetStreamEventsRestored(fn func()) {
+	cm.mu.Lock()
+	cm.streamEventsRestored = fn
 	cm.mu.Unlock()
 }
 
@@ -2943,35 +2952,54 @@ func (cm *CameraManager) MonitorStreamEvents(ctx context.Context) {
 		return
 	}
 
-	// Subscribe to all relevant stream lifecycle events
-	events, err := cm.mediaEngine.SubscribeEvents(ctx, media.EventFilter{
-		Types: []media.EventType{
-			media.EventPublisherStarted,
-			media.EventPublisherStopped,
-			media.EventRelayPullStarted,
-			media.EventRelayPullStopped,
-			media.EventStreamActive,
-			media.EventStreamStopped,
-		},
-	})
-	if err != nil {
-		logger.Error("failed to subscribe to stream events", "error", err)
-		return
-	}
-
-	logger.Info("stream event monitoring started")
-
+	delay := time.Second
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		events, err := cm.mediaEngine.SubscribeEvents(ctx, media.EventFilter{
+			Types: []media.EventType{
+				media.EventPublisherStarted, media.EventPublisherStopped,
+				media.EventRelayPullStarted, media.EventRelayPullStopped,
+				media.EventStreamActive, media.EventStreamStopped,
+			},
+		})
+		if err != nil || events == nil {
+			logger.Warn("failed to subscribe to stream events; retrying", "error", err, "delay", delay)
+		} else {
+			logger.Info("stream event monitoring started")
+			cm.mu.RLock()
+			reconcile := cm.streamEventsRestored
+			cm.mu.RUnlock()
+			if reconcile != nil {
+				reconcile()
+			}
+			delay = time.Second
+		monitor:
+			for {
+				select {
+				case <-ctx.Done():
+					logger.Info("stream event monitoring stopped")
+					return
+				case ev, ok := <-events:
+					if !ok {
+						logger.Warn("stream event channel closed; retrying")
+						break monitor
+					}
+					cm.handleStreamEvent(ctx, ev)
+				}
+			}
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
-			logger.Info("stream event monitoring stopped")
+			timer.Stop()
 			return
-		case ev, ok := <-events:
-			if !ok {
-				logger.Warn("stream event channel closed")
-				return
-			}
-			cm.handleStreamEvent(ctx, ev)
+		case <-timer.C:
+		}
+		delay *= 2
+		if delay > 30*time.Second {
+			delay = 30 * time.Second
 		}
 	}
 }

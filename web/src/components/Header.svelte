@@ -101,6 +101,7 @@
     { href: '#/logs', labelKey: 'nav.logs', route: '/logs', icon: ClipboardList },
     { href: '#/stats', labelKey: 'nav.stats', route: '/stats', icon: BarChart3 },
     { href: '#/voip', labelKey: 'nav.voip', route: '/voip', icon: Phone },
+    { href: '/sfu-meet/', labelKey: 'nav.sfu', route: '/sfu-meet', icon: Radio },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings', icon: Settings },
   ];
 

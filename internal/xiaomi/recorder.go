@@ -105,6 +105,12 @@ type XiaomiRecorder struct {
 	motorActive     bool
 	motorLease      time.Duration
 
+	sdMu      sync.Mutex
+	sdClient  *MISSClient
+	sdFileKey string
+	sdFile    []byte
+	sdFileAt  time.Time
+
 	// lal custom pub session
 	pubSession media.CustomizePubSession
 
@@ -230,6 +236,7 @@ func (r *XiaomiRecorder) Stop() error {
 }
 
 func (r *XiaomiRecorder) finishRun() {
+	r.closeSDClient()
 	r.mu.Lock()
 	r.status = model.StatusStopped
 	if r.active {

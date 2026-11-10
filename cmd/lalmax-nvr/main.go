@@ -397,6 +397,7 @@ func resolveConfigPath(path string) string {
 //  14. FTP server — depends on Config, Storage, DB
 //  15. HTTP server — depends on Router (which depends on all above)
 type App struct {
+	sfuRuntime       *nvrSFURuntime
 	transcodeManager *transcode.Manager
 	transcodeService *transcode.Service
 	transcodeAdapter *media.TranscodeAdapter
@@ -646,6 +647,17 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.mediaAuth.SetPublishTokens("srt", cfg.SRT.StreamKeys)
 	a.mediaAuth.SetPublishTokens("whip", cfg.WHIP.PublishTokens)
 	a.mediaAuth.SetPlaybackTokens("media", cfg.Auth.PlaybackTokens)
+	// Restore historical bridge output identities even when SFU is disabled.
+	// Otherwise an old internal stream name could fall back to open playback
+	// after restart before the SFU runtime is enabled again.
+	bridgeOutputs, err := db.ListSFUBridgeOutputIDs(context.Background())
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("load SFU bridge output identities: %w", err)
+	}
+	for _, id := range bridgeOutputs {
+		a.mediaAuth.RestoreInternalStream(id)
+	}
 	a.banMgr = ban.NewManager(db, a.mediaAuth)
 	a.banMgr.SetRTMPPublishAuthEnabled(cfg.RTMP.RTMPPublishAuthEnabled())
 	a.banMgr.SetRTSPPublishAuthEnabled(cfg.Media.RTSPPublishTokenAuthEnabled())
@@ -881,6 +893,14 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	// Optional DLNA MediaServer shares the NVR HTTP listener but has its own SSDP lifecycle.
 	a.dlna = dlna.NewService(cfg, a.db, a.store, a.mediaEngine)
 
+	if cfg.SFU.Enabled {
+		a.sfuRuntime, err = newNVRSFURuntime(a)
+		if err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("initialize SFU: %w", err)
+		}
+	}
+
 	// Step 12: Build HTTP router
 	a.httpServer = &http.Server{
 		Addr:    cfg.Server.Listen,
@@ -956,6 +976,12 @@ func (a *App) buildRouter() http.Handler {
 
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.configPath, a.mergeMgr, cloudProxy)
+	if a.sfuRuntime != nil {
+		handler.SetSFUBridgeRegistry(a.sfuRuntime.registry)
+		handler.SetSFURoomManager(a.sfuRuntime.roomAdmin)
+		handler.SetSFUSignaling(a.sfuRuntime.signal)
+		handler.SetSFUTicketIssuer(a.sfuRuntime.tickets)
+	}
 	// Capture runtime configuration at bootstrap; changes to executable paths or
 	// media listener settings require a restart before starting new transcodes.
 	transcodeCfg := *cfg
@@ -1312,7 +1338,7 @@ func (a *App) wireRecordTasks() {
 			if source, ok := a.transcodeAdapter.RecordingSource(streamID); ok {
 				return recorder.StreamOwner{
 					CameraID: source.StreamID, Name: source.StreamID,
-					Encoding: "h264", AudioEnabled: true, Derived: true,
+					Encoding: "h264", AudioEnabled: true,
 				}
 			}
 		}
@@ -1327,6 +1353,7 @@ func (a *App) wireRecordTasks() {
 			AudioEnabled: cam.AudioEnabled,
 		}
 	})
+	tasks.SetSourceTimePolicy(a.sfuRecordingSourceTime)
 	tasks.SetPlayURL(func(ctx context.Context, streamID string) string {
 		playURL, err := a.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
 			StreamID: streamID,
@@ -1436,6 +1463,9 @@ func (a *App) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
 	a.startCtx = ctx
+	if a.sfuRuntime != nil {
+		a.sfuRuntime.Start(ctx)
+	}
 	if a.jt808Svr != nil {
 		if err := a.jt808Svr.Start(); err != nil {
 			cancel()
@@ -1474,6 +1504,7 @@ func (a *App) Start() error {
 	a.recSched.SetTasks(a.recTasks)
 	a.recSched.SetEventActive(a.eventActive)
 	a.recSched.SetAliveStreams(a.aliveRecordingStreams)
+	a.camMgr.SetStreamEventsRestored(a.recSched.ReconcileNow)
 	if a.groupWriter != nil {
 		a.recSched.SetWriteSwitch(func(streamID string, want bool) bool {
 			cam := a.camMgr.CameraByStream(streamID)
@@ -1697,6 +1728,11 @@ func (a *App) Stop() error {
 		if a.transcodeManager != nil {
 			if err := a.transcodeManager.Close(shutdownCtx); err != nil {
 				log.Warn("transcoding shutdown incomplete", "error", err)
+			}
+		}
+		if a.sfuRuntime != nil {
+			if err := a.sfuRuntime.Close(shutdownCtx); err != nil {
+				log.Warn("SFU shutdown incomplete", "error", err)
 			}
 		}
 

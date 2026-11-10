@@ -148,6 +148,11 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
+	sfuBridges            SFUBridgeRegistry
+	sfuRooms              SFURoomManager
+	sfuSignaling          http.Handler
+	sfuTickets            SFUTicketIssuer
+	sfuWHEPKey            []byte
 	isInternalMediaStream func(string) bool
 	transcodePlayback     derivedPlaybackProvider
 	transcodeService      *transcode.Service
@@ -186,7 +191,7 @@ type Handler struct {
 	stabilityProvider StabilityProvider
 	cloudProxy        CloudAuthProxy
 	streamRegistry    *StreamRegistry
-	localVideos localVideoPlayers
+	localVideos       localVideoPlayers
 	aiManager         *ai.Manager
 	onvifDiscover     func(ctx context.Context, timeout time.Duration) *onvif.DiscoveryResult
 	onvifProbeDevice  func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error)
@@ -285,7 +290,6 @@ func NewHandler(db storage.APIRepository, store *storage.Manager, authMW func(ht
 		cloudProxy:       cloudProxy,
 		sysMetrics:       newSysMetricsHistory(),
 		streamMetrics:    newStreamMetricsHistory(),
-		trafficHistory:    &trafficHistory{},
 		apiObserver:      observability.NewHTTPObserver(observability.NewAggregator()),
 		onvifDiscover:    onvif.Discover,
 		onvifProbeDevice: onvif.ProbeDevice,
@@ -294,8 +298,9 @@ func NewHandler(db storage.APIRepository, store *storage.Manager, authMW func(ht
 		},
 		transcodeProbe:       transcode.NewProbeService(nil),
 		homeAssistantWHEPKey: []byte(rand.Text()),
-		eventHub: event.NewLiveHub(),
-		logRing:  middleware.DefaultLogRing(),
+		sfuWHEPKey:           []byte(rand.Text()),
+		eventHub:             event.NewLiveHub(),
+		logRing:              middleware.DefaultLogRing(),
 	}
 	if db != nil {
 		hub := h.eventHub
@@ -378,6 +383,15 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
 	r.Get("/api/setup/directories", h.handleSetupDirectories)
+	// Authentication for this WebSocket is a short-lived, single-use ticket;
+	// the signaling handler validates both the ticket and its Origin.
+	r.Get("/api/sfu/ws", h.handleSFUSignaling)
+	r.Get("/sfu-meet", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/sfu-meet/", http.StatusTemporaryRedirect)
+	})
+	r.Get("/sfu-meet/", h.serveSFUMeet)
+	r.Get("/sfu-meet/app.js", h.serveSFUMeet)
+	r.Get("/sfu-meet/style.css", h.serveSFUMeet)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -390,6 +404,25 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/users/me/preferences/{namespace}", h.userPreference)
 		r.Put("/api/users/me/preferences/{namespace}", h.userPreference)
 
+		r.Route("/api/sfu/bridges", func(r chi.Router) {
+			r.Use(middleware.RequireOperatePermission())
+			r.Get("/", h.listSFUBridges)
+			r.Post("/", h.createSFUBridge)
+			r.Get("/{id}", h.getSFUBridge)
+			r.Get("/{id}/playback", h.getSFUBridgePlayback)
+			r.Post("/{id}/whep", h.createSFUBridgeWHEP)
+			r.Delete("/{id}/whep/{session}", h.deleteSFUBridgeWHEP)
+			r.Post("/{id}/stop", h.stopSFUBridge)
+			r.Delete("/{id}", h.removeSFUBridge)
+		})
+		r.With(middleware.RequireOperatePermission()).Post("/api/sfu/ticket", h.createSFUTicket)
+		r.With(middleware.RequireOperatePermission()).Get("/api/sfu/bridge-requests", h.getSFUBridgeRequest)
+		r.Route("/api/sfu/rooms", func(r chi.Router) {
+			r.Use(middleware.RequireOperatePermission())
+			r.Get("/", h.listSFURooms)
+			r.Post("/", h.createSFURoom)
+			r.Delete("/{id}", h.closeSFURoom)
+		})
 		r.Post("/api/auth/logout", h.handleLogout)
 		r.Get("/api/health/details", h.handleHealthDetails)
 		r.Route("/api/recordings", func(r chi.Router) {
@@ -456,6 +489,8 @@ func (h *Handler) Routes() http.Handler {
 				r.Post("/ptz/move", h.handlePTZMove)
 				r.Post("/ptz/stop", h.handlePTZStop)
 				r.Get("/ptz/status", h.handlePTZStatus)
+				r.Get("/sd-recordings", h.handleXiaomiSDRecordings)
+				r.Get("/sd-recordings/{start}/playback", h.handleXiaomiSDRecordingPlayback)
 				r.Get("/ptz/presets", h.handlePTZGetPresets)
 				r.With(middleware.RequireOperatePermission()).Post("/ptz/presets", h.handlePTZCreatePreset)
 				r.With(middleware.RequireOperatePermission()).Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
@@ -1081,15 +1116,10 @@ func (h *Handler) mediaPlayURL(ctx context.Context, cameraID, protocol string) (
 	if h.mediaEngine == nil {
 		return nil, nil
 	}
-	token := ""
-	if h.config != nil {
-		token = h.config.Auth.PlaybackTokens[cameraID]
-	}
 	playURL, err := h.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
 		StreamID: cameraID,
 		AppName:  "live",
 		Protocol: protocol,
-		Token:    token,
 	})
 	if err != nil || playURL == nil || playURL.URL == "" {
 		return nil, err

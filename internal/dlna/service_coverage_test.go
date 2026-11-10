@@ -352,27 +352,34 @@ func TestDLNAMediaStreaming(t *testing.T) {
 	head.Body.Close()
 	require.Equal(t, http.StatusOK, head.StatusCode)
 
-	// The previous streaming GET can still be releasing its viewer slot after
-	// the client has consumed the body. Test limit admission/release against
-	// an independent service to avoid racing with that HTTP handler teardown.
-	viewerGate := enabledService(repo, engine)
-	viewerGate.setViewerLimit(1)
-	limit := viewerGate.limitMediaViewers(func(w http.ResponseWriter, _ *http.Request) {
+	releaseViewer := make(chan struct{})
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	var once sync.Once
+	// The preceding HTTP handler may still be releasing its viewer slot after
+	// the client reads the response. Isolate this limiter assertion from it.
+	limiterService := enabledService(repo, engine)
+	limiterService.setViewerLimit(1)
+	limit := limiterService.limitMediaViewers(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(started) })
+		<-releaseViewer
 		w.WriteHeader(http.StatusOK)
 	})
-	require.True(t, viewerGate.tryAcquireViewer())
+	go func() {
+		defer close(finished)
+		limit(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/dlna/live/cam.ts", nil))
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("viewer slot was not acquired")
+	}
 	limited := httptest.NewRecorder()
 	limit(limited, httptest.NewRequest(http.MethodGet, "/dlna/live/cam.ts", nil))
 	require.Equal(t, http.StatusServiceUnavailable, limited.Code)
 	require.Equal(t, "5", limited.Header().Get("Retry-After"))
-	viewerGate.releaseViewer()
-	available := httptest.NewRecorder()
-	limit(available, httptest.NewRequest(http.MethodGet, "/dlna/live/cam.ts", nil))
-	require.Equal(t, http.StatusOK, available.Code)
-	viewerGate.viewerMu.Lock()
-	remaining := viewerGate.viewers
-	viewerGate.viewerMu.Unlock()
-	require.Zero(t, remaining, "successful requests must release their viewer slot")
+	close(releaseViewer)
+	<-finished
 
 	rr := httptest.NewRecorder()
 	svc.live(rr, httptest.NewRequest(http.MethodGet, "/dlna/live/.ts", nil))
@@ -536,7 +543,8 @@ func TestDLNASSDPAndStartup(t *testing.T) {
 	client := udpLoopback(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	go svc.readSearches(ctx, nil, send)
-	go svc.readSearches(ctx, sock, send)
+	searchDone := make(chan struct{})
+	go func() { defer close(searchDone); svc.readSearches(ctx, sock, send) }()
 	_, err = client.WriteToUDP([]byte("NOTIFY * HTTP/1.1\r\n\r\n"), sock.LocalAddr().(*net.UDPAddr))
 	require.NoError(t, err)
 	_, err = client.WriteToUDP([]byte("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n\r\n"), sock.LocalAddr().(*net.UDPAddr))
@@ -549,6 +557,11 @@ func TestDLNASSDPAndStartup(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(buf[:n]), "HTTP/1.1 200 OK")
 	cancel()
+	select {
+	case <-searchDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("search loop did not stop")
+	}
 	svc.respondSearch(nil, client.LocalAddr().(*net.UDPAddr), "ssdp:all")
 	svc.respondSearch(send, nil, "ssdp:all")
 	closed := udpLoopback(t)

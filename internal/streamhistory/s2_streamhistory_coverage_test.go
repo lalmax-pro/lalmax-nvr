@@ -275,8 +275,8 @@ func TestS2RunHandlesEveryEvent(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		_, finishes, _ := repo.counts()
-		if finishes >= 2 || !time.Now().Before(deadline) {
+		inserts, finishes, mediaStates := repo.counts()
+		if (finishes >= 2 && inserts > 0 && mediaStates > 0) || !time.Now().Before(deadline) {
 			break
 		}
 		time.Sleep(time.Millisecond)

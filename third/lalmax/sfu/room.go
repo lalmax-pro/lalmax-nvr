@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/q191201771/lalmax/sfu/rtpforward"
 )
@@ -19,6 +20,8 @@ var (
 	ErrWatcherLimit         = errors.New("sfu: watcher limit reached")
 	ErrInvalidID            = errors.New("sfu: empty identifier")
 	ErrRoomExists           = errors.New("sfu: room already exists")
+	ErrRoomConfigMismatch   = errors.New("sfu: existing room limits differ")
+	ErrInvalidIdleTimeout   = errors.New("sfu: invalid idle timeout")
 	ErrRoomNotFound         = errors.New("sfu: room not found")
 	ErrRoomClosed           = errors.New("sfu: room closed")
 	ErrParticipantExists    = errors.New("sfu: participant already exists")
@@ -73,27 +76,101 @@ func (m *Manager) Create(key Key, limit int) (*Room, error) {
 
 // CreateWithLimits creates a room with atomic limits; zero means unlimited.
 func (m *Manager) CreateWithLimits(key Key, limits RoomLimits) (*Room, error) {
+	r, _, err := m.getOrCreate(key, limits, false)
+	return r, err
+}
+
+// GetOrCreateWithLimits atomically creates one room per key. The caller must
+// authorize room creation and joining; this method provides no policy. A
+// different limits configuration is rejected rather than silently ignored.
+func (m *Manager) GetOrCreateWithLimits(key Key, limits RoomLimits) (*Room, bool, error) {
+	return m.getOrCreate(key, limits, true)
+}
+
+func (m *Manager) getOrCreate(key Key, limits RoomLimits, allowExisting bool) (*Room, bool, error) {
 	if key.Namespace == "" || key.ID == "" {
-		return nil, ErrInvalidID
+		return nil, false, ErrInvalidID
 	}
 	if limits.MaxParticipants < 0 || limits.MaxPublicationsPerParticipant < 0 || limits.MaxSubscriptions < 0 || limits.MaxWatchers < 0 {
-		return nil, ErrInvalidLimits
+		return nil, false, ErrInvalidLimits
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.rooms == nil {
 		m.rooms = make(map[Key]*Room)
 	}
-	if _, ok := m.rooms[key]; ok {
-		return nil, ErrRoomExists
+	if existing, ok := m.rooms[key]; ok {
+		if !allowExisting {
+			return nil, false, ErrRoomExists
+		}
+		if existing.limits != limits {
+			return nil, false, ErrRoomConfigMismatch
+		}
+		return existing, false, nil
 	}
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	r := &Room{key: key, generation: hex.EncodeToString(id[:]), limit: limits.MaxParticipants, limits: limits, participants: make(map[string]Participant), sessions: make(map[string]string), publications: make(map[string]Publication), subscriptions: make(map[subscriptionKey]Subscription)}
+	r := &Room{key: key, generation: hex.EncodeToString(id[:]), limit: limits.MaxParticipants, limits: limits, idleSince: time.Now(), participants: make(map[string]Participant), sessions: make(map[string]string), publications: make(map[string]Publication), subscriptions: make(map[subscriptionKey]Subscription)}
 	m.rooms[key] = r
-	return r, nil
+	return r, true, nil
+}
+
+// CollectedRoom identifies the exact generation removed by idle collection.
+type CollectedRoom struct {
+	Key        Key
+	Generation string
+}
+
+// CollectIdle closes rooms that have had no participants for at least ttl.
+// Callers own scheduling and must separately authorize room creation. A join
+// racing collection either succeeds before collection or receives ErrRoomClosed
+// and can retry against a new generation. ttl must be positive.
+func (m *Manager) CollectIdle(ttl time.Duration) ([]CollectedRoom, error) {
+	if ttl <= 0 {
+		return nil, ErrInvalidIdleTimeout
+	}
+	return m.collectIdleAt(time.Now(), ttl), nil
+}
+
+// CloseIfIdle atomically checks the exact room generation and removes it only
+// after it has had no participants for ttl. A concurrent join either succeeds
+// first, keeping the room alive, or observes a closed room.
+func (m *Manager) CloseIfIdle(key Key, generation string, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		return false, ErrInvalidIdleTimeout
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rooms[key]
+	if !ok || r.generation != generation {
+		return false, ErrRoomNotFound
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || len(r.participants) != 0 || r.idleSince.IsZero() || time.Since(r.idleSince) < ttl {
+		return false, nil
+	}
+	r.closeLocked()
+	delete(m.rooms, key)
+	return true, nil
+}
+
+func (m *Manager) collectIdleAt(now time.Time, ttl time.Duration) []CollectedRoom {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var collected []CollectedRoom
+	for key, room := range m.rooms {
+		room.mu.Lock()
+		if !room.closed && len(room.participants) == 0 && !room.idleSince.IsZero() && now.Sub(room.idleSince) >= ttl {
+			room.closeLocked()
+			delete(m.rooms, key)
+			collected = append(collected, CollectedRoom{Key: key, Generation: room.generation})
+		}
+		room.mu.Unlock()
+	}
+	return collected
 }
 func (m *Manager) Get(key Key) (*Room, bool) {
 	m.mu.Lock()
@@ -123,6 +200,7 @@ type Room struct {
 	limit            int
 	limits           RoomLimits
 	closed           bool
+	idleSince        time.Time
 	participants     map[string]Participant
 	sessions         map[string]string
 	publications     map[string]Publication
@@ -131,6 +209,7 @@ type Room struct {
 	watchers         map[chan Event]struct{}
 	rtpPublications  map[string]*rtpforward.Fanout
 	rtpSubscriptions map[subscriptionKey]*rtpforward.Subscriber
+	senderReports    map[string]SenderReport
 }
 
 // Join adds a participant. Connection handlers should use JoinSession and
@@ -164,6 +243,7 @@ func (r *Room) JoinSession(p Participant) (string, error) {
 	session := hex.EncodeToString(id[:])
 	r.sessions[p.ID] = session
 	r.participants[p.ID] = p
+	r.idleSince = time.Time{}
 	r.notify("participant_joined")
 	return session, nil
 }
@@ -197,6 +277,9 @@ func (r *Room) leaveLocked(id, session string, checkSession bool) error {
 	}
 	delete(r.sessions, id)
 	delete(r.participants, id)
+	if len(r.participants) == 0 {
+		r.idleSince = time.Now()
+	}
 	for key := range r.subscriptions {
 		if key.participantID == id {
 			r.closeRTPSubscriptionLocked(key)
@@ -233,12 +316,17 @@ func (r *Room) snapshotLocked() Snapshot {
 func (r *Room) close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.closeLocked()
+}
+
+func (r *Room) closeLocked() {
 	r.closed = true
 	for _, fanout := range r.rtpPublications {
 		fanout.Close()
 	}
 	clear(r.rtpPublications)
 	clear(r.rtpSubscriptions)
+	clear(r.senderReports)
 	clear(r.participants)
 	clear(r.sessions)
 	clear(r.publications)

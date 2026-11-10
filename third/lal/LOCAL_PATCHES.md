@@ -32,3 +32,10 @@ Serialize global/prefixed logger initialization with writes and synchronize HTTP
 - Reason: Refresh SDP/remux tracks and GOP caches when a VoIP call changes codecs or adds/removes video while retaining its stream name.
 - Files: `pkg/logic/customize_pubsession.go`, `pkg/logic/group__in.go`.
 - Test: `go test -race -count=1 ./pkg/logic ./pkg/base`; NVR media replacement regression and Linphone video upgrade.
+
+### rtmp-listener-lifecycle
+
+- Reason: Serialize RTMP/RTMPS listener creation and disposal so a shutdown racing startup cannot race on the listener or leave a new listener open after shutdown.
+- Files: `pkg/rtmp/server.go`, `pkg/rtmp/server_lifecycle_test.go`.
+- Upstreamable: Yes.
+- Test: `go test -race ./pkg/rtmp -run '^TestServerListenDisposeRace$' -count=3`.

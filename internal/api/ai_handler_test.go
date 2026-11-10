@@ -251,14 +251,15 @@ func TestAIEvents_ContextCancellation(t *testing.T) {
 		handlerDone.Store(true)
 	}()
 
-	// Verify handler is running.
-	time.Sleep(50 * time.Millisecond)
+	// Wait until the handler has written the SSE headers, then verify it is
+	// still blocked on the request context. Fixed sleeps are too flaky when
+	// the full package suite is running in parallel.
+	require.Eventually(t, func() bool { return rec.Code() == http.StatusOK }, 2*time.Second, time.Millisecond)
 	require.False(t, handlerDone.Load())
 
-	// Cancel context.
+	// Cancel context and wait for the handler's deferred callback cleanup.
 	cancel()
-	time.Sleep(100 * time.Millisecond)
-	require.True(t, handlerDone.Load())
+	require.Eventually(t, handlerDone.Load, 2*time.Second, time.Millisecond)
 }
 
 func TestAIEvents_NoManager(t *testing.T) {
