@@ -18,6 +18,7 @@ func TestUserPreferencesAccountIsolationAndUpdate(t *testing.T) {
  if err := db.SetUserPreference(ctx, "alice", "dashboard", `{"layout":4,"slots":[null,null,null,null]}`); err != nil { t.Fatal(err) }
  if err := db.SetUserPreference(ctx, "bob", "dashboard", `{"layout":1,"slots":[null]}`); err != nil { t.Fatal(err) }
  if err := db.SetUserPreference(ctx, "alice", "dashboard", `{"layout":1,"slots":["camera-1"]}`); err != nil { t.Fatal(err) }
+ if err := db.SetUserPreference(ctx, "alice", "dashboard", `{"layout":1,"slots":["camera-1"]}`); err != nil { t.Fatalf("idempotent repeat must not fail: %v",err) }
  value, found, err := db.GetUserPreference(ctx, "alice", "dashboard")
  if err != nil || !found || value != `{"layout":1,"slots":["camera-1"]}` {
   t.Fatalf("alice preference: value=%q found=%v err=%v", value, found, err)

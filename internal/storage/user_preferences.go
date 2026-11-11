@@ -26,12 +26,15 @@ func (d *DB) GetUserPreference(ctx context.Context, username, namespace string) 
 }
 
 func (d *DB) SetUserPreference(ctx context.Context, username, namespace, value string) error {
- // UPDATE first avoids replacing an existing row on MySQL, SQLite and PostgreSQL.
- res, err := d.execContext(ctx, "UPDATE user_preferences SET config_json=? WHERE username=? AND namespace=?", value, username, namespace)
- if err != nil { return err }
- n, err := res.RowsAffected()
- if err != nil { return err }
- if n > 0 { return nil }
- _, err = d.execContext(ctx, "INSERT INTO user_preferences (username, namespace, config_json) VALUES (?, ?, ?)", username, namespace, value)
- return err
+ // Single-statement UPSERT is atomic and works when the new value equals
+ // the stored value. MySQL RowsAffected() reports changed rows by default,
+ // so UPDATE + RowsAffected() == 0 + INSERT can hit duplicate primary key.
+ switch d.driver {
+ case DriverMySQL:
+  _, err := d.execContext(ctx,"INSERT INTO user_preferences (username, namespace, config_json) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE config_json=?",username,namespace,value,value)
+  return err
+ default:
+  _, err := d.execContext(ctx,"INSERT INTO user_preferences (username, namespace, config_json) VALUES (?, ?, ?) ON CONFLICT (username, namespace) DO UPDATE SET config_json=excluded.config_json",username,namespace,value)
+  return err
+ }
 }
