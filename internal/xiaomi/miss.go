@@ -8,11 +8,18 @@ package xiaomi
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
+	"sync"
 	"time"
+
+	"github.com/lalmax-pro/lalmax-nvr/internal/xiaomi/tutk"
 )
 
 // MISS protocol command constants.
@@ -48,16 +55,23 @@ const (
 	missCodecPCMU = 1026
 	missCodecPCMA = 1027
 	missCodecOPUS = 1032
+	missCodecAAC  = 1033
 )
 
 // Known Xiaomi camera model identifiers.
 const (
-	ModelDafang   = "isa.camera.df3"
-	ModelLoockV2  = "loock.cateye.v02"
-	ModelC200     = "chuangmi.camera.046c04"
-	ModelC300     = "chuangmi.camera.72ac1"
-	ModelXiaofang = "isa.camera.isc5c1"
-	ModelHLC8     = "isa.camera.hlc8"
+	ModelDafang    = "isa.camera.df3"
+	ModelLoockV2   = "loock.cateye.v02"
+	ModelC200      = "chuangmi.camera.046c04"
+	ModelC300      = "chuangmi.camera.72ac1"
+	ModelXiaofang  = "isa.camera.isc5c1"
+	ModelHLC8      = "isa.camera.hlc8"
+	ModelCW400     = "isa.camera.hlc8a"
+	ModelCW500     = "isa.camera.500dh"
+	ModelMJSXJ10CM = "chuangmi.camera.026c05"
+	ModelMi3602K   = "chuangmi.camera.029a02"
+	ModelC01A01    = "xiaomi.camera.c01a01"
+	Model082AC1    = "xiaomi.camera.082ac1"
 )
 
 // missHdrSize is the size of a MISS media packet header.
@@ -79,9 +93,11 @@ type MISSConn interface {
 
 // MISSClient wraps a MISSConn with encryption and protocol logic.
 type MISSClient struct {
-	Conn  MISSConn
-	key   []byte
-	model string
+	Conn   MISSConn
+	key    []byte
+	model  string
+	legacy bool
+	rdtMu  sync.Mutex
 }
 
 // MISSPacket is a decoded media packet from a Xiaomi camera.
@@ -105,11 +121,21 @@ func (p *MISSPacket) SampleRate() uint32 {
 // NewMISSClient parses a MISS URL, establishes a CS2 connection, and performs login.
 // URL format: miss://host?vendor=cs2&device_public=...&client_private=...&client_public=...&sign=...&model=...
 func NewMISSClient(rawURL string, idleTimeout time.Duration) (*MISSClient, error) {
+	return NewMISSClientContext(context.Background(), rawURL, idleTimeout)
+}
+
+func NewMISSClientContext(ctx context.Context, rawURL string, idleTimeout time.Duration) (*MISSClient, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, err
 	}
 
+	if u.Query().Get("vendor") == "legacy" {
+		return newLegacyClient(ctx, u, idleTimeout)
+	}
 	// 1. Calculate shared encryption key.
 	query := u.Query()
 	key, err := CalcSharedKey(query.Get("device_public"), query.Get("client_private"))
@@ -119,11 +145,24 @@ func NewMISSClient(rawURL string, idleTimeout time.Duration) (*MISSClient, error
 
 	model := query.Get("model")
 
-	// 2. Establish transport connection (CS2 only, TUTK removed).
+	// 2. Establish the transport connection.
 	var conn MISSConn
 	switch s := query.Get("vendor"); s {
 	case "cs2":
-		conn, err = CS2Dial(u.Host, query.Get("transport"), idleTimeout)
+		conn, err = CS2DialContext(ctx, u.Host, query.Get("transport"), idleTimeout)
+	case "tutk":
+		if query.Get("uid") == "" {
+			return nil, errors.New("miss: TUTK UID is required")
+		}
+		var tutkConn *tutk.Conn
+		tutkConn, err = tutk.DialContext(ctx, u.Host, query.Get("uid"), "Miss", "client")
+		if err == nil {
+			if idleTimeout == 0 {
+				idleTimeout = defaultIdleTimeout
+			}
+			tutkConn.SetIdleTimeout(idleTimeout)
+			conn = tutkConn
+		}
 	default:
 		err = fmt.Errorf("miss: unsupported vendor %q", s)
 	}
@@ -132,13 +171,22 @@ func NewMISSClient(rawURL string, idleTimeout time.Duration) (*MISSClient, error
 		return nil, err
 	}
 
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
 	// 3. Login with credentials.
 	err = missLogin(conn, query.Get("client_public"), query.Get("sign"))
 	if err != nil {
 		_ = conn.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 
+	if err := ctx.Err(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	return &MISSClient{Conn: conn, key: key, model: model}, nil
 }
 
@@ -175,15 +223,135 @@ func (c *MISSClient) WriteCommand(data []byte) error {
 	return c.Conn.WriteCommand(missCmdEncoded, data)
 }
 
+var ErrNotConnected = errors.New("xiaomi: camera control session is not connected")
+
+// MotorControlContext sends a direction and native motor speed on the current
+// session. A stop always uses speed zero.
+func (c *MISSClient) MotorControlContext(ctx context.Context, direction string, speed int) error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy PTZ is not supported")
+	}
+	switch direction {
+	case "left", "right", "up", "down":
+		if speed < 1 || speed > 100 {
+			return fmt.Errorf("motor speed must be between 1 and 100")
+		}
+	case "stop":
+		if speed != 0 {
+			return fmt.Errorf("stop requires speed zero")
+		}
+	default:
+		return fmt.Errorf("unsupported motor direction %q", direction)
+	}
+	if c.model == ModelDafang {
+		var horizontal, vertical byte
+		switch direction {
+		case "left":
+			horizontal = 1
+		case "right":
+			horizontal = 2
+		case "up":
+			vertical = 2
+		case "down":
+			vertical = 1
+		}
+		motorSpeed := byte(min(speed, 9))
+		if direction == "stop" {
+			motorSpeed = 5
+		}
+		payload := tutk.ICAM(0xff2404, horizontal, vertical, motorSpeed)
+		command := make([]byte, 4+hex.EncodedLen(len(payload)))
+		copy(command, []byte{0x7f, 0xff, 0xff, 0xff})
+		hex.Encode(command[4:], payload)
+		return c.writeEncodedCommandContext(ctx, command)
+	}
+	if fixedStepMotorModel(c.model) {
+		// Each command is one step; these models stop on their own.
+		if direction == "stop" {
+			return ctx.Err()
+		}
+		operation := map[string]int{"left": 1, "right": 2, "up": 3, "down": 4}[direction]
+		return c.writeMotorBody(ctx, struct {
+			Operation int `json:"operation"`
+		}{operation})
+	}
+	return c.writeMotorBody(ctx, struct {
+		Direction string `json:"direction"`
+		Speed     int    `json:"speed"`
+	}{direction, speed})
+}
+
+func (c *MISSClient) writeMotorBody(ctx context.Context, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	command := binary.BigEndian.AppendUint32(nil, missCmdMotorReq)
+	command = append(command, body...)
+	return c.writeEncodedCommandContext(ctx, command)
+}
+
+func (c *MISSClient) writeEncodedCommandContext(ctx context.Context, command []byte) error {
+	encoded, err := Encode(command, c.key)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if conn, ok := c.Conn.(interface {
+		WriteCommandContext(context.Context, uint32, []byte) error
+	}); ok {
+		return conn.WriteCommandContext(ctx, missCmdEncoded, encoded)
+	}
+	return c.Conn.WriteCommand(missCmdEncoded, encoded)
+}
+
 // StartMedia sends the video start command for the given channel and quality.
 // Quality: "auto"=0, "sd"=1, "hd"=2 (or 3 for C200/C300), default="hd".
-func (c *MISSClient) StartMedia(channel, quality string) error {
+func (c *MISSClient) StartMedia(channel, quality string, audioEnabled ...bool) error {
+	if c.legacy {
+		if channel != "" && channel != "0" {
+			return errors.New("xiaomi: legacy camera channel is not supported")
+		}
+		audio := len(audioEnabled) == 0 || audioEnabled[0]
+		return c.startLegacyMedia(quality, audio)
+	}
+	if channel != "" && channel != "0" && channel != "1" && channel != "2" {
+		return fmt.Errorf("unsupported camera channel %q", channel)
+	}
+	switch quality {
+	case "", "auto", "sd", "hd", "0", "1", "2", "3":
+	default:
+		return fmt.Errorf("unsupported camera quality %q", quality)
+	}
+	audio := 1
+	if len(audioEnabled) > 0 && !audioEnabled[0] {
+		audio = 0
+	}
+	if c.model == ModelDafang || c.model == ModelXiaofang {
+		if channel != "" && channel != "0" {
+			return errors.New("xiaomi: camera channel is not supported by this model")
+		}
+		var q byte
+		switch quality {
+		case "", "auto", "hd", "0":
+		case "sd", "1":
+			q = 1
+		default:
+			return fmt.Errorf("xiaomi: unsupported quality %q for this model", quality)
+		}
+		if err := c.writeDafangMediaCommand(0xff07d5, q); err != nil {
+			return err
+		}
+		return c.writeDafangMediaCommand(0xff07d8, 1, byte(audio))
+	}
 	// 0 - auto, 1 - sd, 2 - hd, default - hd
 	switch quality {
 	case "", "hd":
 		// Different models require different default quality settings.
 		switch c.model {
-		case ModelC200, ModelC300:
+		case ModelC200, ModelC300, ModelCW400, ModelCW500:
 			quality = "3"
 		default:
 			quality = "2"
@@ -197,39 +365,65 @@ func (c *MISSClient) StartMedia(channel, quality string) error {
 	data := binary.BigEndian.AppendUint32(nil, missCmdVideoStart)
 	switch channel {
 	case "", "0":
-		data = fmt.Appendf(data, `{"videoquality":%s,"enableaudio":1}`, quality)
+		data = fmt.Appendf(data, `{"videoquality":%s,"enableaudio":%d}`, quality, audio)
 	default:
-		data = fmt.Appendf(data, `{"videoquality":-1,"videoquality2":%s,"enableaudio":1}`, quality)
+		data = fmt.Appendf(data, `{"videoquality":-1,"videoquality2":%s,"enableaudio":%d}`, quality, audio)
 	}
+	return c.WriteCommand(data)
+}
+
+func (c *MISSClient) writeDafangMediaCommand(cmd uint32, args ...byte) error {
+	payload := tutk.ICAM(cmd, args...)
+	data := make([]byte, 4+hex.EncodedLen(len(payload)))
+	copy(data, []byte{0x7f, 0xff, 0xff, 0xff})
+	hex.Encode(data[4:], payload)
 	return c.WriteCommand(data)
 }
 
 // StopMedia sends the video stop command.
 func (c *MISSClient) StopMedia() error {
+	if c.legacy {
+		return errors.Join(c.Conn.WriteCommand(0x2ff, []byte(`{}`)), c.Conn.WriteCommand(0x2ff, make([]byte, 8)))
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdVideoStop)
 	return c.WriteCommand(data)
 }
 
 // StartAudio sends the audio start command (receive audio from camera).
 func (c *MISSClient) StartAudio() error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy audio control is not supported")
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdAudioStart)
 	return c.WriteCommand(data)
 }
 
 // StopAudio sends the audio stop command.
 func (c *MISSClient) StopAudio() error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy audio control is not supported")
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdAudioStop)
 	return c.WriteCommand(data)
 }
 
 // StartSpeaker sends the speaker start command (send audio to camera).
 func (c *MISSClient) StartSpeaker() error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy audio control is not supported")
+	}
+	if conn, ok := c.Conn.(interface{ SupportsAudioOutput() bool }); ok && !conn.SupportsAudioOutput() {
+		return errors.New("xiaomi: audio output is not supported by this transport version")
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdSpeakerStartReq)
 	return c.WriteCommand(data)
 }
 
 // StopSpeaker sends the speaker stop command.
 func (c *MISSClient) StopSpeaker() error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy audio control is not supported")
+	}
 	data := binary.BigEndian.AppendUint32(nil, missCmdSpeakerStop)
 	return c.WriteCommand(data)
 }
@@ -247,6 +441,9 @@ func (c *MISSClient) SpeakerCodec() uint32 {
 
 // WriteAudio encrypts and sends an audio packet to the camera via CS2 channel 3.
 func (c *MISSClient) WriteAudio(codecID uint32, payload []byte) error {
+	if c.legacy {
+		return errors.New("xiaomi: legacy talk is not supported")
+	}
 	payload, err := Encode(payload, c.key)
 	if err != nil {
 		return err
@@ -267,6 +464,9 @@ func (c *MISSClient) ReadPacket() (*MISSPacket, error) {
 		return nil, fmt.Errorf("miss: read media: %w", err)
 	}
 
+	if c.legacy {
+		return c.readLegacyPacket(hdr, payload)
+	}
 	if len(hdr) < missHdrSize {
 		return nil, fmt.Errorf("miss: packet header too small")
 	}

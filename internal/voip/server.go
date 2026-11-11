@@ -441,7 +441,7 @@ func (s *Server) handleMessage(rawMsg string, remoteAddr TransportAddr) {
 	case MethodInvite:
 		response = s.handleInvite(msg, remoteAddr)
 	case MethodUpdate:
-		response = s.handleRenegotiation(msg, remoteAddr)
+		response = s.handleRenegotiationLocked(msg, remoteAddr)
 	case MethodAck:
 		s.handleAck(msg, remoteAddr)
 		return // ACK has no response
@@ -578,7 +578,7 @@ func (s *Server) handleInvite(msg *Message, remoteAddr TransportAddr) string {
 	}
 
 	if s.dialogManager.Get(callID) != nil {
-		return s.handleRenegotiation(msg, remoteAddr)
+		return s.handleRenegotiationLocked(msg, remoteAddr)
 	}
 	if ExtractTag(msg.To()) != "" {
 		return BuildResponse(msg, 481, "Call/Transaction Does Not Exist", "")

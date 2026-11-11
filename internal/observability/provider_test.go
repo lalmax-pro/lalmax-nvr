@@ -73,7 +73,7 @@ func TestProviderExportsTracesMetricsAndPropagatesContext(t *testing.T) {
 		slog.SetDefault(previousSlogLogger)
 	})
 
-	requests := make(chan capturedOTLPRequest, 4)
+	requests := make(chan capturedOTLPRequest, 64)
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -88,8 +88,6 @@ func TestProviderExportsTracesMetricsAndPropagatesContext(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer collector.Close()
-	appLogger := slog.New(otelslog.NewHandler("provider-test"))
-	slog.SetDefault(appLogger)
 	provider, err := NewProvider(context.Background(), "test-version", ProviderConfig{
 		Enabled:               true,
 		Endpoint:              collector.URL + "/collector/",
@@ -103,6 +101,11 @@ func TestProviderExportsTracesMetricsAndPropagatesContext(t *testing.T) {
 		LogsExportInterval:    20 * time.Millisecond,
 	})
 	require.NoError(t, err)
+
+	// otelslog.NewHandler binds the current global LoggerProvider at creation;
+	// create the application logger only after NewProvider installs this test provider.
+	appLogger := slog.New(otelslog.NewHandler("provider-test"))
+	slog.SetDefault(appLogger)
 
 	router := chi.NewRouter()
 	router.Use(NewHTTPObserver(NewAggregator()).Middleware)

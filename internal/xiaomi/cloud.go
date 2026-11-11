@@ -8,6 +8,7 @@ package xiaomi
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/rc4"
@@ -30,16 +31,26 @@ import (
 
 var cloudLogger = slog.Default().With("component", "xiaomi-cloud")
 
-// pendingClouds stores Cloud objects that are awaiting captcha/verify continuation.
+// Pending login challenges expire even when the browser abandons login.
+const pendingCloudTTL = 10 * time.Minute
+
+type pendingCloud struct {
+	cloud     *Cloud
+	expiresAt time.Time
+	timer     *time.Timer
+}
+
 var (
-	pendingClouds   = make(map[string]*Cloud)
+	pendingClouds   = make(map[string]*pendingCloud)
 	pendingCloudsMu sync.Mutex
 )
 
 func storePendingCloud(c *Cloud) string {
 	id := randString(16)
 	pendingCloudsMu.Lock()
-	pendingClouds[id] = c
+	entry := &pendingCloud{cloud: c, expiresAt: time.Now().Add(pendingCloudTTL)}
+	pendingClouds[id] = entry
+	entry.timer = time.AfterFunc(pendingCloudTTL, func() { deletePendingCloud(id) })
 	pendingCloudsMu.Unlock()
 	return id
 }
@@ -47,13 +58,39 @@ func storePendingCloud(c *Cloud) string {
 func loadPendingCloud(id string) *Cloud {
 	pendingCloudsMu.Lock()
 	defer pendingCloudsMu.Unlock()
-	return pendingClouds[id]
+	entry := pendingClouds[id]
+	if entry == nil {
+		return nil
+	}
+	if !time.Now().Before(entry.expiresAt) {
+		entry.timer.Stop()
+		delete(pendingClouds, id)
+		return nil
+	}
+	return entry.cloud
+}
+
+func CancelPendingLogin(id string) {
+	deletePendingCloud(id)
 }
 
 func deletePendingCloud(id string) {
 	pendingCloudsMu.Lock()
 	defer pendingCloudsMu.Unlock()
-	delete(pendingClouds, id)
+	if entry := pendingClouds[id]; entry != nil {
+		entry.timer.Stop()
+		delete(pendingClouds, id)
+	}
+}
+
+// ClearPendingLogins invalidates outstanding captcha and verification challenges.
+func ClearPendingLogins() {
+	pendingCloudsMu.Lock()
+	defer pendingCloudsMu.Unlock()
+	for id, entry := range pendingClouds {
+		entry.timer.Stop()
+		delete(pendingClouds, id)
+	}
 }
 
 // CloudSession holds authenticated Xiaomi cloud session data.
@@ -108,6 +145,10 @@ type AuthRequest struct {
 // SignIn authenticates with the Xiaomi cloud and returns a session.
 // Region should be "cn", "sg", "de", etc. Defaults to "cn" if empty.
 func SignIn(username, password, region string) (*CloudSession, error) {
+	return SignInContext(context.Background(), username, password, region)
+}
+
+func SignInContext(ctx context.Context, username, password, region string) (*CloudSession, error) {
 	if username == "" || password == "" {
 		return nil, errors.New("xiaomi: username and password are required")
 	}
@@ -116,6 +157,7 @@ func SignIn(username, password, region string) (*CloudSession, error) {
 	}
 
 	c := &Cloud{
+		ctx:    ctx,
 		client: &http.Client{Timeout: 15 * time.Second},
 		sid:    "xiaomiio",
 		region: region,
@@ -139,6 +181,10 @@ func SignIn(username, password, region string) (*CloudSession, error) {
 // SignInWithCaptcha handles the initial sign-in that may require captcha.
 // Returns (session, captchaSessionID, error). If captchaSessionID != "", captcha/2FA is required.
 func SignInWithCaptcha(username, password, region string) (session *CloudSession, captchaSessionID string, err error) {
+	return SignInWithCaptchaContext(context.Background(), username, password, region)
+}
+
+func SignInWithCaptchaContext(ctx context.Context, username, password, region string) (session *CloudSession, captchaSessionID string, err error) {
 	if username == "" || password == "" {
 		return nil, "", errors.New("xiaomi: username and password are required")
 	}
@@ -147,11 +193,13 @@ func SignInWithCaptcha(username, password, region string) (session *CloudSession
 	}
 
 	c := &Cloud{
+		ctx:    ctx,
 		client: &http.Client{Timeout: 15 * time.Second},
 		sid:    "xiaomiio",
 		region: region,
 	}
 
+	defer func() { c.ctx = nil }()
 	if err := c.Login(username, password); err != nil {
 		var loginErr *LoginError
 		if errors.As(err, &loginErr) {
@@ -174,6 +222,10 @@ func SignInWithCaptcha(username, password, region string) (session *CloudSession
 
 // SignInWithToken re-authenticates using a stored passToken.
 func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
+	return SignInWithTokenContext(context.Background(), userID, passToken, region)
+}
+
+func SignInWithTokenContext(ctx context.Context, userID, passToken, region string) (*CloudSession, error) {
 	if userID == "" || passToken == "" {
 		return nil, errors.New("xiaomi: user_id and token are required")
 	}
@@ -182,6 +234,7 @@ func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
 	}
 
 	c := &Cloud{
+		ctx:    ctx,
 		client: &http.Client{Timeout: 15 * time.Second},
 		sid:    "xiaomiio",
 		region: region,
@@ -218,73 +271,68 @@ func (e *CaptchaSessionError) Unwrap() error {
 
 // LoginWithCaptcha submits a captcha code to continue the login flow.
 func LoginWithCaptcha(cloudID, captchaCode string) (*CloudSession, error) {
-	c := loadPendingCloud(cloudID)
-	if c == nil {
-		return nil, errors.New("xiaomi: invalid or expired captcha session")
-	}
-	defer deletePendingCloud(cloudID)
-
-	if err := c.loginWithCaptcha(captchaCode); err != nil {
-		var loginErr *LoginError
-		if errors.As(err, &loginErr) {
-			newID := storePendingCloud(c)
-			return nil, &CaptchaSessionError{
-				LoginError:       loginErr,
-				CaptchaSessionID: newID,
-			}
-		}
-		return nil, err
-	}
-
-	userID, passToken := c.UserToken()
-	return &CloudSession{
-		UserID:    userID,
-		PassToken: passToken,
-		Region:    c.region,
-		client:    c.client,
-		ssecurity: c.ssecurity,
-		cookies:   c.cookies,
-	}, nil
+	return LoginWithCaptchaContext(context.Background(), cloudID, captchaCode)
 }
 
-// LoginWithVerify submits a verification ticket (SMS/email code) to continue login.
-func LoginWithVerify(cloudID, ticket string) (*CloudSession, error) {
-	c := loadPendingCloud(cloudID)
-	if c == nil {
-		return nil, errors.New("xiaomi: invalid or expired verification session")
-	}
-	defer deletePendingCloud(cloudID)
+func LoginWithCaptchaContext(ctx context.Context, cloudID, captchaCode string) (*CloudSession, error) {
+	return continueCloudLogin(ctx, cloudID, "captcha", func(c *Cloud) error { return c.loginWithCaptcha(captchaCode) })
+}
 
-	if err := c.loginWithVerify(ticket); err != nil {
-		var loginErr *LoginError
-		if errors.As(err, &loginErr) {
-			newID := storePendingCloud(c)
-			return nil, &CaptchaSessionError{
-				LoginError:       loginErr,
-				CaptchaSessionID: newID,
-			}
-		}
+// LoginWithVerify submits a verification ticket (SMS/email code).
+func LoginWithVerify(cloudID, ticket string) (*CloudSession, error) {
+	return LoginWithVerifyContext(context.Background(), cloudID, ticket)
+}
+
+func LoginWithVerifyContext(ctx context.Context, cloudID, ticket string) (*CloudSession, error) {
+	return continueCloudLogin(ctx, cloudID, "verification", func(c *Cloud) error { return c.loginWithVerify(ticket) })
+}
+
+func continueCloudLogin(ctx context.Context, id, kind string, login func(*Cloud) error) (*CloudSession, error) {
+	invalid := fmt.Errorf("xiaomi: invalid or expired %s session", kind)
+	c := loadPendingCloud(id)
+	if c == nil {
+		return nil, invalid
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Concurrent submissions cannot reuse a challenge already consumed by success.
+	if loadPendingCloud(id) != c {
+		return nil, invalid
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	userID, passToken := c.UserToken()
+	c.ctx = ctx
+	defer func() { c.ctx = nil }()
+	if err := login(c); err != nil {
+		var loginErr *LoginError
+		if errors.As(err, &loginErr) {
+			deletePendingCloud(id)
+			return nil, &CaptchaSessionError{LoginError: loginErr, CaptchaSessionID: storePendingCloud(c)}
+		}
+		// A wrong OTP or transient network failure can be retried until expiry.
+		return nil, err
+	}
+	deletePendingCloud(id)
+	c.auth = nil
 	return &CloudSession{
-		UserID:    userID,
-		PassToken: passToken,
-		Region:    c.region,
-		client:    c.client,
-		ssecurity: c.ssecurity,
-		cookies:   c.cookies,
+		UserID: c.userID, PassToken: c.passToken, Region: c.region,
+		client: c.client, ssecurity: c.ssecurity, cookies: c.cookies,
 	}, nil
 }
 
 // GetDeviceList fetches the list of devices from the Xiaomi cloud.
 func GetDeviceList(session *CloudSession) ([]CloudDevice, error) {
+	return GetDeviceListContext(context.Background(), session)
+}
+
+func GetDeviceListContext(ctx context.Context, session *CloudSession) ([]CloudDevice, error) {
 	if session == nil || session.cookies == "" {
 		return nil, errors.New("xiaomi: session not authenticated")
 	}
 
 	c := &Cloud{
+		ctx:       ctx,
 		client:    session.client,
 		sid:       "xiaomiio",
 		region:    session.Region,
@@ -314,25 +362,42 @@ func GetDeviceList(session *CloudSession) ([]CloudDevice, error) {
 }
 
 func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, error) {
-	session, err := SignInWithToken(xiaomiCfg.UserID, xiaomiCfg.Token, xiaomiCfg.Region)
+	return ResolveMISSURLContext(context.Background(), xiaomiCfg, did, model)
+}
+
+func ResolveMISSURLContext(ctx context.Context, xiaomiCfg XiaomiCloudConfig, did, model string) (string, error) {
+	session, err := SignInWithTokenContext(ctx, xiaomiCfg.UserID, xiaomiCfg.Token, xiaomiCfg.Region)
 	if err != nil {
 		return "", fmt.Errorf("xiaomi cloud auth: %w", err)
 	}
 
-	// Get device LAN IP from cloud device list.
-	var deviceIP string
-	devices, err := GetDeviceList(session)
+	devices, err := GetDeviceListContext(ctx, session)
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		cloudLogger.Warn("failed to get device list for IP lookup", "error", err)
-	} else {
-		for _, d := range devices {
-			if d.DID == did {
-				deviceIP = d.IP
-				if model == "" {
-					model = d.Model
-				}
-				break
+	}
+	return resolveMISSWithSession(ctx, session, did, model, devices)
+}
+
+func resolveMISSWithSession(ctx context.Context, session *CloudSession, did, model string, devices []CloudDevice) (string, error) {
+	var deviceIP string
+	for _, d := range devices {
+		if d.DID == did {
+			deviceIP = d.IP
+			if model == "" {
+				model = d.Model
 			}
+			break
+		}
+	}
+	if strings.Contains(model, ".cateye.") {
+		if err := wakeCamera(ctx, session, did); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			cloudLogger.Warn("camera wakeup failed", "did", did, "error", err)
 		}
 	}
 
@@ -353,12 +418,17 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 	)
 
 	c := &Cloud{
+		ctx:       ctx,
 		client:    session.client,
 		sid:       "xiaomiio",
 		region:    session.Region,
 		ssecurity: session.ssecurity,
 		cookies:   session.cookies,
 		userID:    session.UserID,
+	}
+
+	if legacyModel(model) {
+		return resolveLegacyWithCloud(c, deviceIP, did, model, clientPublic, clientPrivate)
 	}
 
 	result, err := c.Request(
@@ -368,6 +438,9 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 		nil,
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "no available vendor support") && (model == legacyMijia || model == ModelDafang) {
+			return resolveLegacyWithCloud(c, deviceIP, did, model, clientPublic, clientPrivate)
+		}
 		return "", fmt.Errorf("miss_get_vendor API: %w", err)
 	}
 
@@ -385,11 +458,8 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 		return "", fmt.Errorf("parse miss_get_vendor response: %w", err)
 	}
 
-	// Map vendor ID to name (CS2=4).
-	vendorName := "cs2"
-	if resp.Vendor.ID == 1 {
-		vendorName = "tutk"
-	}
+	// Preserve the vendor identity even when its transport is unsupported.
+	vendorName := missVendorName(resp.Vendor.ID)
 
 	// Build MISS URL with device LAN IP as host (CS2 P2P connects directly to this IP).
 	missURL := &url.URL{
@@ -405,7 +475,7 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 	if model != "" {
 		q.Set("model", model)
 	}
-	// Force UDP transport for CS2 - TCP has known 6-second disconnect issue.
+	// Use UDP as the default LAN transport.
 	if vendorName == "cs2" {
 		q.Set("transport", "udp")
 	}
@@ -419,9 +489,26 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 	return missURL.String(), nil
 }
 
+func missVendorName(id byte) string {
+	switch id {
+	case 1:
+		return "tutk"
+	case 3:
+		return "agora"
+	case 4:
+		return "cs2"
+	case 6:
+		return "mtp"
+	default:
+		return strconv.Itoa(int(id))
+	}
+}
+
 // --- Internal cloud client ---
 
 type Cloud struct {
+	mu     sync.Mutex // Serializes continuation of a pending login.
+	ctx    context.Context
 	client *http.Client
 	sid    string
 	region string
@@ -435,8 +522,28 @@ type Cloud struct {
 	auth map[string]string
 }
 
+// Context is bound to the current operation, not the persistent HTTP client.
+// Later captcha/OTP requests can therefore use their own request context.
+func (c *Cloud) do(req *http.Request) (*http.Response, error) {
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return nil, err
+		}
+		req = req.WithContext(c.ctx)
+	}
+	return c.client.Do(req)
+}
+
+func (c *Cloud) get(rawURL string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.do(req)
+}
+
 func (c *Cloud) Login(username, password string) error {
-	res, err := c.client.Get("https://account.xiaomi.com/pass/serviceLogin?_json=true&sid=" + c.sid)
+	res, err := c.get("https://account.xiaomi.com/pass/serviceLogin?_json=true&sid=" + c.sid)
 	if err != nil {
 		return fmt.Errorf("xiaomi: login step 1: %w", err)
 	}
@@ -464,6 +571,12 @@ func (c *Cloud) Login(username, password string) error {
 	}
 	cookies := "deviceId=" + randString(16)
 
+	// Continue the same captcha challenge with both the answer and its cookie.
+	if c.auth != nil && c.auth["captcha_code"] != "" {
+		form.Set("captCode", c.auth["captcha_code"])
+		cookies += "; ick=" + c.auth["ick"]
+	}
+
 	req := cloudRequest{
 		Method:     "POST",
 		URL:        "https://account.xiaomi.com/pass/serviceLoginAuth2",
@@ -471,7 +584,7 @@ func (c *Cloud) Login(username, password string) error {
 		RawCookies: cookies,
 	}.Encode()
 
-	res, err = c.client.Do(req)
+	res, err = c.do(req)
 	if err != nil {
 		return fmt.Errorf("xiaomi: login step 2: %w", err)
 	}
@@ -521,7 +634,7 @@ func (c *Cloud) LoginWithToken(userID, passToken string) error {
 
 	req.Header.Set("Cookie", fmt.Sprintf("userId=%s; passToken=%s", userID, passToken))
 
-	res, err := c.client.Do(req)
+	res, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -581,7 +694,7 @@ func (c *Cloud) Request(baseURL, apiURL, params string, headers map[string]strin
 		req.Header.Set(k, v)
 	}
 
-	res, err := c.client.Do(req)
+	res, err := c.do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -623,7 +736,7 @@ func (c *Cloud) Request(baseURL, apiURL, params string, headers map[string]strin
 }
 
 func (c *Cloud) getCaptcha(captchaURL string) error {
-	res, err := c.client.Get("https://account.xiaomi.com" + captchaURL)
+	res, err := c.get("https://account.xiaomi.com" + captchaURL)
 	if err != nil {
 		return err
 	}
@@ -643,7 +756,7 @@ func (c *Cloud) getCaptcha(captchaURL string) error {
 
 func (c *Cloud) authStart(notificationURL string) error {
 	rawURL := strings.Replace(notificationURL, "/fe/service/identity/authStart", "/identity/list", 1)
-	res, err := c.client.Get(rawURL)
+	res, err := c.get(rawURL)
 	if err != nil {
 		return err
 	}
@@ -682,7 +795,7 @@ func (c *Cloud) sendTicket() error {
 		RawCookies: cookies,
 	}.Encode()
 
-	res, err := c.client.Do(req)
+	res, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -714,7 +827,7 @@ func (c *Cloud) sendTicket() error {
 		RawCookies: cookies,
 	}.Encode()
 
-	res, err = c.client.Do(req2)
+	res, err = c.do(req2)
 	if err != nil {
 		return err
 	}
@@ -743,7 +856,7 @@ func (c *Cloud) sendTicket() error {
 }
 
 func (c *Cloud) finishAuth(location string) error {
-	res, err := c.client.Get(location)
+	res, err := c.get(location)
 	if err != nil {
 		return err
 	}
@@ -810,7 +923,7 @@ func (c *Cloud) loginWithVerify(ticket string) error {
 		RawCookies: "identity_session=" + c.auth["identity_session"],
 	}.Encode()
 
-	res, err := c.client.Do(req)
+	res, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -937,7 +1050,6 @@ func findCookie(res *http.Response, name string) string {
 // randString generates a random alphanumeric string of the given length.
 
 // getAPIBaseURL returns the Xiaomi API base URL for the given region.
-// Matches go2rtc's GetBaseURL logic.
 func getAPIBaseURL(region string) string {
 	switch region {
 	case "de", "i2", "ru", "sg", "us":

@@ -44,27 +44,20 @@ func TestRateLimitBlocksAfterMaxFailures(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Send authMaxFailures failed requests
-	for i := 0; i < authMaxFailures; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
-		req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("request %d: expected 401, got %d", i+1, w.Code)
-		}
-		// Small delay to ensure proper timing
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// Next failed request should be 429 (rate limiter checks BEFORE incrementing)
-	// After 20 failures, the 21st request should be blocked
+	// Seed the exact pre-check state. Running twenty bcrypt checks can exceed
+	// the one-minute security window on a race-instrumented, CPU-contended VM;
+	// this test targets the blocking branch, while the other auth tests cover
+	// failure accumulation and reset behavior.
+	ip := "198.18.0.7"
+	authFailures.Store(ip, rateLimitEntry{count: authMaxFailures, windowStart: time.Now()})
+	t.Cleanup(func() { authFailures.Delete(ip) })
 	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = ip + ":1234"
 	req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected 429 after 20 failures, got %d", w.Code)
+		t.Fatalf("expected 429 after %d failures, got %d", authMaxFailures, w.Code)
 	}
 }
 func TestRateLimitDoesNotBlockValidAuthAfterFailures(t *testing.T) {

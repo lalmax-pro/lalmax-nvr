@@ -332,7 +332,8 @@ func (h *Handler) handleHomeAssistantCatalog(w http.ResponseWriter, r *http.Requ
 		if name == "" {
 			name = p.StreamID
 		}
-		result.Streams = append(result.Streams, homeAssistantStream{WebRTCSupported: p.TranscodeJobID == "" && homeAssistantWebRTCCodec(s.VideoCodec) != "" && (h.config == nil || h.config.Streaming.WebRTC.Enabled == nil || *h.config.Streaming.WebRTC.Enabled), PTZSupported: protocols[p.StreamID] == "onvif" || protocols[p.StreamID] == "gb28181", PTZPresetsSupported: protocols[p.StreamID] == "onvif", StreamID: p.StreamID, Name: name, Active: s.Active, VideoCodec: s.VideoCodec, AudioCodec: s.AudioCodec, RTSPURL: playURL, UnavailableReason: reason})
+		webrtcEnabled := h.config == nil || h.config.Streaming.WebRTC.Enabled == nil || *h.config.Streaming.WebRTC.Enabled
+		result.Streams = append(result.Streams, homeAssistantStream{WebRTCSupported: homeAssistantCatalogWebRTCSupported(s, p.TranscodeJobID, webrtcEnabled), PTZSupported: protocols[p.StreamID] == "onvif" || protocols[p.StreamID] == "gb28181", PTZPresetsSupported: protocols[p.StreamID] == "onvif", StreamID: p.StreamID, Name: name, Active: s.Active, VideoCodec: s.VideoCodec, AudioCodec: s.AudioCodec, RTSPURL: playURL, UnavailableReason: reason})
 	}
 	// One bounded response, with stable ordering, avoids drifting pages as streams go offline.
 	slices.SortFunc(result.Streams, func(a, b homeAssistantStream) int { return strings.Compare(a.StreamID, b.StreamID) })
@@ -383,4 +384,19 @@ func (h *Handler) handleHomeAssistantSnapshot(w http.ResponseWriter, r *http.Req
 	}
 	h.setCachedSnapshot(cacheID, data)
 	serveSnapshotBytes(w, data, "no-store")
+}
+
+// homeAssistantCatalogWebRTCSupported reflects the derived-output restrictions
+// of the WHEP handler. Polling does not start any transcoder job.
+func homeAssistantCatalogWebRTCSupported(info media.StreamInfo, derivedJobID string, enabled bool) bool {
+    if !enabled || !info.Active || homeAssistantWebRTCCodec(info.VideoCodec) == "" {
+        return false
+    }
+    if derivedJobID == "" { return true }
+    switch strings.ToLower(info.AudioCodec) {
+    case "g711a", "pcma", "g711u", "pcmu", "opus":
+        return true
+    default:
+        return false
+    }
 }

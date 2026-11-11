@@ -46,10 +46,12 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	switch camera.Protocol {
 	case "gb28181":
 		h.handleGB28181PTZMove(w, r, cameraID, req.Mode, req.Pan, req.Tilt, req.Zoom)
+	case "xiaomi":
+		h.handleXiaomiPTZMove(w, r, cameraID, req.Mode, req.Pan, req.Tilt, req.Zoom)
 	case "onvif":
 		h.handleONVIFPTZMove(w, r, cameraID, req.Mode, req.Pan, req.Tilt, req.Zoom)
 	default:
-		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF or GB28181 cameras")
+		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF, GB28181 or Xiaomi cameras")
 	}
 }
 
@@ -69,10 +71,12 @@ func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	switch camera.Protocol {
 	case "gb28181":
 		h.handleGB28181PTZStop(w, r, cameraID)
+	case "xiaomi":
+		h.handleXiaomiPTZStop(w, r, cameraID)
 	case "onvif":
 		h.handleONVIFPTZStop(w, r, cameraID)
 	default:
-		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF or GB28181 cameras")
+		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF, GB28181 or Xiaomi cameras")
 	}
 }
 
@@ -188,7 +192,7 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 			"moving": false,
 		})
 	default:
-		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF or GB28181 cameras")
+		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF, GB28181 or Xiaomi cameras")
 	}
 }
 

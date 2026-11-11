@@ -65,7 +65,7 @@ func TestExecutorRejectsMetadataOnlyBytesAndStalledCounter(t *testing.T) {
 	}
 }
 
-func TestExecutorRequiresFreshMediaProgressWithoutFPSClock(t *testing.T) {
+func TestExecutorRejectsPublisherBytesWithoutVideoTimestamp(t *testing.T) {
 	a := &adapterStub{observations: []OutputObservation{
 		{Active: true, VideoCodec: "h264", MediaBytes: 128},
 		{Active: true, VideoCodec: "h264", MediaBytes: 256},
@@ -74,8 +74,8 @@ func TestExecutorRequiresFreshMediaProgressWithoutFPSClock(t *testing.T) {
 	if e.Ready(context.Background(), "output") {
 		t.Fatal("one media-byte sample counted as ready")
 	}
-	if !e.Ready(context.Background(), "output") {
-		t.Fatal("two fresh media-byte advances were rejected without FPS timestamp")
+	if e.Ready(context.Background(), "output") {
+		t.Fatal("audio or metadata bytes accepted without video-frame evidence")
 	}
 }
 
@@ -85,7 +85,7 @@ func TestExecutorRejectsOldGenerationAndCounterResetUntilFresh(t *testing.T) {
 		{Active: true, VideoCodec: "h264", LastFrame: started.Add(-2 * time.Second), MediaBytes: 900},
 		{Active: true, VideoCodec: "h264", MediaBytes: 100},
 		{Active: true, VideoCodec: "h264", MediaBytes: 200},
-		{Active: true, VideoCodec: "h264", MediaBytes: 300},
+		{Active: true, VideoCodec: "h264", MediaBytes: 300, LastFrame: time.Now()},
 	}}
 	e := newReadyExecutor(a, started)
 	if e.Ready(context.Background(), "output") {
@@ -98,8 +98,21 @@ func TestExecutorRejectsOldGenerationAndCounterResetUntilFresh(t *testing.T) {
 		t.Fatal("first post-reset progress counted as ready")
 	}
 	if !e.Ready(context.Background(), "output") {
-		t.Fatal("second post-reset progress was not accepted")
+		t.Fatal("fresh post-reset video frame was not accepted")
 	}
+}
+
+func TestExecutorRejectsStaleVideoDespitePublisherByteGrowth(t *testing.T) {
+    started := time.Now().Add(-2*time.Minute)
+    stale := time.Now().Add(-time.Minute)
+    a := &adapterStub{observations: []OutputObservation{
+        {Active: true, VideoCodec: "h264", LastFrame: stale, MediaBytes: 1000},
+        {Active: true, VideoCodec: "h264", LastFrame: stale, MediaBytes: 2000},
+    }}
+    e := newReadyExecutor(a, started)
+    if e.Ready(context.Background(), "output") || e.Ready(context.Background(), "output") {
+        t.Fatal("stale video timestamp was treated as live from aggregate bytes")
+    }
 }
 
 func TestExecutorAcceptsFreshVideoFrame(t *testing.T) {
@@ -110,6 +123,22 @@ func TestExecutorAcceptsFreshVideoFrame(t *testing.T) {
 	e := newReadyExecutor(a, started)
 	if !e.Ready(context.Background(), "output") {
 		t.Fatal("fresh video frame rejected")
+	}
+}
+
+func TestExecutorReadyWithReservedButNoStateMap(t *testing.T) {
+	adapter := &adapterStub{observation: OutputObservation{
+		Active: true, VideoCodec: "h264", LastFrame: time.Now(),
+	}}
+	executor := &BackendExecutor{
+		Adapter:  adapter,
+		reserved: map[string]time.Time{"output": time.Now().Add(-time.Second)},
+	}
+	if !executor.Ready(context.Background(), "output") {
+		t.Fatal("fresh frame should be ready even with an initially nil ready map")
+	}
+	if executor.ready["output"] == nil {
+		t.Fatal("Ready must initialize per-output progress state")
 	}
 }
 

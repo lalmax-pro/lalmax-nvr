@@ -362,7 +362,7 @@ func TestMISSNewClientUnsupportedVendor(t *testing.T) {
 	privHex := hex.EncodeToString(priv)
 
 	url := fmt.Sprintf(
-		"miss://192.168.1.1?vendor=tutk&device_public=%s&client_private=%s&client_public=%s&sign=test",
+		"miss://192.168.1.1?vendor=unrecognized&device_public=%s&client_private=%s&client_public=%s&sign=test",
 		pubHex, privHex, pubHex,
 	)
 	_, err = NewMISSClient(url, 0)
@@ -621,4 +621,23 @@ func TestMISSClientWriteAudioEncrypts(t *testing.T) {
 
 	require.Len(t, mock.writtenPkts, 1)
 	require.NotEqual(t, payload, mock.writtenPkts[0].payload)
+}
+
+func TestMISSNewClientTUTKRequiresUID(t *testing.T) {
+	pub, priv, err := GenerateKey()
+	require.NoError(t, err)
+	rawURL := fmt.Sprintf("miss://127.0.0.1?vendor=tutk&device_public=%x&client_private=%x", pub, priv)
+	_, err = NewMISSClient(rawURL, time.Second)
+	require.ErrorContains(t, err, "TUTK UID is required")
+}
+
+type noAudioOutputConn struct{ *mockMISSConn }
+
+func (c noAudioOutputConn) SupportsAudioOutput() bool { return false }
+
+func TestSpeakerStartRejectsUnsupportedTransportBeforeCommand(t *testing.T) {
+	conn := &mockMISSConn{}
+	client := &MISSClient{Conn: noAudioOutputConn{conn}, key: make([]byte, 32)}
+	require.ErrorContains(t, client.StartSpeaker(), "audio output is not supported")
+	require.Empty(t, conn.writtenCmds)
 }

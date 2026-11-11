@@ -21,7 +21,9 @@
 
 **支持对接 Home Assistant。** 可将 NVR 中选定的流发布为 HA 摄像头实体，提供实时视频、缩略图和在线状态，并支持检测事件与自动化、录像浏览与回放、云台控制及可选 WebRTC。HA 只连接 NVR，摄像机账号保留在 NVR 中。
 
-在 HACS 中将 `https://github.com/lalmax-pro/lalmax-nvr` 添加为 **Integration** 类型的自定义仓库，下载最新稳定版并重启 Home Assistant（2026.10.2 或更新版本）。HACS 只安装 HA 集成，NVR 需单独运行。在 NVR 的“设置 → Home Assistant”选择发布流，再在 HA“设置 → 设备与服务”中添加 **lalmax-nvr**。HTTP 与 RTSP 账号分别配置。[安装、播放、事件与云台指南](docs/zh/home-assistant.md)。
+在 HACS 中搜索 **lalmax-nvr**，打开并下载最新稳定版，再重启 Home Assistant（2026.10.2 或更新版本）。HACS 只安装 HA 集成，NVR 需单独运行。在 NVR 的“设置 → Home Assistant”选择发布流，再在 HA“设置 → 设备与服务”中添加 **lalmax-nvr**。HTTP 与 RTSP 账号分别配置。[安装、播放、事件与云台指南](docs/zh/home-assistant.md)。
+
+如果 HACS 目录中暂时搜索不到 **lalmax-nvr**，可通过 **⋮ → Custom repositories** 将 `https://github.com/lalmax-pro/lalmax-nvr` 添加为 **Integration** 类型的自定义仓库作为备用方式，再下载并重启 HA。
 
 H.264/H.265 播放取决于终端编码支持；H.265 WebRTC 需要 V1.0.2 之后包含该增强的 NVR 版本。AAC 音频使用 HLS，云台取决于设备支持的命令，当前不自动转码。
 

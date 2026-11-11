@@ -468,7 +468,7 @@ func (conn *whepSession) updateVideoCodec(msg base.RtmpMsg) {
 	}
 
 	if msg.IsHevcKeySeqHeader() {
-		vps, sps, pps, err := hevc.ParseVpsSpsPpsFromSeqHeader(msg.Payload)
+		vps, sps, pps, err := hevc.ParseVpsSpsPpsFromEnhancedSeqHeader(msg.Payload)
 		if err != nil {
 			nazalog.Error("ParseVpsSpsPpsFromSeqHeader err:", err)
 			return

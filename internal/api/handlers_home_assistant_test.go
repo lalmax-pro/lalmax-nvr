@@ -134,3 +134,26 @@ func TestHomeAssistantSettingsValidationAndPermissions(t *testing.T) {
 	res := doRequest(t, h.Routes(), "PUT", "/api/settings/home-assistant", strings.NewReader(`{"enabled":true}`), "", "")
 	require.Equal(t, http.StatusForbidden, res.Code)
 }
+
+func TestHomeAssistantDerivedCatalogWebRTCCapabilities(t *testing.T) {
+    for _, tc := range []struct {
+        name string
+        info media.StreamInfo
+        jobID string
+        enabled bool
+        want bool
+    }{
+        {"derived PCMA", media.StreamInfo{Active:true, VideoCodec:"h264", AudioCodec:"g711a"}, "job-1", true, true},
+        {"derived PCMU", media.StreamInfo{Active:true, VideoCodec:"H265", AudioCodec:"pcmu"}, "job-1", true, true},
+        {"derived Opus", media.StreamInfo{Active:true, VideoCodec:"H264", AudioCodec:"opus"}, "job-1", true, true},
+        {"derived AAC rejected", media.StreamInfo{Active:true, VideoCodec:"H264", AudioCodec:"aac"}, "job-1", true, false},
+        {"derived offline", media.StreamInfo{Active:false, VideoCodec:"H264", AudioCodec:"pcma"}, "job-1", true, false},
+        {"derived unsupported video", media.StreamInfo{Active:true, VideoCodec:"AV1", AudioCodec:"pcma"}, "job-1", true, false},
+        {"derived globally disabled", media.StreamInfo{Active:true, VideoCodec:"H264", AudioCodec:"pcma"}, "job-1", false, false},
+        {"original AAC supported", media.StreamInfo{Active:true, VideoCodec:"H264", AudioCodec:"aac"}, "", true, true},
+    } {
+        t.Run(tc.name, func(t *testing.T) {
+            require.Equal(t, tc.want, homeAssistantCatalogWebRTCSupported(tc.info, tc.jobID, tc.enabled))
+        })
+    }
+}

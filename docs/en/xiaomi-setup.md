@@ -32,11 +32,11 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 
 ## Overview
 
-- **Protocol**: CS2 P2P (Xiaomi's proprietary cloud protocol)
+- **Protocol**: CS2 and TUTK P2P (Xiaomi's proprietary cloud protocol)
 - **Authentication**: Xiaomi cloud services with token-based auth
-- **Supported Models**: CS2-based cameras (see table below)
-- **Features**: Live streaming, recording, two-way audio, dual-lens support
-- **Transport**: UDP (CS2 over TCP has known 6-second disconnect issue)
+- **Supported Models**: MISS cameras (see table below)
+- **Features**: Live streaming, recording, two-way audio, directional PTZ
+- **Transport**: CS2 over UDP or TCP, and TUTK over UDP
 
 ## Prerequisites
 
@@ -53,18 +53,20 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 | **Xiaofang** | `isa.camera.isc5c1` | H264 | PCM | Pan/tilt dome camera |
 | **Xiaomi HLC8** | `isa.camera.hlc8` | H265 | PCMA | Dual-lens camera |
 | **Loock V2** | `loock.cateye.v02` | H264 | PCMA | Smart doorbell camera |
-| **Dafang** | `isa.camera.df3` | - | - | ❌ Not Supported (TUTK protocol) |
+| **Dafang** | `isa.camera.df3` | - | - | MISS or legacy firmware may work; hardware verification is required |
 
-**Important**: Only CS2 protocol cameras are supported. Dafang cameras use the TUTK protocol which is not implemented.
+**Important**: MISS devices using CS2 or TUTK transport and some legacy login and video formats are supported experimentally. Legacy AAC supports ADTS framing without CRC; legacy PTZ and talk are not supported. TUTK and legacy models require hardware verification.
 
 ## Features
 
 - **Live Preview**: WebRTC, HLS, HTTP-FLV playback
 - **Recording**: Automatic MP4 segment recording
 - **Audio**: G.711 (PCMA/PCMU) and Opus audio codecs
+- **Audio sample rate**: Received 16 kHz G.711/PCM is low-pass filtered and resampled to the downstream 8 kHz rate; Opus retains its encoding.
+- **Pan/Tilt**: Direction, speed and stop controls for motor-equipped models.
 - **Two-way Audio**: Send audio to camera speaker via WebSocket
-- **Dual-lens Support**: Main/secondary channel selection
-- **Auto Fallback**: HD to SD quality fallback when no HD data
+- **Dual-lens Devices**: Main and secondary lenses can be configured as separate channels; SD-card queries map the selected camera channel to the device storage channel
+- **Auto Fallback**: HD to SD fallback when the first video frame times out, including audio-only connections
 
 ## Setup Methods
 
@@ -76,7 +78,7 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 
 3. **Xiaomi Discovery**: Expand the "Xiaomi Device Discovery" section
 
-4. **Authenticate**: Enter your Xiaomi account credentials and click "Sign In"
+4. **Authenticate**: Select the same account region as Mi Home, enter your Xiaomi account credentials and click "Sign In"
    - If captcha/2FA is required, follow the prompts
 
 5. **Select Devices**: Browse the discovered devices and select cameras you want to add
@@ -87,7 +89,27 @@ This is **P2P fetch then inject**, not RTSP pull and not GB28181 publish. Overvi
 
 8. **Save**: Click "Save Configuration" to apply changes
 
+An account with no cameras stays signed in. Device refresh errors are shown without discarding the account controls. Sign Out removes persisted server credentials and pending captcha/2FA challenges; a failed save retains the signed-in state and displays an error. Camera configurations remain available. Existing streaming connections continue until disconnected; reconnecting then requires signing in again.
+
+A wrong verification code or temporary network failure can be retried in the current login session. Sessions expire after 10 minutes, after which login must restart. Credentials are applied to running cameras only after the configuration is saved successfully; persistence failures are reported as errors.
+
 ### Manual Configuration
+
+Named accounts can be added in device discovery or configured in YAML:
+
+```yaml
+xiaomi:
+  user_id: "default-user-id"
+  token: "default-token"
+  region: "cn"
+  accounts:
+    home:
+      user_id: "other-user-id"
+      token: "other-token"
+      region: "sg"
+```
+
+Named accounts can be signed in and selected in device discovery. Remove cameras bound to a named account before signing it out. Use `xiaomi://device-id?account=home` to bind a camera to that account; omitting `account` selects the default account. Named user IDs and tokens use the existing configuration encryption mechanism when enabled.
 
 Edit the configuration file:
 
@@ -119,7 +141,91 @@ cameras:
 | `encoding` | Yes | string | "h264" | Video encoding (h264, h265) |
 | `audio_enabled` | No | boolean | true for H.264/H.265 | Enable audio recording; API creation can explicitly disable it |
 
+## Pan/Tilt Control
+
+The live-view control pad provides four directions and three speed settings. Holding a direction moves the camera; releasing, leaving the button, or leaving the view sends stop. Xiaomi controls omit optical zoom and presets.
+
+Controls reuse the active streaming connection. Disconnected or reconnecting cameras return `503`. Motor compatibility still requires testing on the specific model.
+
+Dafang (`isa.camera.df3`) running MISS firmware uses continuous PTZ movement; releasing the control or expiry of the movement lease sends a stop. Legacy firmware PTZ commands are not yet implemented.
+
+CW400 (`isa.camera.hlc8a`), CW500 (`isa.camera.500dh`), `chuangmi.camera.026c05`, `chuangmi.camera.029a02` and `xiaomi.camera.c01a01` use fixed-step motor commands; their step size is determined by the camera and the speed setting does not alter it. `GET /api/cameras/{id}/ptz/capabilities` reports the model-based control mode; other models remain unknown. This is not confirmation from the device.
+
+The recorder keeps an authenticated cloud session for up to 10 minutes and the device list for up to 30 seconds. A credential change or failed resolution invalidates the cached session; each connection still obtains a fresh device authorization. Doorbell models are sent a wakeup request before connection.
+
+- `POST /api/cameras/{id}/ptz/move`: `{"mode":"continuous","pan":-0.5,"tilt":0,"zoom":0}`.
+- `POST /api/cameras/{id}/ptz/stop`: no request body.
+
+Pan and tilt are normalized to `[-1,1]`; the larger axis wins when both are set. Magnitude maps to native speeds `1–10` (approximately `3/5/10` for the three UI settings). A zero vector stops movement. Only continuous movement is supported, and zoom must be zero.
+
+Movement expires after two seconds. Clients must renew commands to continue moving; the Web UI renews every 500 ms. The server attempts an automatic stop if a stop request is lost.
+
+## SD Card Recordings: Search and Playback
+
+On **Cameras → Xiaomi Devices**, select a camera and date in the **SD Card Recordings** panel, then query the camera's SD-card index and play a selected clip. This reads recordings stored on the camera, not recordings saved locally by the NVR; querying the index does not import clips into NVR storage. The date filter is applied in the UI to the full index; the API currently has no date or pagination parameters.
+
+### Recordings List API
+
+```http
+GET /api/cameras/{camera_id}/sd-recordings?channel={storage_channel}
+```
+
+`channel` is the camera's **SD storage channel**, from `0` to `255`; it defaults to `0` when omitted. A dual-lens camera's live channel number may differ from its storage channel. The UI maps known models. For example, live channel `2` maps to storage channel `10` on `xiaomi.camera.082ac1`. Other models may use different mappings.
+
+Requests use the standard NVR API authentication. Success returns HTTP `200`; a missing camera returns `404`; a malformed channel or non-Xiaomi camera returns `400`; an unavailable recorder returns `503`; a device connection/protocol error returns `502`; a read timeout returns `504`. Results are sorted by start time ascending and deduplicated by start time.
+
+The endpoint returns JSON. This redacted example uses illustrative timestamps and counts:
+
+```json
+{
+  "camera_id": "cam-REDACTED",
+  "storage_channel": 10,
+  "recordings": [
+    {
+      "start": 1760000000,
+      "duration": 59
+    },
+    {
+      "start": 1760000060,
+      "duration": 64,
+      "event": true
+    }
+  ],
+  "total": 2
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `camera_id` | Camera record ID in NVR; redacted in the example |
+| `storage_channel` | Device storage channel used for this query |
+| `recordings[].start` | Clip start time as Unix seconds; used to locate the clip for playback |
+| `recordings[].duration` | Clip duration in seconds |
+| `recordings[].event` | Whether the clip is an event recording; omitted for ordinary clips (`false`) |
+| `total` | Number of indexed clips returned |
+
+The camera's recording index does not include media codec, resolution, frame rate, bitrate, or file size, so the list API does not return those properties. The UI formats dates and times from `start`.
+
+### Recording Playback API
+
+```http
+GET /api/cameras/{camera_id}/sd-recordings/{start}/playback?channel={storage_channel}
+```
+
+`start` must be the Unix-seconds timestamp returned by the list API, and `channel` must match the storage channel used to query the list. On success, the response body is an MP4 byte stream with `Content-Type: video/mp4`; HTTP Range requests are supported. The server generates a display filename such as `xiaomi-recording-{start}.mp4`; the camera does not supply a filename.
+
+### Xiaomi Device Request Flow
+
+1. This feature requires MISS/CS2 transport; legacy transport does not support SD index or file retrieval. NVR connects over an authenticated Xiaomi session. Recording queries reuse the camera's active live session when available, avoiding an additional P2P session alongside live video. If the camera is not streaming, a cached dedicated query session is used; each query does not log in again.
+2. Index and file requests use CS2 RDT data channel `1` and are encrypted with the current MISS session key. The RDT header contains a command number and payload length. The index command is `6`, with a 24-byte payload and the storage channel at offset 8. The file command is `1`, with a 12-byte payload, the start time at offset 0, and the storage channel at offset 8.
+3. The camera returns a binary index: a 4-byte header followed by 8-byte entries. Each entry contains a 32-bit little-endian Unix start time and a 32-bit little-endian flags field. The low 8 bits of the flags field contain duration in seconds; bit 8 marks an event recording. NVR parses these entries into the JSON fields above.
+4. A file request returns MP4 data. Recording requests use a separate data channel from live video and do not change live streaming or PTZ state during normal operation.
+
+The list request has a 45-second timeout and playback has a 2-minute timeout. A camera disconnect, protocol error, or timeout is returned as an API gateway or timeout error.
+
 ## Two-way Audio (Talk)
+
+Set lens and quality in the camera URL, for example `xiaomi://123?channel=1&quality=sd`. `channel` accepts `0` (default lens), `1`, and `2`; the second-lens channel varies by model. `quality` accepts `hd`, `sd`, and `auto`, with `hd` as the default. These options are currently configured through the URL.
 
 Xiaomi cameras support two-way audio, allowing you to send audio to the camera's speaker.
 
@@ -144,13 +250,19 @@ Xiaomi cameras support two-way audio, allowing you to send audio to the camera's
 GET /api/xiaomi/talk/ws?camera_id={camera_id}
 ```
 
-Connect via WebSocket and send binary PCMA audio data.
+After opening the WebSocket, read the server's `connected` status and `speaker_codec` before sending binary audio. Each message contains one 40 ms frame:
+
+- `1027`: 8 kHz mono PCMA, 320 bytes per message.
+- `1024`: 8 kHz mono signed PCM16LE, 640 bytes per message.
+- `1032`: 48 kHz mono raw Opus, without a WebM/Ogg container.
+
+The browser selects the encoder for the speaker codec. Opus talk requires WebCodecs AudioEncoder support; unsupported browsers show a message and release the microphone.
 
 ## Network Transport
 
 ### Transport Protocol
 
-The system uses **UDP transport** by default for CS2 P2P communication. CS2 over TCP has a known 6-second disconnect issue.
+The system uses **UDP transport** by default for CS2 P2P communication and handles camera PING/PONG liveness probes.
 
 ### Network Requirements
 
@@ -163,7 +275,7 @@ The system uses **UDP transport** by default for CS2 P2P communication. CS2 over
 ### Common Issues
 
 #### "Unsupported vendor" Error
-- **Cause**: Camera uses TUTK protocol
+- **Cause**: Camera uses an unsupported transport
 - **Solution**: Ensure your camera model is in the supported list
 
 #### "Authentication Failed" Error
@@ -235,6 +347,8 @@ RTSP Pull → MP4 Recording
 - `POST /api/xiaomi/auth` - Login with Xiaomi account
 - `POST /api/xiaomi/captcha` - Submit captcha code
 - `POST /api/xiaomi/verify` - Submit 2FA verification
+- `GET /api/xiaomi/status` - Read saved account status and region without contacting the cloud; credentials are never returned
+- `POST /api/xiaomi/logout` - Remove saved/runtime credentials and pending login challenges (administrator permission required)
 
 ### Device Management
 

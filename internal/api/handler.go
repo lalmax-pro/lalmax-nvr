@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
+	"github.com/lalmax-pro/lalmax-nvr/internal/ai/webhook"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/emby"
@@ -148,30 +149,39 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
+	sfuBridges            SFUBridgeRegistry
+	sfuRooms              SFURoomManager
+	sfuSignaling          http.Handler
+	sfuTickets            SFUTicketIssuer
+	sfuWHEPKey            []byte
 	isInternalMediaStream func(string) bool
-	transcodePlayback derivedPlaybackProvider
-	transcodeService *transcode.Service
-	derivedRecorder *recorder.TaskManager
-	transcodeProbe *transcode.ProbeService
-	homeAssistantMu sync.Mutex
-	homeAssistantWHEPKey []byte
-	voipSettingsMu     sync.Mutex
-	voipRestarter      VoIPRestarter
-	db                 storage.APIRepository
-	store              *storage.Manager
-	authMW             func(http.Handler) http.Handler
-	multiUserMW        func(http.Handler) http.Handler
-	config             *config.Config
-	configWatcher      *config.Watcher
-	restartFunc        func()
-	restartOnce        sync.Once
-	camMgr             *camera.CameraManager
-	recPlanner         *recorder.RecordingPlanner
-	reconcileRecording func(context.Context)
-	mediaEngine        media.Engine
-	mediaProxy         *http.Client
-	wsMgr              media.WS
-	groupStreamSource  interface {
+	transcodePlayback     derivedPlaybackProvider
+	transcodeService      *transcode.Service
+	derivedRecorder       *recorder.TaskManager
+	transcodeProbe        *transcode.ProbeService
+	homeAssistantMu       sync.Mutex
+	homeAssistantWHEPKey  []byte
+	voipSettingsMu        sync.Mutex
+	xiaomiMu              sync.Mutex
+	xiaomiAuthMu          sync.Mutex
+	xiaomiChallenges      map[string]xiaomiChallenge
+	xiaomiMotorDispatch   func(context.Context, string, string, int) error
+	voipRestarter         VoIPRestarter
+	db                    storage.APIRepository
+	store                 *storage.Manager
+	authMW                func(http.Handler) http.Handler
+	multiUserMW           func(http.Handler) http.Handler
+	config                *config.Config
+	configWatcher         *config.Watcher
+	restartFunc           func()
+	restartOnce           sync.Once
+	camMgr                *camera.CameraManager
+	recPlanner            *recorder.RecordingPlanner
+	reconcileRecording    func(context.Context)
+	mediaEngine           media.Engine
+	mediaProxy            *http.Client
+	wsMgr                 media.WS
+	groupStreamSource     interface {
 		StreamInfo(string) (model.Format, []byte, []byte, []byte, *model.StreamHub, bool)
 	}
 	configPath        string
@@ -182,8 +192,10 @@ type Handler struct {
 	stabilityProvider StabilityProvider
 	cloudProxy        CloudAuthProxy
 	streamRegistry    *StreamRegistry
-	localVideos localVideoPlayers
-	aiManager         *ai.Manager
+	localVideos       localVideoPlayers
+	aiManager              *ai.Manager
+	aiDetectionPublisher    webhook.CallbackFunc
+	aiDetectionPublisherID  string
 	onvifDiscover     func(ctx context.Context, timeout time.Duration) *onvif.DiscoveryResult
 	onvifProbeDevice  func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error)
 	onvifNewClient    func(endpoint, username, password string) onvifDeviceClient
@@ -281,7 +293,6 @@ func NewHandler(db storage.APIRepository, store *storage.Manager, authMW func(ht
 		cloudProxy:       cloudProxy,
 		sysMetrics:       newSysMetricsHistory(),
 		streamMetrics:    newStreamMetricsHistory(),
-		trafficHistory:    &trafficHistory{},
 		apiObserver:      observability.NewHTTPObserver(observability.NewAggregator()),
 		onvifDiscover:    onvif.Discover,
 		onvifProbeDevice: onvif.ProbeDevice,
@@ -290,8 +301,9 @@ func NewHandler(db storage.APIRepository, store *storage.Manager, authMW func(ht
 		},
 		transcodeProbe:       transcode.NewProbeService(nil),
 		homeAssistantWHEPKey: []byte(rand.Text()),
-		eventHub: event.NewLiveHub(),
-		logRing:  middleware.DefaultLogRing(),
+		sfuWHEPKey:           []byte(rand.Text()),
+		eventHub:             event.NewLiveHub(),
+		logRing:              middleware.DefaultLogRing(),
 	}
 	if db != nil {
 		hub := h.eventHub
@@ -335,11 +347,38 @@ func (h *Handler) SetMultiUserAuthMW(mw func(http.Handler) http.Handler) {
 	h.multiUserMW = mw
 }
 
-// SetAIManager sets the AI Manager on the handler.
+// SetAIDetectionPublisher registers the event-bus publisher across AI manager
+// replacements. Changing the callback first removes the previous registration.
+func (h *Handler) SetAIDetectionPublisher(callback webhook.CallbackFunc) {
+	if h.aiManager != nil && h.aiDetectionPublisherID != "" {
+		h.aiManager.UnregisterCallback(h.aiDetectionPublisherID)
+	}
+	h.aiDetectionPublisher = callback
+	h.aiDetectionPublisherID = ""
+	if h.aiManager != nil && callback != nil {
+		h.aiDetectionPublisherID = h.aiManager.OnDetection(callback)
+	}
+}
+
+// SetAIManager installs the current manager and rebinds its event-bus callback.
+// The old registration is removed so a manager replacement never duplicates
+// event publication; repeated installation of the same manager is a no-op.
 func (h *Handler) SetAIManager(mgr *ai.Manager) {
+	if h.aiManager == mgr {
+		return
+	}
+	if h.aiManager != nil && h.aiDetectionPublisherID != "" {
+		h.aiManager.UnregisterCallback(h.aiDetectionPublisherID)
+	}
 	h.aiManager = mgr
-	if h.aiManager != nil && h.db != nil {
-		h.aiManager.SetStore(h.db)
+	h.aiDetectionPublisherID = ""
+	if mgr != nil {
+		if h.db != nil {
+			mgr.SetStore(h.db)
+		}
+		if h.aiDetectionPublisher != nil {
+			h.aiDetectionPublisherID = mgr.OnDetection(h.aiDetectionPublisher)
+		}
 	}
 }
 
@@ -374,6 +413,15 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
 	r.Get("/api/setup/directories", h.handleSetupDirectories)
+	// Authentication for this WebSocket is a short-lived, single-use ticket;
+	// the signaling handler validates both the ticket and its Origin.
+	r.Get("/api/sfu/ws", h.handleSFUSignaling)
+	r.Get("/sfu-meet", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/sfu-meet/", http.StatusTemporaryRedirect)
+	})
+	r.Get("/sfu-meet/", h.serveSFUMeet)
+	r.Get("/sfu-meet/app.js", h.serveSFUMeet)
+	r.Get("/sfu-meet/style.css", h.serveSFUMeet)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -386,6 +434,25 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/users/me/preferences/{namespace}", h.userPreference)
 		r.Put("/api/users/me/preferences/{namespace}", h.userPreference)
 
+		r.Route("/api/sfu/bridges", func(r chi.Router) {
+			r.Use(middleware.RequireOperatePermission())
+			r.Get("/", h.listSFUBridges)
+			r.Post("/", h.createSFUBridge)
+			r.Get("/{id}", h.getSFUBridge)
+			r.Get("/{id}/playback", h.getSFUBridgePlayback)
+			r.Post("/{id}/whep", h.createSFUBridgeWHEP)
+			r.Delete("/{id}/whep/{session}", h.deleteSFUBridgeWHEP)
+			r.Post("/{id}/stop", h.stopSFUBridge)
+			r.Delete("/{id}", h.removeSFUBridge)
+		})
+		r.With(middleware.RequireOperatePermission()).Post("/api/sfu/ticket", h.createSFUTicket)
+		r.With(middleware.RequireOperatePermission()).Get("/api/sfu/bridge-requests", h.getSFUBridgeRequest)
+		r.Route("/api/sfu/rooms", func(r chi.Router) {
+			r.Use(middleware.RequireOperatePermission())
+			r.Get("/", h.listSFURooms)
+			r.Post("/", h.createSFURoom)
+			r.Delete("/{id}", h.closeSFURoom)
+		})
 		r.Post("/api/auth/logout", h.handleLogout)
 		r.Get("/api/health/details", h.handleHealthDetails)
 		r.Route("/api/recordings", func(r chi.Router) {
@@ -448,9 +515,12 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/protocols", h.handleCameraProtocols)
 				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
 				r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
+				r.Get("/ptz/capabilities", h.handleXiaomiPTZCapabilities)
 				r.Post("/ptz/move", h.handlePTZMove)
 				r.Post("/ptz/stop", h.handlePTZStop)
 				r.Get("/ptz/status", h.handlePTZStatus)
+				r.Get("/sd-recordings", h.handleXiaomiSDRecordings)
+				r.Get("/sd-recordings/{start}/playback", h.handleXiaomiSDRecordingPlayback)
 				r.Get("/ptz/presets", h.handlePTZGetPresets)
 				r.With(middleware.RequireOperatePermission()).Post("/ptz/presets", h.handlePTZCreatePreset)
 				r.With(middleware.RequireOperatePermission()).Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
@@ -519,6 +589,7 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Patch("/api/transcoding/jobs/{id}", h.handleSaveTranscodeJob)
 		r.With(middleware.RequireOperatePermission()).Delete("/api/transcoding/jobs/{id}", h.handleDeleteTranscodeJob)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/start", h.handleStartTranscodeJob)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/resume", h.handleRearmTranscodeJob)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/record/start", h.handleStartDerivedRecording)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/record/stop", h.handleStopDerivedRecording)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/leases", h.handleAcquireTranscodeDemandLease)
@@ -660,6 +731,10 @@ func (h *Handler) Routes() http.Handler {
 		})
 		// Xiaomi cloud auth and device discovery
 		r.Route("/api/xiaomi", func(r chi.Router) {
+			r.Get("/status", h.handleXiaomiStatus)
+			r.With(middleware.RequireOperatePermission()).Post("/logout", h.handleXiaomiLogout)
+
+			r.Get("/accounts", h.handleXiaomiAccounts)
 			r.Post("/auth", h.handleXiaomiAuth)
 			r.Post("/captcha", h.handleXiaomiCaptcha)
 			r.Post("/verify", h.handleXiaomiVerify)
@@ -1071,15 +1146,10 @@ func (h *Handler) mediaPlayURL(ctx context.Context, cameraID, protocol string) (
 	if h.mediaEngine == nil {
 		return nil, nil
 	}
-	token := ""
-	if h.config != nil {
-		token = h.config.Auth.PlaybackTokens[cameraID]
-	}
 	playURL, err := h.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
 		StreamID: cameraID,
 		AppName:  "live",
 		Protocol: protocol,
-		Token:    token,
 	})
 	if err != nil || playURL == nil || playURL.URL == "" {
 		return nil, err

@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -112,10 +113,35 @@ func (s *RecordingScheduler) run(ctx context.Context) {
 	defer close(s.done)
 
 	schedLogger.Info("recording scheduler started")
-	s.check(ctx)
-
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	var retryTimer *time.Timer
+	var retryC <-chan time.Time
+	retryDelay := time.Second
+	defer func() {
+		if retryTimer != nil {
+			retryTimer.Stop()
+		}
+	}()
+	reconcile := func() {
+		if !s.check(ctx) {
+			if retryTimer != nil {
+				retryTimer.Stop()
+			}
+			retryC = nil
+			retryDelay = time.Second
+			return
+		}
+		if retryC == nil {
+			if retryTimer == nil {
+				retryTimer = time.NewTimer(retryDelay)
+			} else {
+				retryTimer.Reset(retryDelay)
+			}
+			retryC = retryTimer.C
+		}
+	}
+	reconcile()
 
 	for {
 		select {
@@ -126,14 +152,29 @@ func (s *RecordingScheduler) run(ctx context.Context) {
 			schedLogger.Info("recording scheduler stopped (context cancelled)")
 			return
 		case <-ticker.C:
-			s.check(ctx)
+			reconcile()
 		case <-s.kick:
-			s.check(ctx)
+			// A new plan or stream event deserves a prompt retry even if a
+			// different stream has already reached the backoff ceiling.
+			if retryTimer != nil {
+				retryTimer.Stop()
+			}
+			retryC = nil
+			retryDelay = time.Second
+			reconcile()
+		case <-retryC:
+			retryC = nil
+			retryDelay *= 2
+			if retryDelay > 30*time.Second {
+				retryDelay = 30 * time.Second
+			}
+			reconcile()
 		}
 	}
 }
 
-func (s *RecordingScheduler) check(ctx context.Context) {
+// check reports whether a desired live stream needs a retry for its codec.
+func (s *RecordingScheduler) check(ctx context.Context) bool {
 	ctx, span := observability.StartBusinessSpan(ctx, "recording.scheduler.reconcile")
 	var checkErr error
 	defer func() { observability.EndBusinessSpan(span, checkErr) }()
@@ -148,13 +189,13 @@ func (s *RecordingScheduler) check(ctx context.Context) {
 	s.mu.Unlock()
 
 	if tasks == nil {
-		return
+		return false
 	}
 	if planner != nil {
 		if err := planner.Refresh(ctx); err != nil {
 			schedLogger.Error("failed to refresh recording plans", "error", err)
 			checkErr = err
-			return
+			return false
 		}
 	}
 	desired := s.desiredState(ctx, planner)
@@ -184,6 +225,7 @@ func (s *RecordingScheduler) check(ctx context.Context) {
 		attribute.Int("nvr.recording.running_task_count", len(tasks.RunningIDs())),
 	)
 
+	retryCodec := false
 	if aliveKnown {
 		for id := range aliveSet {
 			want := desired[id] || eventOn(eventActive, id)
@@ -193,6 +235,9 @@ func (s *RecordingScheduler) check(ctx context.Context) {
 			if want {
 				if err := tasks.Ensure(ctx, id); err != nil {
 					schedLogger.Debug("record task ensure failed", "stream_id", id, "error", err)
+					if errors.Is(err, ErrStreamCodecNotReady) {
+						retryCodec = true
+					}
 				}
 			}
 		}
@@ -212,6 +257,7 @@ func (s *RecordingScheduler) check(ctx context.Context) {
 			}
 		}
 	}
+	return retryCodec
 }
 
 func eventOn(fn func(string) bool, streamID string) bool {

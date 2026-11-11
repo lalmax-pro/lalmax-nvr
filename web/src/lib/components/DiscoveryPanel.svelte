@@ -5,13 +5,16 @@
     probeONVIFDevice,
     xiaomiAuth,
     xiaomiDevices,
+    xiaomiLogout,
+    xiaomiAccounts,
     xiaomiCaptcha,
     xiaomiVerify,
     createCamera,
+    updateCamera,
     xiaomiSync,
     checkVendor
   } from '$lib/api';
-  import type { DiscoveredDevice, XiaomiDevice, XiaomiAuthResponse, Camera } from '$lib/api';
+  import type { DiscoveredDevice, XiaomiDevice, XiaomiAccountInfo, XiaomiAuthResponse, Camera } from '$lib/api';
   import { RefreshCw, WifiOff, Clock, AlertTriangle, Search } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
@@ -42,10 +45,17 @@
   let xiaomiExpanded = $state(false);
   let xiaomiUsername = $state('');
   let xiaomiPassword = $state('');
+  let xiaomiRegion = $state('cn');
+  let xiaomiRequestVersion = 0;
   let xiaomiLoading = $state(false);
   let xiaomiError = $state('');
   let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
   let xiaomiLoggedIn = $state(false);
+  let xiaomiAccount = $state('default');
+  let xiaomiAddingAccount = $state(false);
+  let xiaomiNewAccount = $state('');
+  let xiaomiLoginAccount = $state('default');
+  let xiaomiAccountList = $state<XiaomiAccountInfo[]>([]);
   let xiaomiAddingDid = $state<string | null>(null);
   let xiaomiCaptchaImage = $state('');
   let xiaomiCaptchaSessionId = $state('');
@@ -58,6 +68,7 @@
 
   // TUTK vendor check dialog
   let tutkWarningDevice = $state<XiaomiDevice | null>(null);
+  let warningVendor = $state('tutk');
 
   // Expose scan state for parent
   export function isScanning(): boolean {
@@ -69,14 +80,27 @@
       await scanONVIF();
     } else if (protocol === 'xiaomi') {
       xiaomiExpanded = true;
-      // Probe auth status
+      const version = ++xiaomiRequestVersion;
+      xiaomiLoading = true;
+      xiaomiError = '';
       try {
-        const res = await xiaomiDevices();
-        if (res.devices && res.devices.length > 0) {
-          xiaomiLoggedIn = true;
-          xiaomiDeviceList = res.devices;
+        const result = await xiaomiAccounts();
+        if (version !== xiaomiRequestVersion) return;
+        xiaomiAccountList = result.accounts.filter(a => a.id === 'default' || a.authenticated);
+        const account = xiaomiAccountList.find(a => a.id === xiaomiAccount);
+        xiaomiLoggedIn = account?.authenticated ?? false;
+        if (xiaomiAccount === 'default' && account?.region) xiaomiRegion = account.region;
+        xiaomiDeviceList = [];
+        if (xiaomiLoggedIn) {
+          const res = await xiaomiDevices(undefined, xiaomiAccount);
+          if (version !== xiaomiRequestVersion) return;
+          xiaomiDeviceList = res.devices || [];
         }
-      } catch (e) { console.warn('Xiaomi not authenticated:', e); }
+      } catch (e) {
+        if (version === xiaomiRequestVersion) xiaomiError = e instanceof Error ? e.message : String(e);
+      } finally {
+        if (version === xiaomiRequestVersion) xiaomiLoading = false;
+      }
     }
   }
 
@@ -148,7 +172,10 @@
     xiaomiVerifyTarget = '';
     xiaomiVerifyType = '';
     try {
-      const result = await xiaomiAuth(xiaomiUsername, xiaomiPassword);
+      xiaomiLoginAccount = xiaomiAddingAccount ? xiaomiNewAccount.trim() : xiaomiAccount;
+      if (!xiaomiLoginAccount || (xiaomiAddingAccount && xiaomiLoginAccount === 'default')) throw new Error(t('xiaomi.invalidAccountId'));
+      if (xiaomiAddingAccount && xiaomiAccountList.some(a => a.id === xiaomiLoginAccount)) throw new Error(t('xiaomi.accountExists'));
+      const result = await xiaomiAuth(xiaomiUsername, xiaomiPassword, xiaomiRegion, undefined, xiaomiLoginAccount);
       await handleAuthResult(result);
     } catch (e: any) {
       xiaomiError = e.message || t('xiaomi.authFailed');
@@ -183,9 +210,14 @@
     xiaomiVerifySessionId = '';
     xiaomiVerifyTarget = '';
     xiaomiVerifyType = '';
+    xiaomiPassword = '';
+    xiaomiAccount = xiaomiLoginAccount;
+    xiaomiAddingAccount = false;
+    xiaomiNewAccount = '';
+    const loggedIn = { id: xiaomiAccount, authenticated: true, region: xiaomiRegion };
+    xiaomiAccountList = [...xiaomiAccountList.filter(a => a.id !== xiaomiAccount), loggedIn];
     xiaomiLoggedIn = true;
-    const devRes = await xiaomiDevices();
-    xiaomiDeviceList = devRes.devices;
+    await refreshXiaomiDevices();
   }
 
   async function handleXiaomiCaptcha() {
@@ -193,7 +225,7 @@
     xiaomiLoading = true;
     xiaomiError = '';
     try {
-      const result = await xiaomiCaptcha(xiaomiCaptchaSessionId, xiaomiCaptchaCode.trim());
+      const result = await xiaomiCaptcha(xiaomiCaptchaSessionId, xiaomiCaptchaCode.trim(), undefined, xiaomiLoginAccount);
       await handleAuthResult(result);
     } catch (e: any) {
       xiaomiError = e.message || t('xiaomi.authFailed');
@@ -208,7 +240,7 @@
     xiaomiLoading = true;
     xiaomiError = '';
     try {
-      const result = await xiaomiVerify(xiaomiVerifySessionId, xiaomiVerifyTicket.trim());
+      const result = await xiaomiVerify(xiaomiVerifySessionId, xiaomiVerifyTicket.trim(), undefined, xiaomiLoginAccount);
       await handleAuthResult(result);
     } catch (e: any) {
       xiaomiError = e.message || t('xiaomi.authFailed');
@@ -218,19 +250,59 @@
     }
   }
 
-  function isXiaomiDeviceAdded(did: string): boolean {
-    return cameras.some(c => c.protocol === 'xiaomi' && c.url === `xiaomi://${did}`);
+  function xiaomiChannels(device: XiaomiDevice): number[] {
+    // The dual-camera model exposes its fixed and motorized lenses as channels 0 and 2.
+    return device.model.toLowerCase() === 'xiaomi.camera.082ac1' ? [0, 2] : [0];
+  }
+
+  function xiaomiCameraChannel(camera: Camera, did: string): number | null {
+    if (camera.protocol !== 'xiaomi') return null;
+    try {
+      const source = new URL(camera.url);
+      if (source.hostname !== did || (source.searchParams.get('account') || 'default') !== xiaomiAccount) return null;
+      const channel = Number(source.searchParams.get('channel') || '0');
+      return Number.isInteger(channel) && channel >= 0 ? channel : null;
+    } catch { return null; }
+  }
+
+  function existingXiaomiChannels(did: string): Set<number> {
+    const channels = new Set<number>();
+    for (const camera of cameras) {
+      const channel = xiaomiCameraChannel(camera, did);
+      if (channel !== null) channels.add(channel);
+    }
+    return channels;
+  }
+
+  function xiaomiChannelName(name: string, channel: number): string {
+    const baseName = name.replace(/\s+-\s+通道\s+\d+$/, '').trim();
+    return `${baseName} - 通道 ${channel}`;
+  }
+
+  function missingXiaomiChannels(device: XiaomiDevice): number[] {
+    const existing = existingXiaomiChannels(device.did);
+    return xiaomiChannels(device).filter(channel => !existing.has(channel));
+  }
+
+  function xiaomiChannelURL(device: XiaomiDevice, channel: number): string {
+    const query = new URLSearchParams();
+    if (channel !== 0 || xiaomiChannels(device).length > 1) query.set('channel', String(channel));
+    if (xiaomiAccount !== 'default') query.set('account', xiaomiAccount);
+    const suffix = query.toString();
+    return `xiaomi://${device.did}${suffix ? `?${suffix}` : ''}`;
   }
 
   async function addXiaomiDevice(device: XiaomiDevice, skipVendorCheck = false) {
     xiaomiAddingDid = device.did;
+    let changed = false;
     try {
       // Check vendor compatibility before adding
       if (!skipVendorCheck) {
         try {
-          const result = await checkVendor(device.did);
+          const result = await checkVendor(device.did, xiaomiAccount);
           if (!result.compatible) {
             tutkWarningDevice = device;
+            warningVendor = result.vendor;
             xiaomiAddingDid = null;
             return;
           }
@@ -240,17 +312,34 @@
         }
       }
 
-      await createCamera({
-        name: device.name,
-        protocol: 'xiaomi',
-        encoding: 'h264',
-        url: `xiaomi://${device.did}`,
-        enabled: true,
-      });
+      const channels = missingXiaomiChannels(device);
+      if (xiaomiChannels(device).length > 1) {
+        for (const camera of cameras) {
+          const channel = xiaomiCameraChannel(camera, device.did);
+          if (channel !== null && xiaomiChannels(device).includes(channel)) {
+            const name = xiaomiChannelName(camera.name, channel);
+            if (name !== camera.name) {
+              await updateCamera(camera.id, { name });
+              changed = true;
+            }
+          }
+        }
+      }
+      for (const channel of channels) {
+        const isDualChannel = xiaomiChannels(device).length > 1;
+        await createCamera({
+          name: isDualChannel ? xiaomiChannelName(device.name, channel) : device.name,
+          protocol: 'xiaomi',
+          encoding: 'h264',
+          url: xiaomiChannelURL(device, channel),
+          enabled: true,
+        });
+        changed = true;
+      }
       showToast(t('cameras.cameraAdded'), 'success');
-      oncameraadded?.();
     } catch (e) { console.warn('Failed to add Xiaomi device:', e); showToast(t('cameras.failedAdd'), 'error'); } finally {
       xiaomiAddingDid = null;
+      if (changed) oncameraadded?.();
     }
   }
 
@@ -267,17 +356,75 @@
   }
 
   async function refreshXiaomiDevices() {
+    const version = ++xiaomiRequestVersion;
+    xiaomiLoading = true;
+    xiaomiError = '';
     try {
-      const res = await xiaomiDevices();
+      const res = await xiaomiDevices(undefined, xiaomiAccount);
+      if (version !== xiaomiRequestVersion) return;
       xiaomiDeviceList = res.devices || [];
-      xiaomiLoggedIn = true;
-    } catch (e) { console.warn('Failed to refresh Xiaomi devices:', e); xiaomiLoggedIn = false; xiaomiDeviceList = []; }
+      xiaomiLoggedIn = res.authenticated;
+    } catch (e) {
+      if (version === xiaomiRequestVersion) xiaomiError = e instanceof Error ? e.message : String(e);
+    } finally {
+      if (version === xiaomiRequestVersion) xiaomiLoading = false;
+    }
+  }
+
+  async function handleXiaomiLogout() {
+    ++xiaomiRequestVersion;
+    xiaomiLoading = true;
+    xiaomiError = '';
+    try {
+      const removed = xiaomiAccount;
+      await xiaomiLogout(undefined, removed);
+      xiaomiAccountList = removed === 'default'
+        ? xiaomiAccountList.map(a => a.id === 'default' ? { ...a, authenticated: false } : a)
+        : xiaomiAccountList.filter(a => a.id !== removed);
+      xiaomiAccount = 'default';
+      xiaomiLoggedIn = xiaomiAccountList.find(a => a.id === 'default')?.authenticated ?? false;
+      xiaomiDeviceList = [];
+      if (xiaomiLoggedIn) await refreshXiaomiDevices();
+      xiaomiUsername = '';
+      xiaomiPassword = '';
+      xiaomiCaptchaImage = '';
+      xiaomiCaptchaSessionId = '';
+      xiaomiCaptchaCode = '';
+      xiaomiVerifySessionId = '';
+      xiaomiVerifyTicket = '';
+      xiaomiVerifyTarget = '';
+      xiaomiVerifyType = '';
+      tutkWarningDevice = null;
+    } catch (e) {
+      xiaomiError = e instanceof Error ? e.message : String(e);
+    } finally {
+      xiaomiLoading = false;
+    }
+  }
+
+  function resetXiaomiVerification() {
+    xiaomiCaptchaImage = '';
+    xiaomiCaptchaSessionId = '';
+    xiaomiCaptchaCode = '';
+    xiaomiVerifySessionId = '';
+    xiaomiVerifyTicket = '';
+    xiaomiVerifyTarget = '';
+    xiaomiVerifyType = '';
+  }
+
+  async function selectXiaomiAccount() {
+    resetXiaomiVerification();
+    xiaomiAddingAccount = false;
+    xiaomiDeviceList = [];
+    xiaomiLoggedIn = xiaomiAccountList.find(a => a.id === xiaomiAccount)?.authenticated ?? false;
+    xiaomiError = '';
+    if (xiaomiLoggedIn) await refreshXiaomiDevices();
   }
 
   async function handleSyncCloud() {
     syncing = true;
     try {
-      const result = await xiaomiSync();
+      const result = await xiaomiSync(undefined, xiaomiAccount);
       showToast(t('cameras.syncedCameras').replace('{count}', String(result.synced)), 'success');
       await refreshXiaomiDevices();
     } catch (e: any) {
@@ -329,6 +476,7 @@
           title={t('common.dismiss')}
         >&times;</button>
       </div>
+
 
       {#if scanning}
         <div class="flex items-center gap-3 th-text-secondary py-4">
@@ -461,23 +609,46 @@
         >&times;</button>
       </div>
 
+      {#if xiaomiAccountList.length > 1}
+        <label class="input-label text-xs" for="xiaomi-account-selector">{t('xiaomi.accountSelection')}</label>
+        <select id="xiaomi-account-selector" class="input py-1 text-sm mb-3" bind:value={xiaomiAccount} disabled={xiaomiLoading || syncing || xiaomiAddingDid !== null} onchange={selectXiaomiAccount}>
+          {#each xiaomiAccountList as account}
+            <option value={account.id}>{account.id} {account.region ? `(${account.region})` : ''}</option>
+          {/each}
+        </select>
+      {/if}
+
+      {#if !xiaomiAddingAccount}
+        <button type="button" class="btn btn-ghost btn-sm mb-3" disabled={xiaomiLoading} onclick={() => { resetXiaomiVerification(); xiaomiAddingAccount = true; xiaomiLoggedIn = false; xiaomiError = ''; }}>{t('xiaomi.addAccount')}</button>
+      {/if}
+
       {#if !xiaomiLoggedIn}
         <!-- Login form -->
         <form onsubmit={(e) => { e.preventDefault(); handleXiaomiLogin(); }} class="space-y-3">
           <p class="text-sm th-text-secondary">{t('xiaomi.signInHint')}</p>
+          {#if xiaomiAddingAccount}
+            <label class="input-label text-xs" for="xiaomi-account-id">{t('xiaomi.accountId')}</label>
+            <input id="xiaomi-account-id" type="text" class="input py-1 text-sm" bind:value={xiaomiNewAccount} maxlength="64" required disabled={xiaomiLoading} />
+            <button type="button" class="btn btn-ghost btn-sm" onclick={() => { resetXiaomiVerification(); xiaomiAddingAccount = false; xiaomiLoggedIn = xiaomiAccountList.find(a => a.id === xiaomiAccount)?.authenticated ?? false; xiaomiError = ''; }}>{t('common.cancel')}</button>
+          {/if}
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label class="input-label text-xs" for="xiaomi-account">{t('xiaomi.account')}</label>
-              <input type="text" class="input py-1 text-sm" bind:value={xiaomiUsername} placeholder={t('xiaomi.accountPlaceholder')} required />
+              <input id="xiaomi-account" type="text" class="input py-1 text-sm" bind:value={xiaomiUsername} placeholder={t('xiaomi.accountPlaceholder')} required />
             </div>
             <div>
               <label class="input-label text-xs" for="xiaomi-password">{t('xiaomi.password')}</label>
-              <input type="password" class="input py-1 text-sm" bind:value={xiaomiPassword} placeholder="******" required />
+              <input id="xiaomi-password" type="password" class="input py-1 text-sm" bind:value={xiaomiPassword} placeholder="******" required />
             </div>
           </div>
-          {#if xiaomiError}
-            <p class="th-color-danger text-sm">{xiaomiError}</p>
-          {/if}
+          <div>
+            <label class="input-label text-xs" for="xiaomi-region">{t('xiaomi.region')}</label>
+            <select id="xiaomi-region" class="input py-1 text-sm" bind:value={xiaomiRegion} disabled={xiaomiLoading}>
+              {#each ['cn', 'sg', 'de', 'us', 'ru', 'i2'] as region}
+                <option value={region}>{t(`xiaomi.region.${region}`)}</option>
+              {/each}
+            </select>
+          </div>
           <button type="submit" class="btn btn-primary btn-sm" disabled={xiaomiLoading}>
             {#if xiaomiLoading}
               <span class="spinner mr-1"></span>
@@ -553,9 +724,9 @@
         <!-- Device list -->
         <div class="flex items-center justify-between mb-3">
           <span class="text-sm th-text-secondary">{t('xiaomi.devicesFound').replace('{count}', String(xiaomiDeviceList.length))}</span>
-          <button class="btn btn-ghost btn-sm" onclick={refreshXiaomiDevices}>{t('xiaomi.refresh')}</button>
+          <button class="btn btn-ghost btn-sm" onclick={refreshXiaomiDevices} disabled={xiaomiLoading}>{t('xiaomi.refresh')}</button>
         </div>
-        <button onclick={handleSyncCloud} class="btn btn-ghost btn-sm mb-3" disabled={syncing}>
+        <button onclick={handleSyncCloud} class="btn btn-ghost btn-sm mb-3" disabled={syncing || xiaomiLoading}>
           <RefreshCw size={14} class={syncing ? 'animate-spin' : ''} />
           {t('cameras.syncCloud')}
         </button>
@@ -564,6 +735,7 @@
         {:else}
           <div class="space-y-3">
             {#each xiaomiDeviceList as device (device.did)}
+              {@const missingChannels = missingXiaomiChannels(device)}
               <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
                 <div class="min-w-0 flex-1 mr-4">
                   <div class="font-medium th-text-primary truncate">{device.name}</div>
@@ -572,24 +744,28 @@
                     {device.isOnline ? t('xiaomi.online') : t('xiaomi.offline')}
                   </div>
                 </div>
-                {#if isXiaomiDeviceAdded(device.did)}
+                {#if missingChannels.length === 0}
                   <button
                     type="button"
                     class="btn btn-sm shrink-0 opacity-50 cursor-not-allowed"
                     disabled
                   >
-                    {t('xiaomi.added')}
+                    {device.model.toLowerCase() === 'xiaomi.camera.082ac1' ? t('xiaomi.channelsAdded') : t('xiaomi.added')}
                   </button>
                 {:else}
                   <button
                     onclick={() => addXiaomiDevice(device)}
                     class="btn btn-primary btn-sm shrink-0"
-                    disabled={xiaomiAddingDid === device.did}
+                    disabled={xiaomiLoading || xiaomiAddingDid === device.did}
                   >
                     {#if xiaomiAddingDid === device.did}
                       <span class="spinner mr-1"></span>
                     {/if}
-                    {t('onvif.addCamera')}
+                    {device.model.toLowerCase() === 'xiaomi.camera.082ac1'
+                      ? (missingChannels.length === 2
+                        ? t('xiaomi.addChannels')
+                        : t('xiaomi.addChannel', { channel: missingChannels[0] }))
+                      : t('onvif.addCamera')}
                   </button>
                 {/if}
               </div>
@@ -597,8 +773,11 @@
           </div>
         {/if}
         <div class="mt-4 flex justify-end">
-          <button class="btn btn-ghost btn-sm" onclick={() => { xiaomiLoggedIn = false; xiaomiDeviceList = []; xiaomiError = ''; }}>{t('xiaomi.signOut')}</button>
+          <button class="btn btn-ghost btn-sm" onclick={handleXiaomiLogout} disabled={xiaomiLoading || syncing || xiaomiAddingDid !== null}>{t('xiaomi.signOut')}</button>
         </div>
+      {/if}
+      {#if xiaomiError}
+        <p class="th-color-danger text-sm" role="alert">{xiaomiError}</p>
       {/if}
     </div>
   {/if}
@@ -627,7 +806,7 @@
               {t('cameras.tutkInterceptTitle')}
             </h3>
             <p class="text-sm th-text-secondary">
-              {t('cameras.tutkInterceptMessage', { name: tutkWarningDevice.name })}
+              {t('cameras.unsupportedVendorMessage', { name: tutkWarningDevice.name, vendor: warningVendor })}
             </p>
           </div>
         </div>

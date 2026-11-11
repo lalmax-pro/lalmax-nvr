@@ -414,7 +414,7 @@ func (m *mockCS2Conn) SetDeadline(t time.Time) error      { return nil }
 func (m *mockCS2Conn) SetReadDeadline(t time.Time) error  { return nil }
 func (m *mockCS2Conn) SetWriteDeadline(t time.Time) error { return nil }
 
-func TestCS2WorkerNoPongOnPing(t *testing.T) {
+func TestCS2WorkerRepliesPongOnPing(t *testing.T) {
 	t.Parallel()
 
 	// Simulate a PING packet as the camera would send it.
@@ -451,12 +451,15 @@ func TestCS2WorkerNoPongOnPing(t *testing.T) {
 	require.Error(t, cerr)
 	require.Contains(t, cerr.Error(), "mock read error")
 
-	// Verify no PONG was written in response to PING.
+	// A camera liveness probe must receive a PONG.
+	found := false
 	for _, w := range mock.writes {
-		if len(w) >= 2 && w[1] == cs2MsgPong {
-			t.Errorf("worker wrote unexpected PONG on PING: %x", w)
+		if len(w) >= 4 && w[1] == cs2MsgPong {
+			found = true
 		}
 	}
+	require.True(t, found)
+
 }
 
 // newTestCS2Conn creates a CS2Conn suitable for unit tests.
@@ -489,16 +492,24 @@ func TestCS2ConnErrorReturnsActualError(t *testing.T) {
 	defer server.Close()
 
 	c := newTestCS2Conn(t, client)
-	go c.worker()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.worker()
+	}()
 
 	// Close server side to make worker's Read return an error.
 	server.Close()
 
-	// Wait for worker to exit (channels close in defer).
-	require.Eventually(t, func() bool {
-		_, ok := c.channels[0].Pop(time.Millisecond)
-		return !ok // channel is closed
-	}, time.Second, 10*time.Millisecond)
+	// Pop returns false for both a timeout and a closed channel. Wait for the
+	// worker itself so Error is read only after its exit guard has run.
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not exit")
+	}
+	_, ok := c.channels[0].Pop(time.Second)
+	require.False(t, ok)
 
 	err := c.Error()
 	require.Error(t, err)

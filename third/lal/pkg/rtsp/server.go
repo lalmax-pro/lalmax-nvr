@@ -10,7 +10,9 @@ package rtsp
 
 import (
 	"crypto/tls"
+	"errors"
 	"net"
+	"sync"
 )
 
 type IServerObserver interface {
@@ -69,8 +71,10 @@ type Server struct {
 	addr     string
 	observer IServerObserver
 
-	ln   net.Listener
-	auth ServerAuthConfig
+	mu       sync.Mutex
+	ln       net.Listener
+	disposed bool
+	auth     ServerAuthConfig
 }
 
 func NewServer(addr string, observer IServerObserver, auth ServerAuthConfig) *Server {
@@ -81,32 +85,62 @@ func NewServer(addr string, observer IServerObserver, auth ServerAuthConfig) *Se
 	}
 }
 
-func (s *Server) Listen() (err error) {
-	s.ln, err = net.Listen("tcp", s.addr)
-	if err != nil {
-		return
+// installListener atomically publishes a listener. Dispose may run while the
+// socket is being bound; a late listener must never escape shutdown.
+func (s *Server) installListener(ln net.Listener) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.disposed {
+		return net.ErrClosed
 	}
-	Log.Infof("start rtsp server listen. addr=%s", s.addr)
-	return
+	if s.ln != nil {
+		return errors.New("rtsp server listener already started")
+	}
+	s.ln = ln
+	return nil
 }
 
-func (s *Server) ListenWithTLS(certFile, keyFile string) (err error) {
+func (s *Server) Listen() error {
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return err
+	}
+	if err = s.installListener(ln); err != nil {
+		_ = ln.Close()
+		return err
+	}
+	Log.Infof("start rtsp server listen. addr=%s", s.addr)
+	return nil
+}
+
+func (s *Server) ListenWithTLS(certFile, keyFile string) error {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		Log.Errorf("start rtsps server listen failed. certFile=%s, keyFile=%s, err=%+v", certFile, keyFile, err)
-		return
+		return err
 	}
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
-	if s.ln, err = tls.Listen("tcp", s.addr, tlsConfig); err != nil {
-		return
+	ln, err := tls.Listen("tcp", s.addr, tlsConfig)
+	if err != nil {
+		return err
+	}
+	if err = s.installListener(ln); err != nil {
+		_ = ln.Close()
+		return err
 	}
 	Log.Infof("start rtsps server listen. addr=%s", s.addr)
-	return
+	return nil
 }
 
 func (s *Server) RunLoop() error {
+	s.mu.Lock()
+	ln := s.ln
+	s.mu.Unlock()
+	if ln == nil {
+		return net.ErrClosed
+	}
 	for {
-		conn, err := s.ln.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			return err
 		}
@@ -115,11 +149,15 @@ func (s *Server) RunLoop() error {
 }
 
 func (s *Server) Dispose() {
-	if s.ln == nil {
-		return
-	}
-	if err := s.ln.Close(); err != nil {
-		Log.Error(err)
+	s.mu.Lock()
+	s.disposed = true
+	ln := s.ln
+	s.ln = nil
+	s.mu.Unlock()
+	if ln != nil {
+		if err := ln.Close(); err != nil {
+			Log.Error(err)
+		}
 	}
 }
 

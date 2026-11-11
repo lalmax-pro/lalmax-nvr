@@ -153,3 +153,31 @@ func TestReconcileDemandReleasesOrphanedProcessWithoutLiveLeases(t *testing.T) {
  if _,ok:=manager.Status(job.ID);ok {t.Fatal("on-demand media retained an owner without a live lease")}
  if errs:=service.ReconcileDemand(context.Background());len(errs)!=0 {t.Fatalf("repeated reconciliation should be harmless: %v",errs)}
 }
+
+type mutableStoppedDemandRepo struct{ *recoveryRepository }
+func (r *mutableStoppedDemandRepo) SetTranscodeJobStopped(_ context.Context, id string, generation uint64, stopped bool) error {
+    if id != r.job.ID || generation != r.job.Generation { return conflictError() }
+    r.job.StoppedByUser = stopped
+    return nil
+}
+
+func TestStoppedOnDemandExplicitRearmDoesNotStartWithoutLease(t *testing.T) {
+    service, manager, executor, job := setupDemandLeaseService(t)
+    repo := &mutableStoppedDemandRepo{service.repo.(*recoveryRepository)}
+    service.repo = repo
+    lease, _, err := service.AcquireDemand(context.Background(), job.ID, job.Generation)
+    if err != nil { t.Fatal(err) }
+    if err := service.Stop(context.Background(), job.ID, job.Generation); err != nil { t.Fatal(err) }
+    if _, err := service.RenewDemand(lease.Token); err == nil { t.Fatal("stopped lease remained valid") }
+    if _, _, err := service.AcquireDemand(context.Background(), job.ID, job.Generation); err == nil { t.Fatal("stopped job accepted consumer") }
+    before := executor.starts.Load()
+    if err := service.RearmDemand(context.Background(), job.ID, job.Generation+1); err == nil { t.Fatal("stale generation rearmed") }
+    if err := service.RearmDemand(context.Background(), job.ID, job.Generation); err != nil { t.Fatal(err) }
+    if repo.job.StoppedByUser { t.Fatal("stop intent was not cleared") }
+    if _, active := manager.Status(job.ID); active { t.Fatal("rearm started a job without consumer") }
+    if executor.starts.Load() != before { t.Fatal("rearm spawned a backend without consumer") }
+    newLease, _, err := service.AcquireDemand(context.Background(), job.ID, job.Generation)
+    if err != nil { t.Fatal(err) }
+    if newLease.Token == lease.Token { t.Fatal("old lease was reused") }
+    if err := service.ReleaseDemand(context.Background(), newLease.Token); err != nil { t.Fatal(err) }
+}

@@ -58,3 +58,21 @@ it('does not delete a job when confirmation is canceled', async () => {
  expect(fetch.mock.calls.some(([, o]) => o?.method === 'DELETE')).toBe(false);
  expect((view.getByText('Start') as HTMLButtonElement).disabled).toBe(true);
 });
+
+it('rearms a stopped on-demand job without starting media directly', async () => {
+  i18nState.currentLang = 'en';
+  vi.stubGlobal('sessionStorage', {getItem: () => null});
+  const job = {id: 'stopped-demand', source: {stream_id: 'door'}, profile_id: 'h264_720p', enabled: true, stopped_by_user: true, generation: 3, run_policy: 'on_demand'};
+  const fetch = vi.fn().mockImplementation(async (url: string, options?: RequestInit) => ({
+    ok: true, status: 200,
+    json: async () => url.endsWith('/profiles') ? {profiles: [profile]} : {jobs: [job], runtime_available: true}
+  }));
+  vi.stubGlobal('fetch', fetch);
+  const view = render(TranscodeJobs);
+  await waitFor(() => expect(view.getByText('恢复按需播放')).toBeTruthy());
+  await fireEvent.click(view.getByText('恢复按需播放'));
+  await waitFor(() => expect(fetch.mock.calls.some(([url, options]) =>
+    String(url).includes('/transcoding/jobs/stopped-demand/resume?generation=3') && options?.method === 'POST'
+  )).toBe(true));
+  expect(fetch.mock.calls.some(([url]) => String(url).includes('/stopped-demand/start'))).toBe(false);
+});

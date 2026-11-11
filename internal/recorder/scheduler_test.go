@@ -3,6 +3,7 @@ package recorder
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +11,57 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
+
+type delayedCodecEngine struct {
+	*stubTaskEngine
+	ready atomic.Bool
+	calls atomic.Int32
+}
+
+func (e *delayedCodecEngine) GetStream(_ context.Context, id string) (*media.StreamInfo, error) {
+	e.calls.Add(1)
+	codec := ""
+	if e.ready.Load() {
+		codec = "h264"
+	}
+	return &media.StreamInfo{StreamID: id, VideoCodec: codec, Active: true}, nil
+}
+
+func TestSchedulerRetriesWhenLiveStreamCodecBecomesReady(t *testing.T) {
+	db := newSchedulerTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertRecordingPlan(ctx, &storage.RecordingPlan{
+		StreamID: "delayed", Mode: storage.RecordingModeContinuous, Enabled: true,
+	}))
+	engine := &delayedCodecEngine{stubTaskEngine: &stubTaskEngine{}}
+	tasks := NewTaskManager(engine, nil, nil, nil, nil, time.Second)
+	t.Cleanup(tasks.StopAll)
+	s := NewRecordingScheduler(db)
+	s.SetTasks(tasks)
+	s.SetAliveStreams(func(context.Context) ([]string, error) { return []string{"delayed"}, nil })
+	require.True(t, s.check(ctx))
+	require.False(t, tasks.Running("delayed"))
+	s.Start(ctx)
+	t.Cleanup(s.Stop)
+	require.Eventually(t, func() bool { return engine.calls.Load() >= 2 }, time.Second, 10*time.Millisecond)
+	engine.ready.Store(true)
+	require.Eventually(t, func() bool { return tasks.Running("delayed") }, 4*time.Second, 20*time.Millisecond)
+}
+
+func TestSchedulerDoesNotRetryUnsupportedCodec(t *testing.T) {
+	db := newSchedulerTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertRecordingPlan(ctx, &storage.RecordingPlan{
+		StreamID: "unsupported", Mode: storage.RecordingModeContinuous, Enabled: true,
+	}))
+	engine := &stubTaskEngine{info: &media.StreamInfo{StreamID: "unsupported", VideoCodec: "vp8", Active: true}}
+	tasks := NewTaskManager(engine, nil, nil, nil, nil, time.Second)
+	s := NewRecordingScheduler(db)
+	s.SetTasks(tasks)
+	s.SetAliveStreams(func(context.Context) ([]string, error) { return []string{"unsupported"}, nil })
+	require.False(t, s.check(ctx))
+	require.False(t, tasks.Running("unsupported"))
+}
 
 func newSchedulerTestDB(t *testing.T) *storage.DB {
 	t.Helper()

@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -13,6 +14,19 @@ import (
 type stubTaskEngine struct {
 	info *media.StreamInfo
 	byID map[string]*media.StreamInfo
+}
+
+func TestTaskManagerSourceTimePolicy(t *testing.T) {
+	engine := &stubTaskEngine{info: &media.StreamInfo{StreamID: "bridge", VideoCodec: "h264", Active: true}}
+	mgr := NewTaskManager(engine, nil, nil, nil, nil, time.Second)
+	mgr.SetSourceTimePolicy(func(_ context.Context, id string) (bool, error) { return id == "bridge", nil })
+	rec, err := mgr.newRecorder(context.Background(), "bridge")
+	require.NoError(t, err)
+	require.True(t, rec.(*H264Recorder).cfg.PreserveSourceTimestamps)
+	want := errors.New("registry unavailable")
+	mgr.SetSourceTimePolicy(func(context.Context, string) (bool, error) { return false, want })
+	_, err = mgr.newRecorder(context.Background(), "bridge")
+	require.ErrorIs(t, err, want)
 }
 
 func (s *stubTaskEngine) Start(context.Context) error { return nil }

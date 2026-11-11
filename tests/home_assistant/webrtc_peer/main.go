@@ -16,6 +16,43 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+func annexBNALTypes(data []byte, h265 bool) []uint8 {
+	var types []uint8
+	for i := 0; i+3 < len(data); {
+		width := 0
+		if i+4 <= len(data) && data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1 {
+			width = 4
+		} else if data[i] == 0 && data[i+1] == 0 && data[i+2] == 1 {
+			width = 3
+		}
+		if width == 0 {
+			i++
+			continue
+		}
+		start := i + width
+		end := len(data)
+		for j := start; j+3 < len(data); j++ {
+			if (j+4 <= len(data) && data[j] == 0 && data[j+1] == 0 && data[j+2] == 0 && data[j+3] == 1) ||
+				(data[j] == 0 && data[j+1] == 0 && data[j+2] == 1) {
+				end = j
+				break
+			}
+		}
+		if start < end {
+			if h265 {
+				types = append(types, (data[start]&0x7e)>>1)
+			} else {
+				types = append(types, data[start]&0x1f)
+			}
+		}
+		if end == len(data) {
+			break
+		}
+		i = end
+	}
+	return types
+}
+
 func main() {
 	var mu sync.Mutex
 	var pc *webrtc.PeerConnection
@@ -24,6 +61,11 @@ func main() {
 	var captureMu sync.Mutex
 	var capture bytes.Buffer
 	var receivedCodec string
+	nalTypes := make(map[uint8]int64)
+	var firstTimestamp, lastTimestamp uint32
+	var firstSequence, lastSequence uint16
+	var havePacket bool
+	var timestampRegressions int64
 	http.HandleFunc("/offer", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -35,6 +77,11 @@ func main() {
 		captureMu.Lock()
 		capture.Reset()
 		receivedCodec = ""
+		nalTypes = make(map[uint8]int64)
+		firstTimestamp, lastTimestamp = 0, 0
+		firstSequence, lastSequence = 0, 0
+		havePacket = false
+		timestampRegressions = 0
 		captureMu.Unlock()
 		settings := webrtc.SettingEngine{}
 		settings.SetIncludeLoopbackCandidate(true)
@@ -66,7 +113,8 @@ func main() {
 		}
 		pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 			var decoder rtp.Depacketizer = &codecs.H264Packet{}
-			if track.Codec().MimeType == webrtc.MimeTypeH265 {
+			isH265 := track.Codec().MimeType == webrtc.MimeTypeH265
+			if isH265 {
 				decoder = &codecs.H265Depacketizer{}
 			}
 			captureMu.Lock()
@@ -77,9 +125,20 @@ func main() {
 				if err != nil || generation.Load() != current {
 					return
 				}
+				captureMu.Lock()
+				if !havePacket {
+					firstTimestamp, firstSequence, havePacket = packet.Timestamp, packet.Header.SequenceNumber, true
+				} else if packet.Timestamp < lastTimestamp {
+					timestampRegressions++
+				}
+				lastTimestamp, lastSequence = packet.Timestamp, packet.Header.SequenceNumber
+				captureMu.Unlock()
 				packets.Add(1)
 				if payload, err := decoder.Unmarshal(packet.Payload); err == nil {
 					captureMu.Lock()
+					for _, typ := range annexBNALTypes(payload, isH265) {
+						nalTypes[typ]++
+					}
 					if capture.Len()+len(payload) <= 16<<20 {
 						_, _ = capture.Write(payload)
 					}
@@ -139,7 +198,14 @@ func main() {
 		}
 		captureMu.Lock()
 		defer captureMu.Unlock()
-		stats := map[string]any{"state": state, "packets": packets.Load(), "codec": receivedCodec, "video_bytes": capture.Len()}
+		stats := map[string]any{
+			"state": state, "packets": packets.Load(), "rtp_received": packets.Load(),
+			"codec": receivedCodec, "video_bytes": capture.Len(),
+			"rtp_first_timestamp": firstTimestamp, "rtp_last_timestamp": lastTimestamp,
+			"rtp_first_sequence": firstSequence, "rtp_last_sequence": lastSequence,
+			"rtp_timestamp_regressions": timestampRegressions, "nal_types": nalTypes,
+			"vps": nalTypes[32], "sps": nalTypes[33], "pps": nalTypes[34],
+		}
 		if pc != nil && pc.SCTP() != nil && pc.SCTP().Transport() != nil {
 			if pair, err := pc.SCTP().Transport().ICETransport().GetSelectedCandidatePair(); err == nil && pair != nil {
 				stats["local_candidate_type"] = pair.Local.Typ.String()

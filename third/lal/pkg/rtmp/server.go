@@ -10,7 +10,9 @@ package rtmp
 
 import (
 	"crypto/tls"
+	"errors"
 	"net"
+	"sync"
 
 	"github.com/q191201771/lal/pkg/base"
 )
@@ -39,7 +41,9 @@ type IServerObserver interface {
 type Server struct {
 	addr     string
 	observer IServerObserver
+	mu       sync.Mutex
 	ln       net.Listener
+	closed   bool
 }
 
 func NewServer(addr string, observer IServerObserver) *Server {
@@ -50,6 +54,14 @@ func NewServer(addr string, observer IServerObserver) *Server {
 }
 
 func (server *Server) Listen() (err error) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.closed {
+		return net.ErrClosed
+	}
+	if server.ln != nil {
+		return errors.New("rtmp: server already listening")
+	}
 	if server.ln, err = net.Listen("tcp", server.addr); err != nil {
 		return
 	}
@@ -58,12 +70,26 @@ func (server *Server) Listen() (err error) {
 }
 
 func (server *Server) ListenWithTLS(certFile, keyFile string) (err error) {
+	server.mu.Lock()
+	closed := server.closed
+	server.mu.Unlock()
+	if closed {
+		return net.ErrClosed
+	}
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		Log.Errorf("start rtmps server listen failed. certFile=%s, keyFile=%s, err=%+v", certFile, keyFile, err)
 		return
 	}
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.closed {
+		return net.ErrClosed
+	}
+	if server.ln != nil {
+		return errors.New("rtmp: server already listening")
+	}
 	if server.ln, err = tls.Listen("tcp", server.addr, tlsConfig); err != nil {
 		Log.Errorf("start rtmps server listen failed. addr=%s, err=%+v", server.addr, err)
 		return
@@ -73,8 +99,14 @@ func (server *Server) ListenWithTLS(certFile, keyFile string) (err error) {
 }
 
 func (server *Server) RunLoop() error {
+	server.mu.Lock()
+	ln := server.ln
+	server.mu.Unlock()
+	if ln == nil {
+		return net.ErrClosed
+	}
 	for {
-		conn, err := server.ln.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			return err
 		}
@@ -83,11 +115,18 @@ func (server *Server) RunLoop() error {
 }
 
 func (server *Server) Dispose() {
-	if server.ln == nil {
+	server.mu.Lock()
+	if server.closed {
+		server.mu.Unlock()
 		return
 	}
-	if err := server.ln.Close(); err != nil {
-		Log.Error(err)
+	server.closed = true
+	ln := server.ln
+	server.mu.Unlock()
+	if ln != nil {
+		if err := ln.Close(); err != nil {
+			Log.Error(err)
+		}
 	}
 }
 

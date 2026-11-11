@@ -133,6 +133,11 @@ func (e *BackendExecutor) Ready(ctx context.Context, id string) bool {
 		e.mu.Unlock()
 		return false
 	}
+	// Start initializes the map for normal execution. Keep Ready safe when
+	// callers construct a reserved executor directly (e.g. recovery/tests).
+	if e.ready == nil {
+		e.ready = make(map[string]*readinessState)
+	}
 	state := e.ready[id]
 	if state == nil {
 		// Keep direct test/manual construction of reserved compatible while
@@ -166,10 +171,14 @@ func (e *BackendExecutor) Ready(ctx context.Context, id string) bool {
 		return true
 	}
 
-	// One non-zero sample can be only FLV metadata/sequence headers. Require
-	// two observed counter advances and keep the last advance fresh; this
-	// proves ongoing media progress without adding a fixed sleep.
-	return progressCount >= 2 && !lastProgressAt.IsZero() && now.Sub(lastProgressAt) < 5*time.Second
+	// Publisher MediaBytes includes audio, metadata and other traffic; even
+	// sustained growth cannot prove a video frame has arrived. Without a
+	// dedicated video-frame timestamp or video-only counter, fail closed.
+	// In particular, a *known stale* video timestamp must never be revived by
+	// continuing audio packets.
+	_ = progressCount
+	_ = lastProgressAt
+	return false
 }
 
 type reservedProcess struct {

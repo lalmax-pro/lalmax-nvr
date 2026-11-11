@@ -6,7 +6,9 @@
 package xiaomi
 
 import (
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -25,55 +27,109 @@ func (p *XiaomiPlugin) Name() string { return "xiaomi" }
 func (p *XiaomiPlugin) Protocols() []string { return []string{"xiaomi"} }
 
 // cloudCfg stores the Xiaomi cloud credentials, set via SetCloudConfig.
-var cloudCfg XiaomiCloudConfig
+var (
+	cloudCfg      XiaomiCloudConfig
+	cloudCfgMu    sync.RWMutex
+	cloudAccounts map[string]XiaomiCloudConfig
+)
+
+func currentCloudConfig() XiaomiCloudConfig {
+	cloudCfgMu.RLock()
+	defer cloudCfgMu.RUnlock()
+	return cloudCfg
+}
+
+func cloudConfigForAccount(id string) XiaomiCloudConfig {
+	cloudCfgMu.RLock()
+	defer cloudCfgMu.RUnlock()
+	if id == "" || id == "default" {
+		return cloudCfg
+	}
+	return cloudAccounts[id]
+}
 
 // SetCloudConfig stores the Xiaomi cloud credentials for use by recorders.
-// Must be called before any xiaomi recorder is created.
+// Existing recorders read the latest credentials on each reconnect.
 func SetCloudConfig(cfg config.XiaomiConfig) {
+	cloudCfgMu.Lock()
+	defer cloudCfgMu.Unlock()
 	cloudCfg = XiaomiCloudConfig{
 		UserID: cfg.UserID,
 		Token:  cfg.Token,
 		Region: cfg.Region,
+	}
+	cloudAccounts = make(map[string]XiaomiCloudConfig, len(cfg.Accounts))
+	for id, account := range cfg.Accounts {
+		cloudAccounts[id] = XiaomiCloudConfig{UserID: account.UserID, Token: account.Token, Region: account.Region}
 	}
 }
 
 // extractDID extracts the device ID from a xiaomi:// URL.
 // Input: "xiaomi://655448418" → Output: "655448418"
 func extractDID(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil && u.Scheme == "xiaomi" {
+		return u.Host
+	}
 	return strings.TrimPrefix(rawURL, "xiaomi://")
 }
 
+func cameraAccount(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("account")
+}
+
+func cameraStreamOptions(rawURL string) (string, string) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", ""
+	}
+	return u.Query().Get("channel"), u.Query().Get("quality")
+}
+
 func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manager, db RecordingDB, opts ...*metrics.Metrics) model.Recorder {
+	account := cameraAccount(cfg.URL)
+	channel, quality := cameraStreamOptions(cfg.URL)
 	did := cfg.DID
 	if did == "" {
 		did = extractDID(cfg.URL)
 	}
 
 	recCfg := XiaomiRecorderConfig{
-		CameraID:     cfg.ID,
-		DID:          did,
-		CloudCfg:     cloudCfg,
-		SegmentDur:   30 * time.Second,
-		DB:           db,
-		AudioEnabled: cfg.AudioEnabled,
+		CameraID:            cfg.ID,
+		DID:                 did,
+		Channel:             channel,
+		Quality:             quality,
+		CloudCfg:            cloudConfigForAccount(account),
+		CloudConfigProvider: func() XiaomiCloudConfig { return cloudConfigForAccount(account) },
+		SegmentDur:          30 * time.Second,
+		DB:                  db,
+		AudioEnabled:        cfg.AudioEnabled,
 	}
 	return NewXiaomiRecorder(recCfg, store, opts...)
 }
 
 func (p *XiaomiPlugin) NewRecorderWithMediaEngine(cfg config.CameraConfig, store *storage.Manager, db RecordingDB, mediaEngine media.Engine, opts ...*metrics.Metrics) model.Recorder {
+	account := cameraAccount(cfg.URL)
+	channel, quality := cameraStreamOptions(cfg.URL)
 	did := cfg.DID
 	if did == "" {
 		did = extractDID(cfg.URL)
 	}
 
 	recCfg := XiaomiRecorderConfig{
-		CameraID:     cfg.ID,
-		DID:          did,
-		CloudCfg:     cloudCfg,
-		SegmentDur:   30 * time.Second,
-		DB:           db,
-		AudioEnabled: cfg.AudioEnabled,
-		MediaEngine:  mediaEngine,
+		CameraID:            cfg.ID,
+		DID:                 did,
+		Channel:             channel,
+		Quality:             quality,
+		CloudCfg:            cloudConfigForAccount(account),
+		CloudConfigProvider: func() XiaomiCloudConfig { return cloudConfigForAccount(account) },
+		SegmentDur:          30 * time.Second,
+		DB:                  db,
+		AudioEnabled:        cfg.AudioEnabled,
+		MediaEngine:         mediaEngine,
 	}
 	return NewXiaomiRecorder(recCfg, store, opts...)
 }

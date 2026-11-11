@@ -1123,10 +1123,7 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 		h.aiManager.StopAll()
 	}
 	newMgr := ai.NewManager(h.config.AI)
-	if h.db != nil {
-		newMgr.SetStore(h.db)
-	}
-	h.aiManager = newMgr
+	h.SetAIManager(newMgr)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -1219,7 +1216,7 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Encodings:    []string{"h264", "h265"},
 			BuiltIn:      true,
 			Addable:      true,
-			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": true, "auth": true},
+			Capabilities: map[string]bool{"hls": true, "ptz": true, "snapshot": false, "discovery": true, "auth": true},
 		},
 		{
 			ID:           "rtmp-pull",

@@ -122,6 +122,17 @@ func (h *Handler) handleStartTranscodeJob(w http.ResponseWriter, r *http.Request
 	}
 	writeJSON(w, 202, runtime)
 }
+func (h *Handler) handleRearmTranscodeJob(w http.ResponseWriter, r *http.Request) {
+    if !h.requireTranscodeService(w) { return }
+    generation, ok := transcodeGeneration(w, r)
+    if !ok { return }
+    if err := h.transcodeService.RearmDemand(r.Context(), chi.URLParam(r, "id"), generation); err != nil {
+        transcodeAPIError(w, err)
+        return
+    }
+    w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) handleStopTranscodeJob(w http.ResponseWriter, r *http.Request) {
 	if !h.requireTranscodeService(w) {
 		return

@@ -9,20 +9,27 @@ package xiaomi
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 // CS2Dial establishes a CS2 P2P connection to a Xiaomi device.
 // transport: "udp" (default), "tcp", or "" (tries both).
 func CS2Dial(host, transport string, idleTimeout time.Duration) (*CS2Conn, error) {
-	conn, err := cs2Handshake(host, transport)
+	return CS2DialContext(context.Background(), host, transport, idleTimeout)
+}
+
+func CS2DialContext(ctx context.Context, host, transport string, idleTimeout time.Duration) (*CS2Conn, error) {
+	conn, err := cs2HandshakeContext(ctx, host, transport)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 
@@ -32,7 +39,7 @@ func CS2Dial(host, transport string, idleTimeout time.Duration) (*CS2Conn, error
 		Conn:  conn,
 		isTCP: isTCP,
 		channels: [4]*cs2DataChannel{
-			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+			newCS2DataChannel(0, 10), newCS2DataChannel(16384, 16384), newCS2DataChannel(250, 100), nil,
 		},
 	}
 	if idleTimeout == 0 {
@@ -50,15 +57,74 @@ type CS2Conn struct {
 	isTCP       bool
 	idleTimeout time.Duration
 
-	mu     sync.Mutex
-	err    error
-	seqCh0 uint16
-	seqCh3 uint16
+	closeOnce sync.Once
+	closeErr  error
+	mu        sync.Mutex
+	err       error
+	seqCh0    uint16
+	seqCh1    uint16
+	seqCh3    uint16
 
 	channels [4]*cs2DataChannel
 
-	cmdMu  sync.Mutex
-	cmdAck func()
+	cmdMu      sync.Mutex
+	writeMu    sync.Mutex
+	packetMu   sync.Mutex
+	ackMu      sync.Mutex
+	pendingAck *cs2CommandAck
+	initOnce   sync.Once
+	done       chan struct{}
+}
+
+type cs2CommandAck struct {
+	channel byte
+	seq     uint16
+	done    chan struct{}
+	once    sync.Once
+}
+
+// writeFrame owns the write deadline while holding writeMu. Cancellation of
+// one command cannot leave an expired deadline on a later control frame.
+func (c *CS2Conn) writeFrame(ctx context.Context, frame []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	deadline := time.Now().Add(time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = c.Conn.SetWriteDeadline(deadline)
+	canceled := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() { _ = c.Conn.SetWriteDeadline(time.Now()); close(canceled) })
+	defer func() {
+		if !stopCancel() {
+			<-canceled
+		}
+		_ = c.Conn.SetWriteDeadline(time.Time{})
+	}()
+	n, err := c.Conn.Write(frame)
+	if ctx.Err() != nil {
+		return n, ctx.Err()
+	}
+	if err == nil && n != len(frame) {
+		err = io.ErrShortWrite
+	}
+	return n, err
+}
+
+func (c *CS2Conn) Close() error {
+	c.closeOnce.Do(func() {
+		if c.Conn != nil {
+			c.closeErr = c.Conn.Close()
+		}
+	})
+	return c.closeErr
+}
+
+func (c *CS2Conn) initSignals() {
+	c.initOnce.Do(func() { c.done = make(chan struct{}) })
 }
 
 const (
@@ -85,11 +151,20 @@ const cs2HdrSize = 32
 const cs2ReadTimeout = 15 * time.Second
 
 func cs2Handshake(host, transport string) (net.Conn, error) {
+	return cs2HandshakeContext(context.Background(), host, transport)
+}
+
+func cs2HandshakeContext(ctx context.Context, host, transport string) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	conn, err := cs2NewUDPConn(host, 32108)
 	if err != nil {
 		return nil, err
 	}
 
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	req := []byte{cs2Magic, cs2MsgLanSearch, 0, 0}
@@ -122,26 +197,31 @@ func cs2Handshake(host, transport string) (net.Conn, error) {
 
 	if res[1] == msgTCP {
 		_ = conn.Close()
-		return cs2NewTCPConn(conn.RemoteAddr().String())
+		return cs2NewTCPConnContext(ctx, conn.RemoteAddr().String())
 	}
 
 	return conn, nil
 }
 
 func (c *CS2Conn) worker() {
-	defer c.workerExitGuard()
-
+	c.initSignals()
+	defer close(c.done)
+	defer c.Close()
 	defer func() {
-		c.channels[0].Close()
-		c.channels[2].Close()
+		for _, channel := range c.channels {
+			if channel != nil {
+				channel.Close()
+			}
+		}
 	}()
+	defer c.workerExitGuard()
 
 	const (
 		pingInterval = 1 * time.Second
 	)
 	var keepaliveTS time.Time // only for TCP
 	lastData := time.Now()
-	buf := make([]byte, 1200)
+	buf := make([]byte, 65535)
 
 	for {
 		// Set a short read deadline for TCP to wake up and send keepalive pings.
@@ -157,7 +237,7 @@ func (c *CS2Conn) worker() {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				// TCP: send keepalive ping on each timeout wakeup.
 				if c.isTCP && time.Now().After(keepaliveTS) {
-					_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPing, 0, 0})
+					_, _ = c.writeFrame(context.Background(), []byte{cs2Magic, cs2MsgPing, 0, 0})
 					keepaliveTS = time.Now().Add(pingInterval)
 				}
 
@@ -172,17 +252,45 @@ func (c *CS2Conn) worker() {
 			return
 		}
 
+		if n < 4 || buf[0] != cs2Magic {
+			continue
+		}
+		if int(binary.BigEndian.Uint16(buf[2:4])) > n-4 {
+			continue
+		}
 		lastData = time.Now()
-		if c.isTCP {
+		// Keepalive cadence is independent of incoming media traffic.
+		if c.isTCP && time.Now().After(keepaliveTS) {
+			if _, err := c.writeFrame(context.Background(), []byte{cs2Magic, cs2MsgPing, 0, 0}); err != nil {
+				c.setErr(err)
+				return
+			}
 			keepaliveTS = time.Now().Add(pingInterval)
 		}
-
 		switch buf[1] {
 		case cs2MsgDrw:
+			if n < 8 || buf[4] != cs2MagicDrw {
+				continue
+			}
 			ch := buf[5]
+			if int(ch) >= len(c.channels) || c.channels[ch] == nil {
+				continue
+			}
 			channel := c.channels[ch]
 
-			if c.isTCP {
+			if ch == 1 {
+				if c.isTCP {
+					err = channel.PushRaw(buf[8:n])
+				} else {
+					var pushed int
+					seq := binary.BigEndian.Uint16(buf[6:8])
+					pushed, err = channel.PushRawSeq(seq, buf[8:n])
+					if err == nil && pushed >= 0 {
+						ack := []byte{cs2Magic, cs2MsgDrwAck, 0, 6, cs2MagicDrw, ch, 0, 1, buf[6], buf[7]}
+						_, _ = c.writeFrame(context.Background(), ack)
+					}
+				}
+			} else if c.isTCP {
 				err = channel.Push(buf[8:n])
 			} else {
 				var pushed int
@@ -194,7 +302,7 @@ func (c *CS2Conn) worker() {
 				if pushed >= 0 {
 					// For UDP we should send ACK.
 					ack := []byte{cs2Magic, cs2MsgDrwAck, 0, 6, cs2MagicDrw, ch, 0, 1, seqHI, seqLO}
-					_, _ = c.Conn.Write(ack)
+					_, _ = c.writeFrame(context.Background(), ack)
 				}
 			}
 
@@ -204,21 +312,23 @@ func (c *CS2Conn) worker() {
 			}
 
 		case cs2MsgPing:
+			if _, err := c.writeFrame(context.Background(), []byte{cs2Magic, cs2MsgPong, 0, 0}); err != nil {
+				c.setErr(err)
+				return
+			}
 		case cs2MsgPong:
 		case cs2MsgP2PRdyUDP, cs2MsgP2PRdyTCP:
 			xiaomiLogger.Info("cs2: received ready message", "type", fmt.Sprintf("0x%02x", buf[1]))
 		case cs2MsgClose:
 			xiaomiLogger.Info("cs2: received close message", "type", fmt.Sprintf("0x%02x", buf[1]))
 			// Send close ACK before exiting
-			_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgCloseAck, 0, 0})
+			_, _ = c.writeFrame(context.Background(), []byte{cs2Magic, cs2MsgCloseAck, 0, 0})
 			c.setErr(fmt.Errorf("cs2: received close from camera"))
 			return
 		case cs2MsgCloseAck:
 			xiaomiLogger.Info("cs2: received close ACK", "type", fmt.Sprintf("0x%02x", buf[1]))
 		case cs2MsgDrwAck: // only for UDP
-			if c.cmdAck != nil {
-				c.cmdAck()
-			}
+			c.acceptCommandACK(buf[:n])
 		default:
 			xiaomiLogger.Info("cs2: received unknown message", "type", fmt.Sprintf("0x%02x", buf[1]), "len", n)
 		}
@@ -279,48 +389,107 @@ func (c *CS2Conn) ReadCommand() (cmd uint32, data []byte, err error) {
 		}
 		return 0, nil, fmt.Errorf("cs2: no command data for %v", cs2ReadTimeout)
 	}
+	if len(buf) < 4 {
+		return 0, nil, fmt.Errorf("cs2: command header too short: %d", len(buf))
+	}
 	cmd = binary.LittleEndian.Uint32(buf)
 	data = buf[4:]
 	return
 }
 
+// acceptCommandACK matches channel and sequence so unrelated or late ACKs
+// cannot acknowledge the current command.
+func (c *CS2Conn) acceptCommandACK(frame []byte) {
+	if len(frame) < 8 || frame[4] != cs2MagicDrw {
+		return
+	}
+	count := int(binary.BigEndian.Uint16(frame[6:8]))
+	if count == 0 || count > (len(frame)-8)/2 {
+		return
+	}
+	c.ackMu.Lock()
+	defer c.ackMu.Unlock()
+	pending := c.pendingAck
+	if pending == nil {
+		return
+	}
+	for i := 0; i < count; i++ {
+		if frame[5] == pending.channel && binary.BigEndian.Uint16(frame[8+2*i:]) == pending.seq {
+			pending.once.Do(func() { close(pending.done) })
+			return
+		}
+	}
+}
+
 // WriteCommand sends a command on channel 0 with ACK retry for UDP.
 func (c *CS2Conn) WriteCommand(cmd uint32, data []byte) error {
-	c.cmdMu.Lock()
-	defer c.cmdMu.Unlock()
+	return c.WriteCommandContext(context.Background(), cmd, data)
+}
 
-	req := cs2MarshalCmd(0, c.seqCh0, cmd, data)
-	c.seqCh0++
-
-	if c.isTCP {
-		_, err := c.Conn.Write(req)
+func (c *CS2Conn) WriteCommandContext(ctx context.Context, cmd uint32, data []byte) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	var repeat atomic.Int32
-	repeat.Store(5)
-
-	timeout := time.NewTicker(time.Second)
-	defer timeout.Stop()
-
-	c.cmdAck = func() {
-		repeat.Store(0)
-		timeout.Reset(1)
+	c.cmdMu.Lock()
+	defer c.cmdMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
-	for {
-		if _, err := c.Conn.Write(req); err != nil {
+	c.initSignals()
+	seq := c.seqCh0
+	req := cs2MarshalCmd(0, seq, cmd, data)
+	c.seqCh0++
+	if c.isTCP {
+		_, err := c.writeFrame(ctx, req)
+		return err
+	}
+	pending := &cs2CommandAck{channel: 0, seq: seq, done: make(chan struct{})}
+	c.ackMu.Lock()
+	c.pendingAck = pending
+	c.ackMu.Unlock()
+	defer func() { c.ackMu.Lock(); c.pendingAck = nil; c.ackMu.Unlock() }()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for attempt := 0; attempt < 5; attempt++ {
+		if _, err := c.writeFrame(ctx, req); err != nil {
 			return err
 		}
-		<-timeout.C
-		r := repeat.Add(-1)
-		if r < 0 {
+		select {
+		case <-pending.done:
 			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.done:
+			return c.Error()
+		case <-timer.C:
 		}
-		if r == 0 {
-			return fmt.Errorf("cs2: can't send command %d", cmd)
-		}
+		timer.Reset(time.Second)
 	}
+	return fmt.Errorf("cs2: command %d was not acknowledged", cmd)
+}
+
+// WriteChannel sends an encrypted data message on a CS2 channel without a MISS command envelope.
+func (c *CS2Conn) WriteChannel(channel byte, payload []byte) error {
+	if channel != 1 {
+		return fmt.Errorf("cs2: unsupported raw channel %d", channel)
+	}
+	c.cmdMu.Lock()
+	defer c.cmdMu.Unlock()
+	seq := c.seqCh1
+	c.seqCh1++
+	return c.writeDataFrame(context.Background(), channel, seq, payload)
+}
+
+func (c *CS2Conn) writeDataFrame(ctx context.Context, channel byte, seq uint16, payload []byte) error {
+	frame := make([]byte, 12+len(payload))
+	frame[0], frame[1] = cs2Magic, cs2MsgDrw
+	binary.BigEndian.PutUint16(frame[2:], uint16(8+len(payload)))
+	frame[4], frame[5] = cs2MagicDrw, channel
+	binary.BigEndian.PutUint16(frame[6:], seq)
+	binary.BigEndian.PutUint32(frame[8:], uint32(len(payload)))
+	copy(frame[12:], payload)
+	_, err := c.writeFrame(ctx, frame)
+	return err
 }
 
 // ReadPacket reads a media packet from channel 2.
@@ -332,11 +501,35 @@ func (c *CS2Conn) ReadPacket() (hdr, payload []byte, err error) {
 		}
 		return nil, nil, fmt.Errorf("cs2: no media data for %v", cs2ReadTimeout)
 	}
+	if len(data) < cs2HdrSize {
+		return nil, nil, fmt.Errorf("cs2: media header too short: %d", len(data))
+	}
 	return data[:cs2HdrSize], data[cs2HdrSize:], nil
+}
+
+// ReadChannel waits for one raw transport message from a data channel.
+func (c *CS2Conn) ReadChannel(ctx context.Context, channel byte) ([]byte, error) {
+	if int(channel) >= len(c.channels) || c.channels[channel] == nil {
+		return nil, fmt.Errorf("cs2: channel %d is unavailable", channel)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		data, ok := c.channels[channel].Pop(200 * time.Millisecond)
+		if ok {
+			return data, nil
+		}
+		if err := c.getErr(); err != nil {
+			return nil, err
+		}
+	}
 }
 
 // WritePacket writes a media packet on channel 3.
 func (c *CS2Conn) WritePacket(hdr, payload []byte) error {
+	c.packetMu.Lock()
+	defer c.packetMu.Unlock()
 	const offset = 12
 
 	n := cs2HdrSize + uint32(len(payload))
@@ -353,7 +546,7 @@ func (c *CS2Conn) WritePacket(hdr, payload []byte) error {
 	copy(req[offset:], hdr)
 	copy(req[offset+cs2HdrSize:], payload)
 
-	_, err := c.Conn.Write(req)
+	_, err := c.writeFrame(context.Background(), req)
 	return err
 }
 
@@ -410,7 +603,7 @@ func (c *cs2UDPConn) Read(b []byte) (n int, err error) {
 			return 0, err
 		}
 
-		if string(addr.IP) == string(c.addr.IP) || n >= 8 {
+		if addr.IP.Equal(c.addr.IP) && addr.Port == c.addr.Port {
 			return
 		}
 	}
@@ -467,7 +660,11 @@ func (c *cs2UDPConn) WriteUntil(req []byte, ok func(res []byte) bool) ([]byte, e
 }
 
 func cs2NewTCPConn(addr string) (net.Conn, error) {
-	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	return cs2NewTCPConnContext(context.Background(), addr)
+}
+
+func cs2NewTCPConnContext(ctx context.Context, addr string) (net.Conn, error) {
+	conn, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -527,10 +724,13 @@ type cs2DataChannel struct {
 func (c *cs2DataChannel) Push(b []byte) error {
 	c.waitData = append(c.waitData, b...)
 
-	for len(c.waitData) > 4 {
+	for c.waitSize > 0 || len(c.waitData) >= 4 {
 		// Every new data starts with size. There can be several data inside one packet.
 		if c.waitSize == 0 {
 			c.waitSize = int(binary.BigEndian.Uint32(c.waitData))
+			if c.waitSize == 0 || c.waitSize > 8<<20 {
+				return fmt.Errorf("cs2: invalid payload size %d", c.waitSize)
+			}
 			c.waitData = c.waitData[4:]
 		}
 		if c.waitSize > len(c.waitData) {
@@ -558,6 +758,45 @@ func (c *cs2DataChannel) Push(b []byte) error {
 		c.waitSize = 0
 	}
 	return nil
+}
+
+func (c *cs2DataChannel) PushRaw(b []byte) error {
+	select {
+	case c.popBuf <- bytes.Clone(b):
+		return nil
+	default:
+		return fmt.Errorf("cs2: raw data channel buffer is full")
+	}
+}
+
+func (c *cs2DataChannel) PushRawSeq(seq uint16, data []byte) (int, error) {
+	diff := int16(seq - c.waitSeq)
+	if diff > 0 {
+		if c.pushSize == 0 {
+			return -1, nil
+		}
+		if c.pushBuf[seq] == nil {
+			if len(c.pushBuf) == c.pushSize {
+				return -1, nil
+			}
+			c.pushBuf[seq] = bytes.Clone(data)
+		}
+		return 0, nil
+	}
+	if diff < 0 {
+		return 0, nil
+	}
+	for i := 1; ; i++ {
+		if err := c.PushRaw(data); err != nil {
+			return i, err
+		}
+		c.waitSeq++
+		if data = c.pushBuf[c.waitSeq]; data != nil {
+			delete(c.pushBuf, c.waitSeq)
+		} else {
+			return i, nil
+		}
+	}
 }
 
 func (c *cs2DataChannel) Pop(timeout time.Duration) ([]byte, bool) {

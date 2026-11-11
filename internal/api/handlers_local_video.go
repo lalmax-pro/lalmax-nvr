@@ -83,6 +83,10 @@ func (h *Handler) revokeLocalVideoPublishKey(streamID string) {
 }
 
 func (h *Handler) localVideoRTMP(streamID string) (string,error) {
+ // StreamKeys map header changes during provisioning/revocation. Match the
+ // writer's mutex for the whole read, not only the token lookup.
+ h.localVideos.authMu.Lock()
+ defer h.localVideos.authMu.Unlock()
  if h.config==nil || h.config.RTMP.Enabled==nil || !*h.config.RTMP.Enabled {
   return "",errors.New("RTMP ingest must be enabled to loop local video")
  }

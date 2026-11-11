@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pion/stun/v4"
 	"gopkg.in/yaml.v3"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
@@ -48,6 +49,7 @@ type Config struct {
 	RTMP          RTMPConfig          `yaml:"rtmp"`
 	SRT           SRTConfig           `yaml:"srt"`
 	WHIP          WHIPConfig          `yaml:"whip"`
+	SFU           SFUConfig           `yaml:"sfu"`
 	GB28181       GB28181Config       `yaml:"gb28181"`
 	JT808         JT808Config         `yaml:"jt808"`
 	Health        HealthConfig        `yaml:"health"`
@@ -61,6 +63,67 @@ type Config struct {
 	AutoDiscover  AutoDiscoverConfig  `yaml:"auto_discover"`
 	Event         EventConfig         `yaml:"event"`
 	Version       string              `yaml:"version"`
+}
+
+// SFUConfig configures the experimental NVR SFU runtime.
+// The runtime is opt-in and currently accepts authenticated administrators.
+type SFUConfig struct {
+	Enabled          bool           `yaml:"enabled" json:"enabled"`
+	ICEServers       []SFUICEServer `yaml:"ice_servers" json:"-"`
+	IdleTimeout      string         `yaml:"idle_timeout,omitempty" json:"idle_timeout,omitempty"`
+	ObserveBandwidth bool           `yaml:"observe_bandwidth,omitempty" json:"observe_bandwidth,omitempty"`
+	Pacing           bool           `yaml:"pacing,omitempty" json:"pacing,omitempty"`
+}
+
+// ValidatePacing requires the bandwidth estimator when pacing is enabled.
+func (c SFUConfig) ValidatePacing() error {
+	if c.Pacing && !c.ObserveBandwidth {
+		return fmt.Errorf("sfu: pacing requires observe_bandwidth")
+	}
+	return nil
+}
+
+// RoomIdleTimeout returns zero when automatic room collection is disabled.
+func (c SFUConfig) RoomIdleTimeout() (time.Duration, error) {
+	if c.IdleTimeout == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(c.IdleTimeout)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("sfu: idle_timeout must be a positive duration")
+	}
+	return d, nil
+}
+
+// SFUICEServer credentials are returned only to authenticated SFU users.
+type SFUICEServer struct {
+	URLs       []string `yaml:"urls" json:"urls"`
+	Username   string   `yaml:"username,omitempty" json:"username,omitempty"`
+	Credential string   `yaml:"credential,omitempty" json:"credential,omitempty"`
+}
+
+func (c SFUConfig) ValidateICE() error {
+	if len(c.ICEServers) > 8 {
+		return fmt.Errorf("sfu: too many ICE servers")
+	}
+	for i, server := range c.ICEServers {
+		if len(server.URLs) == 0 || len(server.URLs) > 8 || len(server.Username) > 512 || len(server.Credential) > 1024 {
+			return fmt.Errorf("sfu: invalid ICE server %d", i)
+		}
+		for _, raw := range server.URLs {
+			if len(raw) > 2048 {
+				return fmt.Errorf("sfu: invalid ICE URL in server %d", i)
+			}
+			u, err := stun.ParseURI(raw)
+			if err != nil || u.Host == "" || u.Username != "" || u.Password != "" {
+				return fmt.Errorf("sfu: invalid ICE URL in server %d", i)
+			}
+			if (u.Scheme == stun.SchemeTypeTURN || u.Scheme == stun.SchemeTypeTURNS) && (server.Username == "" || server.Credential == "") {
+				return fmt.Errorf("sfu: TURN credentials required for server %d", i)
+			}
+		}
+	}
+	return nil
 }
 
 type SnapshotConfig struct {
@@ -478,9 +541,24 @@ type FLVConfig struct {
 
 // XiaomiConfig holds Xiaomi cloud authentication settings.
 type XiaomiConfig struct {
-	UserID string `yaml:"user_id"` // Xiaomi account user ID (from auth response)
-	Token  string `yaml:"token"`   // Xiaomi passToken for API access
-	Region string `yaml:"region"`  // Region code (e.g. "cn", "sg", "de")
+	UserID   string                   `yaml:"user_id"` // Xiaomi account user ID (from auth response)
+	Token    string                   `yaml:"token"`   // Xiaomi passToken for API access
+	Region   string                   `yaml:"region"`  // Region code (e.g. "cn", "sg", "de")
+	Accounts map[string]XiaomiAccount `yaml:"accounts,omitempty" json:"accounts,omitempty"`
+}
+
+type XiaomiAccount struct {
+	UserID string `yaml:"user_id" json:"user_id"`
+	Token  string `yaml:"token" json:"-"`
+	Region string `yaml:"region" json:"region"`
+}
+
+func (c XiaomiConfig) Account(id string) (XiaomiAccount, bool) {
+	if id == "" || id == "default" {
+		return XiaomiAccount{UserID: c.UserID, Token: c.Token, Region: c.Region}, true
+	}
+	account, ok := c.Accounts[id]
+	return account, ok
 }
 
 // SRTConfig configures the SRT ingest server.
@@ -706,6 +784,7 @@ func Save(path string, cfg *Config) error {
 	saveCfg.VoIP = cfg.VoIP.Clone()
 	saveCfg.Auth.PublishTokens = cloneStringMap(cfg.Auth.PublishTokens)
 	saveCfg.Auth.PlaybackTokens = cloneStringMap(cfg.Auth.PlaybackTokens)
+	saveCfg.Xiaomi.Accounts = cloneXiaomiAccounts(cfg.Xiaomi.Accounts)
 	saveCfg.RTMP.StreamKeys = cloneStringMap(cfg.RTMP.StreamKeys)
 	saveCfg.SRT.StreamKeys = cloneStringMap(cfg.SRT.StreamKeys)
 	saveCfg.WHIP.StreamKeys = cloneStringMap(cfg.WHIP.StreamKeys)
@@ -753,6 +832,20 @@ func Save(path string, cfg *Config) error {
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
+	}
+	if err := cfg.SFU.ValidatePacing(); err != nil {
+		return err
+	}
+	if err := cfg.SFU.ValidateICE(); err != nil {
+		return err
+	}
+	if _, err := cfg.SFU.RoomIdleTimeout(); err != nil {
+		return err
+	}
+	for id := range cfg.Xiaomi.Accounts {
+		if id == "" || id == "default" || len(id) > 64 || strings.ContainsAny(id, "/?&# ") {
+			return fmt.Errorf("invalid Xiaomi account ID %q", id)
+		}
 	}
 	if err := cfg.Transcoding.Validate(); err != nil {
 		return err
@@ -843,8 +936,15 @@ func Validate(cfg *Config) error {
 	}
 	// Validate Xiaomi configuration
 	for _, cam := range cfg.Cameras {
-		if cam.Protocol == "xiaomi" && strings.TrimSpace(cfg.Xiaomi.Token) == "" {
-			return fmt.Errorf("xiaomi camera %q requires xiaomi.token in config", cam.ID)
+		if cam.Protocol == "xiaomi" {
+			u, err := url.Parse(cam.URL)
+			if err != nil {
+				return fmt.Errorf("invalid Xiaomi camera URL: %w", err)
+			}
+			account, ok := cfg.Xiaomi.Account(u.Query().Get("account"))
+			if !ok || strings.TrimSpace(account.Token) == "" {
+				return fmt.Errorf("xiaomi camera %q requires xiaomi.token or selected account credentials in config", cam.ID)
+			}
 		}
 	}
 	// port ranges

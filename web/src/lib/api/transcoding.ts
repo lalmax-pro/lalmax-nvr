@@ -9,7 +9,7 @@ export interface TranscodeProfile {
 export interface TranscodeJob {
   id: string; source: { engine_id: string; stream_id: string; app_name: string };
   profile_id: string; profile_revision: number; enabled: boolean;
-  run_policy: 'always' | 'manual' | 'on_demand'; generation: number;
+  run_policy: 'always' | 'manual' | 'on_demand'; generation: number; stopped_by_user?: boolean;
 }
 export interface TranscodeVariant {
   id: string; job_id: string; source_id: string; state: string; error_code?: string; retry_at?: string;
@@ -59,7 +59,7 @@ export function saveTranscodeJob(job: TranscodeJob, signal?: AbortSignal) {
   const path = job.generation ? `/transcoding/jobs/${encodeURIComponent(job.id)}` : '/transcoding/jobs';
   return apiRequest<TranscodeJob>(path, { method: job.generation ? 'PATCH' : 'POST', body: JSON.stringify(job), signal });
 }
-export function transcodeJobAction(job: TranscodeJob, action: 'start' | 'stop' | 'delete', signal?: AbortSignal) {
+export function transcodeJobAction(job: TranscodeJob, action: 'start' | 'stop' | 'resume' | 'delete', signal?: AbortSignal) {
   const suffix = action === 'delete' ? '' : `/${action}`;
   return apiRequest<unknown>(`/transcoding/jobs/${encodeURIComponent(job.id)}${suffix}?generation=${job.generation}`, { method: action === 'delete' ? 'DELETE' : 'POST', signal });
 }

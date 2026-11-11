@@ -239,7 +239,7 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     encodings: ['h264', 'h265'],
     builtIn: true,
     addable: true,
-    capabilities: { hls: true, ptz: false, snapshot: false, discovery: true, auth: true },
+    capabilities: { hls: true, ptz: true, snapshot: false, discovery: true, auth: true },
   },
   {
     id: 'rtmp-pull',
@@ -650,8 +650,8 @@ export interface VendorCheckResult {
   message?: string;
 }
 
-export async function checkVendor(did: string): Promise<VendorCheckResult> {
-  return apiRequest<VendorCheckResult>(`/xiaomi/check-vendor?did=${encodeURIComponent(did)}`);
+export async function checkVendor(did: string, account = 'default'): Promise<VendorCheckResult> {
+  return apiRequest<VendorCheckResult>(`/xiaomi/check-vendor?did=${encodeURIComponent(did)}&account=${encodeURIComponent(account)}`);
 }
 
 // --- Imaging ---
@@ -991,4 +991,15 @@ export async function takeSnapshot(
   }
 
   return response.blob();
+}
+
+export interface XiaomiMotorProfile {
+  model: string;
+  control: 'fixed_step' | 'continuous' | 'unknown';
+  source: 'model' | 'unknown';
+  device_verified: boolean;
+}
+
+export async function getXiaomiMotorProfile(cameraId: string, signal?: AbortSignal): Promise<XiaomiMotorProfile> {
+  return apiRequest<XiaomiMotorProfile>(`/cameras/${encodeURIComponent(cameraId)}/ptz/capabilities`, { signal });
 }

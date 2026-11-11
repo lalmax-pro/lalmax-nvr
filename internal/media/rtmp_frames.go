@@ -134,6 +134,13 @@ func rtmpAudioToFrames(msg base.RtmpMsg) []MediaFrame {
 			PTS:   pts,
 			Data:  append([]byte(nil), msg.Payload[1:]...),
 		}}
+	case base.RtmpSoundFormatOpus:
+		return []MediaFrame{{
+			Kind:  FrameAudio,
+			Codec: "opus",
+			PTS:   pts,
+			Data:  append([]byte(nil), msg.Payload[1:]...),
+		}}
 	default:
 		return nil
 	}

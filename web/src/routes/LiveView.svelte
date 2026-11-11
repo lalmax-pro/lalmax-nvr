@@ -124,7 +124,7 @@
       }
       return;
     }
-    if (!camera || !isPtzSupported(camera)) return;
+    if (!camera || isXiaomiCamera(camera) || !isPtzSupported(camera)) return;
     const el = playerContainer;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -271,7 +271,7 @@
   }
 
   // Check if PTZ should be shown
-  let showPtz = $derived(camera && (isGB28181Camera(camera) || (isOnvifCamera(camera) && (!deviceCaps || deviceCaps.ptz))));
+  let showPtz = $derived(camera && (isGB28181Camera(camera) || isXiaomiCamera(camera) || (isOnvifCamera(camera) && (!deviceCaps || deviceCaps.ptz))));
   let showTalk = $derived(camera && isGB28181Camera(camera));
   let showXiaomiTalk = $derived(camera && isXiaomiCamera(camera));
 
@@ -575,7 +575,7 @@
                           <Move size={16} />
                           {t('live.ptz.title') || '云台控制'}
                         </h3>
-                        <PtzControl {cameraId} enabled={true} compact={true} />
+                        <PtzControl {cameraId} enabled={true} protocol={camera.protocol} />
                       </div>
                     {/if}
 

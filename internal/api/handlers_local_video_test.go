@@ -5,7 +5,10 @@ import (
  "path/filepath"
  "strings"
  "testing"
+ "strconv"
+ "sync"
 
+ "github.com/lalmax-pro/lalmax-nvr/internal/ban"
  "github.com/lalmax-pro/lalmax-nvr/internal/config"
 )
 
@@ -42,4 +45,30 @@ func TestLocalVideoRTMPRequiresEnabledIngestAndAuthToken(t *testing.T) {
  h.config.RTMP.PublishAuthEnabled=&noAuth
  got,err=h.localVideoRTMP("demo")
  if err!=nil || strings.Contains(got,"stream_key") {t.Fatalf("anonymous RTMP target %q, %v",got,err)}
+}
+
+func TestLocalVideoPublishKeyConcurrentReadAndProvision(t *testing.T) {
+    enabled := true
+    h := &Handler{config: &config.Config{}, configPath: filepath.Join(t.TempDir(), "nvr.yaml"), banMgr: ban.NewManager(nil,nil)}
+    h.config.RTMP.Enabled = &enabled
+    h.config.RTMP.StreamKeys = map[string]string{"existing":"fixture-key"}
+    var workers sync.WaitGroup
+    done := make(chan struct{})
+    workers.Add(1)
+    go func() {
+        defer workers.Done()
+        for {
+            select {case <-done: return; default:}
+            _, _ = h.localVideoRTMP("existing")
+        }
+    }()
+    for i:=0; i<8; i++ {
+        if err:=h.ensureLocalVideoPublishKey("new-"+strconv.Itoa(i));err!=nil {
+            close(done)
+            workers.Wait()
+            t.Fatal(err)
+        }
+    }
+    close(done)
+    workers.Wait()
 }

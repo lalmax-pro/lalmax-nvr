@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/emiago/sipgo"
@@ -46,7 +47,7 @@ type Platform struct {
 	serial         string
 	password       string
 	sn             int
-	status         bool
+	status         atomic.Bool
 	keepAliveReply int
 	registerCallID string
 	quit           chan struct{}
@@ -290,7 +291,7 @@ func (p *Platform) Start() {
 				slog.Error("[Platform] keepalive failed", "name", p.Config.Name, "error", err, "count", p.keepAliveReply)
 				if p.keepAliveReply >= p.Config.MaxTimeoutCount {
 					slog.Warn("[Platform] max keepalive retries reached, re-registering", "name", p.Config.Name)
-					p.status = false
+					p.status.Store(false)
 					p.keepAliveReply = 0
 					_ = p.store.UpdatePlatformStatus(context.Background(), p.Config.ID, false)
 					_ = p.Register()
@@ -311,7 +312,7 @@ func (p *Platform) Start() {
 // Stop stops the platform.
 func (p *Platform) Stop() {
 	cfg := p.Config
-	if cfg != nil && p.status {
+	if cfg != nil && p.status.Load() {
 		// Record unregister event
 		_ = p.store.AddPlatformEvent(context.Background(), storage.PlatformEventRow{
 			PlatformID:   cfg.ID,
@@ -322,7 +323,7 @@ func (p *Platform) Stop() {
 			Details:      "platform stopped",
 		})
 	}
-	p.status = false
+	p.status.Store(false)
 	select {
 	case <-p.quit:
 	default:
@@ -474,7 +475,7 @@ func (p *Platform) Register() error {
 		return fmt.Errorf("register rejected: %d", res.StatusCode)
 	}
 
-	p.status = true
+	p.status.Store(true)
 	p.registerCallID = callID
 	_ = p.store.UpdatePlatformStatus(context.Background(), cfg.ID, true)
 
@@ -747,7 +748,7 @@ func (p *Platform) handleDeviceStatusResponse(req *sip.Request, sn int, deviceID
 
 	online := "ONLINE"
 	status := "OK"
-	if !p.status {
+	if !p.status.Load() {
 		online = "OFFLINE"
 		status = "ERROR"
 	}

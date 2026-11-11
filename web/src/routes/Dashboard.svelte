@@ -1370,7 +1370,7 @@
                   >
                     <X size={12} />
                   </button>
-                  <PtzControl cameraId={camera.id} enabled={true} />
+                  <PtzControl cameraId={camera.id} enabled={true} protocol={camera.protocol} />
                 </div>
               </div>
             {/if}

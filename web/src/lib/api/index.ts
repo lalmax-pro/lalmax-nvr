@@ -85,6 +85,7 @@ export {
   updateMergeConfig,
   getRecordingDays,
   deleteCameraMergeConfig,
+  getXiaomiMotorProfile,
   ptzMove,
   ptzStop,
   getPTZStatus,
@@ -371,9 +372,28 @@ export type {
 } from './streams';
 
 // Xiaomi — cloud auth, devices, sync
-export { xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify, xiaomiSync } from './xiaomi';
+export {
+  xiaomiAuth,
+  xiaomiDevices,
+  xiaomiStatus,
+  xiaomiLogout,
+  xiaomiAccounts,
+  xiaomiCaptcha,
+  xiaomiVerify,
+  xiaomiSync,
+  getXiaomiSDRecordings,
+  getXiaomiSDRecordingPlaybackUrl,
+} from './xiaomi';
 
-export type { XiaomiDevice, XiaomiDevicesResponse, XiaomiAuthResponse } from './xiaomi';
+export type {
+  XiaomiDevice,
+  XiaomiDevicesResponse,
+  XiaomiStatusResponse,
+  XiaomiAccountInfo,
+  XiaomiAuthResponse,
+  XiaomiSDRecording,
+  XiaomiSDRecordingsResponse,
+} from './xiaomi';
 
 // Health — camera health status and events
 export { getHealthStatus, getHealthEvents, getCameraHealth, getHealthCameras, getStabilityData } from './health';
