@@ -47,6 +47,8 @@ type StatGroup struct {
 	StatPull    StatPull  `json:"pull"`
 
 	Fps []RecordPerSec `json:"in_frame_per_sec"`
+	// Independent of draining FPS samples: safe for repeated stat reads.
+	LastVideoFrameUnixSec int64 `json:"last_video_frame_unix_sec,omitempty"`
 }
 
 type RecordPerSec struct {
@@ -86,6 +88,7 @@ type StatPull struct {
 type PeriodRecord struct {
 	ringBuf []RecordPerSec
 	nRecord int
+	lastVideoFrameUnixSec int64
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -112,6 +115,9 @@ func Session2StatPull(session ISession) StatPull {
 //
 // @note result s.Fps is not ordered
 func (s *StatGroup) GetFpsFrom(p *PeriodRecord, nowUnixSec int64) {
+	// Unlike FPS buckets, the last video-frame timestamp is not consumed by
+	// this stats request. Multiple readers must observe the same last frame.
+	s.LastVideoFrameUnixSec = p.lastVideoFrameUnixSec
 	if s.Fps == nil || cap(s.Fps) < p.nRecord {
 		s.Fps = make([]RecordPerSec, p.nRecord)
 	} else {
@@ -156,10 +162,15 @@ func (p *PeriodRecord) Add(unixSec int64, v uint32) {
 		p.ringBuf[index].UnixSec = unixSec
 		p.ringBuf[index].V = v
 	}
+	if v > 0 && unixSec > p.lastVideoFrameUnixSec {
+		p.lastVideoFrameUnixSec = unixSec
+	}
 	return
 }
 
 func (p *PeriodRecord) Clear() {
+	p.lastVideoFrameUnixSec = 0
+	p.nRecord = 0
 	for idx := range p.ringBuf {
 		p.ringBuf[idx].UnixSec = 0
 		p.ringBuf[idx].V = 0

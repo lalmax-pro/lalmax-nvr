@@ -621,6 +621,7 @@ type groupPayload struct {
 	Pub        sessionPayload   `json:"pub"`
 	Subs       []sessionPayload `json:"subs"`
 	Pull       sessionPayload   `json:"pull"`
+	LastVideoFrameUnixSec int64 `json:"last_video_frame_unix_sec"`
 	FPS        []struct {
 		UnixSec int64   `json:"unix_sec"`
 		V       float64 `json:"v"`
@@ -634,6 +635,9 @@ func groupToStreamInfo(group groupPayload) StreamInfo {
 	isPubActive := group.Pub.SessionID != "" || group.Pub.ID != ""
 	isPullActive := group.Pull.SessionID != "" || group.Pull.ID != ""
 	info := StreamInfo{StreamID: group.StreamName, AppName: group.AppName, Active: isPubActive || isPullActive, AudioCodec: group.AudioCodec, VideoCodec: group.VideoCodec}
+	if group.LastVideoFrameUnixSec > 0 {
+		info.LastFrameTime = time.Unix(group.LastVideoFrameUnixSec, 0)
+	}
 	if isPubActive {
 		info.Publisher = sessionInfoFromPayload(group.Pub, "pub")
 	} else if isPullActive {
@@ -663,16 +667,17 @@ func groupToStreamInfo(group groupPayload) StreamInfo {
 		if samples > 0 {
 			info.InFPS = totalFPS / float64(samples)
 		}
-		if latestUnixSec > 0 {
+		if latestUnixSec > 0 && (info.LastFrameTime.IsZero() || latestUnixSec > info.LastFrameTime.Unix()) {
 			info.LastFrameTime = time.Unix(latestUnixSec, 0)
 		}
-		// Customize publish sessions (including native HLS pulls) are not
-		// always represented in lal's pub/pull session fields. Recent incoming
-		// video frames are authoritative evidence that such a stream is active.
-		if !info.Active && info.InFPS > 0 && !info.LastFrameTime.IsZero() && time.Since(info.LastFrameTime) <= 10*time.Second {
-			info.Active = true
-			info.Publisher = &SessionInfo{Protocol: "customize"}
-		}
+
+	}
+	// Customize publish sessions (including native HLS pulls) are not
+	// always represented in lal's pub/pull session fields. Recent incoming
+	// video frames are authoritative evidence that such a stream is active.
+	if !info.Active && !info.LastFrameTime.IsZero() && time.Since(info.LastFrameTime) <= 10*time.Second {
+		info.Active = true
+		info.Publisher = &SessionInfo{Protocol: "customize"}
 	}
 	return info
 }
