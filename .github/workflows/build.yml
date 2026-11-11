@@ -149,16 +149,8 @@ jobs:
       - name: Display coverage
         run: go tool cover -func=coverage.out
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7.1.1
-        with:
-          use_oidc: true
-          files: coverage.out
-          disable_search: true
-          flags: go
-          name: go-unit
-          fail_ci_if_error: true
-
+      # The local coverage threshold is mandatory on forks and upstream alike.
+      # Evaluate it before any optional external reporting integration.
       - name: Check coverage threshold
         run: |
           echo "Checking coverage threshold..."
@@ -169,6 +161,20 @@ jobs:
             exit 1
           fi
           echo "Coverage threshold check passed"
+
+      # Codecov recognizes the upstream repository, but not every fork. Do not
+      # turn a missing fork-side Codecov project into a build failure.
+      # Keep strict uploads for the upstream repository.
+      - name: Upload coverage to Codecov
+        if: github.repository == 'lalmax-pro/lalmax-nvr'
+        uses: codecov/codecov-action@v7.1.1
+        with:
+          use_oidc: true
+          files: coverage.out
+          disable_search: true
+          flags: go
+          name: go-unit
+          fail_ci_if_error: true
 
       # All binary matrix jobs run on the same Linux host architecture. Reuse
       # the exact toolchain that passed tests instead of six network downloads.
