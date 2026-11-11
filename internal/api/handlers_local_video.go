@@ -266,7 +266,7 @@ func (h *Handler) handleCreateLocalVideo(w http.ResponseWriter,r *http.Request){
   writeError(w,http.StatusBadRequest,"invalid or oversized video file");return
  }
  // Upload bytes were written directly to this request's unique final path.
- 
+ if _,_,_,err=probeLocalVideo(dest);err!=nil {
   _=os.Remove(dest)
   writeError(w,http.StatusBadRequest,err.Error());return
  }
