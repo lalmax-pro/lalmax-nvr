@@ -426,6 +426,12 @@ func (group *Group) delIn() {
 	// the previous session. delIn is invoked while group.mutex is held.
 	group.inVideoFpsRecords.Clear()
 	group.stat.LastVideoFrameUnixSec = 0
+    group.flvAudioAnnounced = false
+    group.flvVideoAnnounced = false
+    group.stat.AudioCodec = ""
+    group.stat.VideoCodec = ""
+    group.stat.VideoWidth = 0
+    group.stat.VideoHeight = 0
 	group.sdpCtx = nil
 	group.patpmt = nil
 }

@@ -18,4 +18,14 @@ var (
 	Log = nazalog.GetGlobalLogger()
 )
 
+// FlvHeaderWithTracks returns a per-stream FLV v1 header without altering
+// the global legacy header. Bit 2 is audio; bit 0 is video.
+func FlvHeaderWithTracks(audio, video bool) []byte {
+    header := append([]byte(nil), FlvHeader...)
+    header[4] = 0
+    if audio { header[4] |= 0x04 }
+    if video { header[4] |= 0x01 }
+    return header
+}
+
 var readBufSize = 256 //16384 // ClientPullSession读取数据时

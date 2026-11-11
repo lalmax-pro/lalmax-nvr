@@ -10,6 +10,7 @@ package httpflv
 
 import (
 	"net"
+	"sync/atomic"
 
 	"github.com/q191201771/lal/pkg/base"
 
@@ -22,6 +23,7 @@ type SubSession struct {
 	core                    *base.BasicHttpSubSession
 	IsFresh                 bool
 	ShouldWaitVideoKeyFrame bool
+	flvHeaderWritten atomic.Bool
 }
 
 func NewSubSession(conn net.Conn, urlCtx base.UrlContext, isWebSocket bool, websocketKey string) *SubSession {
@@ -65,9 +67,22 @@ func (session *SubSession) WriteHttpResponseHeader() {
 	session.core.WriteHttpResponseHeader(flvHttpResponseHeader)
 }
 
+// FlvHeaderWritten allows stream groups to defer a header until media
+// tracks have been discovered, and prevents duplicate header emission.
+func (session *SubSession) FlvHeaderWritten() bool {
+    return session.flvHeaderWritten.Load()
+}
+
+func (session *SubSession) WriteFlvHeaderWithTracks(audio, video bool) {
+    if !audio && !video { return }
+    if !session.flvHeaderWritten.CompareAndSwap(false, true) { return }
+    Log.Debugf("[%s] > W http flv header. audio=%t video=%t", session.core.UniqueKey(), audio, video)
+    session.core.Write(FlvHeaderWithTracks(audio, video))
+}
+
+// Compatibility entrypoint for callers without track information.
 func (session *SubSession) WriteFlvHeader() {
-	Log.Debugf("[%s] > W http flv header.", session.core.UniqueKey())
-	session.core.Write(FlvHeader)
+    session.WriteFlvHeaderWithTracks(true, true)
 }
 
 func (session *SubSession) WriteTag(tag *Tag) {
