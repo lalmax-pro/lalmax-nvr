@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
+	"github.com/lalmax-pro/lalmax-nvr/internal/ai/webhook"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/emby"
@@ -192,7 +193,9 @@ type Handler struct {
 	cloudProxy        CloudAuthProxy
 	streamRegistry    *StreamRegistry
 	localVideos       localVideoPlayers
-	aiManager         *ai.Manager
+	aiManager              *ai.Manager
+	aiDetectionPublisher    webhook.CallbackFunc
+	aiDetectionPublisherID  string
 	onvifDiscover     func(ctx context.Context, timeout time.Duration) *onvif.DiscoveryResult
 	onvifProbeDevice  func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error)
 	onvifNewClient    func(endpoint, username, password string) onvifDeviceClient
@@ -344,11 +347,38 @@ func (h *Handler) SetMultiUserAuthMW(mw func(http.Handler) http.Handler) {
 	h.multiUserMW = mw
 }
 
-// SetAIManager sets the AI Manager on the handler.
+// SetAIDetectionPublisher registers the event-bus publisher across AI manager
+// replacements. Changing the callback first removes the previous registration.
+func (h *Handler) SetAIDetectionPublisher(callback webhook.CallbackFunc) {
+	if h.aiManager != nil && h.aiDetectionPublisherID != "" {
+		h.aiManager.UnregisterCallback(h.aiDetectionPublisherID)
+	}
+	h.aiDetectionPublisher = callback
+	h.aiDetectionPublisherID = ""
+	if h.aiManager != nil && callback != nil {
+		h.aiDetectionPublisherID = h.aiManager.OnDetection(callback)
+	}
+}
+
+// SetAIManager installs the current manager and rebinds its event-bus callback.
+// The old registration is removed so a manager replacement never duplicates
+// event publication; repeated installation of the same manager is a no-op.
 func (h *Handler) SetAIManager(mgr *ai.Manager) {
+	if h.aiManager == mgr {
+		return
+	}
+	if h.aiManager != nil && h.aiDetectionPublisherID != "" {
+		h.aiManager.UnregisterCallback(h.aiDetectionPublisherID)
+	}
 	h.aiManager = mgr
-	if h.aiManager != nil && h.db != nil {
-		h.aiManager.SetStore(h.db)
+	h.aiDetectionPublisherID = ""
+	if mgr != nil {
+		if h.db != nil {
+			mgr.SetStore(h.db)
+		}
+		if h.aiDetectionPublisher != nil {
+			h.aiDetectionPublisherID = mgr.OnDetection(h.aiDetectionPublisher)
+		}
 	}
 }
 

@@ -1114,7 +1114,7 @@ func (a *App) buildRouter() http.Handler {
 
 	// Wire AI Manager
 	aiMgr := ai.NewManager(cfg.AI)
-	aiMgr.OnDetection(func(result webhook.DetectionResult) {
+	handler.SetAIDetectionPublisher(func(result webhook.DetectionResult) {
 		detections := make([]event.AIDetectionObject, 0, len(result.Detections))
 		for _, detection := range result.Detections {
 			detections = append(detections, event.AIDetectionObject{

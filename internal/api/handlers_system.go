@@ -1123,10 +1123,7 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 		h.aiManager.StopAll()
 	}
 	newMgr := ai.NewManager(h.config.AI)
-	if h.db != nil {
-		newMgr.SetStore(h.db)
-	}
-	h.aiManager = newMgr
+	h.SetAIManager(newMgr)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
