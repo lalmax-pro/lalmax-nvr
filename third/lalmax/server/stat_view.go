@@ -20,6 +20,9 @@ type LalmaxStatGroup struct {
 	StatSubs    []base.StatSub      `json:"subs"`
 	StatPull    base.StatPull       `json:"pull"`
 	Fps         []base.RecordPerSec `json:"in_frame_per_sec"`
+	// LastVideoFrameUnixSec is independent of the consumable FPS buckets.
+	// Preserve it for both /api/stat/group and /api/stat/all_group.
+	LastVideoFrameUnixSec int64 `json:"last_video_frame_unix_sec,omitempty"`
 	Lalmax      LalmaxGroupStat     `json:"lalmax"`
 }
 
@@ -48,6 +51,7 @@ func newLalmaxStatGroup(view maxlogic.StatGroupView) LalmaxStatGroup {
 		StatSubs:    group.StatSubs,
 		StatPull:    group.StatPull,
 		Fps:         group.Fps,
+		LastVideoFrameUnixSec: group.LastVideoFrameUnixSec,
 		Lalmax: LalmaxGroupStat{
 			ExtSubs: view.ExtSubs,
 		},
