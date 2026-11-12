@@ -619,6 +619,10 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Serialize the config update and snapshot with RTMP StreamKeys changes.
+	configLocked := true
+	h.localVideos.authMu.Lock()
+	defer func() { if configLocked { h.localVideos.authMu.Unlock() } }()
 	// Update cleanup settings
 	if body.Cleanup != nil {
 		if body.Cleanup.RetentionDays != nil {
@@ -731,9 +735,11 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist config to disk (with conflict detection)
-	if !h.saveConfig(w) {
+	if !h.saveConfigLocked(w) {
 		return
 	}
+	h.localVideos.authMu.Unlock()
+	configLocked = false
 	if body.Observability != nil && body.Observability.LocalTraceEnabled != nil && h.localTraceApply != nil {
 		h.localTraceApply(*body.Observability.LocalTraceEnabled)
 	}
@@ -841,6 +847,10 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Serialize the config update and snapshot with RTMP StreamKeys changes.
+	configLocked := true
+	h.localVideos.authMu.Lock()
+	defer func() { if configLocked { h.localVideos.authMu.Unlock() } }()
 	if body.RTSPServer != nil {
 		candidate := h.config.Media
 		if body.RTSPServer.AuthEnabled != nil {
@@ -975,9 +985,11 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	}
 
 	// Persist config to disk (with conflict detection)
-	if !h.saveConfig(w) {
+	if !h.saveConfigLocked(w) {
 		return
 	}
+	h.localVideos.authMu.Unlock()
+	configLocked = false
 
 	h.logOperation(r, "config.update", "config", "streaming", "success", "streaming settings updated", nil)
 
@@ -1056,6 +1068,10 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Serialize the config update and snapshot with RTMP StreamKeys changes.
+	configLocked := true
+	h.localVideos.authMu.Lock()
+	defer func() { if configLocked { h.localVideos.authMu.Unlock() } }()
 	// Update enabled
 	if body.Enabled != nil {
 		h.config.AI.Enabled = *body.Enabled
@@ -1112,9 +1128,11 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 	h.config.ApplyDefaults()
 
 	// Persist config to disk
-	if !h.saveConfig(w) {
+	if !h.saveConfigLocked(w) {
 		return
 	}
+	h.localVideos.authMu.Unlock()
+	configLocked = false
 
 	h.logOperation(r, "config.update", "config", "ai", "success", "AI settings updated", nil)
 
@@ -1460,6 +1478,10 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Serialize the config update and snapshot with RTMP StreamKeys changes.
+	configLocked := true
+	h.localVideos.authMu.Lock()
+	defer func() { if configLocked { h.localVideos.authMu.Unlock() } }()
 	// Track whether config changed (requires GB28181 restart)
 	needRestart := false
 
@@ -1502,9 +1524,11 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 	}
 
 	// Persist config to disk (with conflict detection)
-	if !h.saveConfig(w) {
+	if !h.saveConfigLocked(w) {
 		return
 	}
+	h.localVideos.authMu.Unlock()
+	configLocked = false
 
 	h.logOperation(r, "config.update", "config", "gb28181", "success", "GB28181 settings updated", nil)
 
@@ -1576,7 +1600,9 @@ func (h *Handler) handleReloadConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to reload config: "+err.Error())
 			return
 		}
+		h.localVideos.authMu.Lock()
 		h.config = cfg
+		h.localVideos.authMu.Unlock()
 		h.logSuccess(r, "config.reload", "config", "", "config reloaded from disk", nil)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 		return
@@ -1589,7 +1615,9 @@ func (h *Handler) handleReloadConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to reload config: "+err.Error())
 		return
 	}
+	h.localVideos.authMu.Lock()
 	h.config = h.configWatcher.Config()
+	h.localVideos.authMu.Unlock()
 	h.logSuccess(r, "config.reload", "config", "", "config reloaded from disk", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
@@ -1664,6 +1692,10 @@ func (h *Handler) handleUpdateHLSSettings(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Serialize the config update and snapshot with RTMP StreamKeys changes.
+	configLocked := true
+	h.localVideos.authMu.Lock()
+	defer func() { if configLocked { h.localVideos.authMu.Unlock() } }()
 	hlsChanged := false
 	if body.Enabled != nil {
 		if h.config.HLS.Enabled == nil {
@@ -1723,9 +1755,11 @@ func (h *Handler) handleUpdateHLSSettings(w http.ResponseWriter, r *http.Request
 			h.config.Streaming.DefaultProtocol = "webrtc"
 		}
 	}
-	if !h.saveConfig(w) {
+	if !h.saveConfigLocked(w) {
 		return
 	}
+	h.localVideos.authMu.Unlock()
+	configLocked = false
 	h.logOperation(r, "config.update", "config", "hls", "success", "HLS settings updated", nil)
 	if hlsChanged && h.mediaEngine != nil {
 		if applier, ok := h.mediaEngine.(interface {
