@@ -1540,14 +1540,24 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 
 // saveConfig saves the config using the Watcher (with conflict detection).
 // Returns true if save succeeded, false if conflict detected (409 already written).
-func (h *Handler) saveConfig(w http.ResponseWriter) bool {
-	if h.configWatcher == nil {
-		if err := config.Save(h.configPath, h.config); err != nil {
-			logger.Warn("failed to save config", "error", err)
-		}
-		return true
+// persistConfigLocked snapshots the live config while holding
+// localVideos.authMu, also shared with local-video RTMP token updates.
+func (h *Handler) persistConfigLocked() error {
+	if h.configWatcher != nil && h.configWatcher.Config() == h.config {
+		return h.configWatcher.Save(false)
 	}
-	if err := h.configWatcher.Save(false); err != nil {
+	return config.Save(h.configPath, h.config)
+}
+
+func (h *Handler) saveConfig(w http.ResponseWriter) bool {
+	h.localVideos.authMu.Lock()
+	defer h.localVideos.authMu.Unlock()
+	return h.saveConfigLocked(w)
+}
+
+// Called only while localVideos.authMu is already held.
+func (h *Handler) saveConfigLocked(w http.ResponseWriter) bool {
+	if err := h.persistConfigLocked(); err != nil {
 		if err == config.ErrConfigModified {
 			writeError(w, http.StatusConflict, "config file was modified externally; please reload before saving")
 			return false

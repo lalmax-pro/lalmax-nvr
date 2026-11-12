@@ -56,7 +56,7 @@ func (h *Handler) ensureLocalVideoPublishKey(streamID string) error {
  for id,token:=range previous {next[id]=token}
  next[streamID]=hex.EncodeToString(key)
  h.config.RTMP.StreamKeys=next
- if err:=config.Save(h.configPath,h.config);err!=nil {
+ if err:=h.persistConfigLocked();err!=nil {
   h.config.RTMP.StreamKeys=previous
   return fmt.Errorf("persist local video publish token: %w",err)
  }
@@ -74,7 +74,7 @@ func (h *Handler) revokeLocalVideoPublishKey(streamID string) {
  next:=make(map[string]string,len(previous))
  for id,token:=range previous {if id!=streamID {next[id]=token}}
  h.config.RTMP.StreamKeys=next
- if err:=config.Save(h.configPath,h.config);err!=nil {
+ if err:=h.persistConfigLocked();err!=nil {
   h.config.RTMP.StreamKeys=previous
   logger.Warn("failed to persist RTMP token revocation", "stream_id",streamID,"err",err)
   return

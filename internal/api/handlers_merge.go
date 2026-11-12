@@ -6,12 +6,13 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 )
 
 // --- Merge settings endpoints ---
 
 func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request) {
+	h.localVideos.authMu.Lock()
+	defer h.localVideos.authMu.Unlock()
 	if h.config == nil {
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
@@ -50,6 +51,10 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	// Protect both the mutation and the whole-Config persistence snapshot.
+	h.localVideos.authMu.Lock()
+	defer h.localVideos.authMu.Unlock()
 
 	if body.Enabled != nil {
 		h.config.Merge.Enabled = *body.Enabled
@@ -100,10 +105,8 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 		h.config.Merge.RollingDebounce = *body.RollingDebounce
 	}
 
-	// Persist config to disk
-	if err := config.Save(h.configPath, h.config); err != nil {
-		logger.Warn("failed to save config", "error", err)
-	}
+	// Use the same watcher-aware snapshot path as system settings.
+	if !h.saveConfigLocked(w) { return }
 	h.logOperation(r, "config.update", "config", "merge", "success", "merge settings updated", nil)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
