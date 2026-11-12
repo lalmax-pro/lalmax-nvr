@@ -1621,6 +1621,15 @@ func newTestCamHandler(t *testing.T) (*Handler, *camera.CameraManager, *config.C
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
+	// Camera endpoints may start real recorder goroutines. Stop them before
+	// setupTestDB closes SQLite and before the next -count run starts.
+	// Without cleanup, reconnect loops survive into unrelated health/readyz
+	// tests and can exceed their process-wide goroutine thresholds.
+	t.Cleanup(func() {
+		if err := camMgr.Stop(); err != nil {
+			t.Errorf("stop test camera manager: %v", err)
+		}
+	})
 	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, "", nil, nil)
 	h.SetMultiUserAuthMW(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
