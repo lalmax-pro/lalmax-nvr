@@ -207,21 +207,26 @@ type HevcRtpEncoder struct {
 	rtpPacker *rtprtcp.RtpPacker
 }
 
-func NewHevcRtpEncoder(codec []byte) *HevcRtpEncoder {
-	// LAL supports both legacy 0x1c and Enhanced RTMP hvc1 HEVC headers.
+// parseHEVCSequenceHeader is shared by WHEP initialization and in-session
+// parameter-set changes. Both legacy 0x1c and Enhanced hvc1 can occur on a
+// single session; never route a legacy update into the Enhanced parser.
+func parseHEVCSequenceHeader(codec []byte) (vps, sps, pps []byte, err error) {
 	if len(codec) < 5 {
-		return nil
+		return nil, nil, nil, fmt.Errorf("HEVC sequence header too short")
 	}
-	var vps, sps, pps []byte
-	var err error
 	switch {
 	case codec[0] == 0x1c:
-		vps, sps, pps, err = hevc.ParseVpsSpsPpsFromSeqHeader(codec)
-	case codec[0]&0x80 != 0 && string(codec[1:5]) == "hvc1":
-		vps, sps, pps, err = hevc.ParseVpsSpsPpsFromEnhancedSeqHeader(codec)
+		return hevc.ParseVpsSpsPpsFromSeqHeader(codec)
+	case codec[0]&0x80 != 0 && string(codec[1:5]) == "hvc1" &&
+		codec[0]&0x0f == base.RtmpExPacketTypeSequenceStart:
+		return hevc.ParseVpsSpsPpsFromEnhancedSeqHeader(codec)
 	default:
-		return nil
+		return nil, nil, nil, fmt.Errorf("unsupported HEVC sequence header format")
 	}
+}
+
+func NewHevcRtpEncoder(codec []byte) *HevcRtpEncoder {
+	vps, sps, pps, err := parseHEVCSequenceHeader(codec)
 	if err != nil {
 		nazalog.Error(err)
 		return nil

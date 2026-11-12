@@ -463,9 +463,9 @@ func (group *Group) broadcastByRtmpMsg(msg base.RtmpMsg) {
 			}
 		}
 	}
-	if msg.Header.MsgTypeId == base.RtmpTypeIdVideo &&
-		!msg.IsAvcKeySeqHeader() && !msg.IsHevcKeySeqHeader() {
-		// Sequence headers are codec metadata, not decoded video frames.
+	if isEncodedVideoFrame(msg) {
+		// A sequence header or end-of-sequence command is not a frame:
+		// neither can establish output readiness in the absence of NALUs.
 		group.inVideoFpsRecords.Add(nazalog.Clock.Now().Unix(), 1)
 	}
 }
