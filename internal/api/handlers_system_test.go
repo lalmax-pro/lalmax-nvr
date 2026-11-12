@@ -56,8 +56,9 @@ func TestReadyz_OK(t *testing.T) {
 	defer db.Close()
 	h := TestHandler(db, store)
 
-	rr := doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
-	require.Equal(t, http.StatusOK, rr.Code)
+	// All other health gates still execute; only the process-wide count is
+	// stabilized, as in the dedicated camera health success-path regression.
+	assertReadyzHealthy(t, h)
 }
 
 // --- handleProtocols tests ---

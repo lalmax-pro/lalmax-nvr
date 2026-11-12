@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1941,14 +1942,35 @@ func TestHealthWithNilDB(t *testing.T) {
 	require.Equal(t, "error", body.Checks["storage"].Status)
 }
 
+// assertReadyzHealthy checks DB and storage readiness without allowing other
+// parallel tests' process-wide goroutines to turn this success-path case into
+// a resource-limit test. The limit itself is tested separately at 4999/5000.
+func assertReadyzHealthy(t *testing.T, h *Handler) *httptest.ResponseRecorder {
+	t.Helper()
+	h.goroutineCount = func() int { return 1 }
+	rr := doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
+	if rr.Code != http.StatusOK {
+		// A readyz 503 response does not say which dependency failed. Preserve
+		// the detail needed to diagnose actual DB/disk problems if they arise.
+		health := doRequest(t, h.Routes(), "GET", "/api/health/details", nil, "", "")
+		diskDetail := "no disk probe"
+		if h.readyzDiskUsage != nil {
+			total, used, err := h.readyzDiskUsage()
+			diskDetail = fmt.Sprintf("total=%d used=%d err=%v", total, used, err)
+		}
+		t.Fatalf("readyz: expected HTTP 200, got %d body=%s; health=%s; disk=%s; actual_process_goroutines=%d",
+			rr.Code, rr.Body.String(), health.Body.String(), diskDetail, runtime.NumGoroutine())
+	}
+	return rr
+}
+
 func TestReadyzReturns200(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
 
-	rr := doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
-	require.Equal(t, http.StatusOK, rr.Code)
+	rr := assertReadyzHealthy(t, h)
 
 	var body map[string]string
 	parseJSON(t, rr, &body)
