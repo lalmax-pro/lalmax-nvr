@@ -93,6 +93,33 @@ func (w *Watcher) Reload() error {
 	return nil
 }
 
+// ReloadWithGuard serializes loading and installation with the owner's config
+// mutations while invoking watcher subscribers only after that guard is released.
+func (w *Watcher) ReloadWithGuard(lock, unlock func(), apply func(*Config)) error {
+	lock()
+	cfg, err := Load(w.path)
+	if err != nil {
+		unlock()
+		return fmt.Errorf("reload config: %w", err)
+	}
+	w.mu.Lock()
+	if err := w.statFileLocked(); err != nil {
+		w.mu.Unlock()
+		unlock()
+		return err
+	}
+	w.cfg = cfg
+	subscribers := append([]func(*Config){}, w.subs...)
+	w.mu.Unlock()
+	apply(cfg)
+	unlock()
+	watchLogger.Info("config reloaded from disk", "path", w.path)
+	for _, fn := range subscribers {
+		fn(cfg)
+	}
+	return nil
+}
+
 // Save persists the in-memory config to disk. It checks for external
 // modifications first and returns ErrConfigModified if the file was changed
 // since the last load/save. Pass force=true to skip the check.

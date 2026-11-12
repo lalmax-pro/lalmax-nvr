@@ -31,10 +31,14 @@ type localVideoPlayers struct {
 }
 
 func (h *Handler) localVideoDirectory() (string,error) {
- if h.config == nil || strings.TrimSpace(h.config.Storage.RootDir)=="" {
+ h.localVideos.authMu.Lock()
+ root := ""
+ if h.config != nil { root = h.config.Storage.RootDir }
+ h.localVideos.authMu.Unlock()
+ if strings.TrimSpace(root)=="" {
   return "",errors.New("storage root directory is not configured")
  }
- dir,absErr:=filepath.Abs(filepath.Join(h.config.Storage.RootDir,"local-videos"))
+ dir,absErr:=filepath.Abs(filepath.Join(root,"local-videos"))
  if absErr!=nil {return "",absErr}
  if err:=os.MkdirAll(dir,0700);err!=nil{return "",err}
  return dir,nil
@@ -56,7 +60,7 @@ func (h *Handler) ensureLocalVideoPublishKey(streamID string) error {
  for id,token:=range previous {next[id]=token}
  next[streamID]=hex.EncodeToString(key)
  h.config.RTMP.StreamKeys=next
- if err:=config.Save(h.configPath,h.config);err!=nil {
+ if err:=h.persistConfigLocked();err!=nil {
   h.config.RTMP.StreamKeys=previous
   return fmt.Errorf("persist local video publish token: %w",err)
  }
@@ -74,7 +78,7 @@ func (h *Handler) revokeLocalVideoPublishKey(streamID string) {
  next:=make(map[string]string,len(previous))
  for id,token:=range previous {if id!=streamID {next[id]=token}}
  h.config.RTMP.StreamKeys=next
- if err:=config.Save(h.configPath,h.config);err!=nil {
+ if err:=h.persistConfigLocked();err!=nil {
   h.config.RTMP.StreamKeys=previous
   logger.Warn("failed to persist RTMP token revocation", "stream_id",streamID,"err",err)
   return
@@ -228,7 +232,10 @@ func (h *Handler) handleCreateLocalVideo(w http.ResponseWriter,r *http.Request){
  id:=strings.TrimSpace(r.FormValue("stream_id"))
  if !pushStreamIDPattern.MatchString(id) {writeError(w,http.StatusBadRequest,"invalid stream_id");return}
  // Validate RTMP availability before accepting a potentially large upload.
- if h.config==nil || h.config.RTMP.Enabled==nil || !*h.config.RTMP.Enabled {
+ h.localVideos.authMu.Lock()
+ rtmpEnabled := h.config!=nil && h.config.RTMP.Enabled!=nil && *h.config.RTMP.Enabled
+ h.localVideos.authMu.Unlock()
+ if !rtmpEnabled {
   writeError(w,http.StatusBadRequest,"RTMP ingest must be enabled for local video");return
  }
  existing,err:=h.db.GetCreatedStream(r.Context(),id)

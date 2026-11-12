@@ -77,11 +77,11 @@ func TestApi3AutoDiscoverSettings(t *testing.T) {
 	api3Status(t, api3Request(t, router, http.MethodPut, "/settings/autodiscover", `{"default_password":""}`), http.StatusOK)
 	require.Equal(t, "secret", cfg.AutoDiscover.DefaultPassword)
 
-	// Saving the config is tolerated when no config path is set.
+	// An empty config path is a persistence error.
 	bare := NewHandler(db, store, noopAuthMW(), cfg, nil, "", nil, nil)
 	api3Status(t, api3Request(t, api3Router(func(r chi.Router) {
 		r.Put("/settings/autodiscover", bare.handleUpdateAutoDiscoverSettings)
-	}), http.MethodPut, "/settings/autodiscover", `{"enabled":false}`), http.StatusOK)
+	}), http.MethodPut, "/settings/autodiscover", `{"enabled":false}`), http.StatusInternalServerError)
 }
 
 // --- camera activation and rediscovery ---

@@ -41,7 +41,7 @@ func (group *Group) AddHttpflvSubSession(session *httpflv.SubSession) {
     // Never advertise phantom audio/video tracks. A session connecting
     // before codec discovery writes its FLV header on the first media packet.
     audio, video := group.httpflvTracks(nil)
-    session.WriteFlvHeaderWithTracks(audio, video)
+    session.ObserveFlvTracks(audio, video)
     group.httpflvSubSessionSet[session] = struct{}{}
 	// 加入时，如果上行还没有推流过，就不需要等待关键帧了
 	if group.stat.VideoCodec == "" {

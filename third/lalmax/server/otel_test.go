@@ -37,9 +37,14 @@ func TestOTelMiddlewareExtractsTraceContextAndUsesRouteTemplate(t *testing.T) {
 	request.Header.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
 	router.ServeHTTP(httptest.NewRecorder(), request)
 
-	spans := recorder.Ended()
-	require.Len(t, spans, 1)
-	span := spans[0]
+	var matches []sdktrace.ReadOnlySpan
+	for _, candidate := range recorder.Ended() {
+		if candidate.Name() == "GET /api/group/:stream" && candidate.SpanContext().TraceID().String() == "0123456789abcdef0123456789abcdef" {
+			matches = append(matches, candidate)
+		}
+	}
+	require.Len(t, matches, 1)
+	span := matches[0]
 	require.Equal(t, "GET /api/group/:stream", span.Name())
 	require.Equal(t, "0123456789abcdef0123456789abcdef", span.SpanContext().TraceID().String())
 	require.Equal(t, "0123456789abcdef", span.Parent().SpanID().String())

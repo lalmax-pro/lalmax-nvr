@@ -14,7 +14,6 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lal/pkg/avc"
 	"github.com/q191201771/lal/pkg/base"
-	"github.com/q191201771/lal/pkg/hevc"
 	"github.com/q191201771/lal/pkg/logic"
 	"github.com/q191201771/naza/pkg/nazalog"
 )
@@ -468,7 +467,7 @@ func (conn *whepSession) updateVideoCodec(msg base.RtmpMsg) {
 	}
 
 	if msg.IsHevcKeySeqHeader() {
-		vps, sps, pps, err := hevc.ParseVpsSpsPpsFromEnhancedSeqHeader(msg.Payload)
+		vps, sps, pps, err := parseHEVCSequenceHeader(msg.Payload)
 		if err != nil {
 			nazalog.Error("ParseVpsSpsPpsFromSeqHeader err:", err)
 			return

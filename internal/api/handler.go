@@ -208,6 +208,9 @@ type Handler struct {
 	relayMgr          *relay.Manager
 	// readyzDiskUsage overrides disk probing for /api/readyz (tests only).
 	readyzDiskUsage func() (total, used int64, err error)
+	// goroutineCount is a test seam for the process-wide health metric.
+	// A nil callback uses runtime.NumGoroutine, preserving production behavior.
+	goroutineCount func() int
 	// sysMetrics holds the in-memory ring buffer of periodic system metric samples.
 	sysMetrics *sysMetricsHistory
 	// streamMetrics holds per-stream ring buffers of periodic live metric samples.

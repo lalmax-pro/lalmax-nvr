@@ -6,18 +6,19 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 )
 
 // --- Merge settings endpoints ---
 
 func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request) {
+	h.localVideos.authMu.Lock()
 	if h.config == nil {
+		h.localVideos.authMu.Unlock()
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	values := map[string]any{
 		"enabled":               h.config.Merge.Enabled,
 		"check_interval":        h.config.Merge.CheckInterval,
 		"window_size":           h.config.Merge.WindowSize,
@@ -26,15 +27,19 @@ func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request)
 		"min_segments_to_merge": h.config.Merge.MinSegmentsToMerge,
 		"rolling_enabled":       h.config.Merge.IsRollingEnabled(),
 		"rolling_debounce":      h.config.Merge.RollingDebounce,
-	})
+	}
+	h.localVideos.authMu.Unlock()
+	writeJSON(w, http.StatusOK, values)
 }
 
 func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+	h.localVideos.authMu.Lock()
+	hasConfig := h.config != nil
+	h.localVideos.authMu.Unlock()
+	if !hasConfig {
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
-
 	var body struct {
 		Enabled            *bool   `json:"enabled"`
 		CheckInterval      *string `json:"check_interval"`
@@ -50,6 +55,18 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	// Protect both the mutation and the whole-Config persistence snapshot.
+	h.localVideos.authMu.Lock()
+	configLocked := true
+	defer func() { if configLocked { h.localVideos.authMu.Unlock() } }()
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	previousMerge := h.config.Merge
+	configCommitted := false
+	defer func() { if !configCommitted { h.config.Merge = previousMerge } }()
 
 	if body.Enabled != nil {
 		h.config.Merge.Enabled = *body.Enabled
@@ -100,10 +117,11 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 		h.config.Merge.RollingDebounce = *body.RollingDebounce
 	}
 
-	// Persist config to disk
-	if err := config.Save(h.configPath, h.config); err != nil {
-		logger.Warn("failed to save config", "error", err)
-	}
+	// Use the same watcher-aware snapshot path as system settings.
+	if !h.saveConfigLocked(w) { return }
+	configCommitted = true
+	h.localVideos.authMu.Unlock()
+	configLocked = false
 	h.logOperation(r, "config.update", "config", "merge", "success", "merge settings updated", nil)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})

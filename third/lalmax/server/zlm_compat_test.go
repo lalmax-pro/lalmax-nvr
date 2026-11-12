@@ -175,6 +175,19 @@ func TestZlmCompatGetServerConfig(t *testing.T) {
 }
 
 func TestZlmCompatSetServerConfig(t *testing.T) {
+	// The shared TestMain server survives -count repetitions. Restore both
+	// the public configuration and the active hook hub after this test.
+	max.configMu.Lock()
+	previous := max.conf.HttpNotifyConfig
+	max.configMu.Unlock()
+	t.Cleanup(func() {
+		max.configMu.Lock()
+		max.conf.HttpNotifyConfig = previous
+		max.configMu.Unlock()
+		max.notifyHub.configMu.Lock()
+		max.notifyHub.cfg = previous
+		max.notifyHub.configMu.Unlock()
+	})
 	body := `{
 		"hook.on_stream_changed":"http://127.0.0.1:15123/webhook/on_stream_changed",
 		"hook.on_server_keepalive":"http://127.0.0.1:15123/webhook/on_server_keepalive",
