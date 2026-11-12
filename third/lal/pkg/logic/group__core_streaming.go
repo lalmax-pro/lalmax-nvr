@@ -186,9 +186,10 @@ func (group *Group) broadcastByRtmpMsg(msg base.RtmpMsg) {
 	}
 
 	if msg.Header.MsgTypeId == base.RtmpTypeIdMetadata {
-		m, err := rtmp.ParseMetadata(msg.Payload)
-		nazalog.Debugf("[%s] metadata. err=%+v, len=%d, value=%s", group.UniqueKey, err, len(m), m.DebugString())
-	}
+        m, err := rtmp.ParseMetadata(msg.Payload)
+        nazalog.Debugf("[%s] metadata. err=%+v, len=%d, value=%s", group.UniqueKey, err, len(m), m.DebugString())
+        if err == nil { group.noteFlvTrackMetadata(m) }
+    }
 
 	var (
 		lazyRtmpChunkDivider remux.LazyRtmpChunkDivider
@@ -337,7 +338,15 @@ func (group *Group) broadcastByRtmpMsg(msg base.RtmpMsg) {
 
 	// # 广播。遍历所有 httpflv sub session，转发数据
 	for session := range group.httpflvSubSessionSet {
-		if session.IsFresh {
+        if !session.FlvHeaderWritten() {
+            audio, video := group.httpflvTracks(&msg)
+            if !audio && !video {
+                // The FLV header precedes every FLV tag, including metadata.
+                continue
+            }
+            session.WriteFlvHeaderWithTracks(audio, video)
+        }
+        if session.IsFresh {
 			if group.httpflvGopCache.MetadataEnsureWithoutSetDataFrame != nil {
 				session.Write(group.httpflvGopCache.MetadataEnsureWithoutSetDataFrame)
 			}
@@ -454,7 +463,9 @@ func (group *Group) broadcastByRtmpMsg(msg base.RtmpMsg) {
 			}
 		}
 	}
-	if msg.Header.MsgTypeId == base.RtmpTypeIdVideo {
+	if msg.Header.MsgTypeId == base.RtmpTypeIdVideo &&
+		!msg.IsAvcKeySeqHeader() && !msg.IsHevcKeySeqHeader() {
+		// Sequence headers are codec metadata, not decoded video frames.
 		group.inVideoFpsRecords.Add(nazalog.Clock.Now().Unix(), 1)
 	}
 }

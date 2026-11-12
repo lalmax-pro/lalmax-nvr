@@ -136,6 +136,8 @@ type Group struct {
 	rtmpMergeWriter *base.MergeWriter // TODO(chef): 后面可以在业务层加一个定时Flush
 	//
 	stat base.StatGroup
+	flvAudioAnnounced bool
+	flvVideoAnnounced bool
 	//
 	inVideoFpsRecords base.PeriodRecord
 	//

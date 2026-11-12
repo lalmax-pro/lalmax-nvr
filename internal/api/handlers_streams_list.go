@@ -702,7 +702,11 @@ func (h *Handler) buildIngestURLs(ctx context.Context, streamID, appName string)
 		if protocol == "rtmp" {
 			streamKey := ""
 			if h.config != nil {
+				// Token provisioning swaps StreamKeys under authMu; all readers
+				// must use the same mutex, including ingest URL discovery.
+				h.localVideos.authMu.Lock()
 				streamKey = h.config.RTMP.StreamKeys[streamID]
+				h.localVideos.authMu.Unlock()
 			}
 			if streamKey == "" {
 				continue

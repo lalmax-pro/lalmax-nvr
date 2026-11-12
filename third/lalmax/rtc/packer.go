@@ -208,7 +208,20 @@ type HevcRtpEncoder struct {
 }
 
 func NewHevcRtpEncoder(codec []byte) *HevcRtpEncoder {
-	vps, sps, pps, err := hevc.ParseVpsSpsPpsFromEnhancedSeqHeader(codec)
+	// LAL supports both legacy 0x1c and Enhanced RTMP hvc1 HEVC headers.
+	if len(codec) < 5 {
+		return nil
+	}
+	var vps, sps, pps []byte
+	var err error
+	switch {
+	case codec[0] == 0x1c:
+		vps, sps, pps, err = hevc.ParseVpsSpsPpsFromSeqHeader(codec)
+	case codec[0]&0x80 != 0 && string(codec[1:5]) == "hvc1":
+		vps, sps, pps, err = hevc.ParseVpsSpsPpsFromEnhancedSeqHeader(codec)
+	default:
+		return nil
+	}
 	if err != nil {
 		nazalog.Error(err)
 		return nil

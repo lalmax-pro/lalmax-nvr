@@ -63,8 +63,9 @@ type TaskManager struct {
 	onStart    func(streamID string, rec model.Recorder)
 	onStop     func(streamID string, rec model.Recorder)
 
-	mu    sync.Mutex
-	tasks map[string]model.Recorder
+	mu              sync.Mutex
+	tasks           map[string]model.Recorder
+	explicitDerived map[string]bool // operator-owned derived recording tasks
 }
 
 func NewTaskManager(engine media.Engine, store SegmentStore, db RecordingDB, m *metrics.Metrics, bus *event.EventBus, segmentDur time.Duration) *TaskManager {
@@ -79,6 +80,7 @@ func NewTaskManager(engine media.Engine, store SegmentStore, db RecordingDB, m *
 		eventBus:   bus,
 		segmentDur: segmentDur,
 		tasks:      make(map[string]model.Recorder),
+		explicitDerived: make(map[string]bool),
 	}
 }
 
@@ -171,6 +173,10 @@ func (m *TaskManager) ensure(ctx context.Context, streamID string, explicitDeriv
 		return nil
 	}
 	if _, ok := m.tasks[streamID]; ok {
+		if explicitDerived {
+			if m.explicitDerived == nil { m.explicitDerived = make(map[string]bool) }
+			m.explicitDerived[streamID] = true
+		}
 		m.mu.Unlock()
 		return nil
 	}
@@ -191,11 +197,19 @@ func (m *TaskManager) ensure(ctx context.Context, streamID string, explicitDeriv
 
 	m.mu.Lock()
 	if _, ok := m.tasks[streamID]; ok {
+		if explicitDerived {
+			if m.explicitDerived == nil { m.explicitDerived = make(map[string]bool) }
+			m.explicitDerived[streamID] = true
+		}
 		m.mu.Unlock()
 		_ = rec.Stop()
 		return nil
 	}
 	m.tasks[streamID] = rec
+	if explicitDerived {
+		if m.explicitDerived == nil { m.explicitDerived = make(map[string]bool) }
+		m.explicitDerived[streamID] = true
+	}
 	onStart := m.onStart
 	if m.metrics != nil {
 		m.metrics.ActiveCameras.Inc()
@@ -225,6 +239,7 @@ func (m *TaskManager) Stop(ctx context.Context, streamID, reason string) (retErr
 	m.mu.Lock()
 	rec := m.tasks[streamID]
 	delete(m.tasks, streamID)
+	delete(m.explicitDerived, streamID)
 	onStop := m.onStop
 	if rec != nil && m.metrics != nil {
 		m.metrics.ActiveCameras.Dec()
@@ -274,6 +289,16 @@ func (m *TaskManager) Status() map[string]model.RecorderStatus {
 		out[id] = rec.Status()
 	}
 	return out
+}
+
+// IsExplicitDerived reports whether a running recorder has an explicit
+// operator owner, independent of a recording plan. Stream loss and an
+// explicit stop still tear down the task and clear ownership.
+func (m *TaskManager) IsExplicitDerived(streamID string) bool {
+	if m == nil { return false }
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.explicitDerived[streamID] && m.tasks[streamID] != nil
 }
 
 func (m *TaskManager) RunningIDs() []string {

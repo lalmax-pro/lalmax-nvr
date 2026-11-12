@@ -244,7 +244,9 @@ func (s *RecordingScheduler) check(ctx context.Context) bool {
 	}
 
 	for _, id := range tasks.RunningIDs() {
-		want := desired[id] || eventOn(eventActive, id)
+		// An operator-started derived recording is not plan-driven, but an
+		// offline derived publisher must still terminate its recording.
+		want := desired[id] || eventOn(eventActive, id) || tasks.IsExplicitDerived(id)
 		if aliveKnown && !aliveSet[id] {
 			if err := tasks.Stop(ctx, id, ReasonStreamDown); err != nil {
 				schedLogger.Debug("record task stop failed", "stream_id", id, "reason", ReasonStreamDown, "error", err)

@@ -21,11 +21,21 @@ func newTestServer(t *testing.T, ack, rtp int) (*Server, chan *maxvoip.PubSessio
 	}
 	port := socket.LocalAddr().(*net.UDPAddr).Port
 	socket.Close()
+	// RTP is allocated after the SIP exchange. A single previously released
+	// ephemeral port is prone to being claimed by parallel tests (or the OS)
+	// between discovery and INVITE. Give the test allocator a bounded range
+	// so it can skip a transiently occupied UDP port.
+	const testMediaPortWindow = 64
+	mediaPortMin, mediaPortMax := port, port+testMediaPortWindow-1
+	if mediaPortMax > 65535 {
+		mediaPortMax = 65535
+		mediaPortMin = mediaPortMax - testMediaPortWindow + 1
+	}
 	added := make(chan *maxvoip.PubSession, 8)
 	packets := make(chan base.AvPacket, 32)
 	removed := make(chan struct{}, 8)
 	server, err := NewServer(ServerConfig{
-		Config: Config{SipListenAddr: "127.0.0.1:0", MediaIP: "203.0.113.10", MediaPortMin: port, MediaPortMax: port, AckTimeoutMs: ack, RtpTimeoutMs: rtp},
+		Config: Config{SipListenAddr: "127.0.0.1:0", MediaIP: "203.0.113.10", MediaPortMin: mediaPortMin, MediaPortMax: mediaPortMax, AckTimeoutMs: ack, RtpTimeoutMs: rtp},
 		OnPubSession: func(session *maxvoip.PubSession) error {
 			session.SetOnAvPacket(func(pkt base.AvPacket) {
 				select {
@@ -241,5 +251,32 @@ func TestCloseWithTCPRequestsInFlight(t *testing.T) {
 	// A send after close must not resurrect a transport handler.
 	if err := s.tcpTransport.Send([]byte("ignored"), TransportAddr{Type: TransportTCP, Addr: s.tcpTransport.listener.Addr().String()}); err == nil {
 		t.Fatal("closed transport accepted send")
+	}
+}
+
+// TestLifecycleMediaAllocatorSkipsOccupiedPort ensures the RTP test fixture
+// can still negotiate when another process claims the first candidate UDP port.
+func TestLifecycleMediaAllocatorSkipsOccupiedPort(t *testing.T) {
+	s, _, _, _ := newTestServer(t, 5000, 15000)
+	if got := s.config.MediaPortMax - s.config.MediaPortMin + 1; got < 32 {
+		t.Fatalf("media fixture range too narrow: %d ports", got)
+	}
+	occupied, err := net.ListenUDP("udp4", &net.UDPAddr{
+		IP: net.IPv4zero, Port: s.config.MediaPortMin,
+	})
+	if err != nil {
+		// A concurrent process already holds the first port, which exercises
+		// the same retry path without needing to bind it ourselves.
+		t.Logf("first media port already occupied: %v", err)
+	} else {
+		defer occupied.Close()
+	}
+	allocated, err := s.portAllocator.Alloc()
+	if err != nil {
+		t.Fatalf("allocator could not use remaining test ports: %v", err)
+	}
+	defer s.portAllocator.Free(allocated)
+	if allocated == s.config.MediaPortMin {
+		t.Fatal("allocator selected an occupied first media port")
 	}
 }

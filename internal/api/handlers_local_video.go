@@ -211,6 +211,12 @@ func (h *Handler) stopLocalVideo(streamID string){
  }
 }
 
+// newLocalVideoUploadFile keeps the original extension for FFmpeg probing
+// while isolating files from simultaneous requests for the same stream ID.
+func newLocalVideoUploadFile(dir, id, ext string) (*os.File, error) {
+ return os.CreateTemp(dir,id+"-upload-*"+ext)
+}
+
 // handleCreateLocalVideo accepts a browser-uploaded media file and creates a
 // persistent stream slot. Uploaded bytes stay inside the configured storage root.
 func (h *Handler) handleCreateLocalVideo(w http.ResponseWriter,r *http.Request){
@@ -247,17 +253,19 @@ func (h *Handler) handleCreateLocalVideo(w http.ResponseWriter,r *http.Request){
  }
  dir,err:=h.localVideoDirectory()
  if err!=nil {writeError(w,http.StatusInternalServerError,"video storage unavailable");return}
- dest:=filepath.Join(dir,id+ext)
- temp,err:=os.CreateTemp(dir,id+"-upload-*")
+ // Each request owns one final upload path. Never overwrite a competing
+ // request's file merely because the stream ID and extension match.
+ temp,err:=newLocalVideoUploadFile(dir,id,ext)
  if err!=nil {writeError(w,http.StatusInternalServerError,"cannot create video file");return}
- tempPath:=temp.Name()
- defer os.Remove(tempPath)
+ dest:=temp.Name()
+ keepFile:=false
+ defer func(){ if !keepFile { _=os.Remove(dest) } }()
  n,copyErr:=io.Copy(temp,io.LimitReader(input,localVideoMaxBytes+1))
  closeErr:=temp.Close()
  if copyErr!=nil || closeErr!=nil || n==0 || n>localVideoMaxBytes {
   writeError(w,http.StatusBadRequest,"invalid or oversized video file");return
  }
- if err=os.Rename(tempPath,dest);err!=nil {writeError(w,http.StatusInternalServerError,"failed to save video");return}
+ // Upload bytes were written directly to this request's unique final path.
  if _,_,_,err=probeLocalVideo(dest);err!=nil {
   _=os.Remove(dest)
   writeError(w,http.StatusBadRequest,err.Error());return
@@ -299,5 +307,6 @@ func (h *Handler) handleCreateLocalVideo(w http.ResponseWriter,r *http.Request){
   case <-ticker.C:
   }
  }
+ keepFile=true
  writeJSON(w,http.StatusCreated,h.summaryFromCreated(r.Context(),row))
 }
