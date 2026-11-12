@@ -1199,6 +1199,10 @@ func TestApi2SysHealthDetailsNoDependencies(t *testing.T) {
 
 func TestApi2SysHealthDetailsDegradedCameras(t *testing.T) {
 	h, _, _, _ := api2sysNewHandler(t)
+	// The production endpoint checks the process-wide goroutine count. Make
+	// this camera-status test independent of goroutines belonging to other
+	// tests running in the same process during -race -count=3.
+	h.goroutineCount = func() int { return 1 }
 	h.healthMgr = api2sysHealthMgr{all: map[string]*model.CameraHealth{
 		"cam-a": {CameraID: "cam-a", LatestStatus: "error"},
 		"cam-b": {CameraID: "cam-b", LatestStatus: "reconnecting"},
@@ -1217,8 +1221,32 @@ func TestApi2SysHealthDetailsDegradedCameras(t *testing.T) {
 		t.Fatalf("unexpected camera counters: %+v", resp.Cameras)
 	}
 	if resp.Status != "degraded" {
-		t.Fatalf("expected degraded, got %q", resp.Status)
+		t.Fatalf("expected degraded, got %q; checks=%+v cameras=%+v", resp.Status, resp.Checks, resp.Cameras)
 	}
+	if got := resp.Checks["goroutines"].Status; got != "ok" {
+		t.Fatalf("expected stable goroutine health check, got %q", got)
+	}
+}
+
+// Verify the production health/readyz thresholds still report failures. The
+// injected count is deliberately above the real thresholds; this is not a
+// relaxation or a skip of the process-wide resource checks.
+func TestApi2SysHealthAndReadyzGoroutineThresholds(t *testing.T) {
+	h, _, _, _ := api2sysNewHandler(t)
+	h.goroutineCount = func() int { return 1001 }
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/details", nil, "", "")
+	api2sysStatus(t, rr, http.StatusOK)
+	var resp HealthResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp.Status != "unhealthy" || resp.Checks["goroutines"].Status != "error" {
+		t.Fatalf("high goroutine count must fail health: %+v", resp)
+	}
+
+	h.goroutineCount = func() int { return 5000 }
+	rr = doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
+	api2sysStatus(t, rr, http.StatusServiceUnavailable)
 }
 
 // ==================== stream list helpers ====================

@@ -208,6 +208,16 @@ func (h *Handler) handleCameraUptimeStats(w http.ResponseWriter, r *http.Request
 
 // --- Public endpoints ---
 
+// currentGoroutineCount reports the real process count unless tests explicitly
+// inject a stable value. This keeps camera-specific health assertions independent
+// of unrelated concurrent test goroutines without changing production thresholds.
+func (h *Handler) currentGoroutineCount() int {
+	if h.goroutineCount != nil {
+		return h.goroutineCount()
+	}
+	return runtime.NumGoroutine()
+}
+
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	setupRequired := h.config != nil && h.config.Auth.PasswordHash == "" && h.config.Auth.Password == ""
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -264,7 +274,7 @@ func (h *Handler) handleHealthDetails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Goroutine check
-	numGoroutines := runtime.NumGoroutine()
+	numGoroutines := h.currentGoroutineCount()
 	if numGoroutines > 1000 {
 		resp.Checks["goroutines"] = HealthCheck{Status: "error", Message: "goroutine count above threshold"}
 		hasError = true
@@ -420,7 +430,7 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Goroutines must be < 5000
-	numGoroutines := runtime.NumGoroutine()
+	numGoroutines := h.currentGoroutineCount()
 	if numGoroutines >= 5000 {
 		allOK = false
 	}
