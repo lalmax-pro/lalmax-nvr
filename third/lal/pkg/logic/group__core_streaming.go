@@ -338,15 +338,14 @@ func (group *Group) broadcastByRtmpMsg(msg base.RtmpMsg) {
 
 	// # 广播。遍历所有 httpflv sub session，转发数据
 	for session := range group.httpflvSubSessionSet {
-        if !session.FlvHeaderWritten() {
-            audio, video := group.httpflvTracks(&msg)
-            if !audio && !video {
-                // The FLV header precedes every FLV tag, including metadata.
-                continue
-            }
-            session.WriteFlvHeaderWithTracks(audio, video)
-        }
-        if session.IsFresh {
+		if !session.FlvHeaderWritten() {
+			audio, video := group.httpflvTracks(&msg)
+			session.ObserveFlvTracks(audio, video)
+		}
+		// The subscriber queues tags until track discovery completes or
+		// the bounded timer expires, preserving order without blocking the
+		// publisher loop or emitting a speculative single-track header.
+		if session.IsFresh {
 			if group.httpflvGopCache.MetadataEnsureWithoutSetDataFrame != nil {
 				session.Write(group.httpflvGopCache.MetadataEnsureWithoutSetDataFrame)
 			}
