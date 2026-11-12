@@ -1244,6 +1244,12 @@ func TestApi2SysHealthAndReadyzGoroutineThresholds(t *testing.T) {
 		t.Fatalf("high goroutine count must fail health: %+v", resp)
 	}
 
+	// Ensure readiness is otherwise healthy so the 503 below is caused
+	// only by the goroutine threshold, not by disk usage or a closed DB.
+	h.readyzDiskUsage = func() (int64, int64, error) { return 100, 10, nil }
+	h.goroutineCount = func() int { return 4999 }
+	rr = doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
+	api2sysStatus(t, rr, http.StatusOK)
 	h.goroutineCount = func() int { return 5000 }
 	rr = doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
 	api2sysStatus(t, rr, http.StatusServiceUnavailable)
