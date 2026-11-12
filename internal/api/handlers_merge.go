@@ -12,13 +12,13 @@ import (
 
 func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request) {
 	h.localVideos.authMu.Lock()
-	defer h.localVideos.authMu.Unlock()
 	if h.config == nil {
+		h.localVideos.authMu.Unlock()
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	values := map[string]any{
 		"enabled":               h.config.Merge.Enabled,
 		"check_interval":        h.config.Merge.CheckInterval,
 		"window_size":           h.config.Merge.WindowSize,
@@ -27,7 +27,9 @@ func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request)
 		"min_segments_to_merge": h.config.Merge.MinSegmentsToMerge,
 		"rolling_enabled":       h.config.Merge.IsRollingEnabled(),
 		"rolling_debounce":      h.config.Merge.RollingDebounce,
-	})
+	}
+	h.localVideos.authMu.Unlock()
+	writeJSON(w, http.StatusOK, values)
 }
 
 func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +56,8 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 
 	// Protect both the mutation and the whole-Config persistence snapshot.
 	h.localVideos.authMu.Lock()
-	defer h.localVideos.authMu.Unlock()
+	configLocked := true
+	defer func() { if configLocked { h.localVideos.authMu.Unlock() } }()
 
 	if body.Enabled != nil {
 		h.config.Merge.Enabled = *body.Enabled
@@ -107,6 +110,8 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 
 	// Use the same watcher-aware snapshot path as system settings.
 	if !h.saveConfigLocked(w) { return }
+	h.localVideos.authMu.Unlock()
+	configLocked = false
 	h.logOperation(r, "config.update", "config", "merge", "success", "merge settings updated", nil)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
