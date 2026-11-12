@@ -33,11 +33,13 @@ func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+	h.localVideos.authMu.Lock()
+	hasConfig := h.config != nil
+	h.localVideos.authMu.Unlock()
+	if !hasConfig {
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
-
 	var body struct {
 		Enabled            *bool   `json:"enabled"`
 		CheckInterval      *string `json:"check_interval"`
@@ -58,6 +60,13 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 	h.localVideos.authMu.Lock()
 	configLocked := true
 	defer func() { if configLocked { h.localVideos.authMu.Unlock() } }()
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	previousMerge := h.config.Merge
+	configCommitted := false
+	defer func() { if !configCommitted { h.config.Merge = previousMerge } }()
 
 	if body.Enabled != nil {
 		h.config.Merge.Enabled = *body.Enabled
@@ -110,6 +119,7 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 
 	// Use the same watcher-aware snapshot path as system settings.
 	if !h.saveConfigLocked(w) { return }
+	configCommitted = true
 	h.localVideos.authMu.Unlock()
 	configLocked = false
 	h.logOperation(r, "config.update", "config", "merge", "success", "merge settings updated", nil)

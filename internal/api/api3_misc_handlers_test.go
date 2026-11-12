@@ -221,11 +221,11 @@ func TestApi3MergeSettingsEndpoints(t *testing.T) {
 	require.True(t, *cfg.Merge.RollingEnabled)
 	require.Equal(t, "5s", cfg.Merge.RollingDebounce)
 
-	// The save path tolerates an empty config path (logs a warning, still 200).
+	// An empty config path is a persistence error.
 	bare := NewHandler(db, store, noopAuthMW(), cfg, nil, "", nil, nil)
 	api3Status(t, api3Request(t, api3Router(func(r chi.Router) {
 		r.Put("/settings/merge", bare.handleUpdateMergeSettings)
-	}), http.MethodPut, "/settings/merge", `{"enabled":false}`), http.StatusOK)
+	}), http.MethodPut, "/settings/merge", `{"enabled":false}`), http.StatusInternalServerError)
 }
 
 // --- per-camera merge overrides ---

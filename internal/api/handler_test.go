@@ -836,6 +836,7 @@ func TestUpdateSettings_Success(t *testing.T) {
 		Cameras: []config.CameraConfig{{ID: "cam-1", Name: "Cam1", Protocol: "rtsp_h264", URL: "rtsp://x", Enabled: true}},
 	}
 	h := newHandlerWithConfig(db, store, cfg)
+	h.configPath = filepath.Join(t.TempDir(), "config.yaml")
 
 	body := strings.NewReader(`{"cleanup":{"retention_days":7,"check_interval":"30m","disk_threshold_percent":80}}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", body, "", "")
@@ -866,6 +867,7 @@ func TestUpdateSettings_EmptyBody(t *testing.T) {
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
 	h := newHandlerWithConfig(db, store, cfg)
+	h.configPath = filepath.Join(t.TempDir(), "config.yaml")
 
 	body := strings.NewReader(`{}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", body, "", "")
@@ -2279,6 +2281,7 @@ func TestUpdateMergeSettings_Success(t *testing.T) {
 		Cameras: []config.CameraConfig{},
 	}
 	h := newHandlerWithConfig(db, store, cfg)
+	h.configPath = filepath.Join(t.TempDir(), "config.yaml")
 
 	body := strings.NewReader(`{"enabled":true,"batch_limit":100}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/merge", body, "", "")

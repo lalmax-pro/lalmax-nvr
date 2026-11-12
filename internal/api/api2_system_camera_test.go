@@ -3150,13 +3150,13 @@ func TestApi2SysReadyzDiskBranches(t *testing.T) {
 }
 
 func TestApi2SysSaveConfigErrorAndFeatureManager(t *testing.T) {
-	// Config save failure is logged but the update still succeeds.
+	// Config save failure must return an error and restore the in-memory settings.
 	h, cfg, _, _ := api2sysNewHandler(t)
 	h.configPath = filepath.Join(t.TempDir(), "missing-dir", "config.yaml")
 	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", strings.NewReader(`{"cleanup":{"retention_days":11}}`), "", "")
-	api2sysStatus(t, rr, http.StatusOK)
-	if cfg.Cleanup.RetentionDays != 11 {
-		t.Fatalf("expected in-memory update, got %d", cfg.Cleanup.RetentionDays)
+	api2sysStatus(t, rr, http.StatusInternalServerError)
+	if cfg.Cleanup.RetentionDays == 11 {
+		t.Fatalf("failed save retained in-memory update: %d", cfg.Cleanup.RetentionDays)
 	}
 
 	// Feature toggles propagate to the camera manager.

@@ -31,10 +31,14 @@ type localVideoPlayers struct {
 }
 
 func (h *Handler) localVideoDirectory() (string,error) {
- if h.config == nil || strings.TrimSpace(h.config.Storage.RootDir)=="" {
+ h.localVideos.authMu.Lock()
+ root := ""
+ if h.config != nil { root = h.config.Storage.RootDir }
+ h.localVideos.authMu.Unlock()
+ if strings.TrimSpace(root)=="" {
   return "",errors.New("storage root directory is not configured")
  }
- dir,absErr:=filepath.Abs(filepath.Join(h.config.Storage.RootDir,"local-videos"))
+ dir,absErr:=filepath.Abs(filepath.Join(root,"local-videos"))
  if absErr!=nil {return "",absErr}
  if err:=os.MkdirAll(dir,0700);err!=nil{return "",err}
  return dir,nil
@@ -228,7 +232,10 @@ func (h *Handler) handleCreateLocalVideo(w http.ResponseWriter,r *http.Request){
  id:=strings.TrimSpace(r.FormValue("stream_id"))
  if !pushStreamIDPattern.MatchString(id) {writeError(w,http.StatusBadRequest,"invalid stream_id");return}
  // Validate RTMP availability before accepting a potentially large upload.
- if h.config==nil || h.config.RTMP.Enabled==nil || !*h.config.RTMP.Enabled {
+ h.localVideos.authMu.Lock()
+ rtmpEnabled := h.config!=nil && h.config.RTMP.Enabled!=nil && *h.config.RTMP.Enabled
+ h.localVideos.authMu.Unlock()
+ if !rtmpEnabled {
   writeError(w,http.StatusBadRequest,"RTMP ingest must be enabled for local video");return
  }
  existing,err:=h.db.GetCreatedStream(r.Context(),id)

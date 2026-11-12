@@ -527,12 +527,14 @@ func (h *Handler) handleStatsTrends(w http.ResponseWriter, r *http.Request) {
 // --- Settings endpoints ---
 
 func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	h.localVideos.authMu.Lock()
 	if h.config == nil {
+		h.localVideos.authMu.Unlock()
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	values := map[string]any{
 		"cleanup": map[string]any{
 			"retention_days":         h.config.Cleanup.RetentionDays,
 			"check_interval":         h.config.Cleanup.CheckInterval,
@@ -550,7 +552,7 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"port":               h.config.DLNA.Port,
 			"advertise_url":      dlna.ResolvedBaseURL(h.config),
 			"interface":          h.config.DLNA.Interface,
-			"allowed_cidrs":      h.config.DLNA.AllowedCIDRs,
+			"allowed_cidrs":      append([]string(nil), h.config.DLNA.AllowedCIDRs...),
 			"include_live":       h.config.DLNA.IncludeLive != nil && *h.config.DLNA.IncludeLive,
 			"include_recordings": h.config.DLNA.IncludeRecordings != nil && *h.config.DLNA.IncludeRecordings,
 			"max_browse_count":   h.config.DLNA.MaxBrowseCount,
@@ -565,15 +567,19 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"local_trace_enabled":   h.config.Observability.LocalTracesEnabled(),
 			"trace_ui_url_template": strings.TrimSpace(h.config.Observability.TraceUIURLTemplate),
 		},
-	})
+	}
+	h.localVideos.authMu.Unlock()
+	writeJSON(w, http.StatusOK, values)
 }
 
 func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+	h.localVideos.authMu.Lock()
+	hasConfig := h.config != nil
+	h.localVideos.authMu.Unlock()
+	if !hasConfig {
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
-
 	var body struct {
 		Cleanup *struct {
 			RetentionDays        *int    `json:"retention_days"`
@@ -623,6 +629,13 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	configLocked := true
 	h.localVideos.authMu.Lock()
 	defer func() { if configLocked { h.localVideos.authMu.Unlock() } }()
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	previousCleanup, previousDLNA, previousWebDAV, previousObservability := h.config.Cleanup, h.config.DLNA, h.config.WebDAV, h.config.Observability
+	configCommitted := false
+	defer func() { if !configCommitted { h.config.Cleanup, h.config.DLNA, h.config.WebDAV, h.config.Observability = previousCleanup, previousDLNA, previousWebDAV, previousObservability } }()
 	// Update cleanup settings
 	if body.Cleanup != nil {
 		if body.Cleanup.RetentionDays != nil {
@@ -651,10 +664,8 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// Update webdav settings
 	if body.DLNA != nil {
 		if body.DLNA.Enabled != nil {
-			if h.config.DLNA.Enabled == nil {
-				h.config.DLNA.Enabled = new(bool)
-			}
-			*h.config.DLNA.Enabled = *body.DLNA.Enabled
+			value := *body.DLNA.Enabled
+			h.config.DLNA.Enabled = &value
 		}
 		if body.DLNA.FriendlyName != nil {
 			h.config.DLNA.FriendlyName = strings.TrimSpace(*body.DLNA.FriendlyName)
@@ -681,16 +692,12 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			h.config.DLNA.AllowedCIDRs = *body.DLNA.AllowedCIDRs
 		}
 		if body.DLNA.IncludeLive != nil {
-			if h.config.DLNA.IncludeLive == nil {
-				h.config.DLNA.IncludeLive = new(bool)
-			}
-			*h.config.DLNA.IncludeLive = *body.DLNA.IncludeLive
+			value := *body.DLNA.IncludeLive
+			h.config.DLNA.IncludeLive = &value
 		}
 		if body.DLNA.IncludeRecordings != nil {
-			if h.config.DLNA.IncludeRecordings == nil {
-				h.config.DLNA.IncludeRecordings = new(bool)
-			}
-			*h.config.DLNA.IncludeRecordings = *body.DLNA.IncludeRecordings
+			value := *body.DLNA.IncludeRecordings
+			h.config.DLNA.IncludeRecordings = &value
 		}
 		if body.DLNA.MaxBrowseCount != nil && *body.DLNA.MaxBrowseCount > 0 {
 			h.config.DLNA.MaxBrowseCount = *body.DLNA.MaxBrowseCount
@@ -710,10 +717,8 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	if body.WebDAV != nil {
 		if body.WebDAV.Enabled != nil {
-			if h.config.WebDAV.Enabled == nil {
-				h.config.WebDAV.Enabled = new(bool)
-			}
-			*h.config.WebDAV.Enabled = *body.WebDAV.Enabled
+			value := *body.WebDAV.Enabled
+			h.config.WebDAV.Enabled = &value
 		}
 		if body.WebDAV.PathPrefix != nil {
 			h.config.WebDAV.PathPrefix = *body.WebDAV.PathPrefix
@@ -724,10 +729,8 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Observability != nil {
 		if body.Observability.LocalTraceEnabled != nil {
-			if h.config.Observability.LocalTraceEnabled == nil {
-				h.config.Observability.LocalTraceEnabled = new(bool)
-			}
-			*h.config.Observability.LocalTraceEnabled = *body.Observability.LocalTraceEnabled
+			value := *body.Observability.LocalTraceEnabled
+			h.config.Observability.LocalTraceEnabled = &value
 		}
 		if body.Observability.TraceUIURLTemplate != nil {
 			h.config.Observability.TraceUIURLTemplate = strings.TrimSpace(*body.Observability.TraceUIURLTemplate)
@@ -735,9 +738,8 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist config to disk (with conflict detection)
-	if !h.saveConfigLocked(w) {
-		return
-	}
+	if !h.saveConfigLocked(w) { return }
+	configCommitted = true
 	h.localVideos.authMu.Unlock()
 	configLocked = false
 	if body.Observability != nil && body.Observability.LocalTraceEnabled != nil && h.localTraceApply != nil {
@@ -756,12 +758,14 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Request) {
+	h.localVideos.authMu.Lock()
 	if h.config == nil {
+		h.localVideos.authMu.Unlock()
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	values := map[string]any{
 		"default_protocol":      h.config.Streaming.DefaultProtocol,
 		"auto_stop_no_view_sec": h.config.Streaming.AutoStopNoViewSec,
 		"webrtc": map[string]any{
@@ -797,15 +801,19 @@ func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Requ
 			"auth_method":  h.config.Media.RTSPAuthMethod,
 			"username":     h.config.Media.RTSPUsername,
 		},
-	})
+	}
+	h.localVideos.authMu.Unlock()
+	writeJSON(w, http.StatusOK, values)
 }
 
 func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+	h.localVideos.authMu.Lock()
+	hasConfig := h.config != nil
+	h.localVideos.authMu.Unlock()
+	if !hasConfig {
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
-
 	var body struct {
 		DefaultProtocol   *string `json:"default_protocol"`
 		AutoStopNoViewSec *int    `json:"auto_stop_no_view_sec"`
@@ -851,6 +859,13 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	configLocked := true
 	h.localVideos.authMu.Lock()
 	defer func() { if configLocked { h.localVideos.authMu.Unlock() } }()
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	previousStreaming, previousHLS, previousRTMP, previousSRT, previousWHIP, previousMedia := h.config.Streaming, h.config.HLS, h.config.RTMP, h.config.SRT, h.config.WHIP, h.config.Media
+	configCommitted := false
+	defer func() { if !configCommitted { h.config.Streaming, h.config.HLS, h.config.RTMP, h.config.SRT, h.config.WHIP, h.config.Media = previousStreaming, previousHLS, previousRTMP, previousSRT, previousWHIP, previousMedia } }()
 	if body.RTSPServer != nil {
 		candidate := h.config.Media
 		if body.RTSPServer.AuthEnabled != nil {
@@ -880,10 +895,8 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 
 	if body.WebRTC != nil {
 		if body.WebRTC.Enabled != nil {
-			if h.config.Streaming.WebRTC.Enabled == nil {
-				h.config.Streaming.WebRTC.Enabled = new(bool)
-			}
-			*h.config.Streaming.WebRTC.Enabled = *body.WebRTC.Enabled
+			value := *body.WebRTC.Enabled
+			h.config.Streaming.WebRTC.Enabled = &value
 		}
 		if body.WebRTC.MaxViewers != nil {
 			h.config.Streaming.WebRTC.MaxViewers = *body.WebRTC.MaxViewers
@@ -895,10 +908,8 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 
 	if body.FLV != nil {
 		if body.FLV.Enabled != nil {
-			if h.config.Streaming.FLV.Enabled == nil {
-				h.config.Streaming.FLV.Enabled = new(bool)
-			}
-			*h.config.Streaming.FLV.Enabled = *body.FLV.Enabled
+			value := *body.FLV.Enabled
+			h.config.Streaming.FLV.Enabled = &value
 		}
 		if body.FLV.MaxViewers != nil {
 			h.config.Streaming.FLV.MaxViewers = *body.FLV.MaxViewers
@@ -913,10 +924,8 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 
 	if body.HLS != nil {
 		if body.HLS.Enabled != nil {
-			if h.config.HLS.Enabled == nil {
-				h.config.HLS.Enabled = new(bool)
-			}
-			*h.config.HLS.Enabled = *body.HLS.Enabled
+			value := *body.HLS.Enabled
+			h.config.HLS.Enabled = &value
 		}
 		if body.HLS.LowLatency != nil {
 			h.config.HLS.LowLatency = *body.HLS.LowLatency
@@ -928,13 +937,11 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 
 	if body.RTMP != nil {
 		if body.RTMP.Enabled != nil {
-			if h.config.RTMP.Enabled == nil {
-				h.config.RTMP.Enabled = new(bool)
-			}
-			if *h.config.RTMP.Enabled != *body.RTMP.Enabled {
+			if (h.config.RTMP.Enabled != nil && *h.config.RTMP.Enabled) != *body.RTMP.Enabled {
 				needRestart = true
 			}
-			*h.config.RTMP.Enabled = *body.RTMP.Enabled
+			value := *body.RTMP.Enabled
+			h.config.RTMP.Enabled = &value
 		}
 		if body.RTMP.Port != nil && *body.RTMP.Port != h.config.RTMP.Port {
 			needRestart = true
@@ -944,13 +951,11 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 
 	if body.SRT != nil {
 		if body.SRT.Enabled != nil {
-			if h.config.SRT.Enabled == nil {
-				h.config.SRT.Enabled = new(bool)
-			}
-			if *h.config.SRT.Enabled != *body.SRT.Enabled {
+			if (h.config.SRT.Enabled != nil && *h.config.SRT.Enabled) != *body.SRT.Enabled {
 				needRestart = true
 			}
-			*h.config.SRT.Enabled = *body.SRT.Enabled
+			value := *body.SRT.Enabled
+			h.config.SRT.Enabled = &value
 		}
 		if body.SRT.Port != nil && *body.SRT.Port != h.config.SRT.Port {
 			needRestart = true
@@ -959,10 +964,8 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	}
 
 	if body.WHIP != nil && body.WHIP.Enabled != nil {
-		if h.config.WHIP.Enabled == nil {
-			h.config.WHIP.Enabled = new(bool)
-		}
-		*h.config.WHIP.Enabled = *body.WHIP.Enabled
+		value := *body.WHIP.Enabled
+		h.config.WHIP.Enabled = &value
 	}
 
 	if body.RTSPServer != nil {
@@ -985,9 +988,8 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	}
 
 	// Persist config to disk (with conflict detection)
-	if !h.saveConfigLocked(w) {
-		return
-	}
+	if !h.saveConfigLocked(w) { return }
+	configCommitted = true
 	h.localVideos.authMu.Unlock()
 	configLocked = false
 
@@ -1567,7 +1569,10 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 // persistConfigLocked snapshots the live config while holding
 // localVideos.authMu, also shared with local-video RTMP token updates.
 func (h *Handler) persistConfigLocked() error {
-	if h.configWatcher != nil && h.configWatcher.Config() == h.config {
+	if h.configWatcher != nil {
+		if h.configWatcher.Config() != h.config {
+			return config.ErrConfigModified
+		}
 		return h.configWatcher.Save(false)
 	}
 	return config.Save(h.configPath, h.config)
@@ -1587,21 +1592,33 @@ func (h *Handler) saveConfigLocked(w http.ResponseWriter) bool {
 			return false
 		}
 		logger.Warn("failed to save config", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save config")
+		return false
 	}
 	return true
+}
+
+// installReloadedConfigLocked updates both the handler snapshot and the RTMP
+// authorizer before concurrent local-video provisioning can resume.
+func (h *Handler) installReloadedConfigLocked(cfg *config.Config) {
+	h.config = cfg
+	if updater, ok := h.banMgr.(interface{ SetRTMPStreamKeys(map[string]string) }); ok {
+		updater.SetRTMPStreamKeys(cfg.RTMP.StreamKeys)
+	}
 }
 
 // handleReloadConfig re-reads the config from disk and notifies subscribers.
 func (h *Handler) handleReloadConfig(w http.ResponseWriter, r *http.Request) {
 	if h.configWatcher == nil {
 		// Fallback: reload directly without watcher
+		h.localVideos.authMu.Lock()
 		cfg, err := config.Load(h.configPath)
 		if err != nil {
+			h.localVideos.authMu.Unlock()
 			writeError(w, http.StatusInternalServerError, "failed to reload config: "+err.Error())
 			return
 		}
-		h.localVideos.authMu.Lock()
-		h.config = cfg
+		h.installReloadedConfigLocked(cfg)
 		h.localVideos.authMu.Unlock()
 		h.logSuccess(r, "config.reload", "config", "", "config reloaded from disk", nil)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
@@ -1611,13 +1628,12 @@ func (h *Handler) handleReloadConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "no_changes"})
 		return
 	}
-	if err := h.configWatcher.Reload(); err != nil {
+	if err := h.configWatcher.ReloadWithGuard(h.localVideos.authMu.Lock, h.localVideos.authMu.Unlock, func(cfg *config.Config) {
+		h.installReloadedConfigLocked(cfg)
+	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to reload config: "+err.Error())
 		return
 	}
-	h.localVideos.authMu.Lock()
-	h.config = h.configWatcher.Config()
-	h.localVideos.authMu.Unlock()
 	h.logSuccess(r, "config.reload", "config", "", "config reloaded from disk", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
