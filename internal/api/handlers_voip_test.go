@@ -9,11 +9,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/ban"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
@@ -154,6 +156,52 @@ func TestVoIPSettingsConcurrentReadWrite(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestVoIPSettingsSaveConcurrentWithLocalVideoPublishKeys(t *testing.T) {
+	for _, watch := range []bool{false, true} {
+		t.Run("watcher="+strconv.FormatBool(watch), func(t *testing.T) {
+			h, _ := newVoIPSettingsHandler(t)
+			h.banMgr = ban.NewManager(nil, nil)
+			if watch {
+				watcher, err := config.NewWatcher(h.config, h.configPath)
+				require.NoError(t, err)
+				h.SetConfigWatcher(watcher)
+			}
+
+			const updates = 24
+			router := h.Routes()
+			start := make(chan struct{})
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				<-start
+				for i := 0; i < updates; i++ {
+					body := strings.NewReader(fmt.Sprintf(`{"realm":"realm-%d"}`, i))
+					rec := httptest.NewRecorder()
+					router.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings/voip", body))
+					if rec.Code != http.StatusOK {
+						t.Errorf("saving VoIP settings returned %d: %s", rec.Code, rec.Body.String())
+						return
+					}
+				}
+			}()
+			close(start)
+			for i := 0; i < updates; i++ {
+				if err := h.ensureLocalVideoPublishKey(fmt.Sprintf("video-%d", i)); err != nil {
+					t.Errorf("provisioning RTMP key: %v", err)
+					break
+				}
+			}
+			<-done
+
+			saved, err := config.Load(h.configPath)
+			require.NoError(t, err)
+			require.Equal(t, fmt.Sprintf("realm-%d", updates-1), saved.VoIP.Realm)
+			require.Len(t, saved.RTMP.StreamKeys, updates)
+			require.Equal(t, h.config.RTMP.StreamKeys, saved.RTMP.StreamKeys)
+		})
+	}
 }
 
 type voipRuntimeFake struct {

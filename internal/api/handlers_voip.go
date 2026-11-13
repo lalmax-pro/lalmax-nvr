@@ -22,11 +22,15 @@ import (
 func (h *Handler) handleGetVoIPSettings(w http.ResponseWriter, r *http.Request) {
 	h.voipSettingsMu.Lock()
 	defer h.voipSettingsMu.Unlock()
+	h.localVideos.authMu.Lock()
 	if h.config == nil {
+		h.localVideos.authMu.Unlock()
 		writeError(w, 500, "config not available")
 		return
 	}
 	cfg := h.config.VoIP.Clone()
+	embedded := h.config.Media.Mode == "embedded"
+	h.localVideos.authMu.Unlock()
 	cfg.Normalize()
 	hasPbxPassword := cfg.PbxPassword != ""
 	cfg.PbxPassword = ""
@@ -39,17 +43,22 @@ func (h *Handler) handleGetVoIPSettings(w http.ResponseWriter, r *http.Request) 
 		Users          []map[string]any `json:"users"`
 		Supported      bool             `json:"supported"`
 		PbxHasPassword bool             `json:"pbx_has_password"`
-	}{Config: cfg, Users: users, Supported: h.config.Media.Mode == "embedded", PbxHasPassword: hasPbxPassword})
+	}{Config: cfg, Users: users, Supported: embedded, PbxHasPassword: hasPbxPassword})
 }
 
 func (h *Handler) handleUpdateVoIPSettings(w http.ResponseWriter, r *http.Request) {
 	h.voipSettingsMu.Lock()
 	defer h.voipSettingsMu.Unlock()
-	if h.config == nil {
+	h.localVideos.authMu.Lock()
+	cfg := h.config
+	if cfg == nil {
+		h.localVideos.authMu.Unlock()
 		writeError(w, 500, "config not available")
 		return
 	}
-	old := h.config.VoIP.Clone()
+	old := cfg.VoIP.Clone()
+	embedded := cfg.Media.Mode == "embedded"
+	h.localVideos.authMu.Unlock()
 	next := old.Clone()
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	decoder.DisallowUnknownFields()
@@ -91,7 +100,7 @@ func (h *Handler) handleUpdateVoIPSettings(w http.ResponseWriter, r *http.Reques
 		writeError(w, 400, err.Error())
 		return
 	}
-	if next.Enable && h.config.Media.Mode != "embedded" {
+	if next.Enable && !embedded {
 		writeError(w, 400, "VoIP requires embedded media mode")
 		return
 	}
@@ -112,18 +121,26 @@ func (h *Handler) handleUpdateVoIPSettings(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	h.config.VoIP = next
+	// The runtime restart can block. Serialize only the configuration change
+	// and persistence with token provisioning and config reload.
+	h.localVideos.authMu.Lock()
 	var err error
-	if h.configWatcher != nil {
-		err = h.configWatcher.Save(false)
+	restore := old
+	if h.config != cfg {
+		err = config.ErrConfigModified
+		restore = h.config.VoIP.Clone()
 	} else {
-		err = config.Save(h.configPath, h.config)
+		cfg.VoIP = next
+		err = h.persistConfigLocked()
+		if err != nil {
+			cfg.VoIP = old
+		}
 	}
+	h.localVideos.authMu.Unlock()
 	if err != nil {
-		h.config.VoIP = old
 		if changed {
 			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 15*time.Second)
-			restoreErr := h.voipRestarter.RestartVoIP(rollbackCtx, &old)
+			restoreErr := h.voipRestarter.RestartVoIP(rollbackCtx, &restore)
 			rollbackCancel()
 			if restoreErr != nil {
 				err = fmt.Errorf("%v; runtime restore failed: %w", err, restoreErr)

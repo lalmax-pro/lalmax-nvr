@@ -254,10 +254,8 @@ func TestCloseWithTCPRequestsInFlight(t *testing.T) {
 	}
 }
 
-// TestLifecycleMediaAllocatorSkipsOccupiedPort ensures the RTP test fixture
-// can still negotiate when another process claims the first candidate UDP port.
 func TestLifecycleMediaAllocatorSkipsOccupiedPort(t *testing.T) {
-	s, _, _, _ := newTestServer(t, 5000, 15000)
+	s, added, _, _ := newTestServer(t, 5000, 15000)
 	if got := s.config.MediaPortMax - s.config.MediaPortMin + 1; got < 32 {
 		t.Fatalf("media fixture range too narrow: %d ports", got)
 	}
@@ -265,18 +263,24 @@ func TestLifecycleMediaAllocatorSkipsOccupiedPort(t *testing.T) {
 		IP: net.IPv4zero, Port: s.config.MediaPortMin,
 	})
 	if err != nil {
-		// A concurrent process already holds the first port, which exercises
-		// the same retry path without needing to bind it ourselves.
-		t.Logf("first media port already occupied: %v", err)
-	} else {
-		defer occupied.Close()
+		t.Fatal(err)
 	}
-	allocated, err := s.portAllocator.Alloc()
-	if err != nil {
-		t.Fatalf("allocator could not use remaining test ports: %v", err)
+	defer occupied.Close()
+
+	answer := exchange(t, s, request("INVITE", "occupied-media-port"))
+	if !strings.HasPrefix(answer, "SIP/2.0 200 OK\r\n") {
+		t.Fatalf("invite failed with the first media port occupied: %s", answer)
 	}
-	defer s.portAllocator.Free(allocated)
-	if allocated == s.config.MediaPortMin {
-		t.Fatal("allocator selected an occupied first media port")
+	select {
+	case session := <-added:
+		port := session.AudioPort()
+		if port <= s.config.MediaPortMin || port > s.config.MediaPortMax {
+			t.Fatalf("RTP port %d is outside the remaining range %d-%d", port, s.config.MediaPortMin+1, s.config.MediaPortMax)
+		}
+		if !strings.Contains(answer, fmt.Sprintf("\r\nm=audio %d ", port)) {
+			t.Fatalf("answer did not advertise the RTP port %d: %s", port, answer)
+		}
+	default:
+		t.Fatal("invite did not publish the RTP session")
 	}
 }

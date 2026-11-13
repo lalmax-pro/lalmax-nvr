@@ -1,7 +1,9 @@
 package media
 
 import (
+	"errors"
 	"net"
+	"syscall"
 	"testing"
 	"time"
 
@@ -10,6 +12,23 @@ import (
 	"github.com/q191201771/lalmax/voip/sdp"
 	"github.com/q191201771/naza/pkg/nazalog"
 )
+
+func TestRTPListenerRejectsOccupiedIPv4Port(t *testing.T) {
+	occupied, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+
+	port := occupied.LocalAddr().(*net.UDPAddr).Port
+	session, err := NewRtpSession(RtpSessionConfig{MediaIP: "0.0.0.0", Port: port, RTCPMux: true})
+	if err == nil {
+		session.Close()
+	}
+	if !errors.Is(err, syscall.EADDRINUSE) {
+		t.Fatalf("listen on occupied IPv4 port %d: got %v, want address already in use", port, err)
+	}
+}
 
 func TestRTCPMuxPacketClassification(t *testing.T) {
 	tests := []struct {

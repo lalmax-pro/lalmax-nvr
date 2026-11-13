@@ -158,12 +158,12 @@ func NewRtpSession(cfg RtpSessionConfig) (*RtpSession, error) {
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.MediaIP, cfg.Port)
-	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	udpAddr, err := net.ResolveUDPAddr("udp4", addr)
 	if err != nil {
 		return nil, fmt.Errorf("resolve udp addr failed: %w", err)
 	}
 
-	conn, err := net.ListenUDP("udp", udpAddr)
+	conn, err := net.ListenUDP("udp4", udpAddr)
 	if err != nil {
 		return nil, fmt.Errorf("listen udp failed: %w", err)
 	}

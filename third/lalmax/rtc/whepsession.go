@@ -310,6 +310,9 @@ func (conn *whepSession) playCachedSnapshot(snapshot []base.RtmpMsg) {
 // sendMediaMessage is owned by the viewer's Run goroutine, including codec
 // changes and RTP packetization. It never runs from the publisher's OnMsg.
 func (conn *whepSession) sendMediaMessage(msg base.RtmpMsg, cached bool) {
+	if msg.Header.MsgTypeId == base.RtmpTypeIdVideo && !msg.HasCompleteVideoHeader() {
+		return
+	}
 	if msg.IsVideoKeySeqHeader() {
 		conn.updateVideoCodec(msg)
 		return
@@ -366,6 +369,9 @@ func (conn *whepSession) OnMsg(msg base.RtmpMsg) {
 			conn.enqueue(msg)
 		}
 	case base.RtmpTypeIdVideo:
+		if !msg.HasCompleteVideoHeader() {
+			return
+		}
 		if msg.IsVideoKeySeqHeader() {
 			conn.enqueue(msg)
 			return
