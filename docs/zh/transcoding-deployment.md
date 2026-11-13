@@ -2,27 +2,51 @@
 
 关联 [Issue #66](https://github.com/lalmax-pro/lalmax-nvr/issues/66)、[架构设计](transcoding-design.md)、[验收记录](transcoding-testing.md)。
 
-> 实验性实现，尚未发布。第六轮已在隔离的原生 Linux 环境完成 FFmpeg/GStreamer 实际媒体、Chromium WHEP 和回归验证；这不是生产验收，也不替代真实 Home Assistant 实例验收。下面描述当前分支的配置与操作，不代表已发布版本可用。
+本文描述包含通用实时转码的源码版本。转码默认关闭。使用发布包时，可先检查后台是否提供「通用转码能力」及 `/api/transcoding/capabilities`。各平台与后端的验证记录见[验收记录](transcoding-testing.md)。
 
 ## 本地运行
 
-将以下配置合并到 NVR 配置中，首次保留 `enabled: false`：
+将以下配置合并到 NVR 配置。示例使用内嵌媒体引擎，在本机通过 RTMP 推入一路测试流。部署时请替换推流密钥。已有源可以直接用于转码，RTMP 监听仍需开启，供派生流回灌。
 
 ```yaml
+media:
+  mode: embedded
+  rtmp_listen_addr: "127.0.0.1:11935"
+rtmp:
+  enabled: true
+  port: 11935
+  stream_keys:
+    local-demo: "replace-with-a-private-key"
 transcoding:
-  enabled: false
+  enabled: true
   max_concurrent: 2
   threads_per_job: 2
-  worker_enabled: false  # P5：独立子进程，先通过能力检测及专项测试再开启
-  ffmpeg_path: /opt/homebrew/bin/ffmpeg
-  ffprobe_path: /opt/homebrew/bin/ffprobe
-  gst_launch_path: /opt/homebrew/bin/gst-launch-1.0
-  gst_inspect_path: /opt/homebrew/bin/gst-inspect-1.0
+  worker_enabled: false
+  ffmpeg_path: ""
+  ffprobe_path: ""
+  gst_launch_path: ""
+  gst_inspect_path: ""
 ```
 
-以上路径仅为 macOS Homebrew 示例；Linux/容器应使用各自安装路径，空字符串表示 PATH 查找。不要把宿主机 macOS 二进制挂载到 Linux 容器使用。
+路径留空时从 NVR 进程的 `PATH` 查找工具。也可以填写该运行环境内的绝对路径。配置中的 `rtmp_listen_addr` 包含主机和端口，端口应与 `rtmp.port` 一致。回灌连接使用 `127.0.0.1`。如需同时接收远端 RTMP 推流，可以监听 `0.0.0.0:11935` 并保留发布鉴权。后端通过 RTSP 拉取源，因此 NVR 进程也要能访问内嵌引擎公布的 RTSP 地址。
 
-目前路径与转码运行配置在启动时固定，修改后需重启。缺失工具不会阻止 NVR 启动，检测页显示失败。
+已有二进制时可直接传入配置路径。macOS/Linux 从源码构建时，项目脚本会打包网页与后端。
+
+```sh
+./scripts/unix/build.sh
+./bin/lalmax-nvr -config ./config/lalmax-nvr.yaml
+```
+
+改动工具路径、监听端口、`enabled` 或 `worker_enabled` 后重启 NVR。缺少后端工具时，NVR 仍可启动，能力页会显示检测结果。使用 macOS Homebrew GStreamer 时，如遇插件扫描或动态库加载失败，可先在测试进程中设置 `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`，并将 `GST_REGISTRY` 指向可写的本地缓存文件。
+
+本机没有现成流时，可用以下命令推送合成 H.264/AAC 测试流。将 URL 中的占位符替换为上面配置的密钥，然后在流详情确认 `local-demo` 在线。
+
+```sh
+ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=25 \
+  -f lavfi -i sine=frequency=997:sample_rate=44100 \
+  -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 25 \
+  -c:a aac -f flv 'rtmp://127.0.0.1:11935/live/local-demo?stream_key=replace-with-a-private-key'
+```
 
 ## Docker 可选后端
 
@@ -38,14 +62,31 @@ docker build --build-arg WITH_GSTREAMER=true -t lalmax-nvr:transcode-gst .
 
 ## 首次使用步骤
 
-1. 用管理员账户打开“设置 → 通用转码能力”，点击检测，不会修改源或启动录像。
-2. 添加 H.264 720p 模板，然后对**已保存模板**再次检测；后端默认模板的结果不能替代不同配置模板的结果。
-3. 输入已接入的源流 ID、实际应用名和模板，保存禁用手动任务草稿。
-4. 检查原始流在线，媒体模式为 embedded，RTMP 监听已由管理员显式开启。
-5. 配置 `transcoding.enabled: true` 并重启后，重新检测保存的模板，再启用、启动任务。当前内存检测缓存重启即失效。
-6. 查询任务源的 variants，并通过管理员播放接口取得带临时令牌的 RTSP 地址；不要把此地址放入公开日志或 Issue。
-7. HA 发布设置可加载该源的转码任务作为输出；身份仍为原源 ID，选择操作不会启动任务。
-8. 结束测试先停止任务；原流与原录像不因任务删除而修改。
+1. 用超级管理员账户打开「设置 → 通用转码能力」，选择 FFmpeg 或 GStreamer 并检测默认模板。
+2. 在同一设置页的「转码模板与任务」创建模板，例如 H.264 720p + AAC。对**已保存的模板**执行检测。默认模板的检测结果不能用于其他媒体规格。检测缓存有效期为 10 分钟，重启后手动任务需要重新检测。
+3. 填入在线源流 ID、实际应用名（示例为 `live`）和模板，先保存禁用的手动任务。启用后点击启动。等任务进入 `running` 再拉流，`starting` 表示尚未取得可播放输出。
+4. 在源流详情选择派生输出预览，或用管理员接口查询 `/api/streams/{stream_id}/variants/{job_id}/play`。接口返回的 `URL` 为带临时令牌的 RTSP 地址，请按凭据处理。
+5. 可用 `ffprobe -v error -rtsp_transport tcp -show_streams '<带令牌的 RTSP URL>'` 核对编解码和分辨率。测试结束后先停止派生录像、转推等消费者，再停止手动转码任务。
+
+### API 启动顺序
+
+| 步骤 | 请求 | 参数或结果 |
+| --- | --- | --- |
+| 保存模板 | `POST /api/transcoding/profiles` | 保存 `backend`、`video`、`audio`，记录响应的 `id` 和 `revision` |
+| 检测模板 | `POST /api/transcoding/profiles/{id}/probe` | `can_enable: true` 后可启用任务 |
+| 保存任务 | `POST /api/transcoding/jobs` | `source` 包含 `engine_id: "embedded"`、`stream_id`、`app_name`，另传 `profile_id`、`profile_revision`、`enabled`、`run_policy`，记录响应的 `generation` |
+| 启动手动任务 | `POST /api/transcoding/jobs/{id}/start?generation=N` | `202` 表示已受理。查询 `GET /api/streams/{stream_id}/variants` 等待 `running` |
+| 停止任务 | `POST /api/transcoding/jobs/{id}/stop?generation=N` | `204` 表示已停止该任务的运行需求 |
+
+`manual` 由操作员显式启动。`always` 在源可用时由后台启动并在故障后退避重试。`on_demand` 由消费者获取租约后启动。网页创建的是手动任务，其他策略可通过 API 设置。常驻任务的显式停止会持久化，重启后需要显式启动才能重新运行。按需任务显式停止后可调用 `resume?generation=N` 重新接受租约。
+
+| 状态或错误码 | 检查项 |
+| --- | --- |
+| `probe_required` | 对保存的模板重新检测 |
+| `source_offline` | 确认原始流在线，应用名匹配，RTSP 可拉取 |
+| `rtmp_disabled` | 打开 RTMP 监听并重启 |
+| `capacity_exceeded` | 检查 `max_concurrent` 和现有运行任务 |
+| `output_timeout` | 检查源是否持续出帧、模板是否支持输入编解码、后端能否回灌到配置的 RTMP 端口 |
 
 ## 已知限制
 
@@ -63,16 +104,14 @@ docker build --build-arg WITH_GSTREAMER=true -t lalmax-nvr:transcode-gst .
 上线前必须实际验证源拉取、派生发布、RTSP 播放的鉴权；拒绝无令牌和跨源播放；验证取消 HA 发布与全局停止的不同作用域。不得以参数构造、进程启动或前端构建成功替代实际媒体解码验收。
 
 
-## P4/P5 实验功能（已完成范围验收，仍非生产承诺）
+## 派生输出与可选功能
 
 - **按需订阅**：`POST /api/transcoding/jobs/{id}/leases?generation=N&wait_ms=20000` 可等待实际媒体就绪。租约会按需续期，最后一个租约释放或过期后自动收回媒体进程。前端派生预览已接入申请、续期和释放。
 - **Home Assistant 预加载**：发布列表中选择 `on_demand` 转码 Job 后可单独勾选 `preload_transcode`；默认关闭，关闭 HA 发布、任务被禁用或代次变化后撤销租约。
 - **WebRTC 有声派生输出**：选择 G.711 A-law 8kHz mono / H.264 模板，媒体检测必须成功；只接受能够协商 PCMA 的 WHEP SDP，其他音频明确拒绝，不静默回退 AAC 或原流。派生会话签名令牌已改为认证加密。
 - **硬件编码**：可显式选择 `h264_nvenc`；必须完成当前机器上实际 FFmpeg 编码、ffprobe 与解码自检后才能启用，失败绝不回退 `libx264`。Intel/AMD 和其他架构不声称支持。
 - **多档共享解码**：本期只完成对照评估，保留独立编码任务与同配置去重；参见 [实验记录](transcoding-multitier-evaluation.md)。未启用未通过收益与故障隔离门槛的共享解码。
-- **派生录像**：通过受控 `/api/transcoding/jobs/{id}/record/start|stop?generation=N` 显式启动/停止，默认录像策略不改变；录制物理流及其来源 Job、代次、Profile 版本和实际编码被持久化关联。录制停止时随派生物理输出释放。
+- **派生录像**：通过 `/api/transcoding/jobs/{id}/record/start|stop?generation=N` 显式启停。录像按源流 ID 查询，数据库关联本次物理流、任务代次、模板修订与实际编码。本机复现了多 slice H.264 输出生成的 MP4 解码失败。同一 FFmpeg 模板改用 `threads_per_job: 1` 后通过回放复测。使用录像前请验证当前模板的实际文件。[验收记录](transcoding-testing.md#2026-11-13本机完整功能复核)。
 - **派生转推**：Relay 创建接口接受可选 `transcode_job_id`；存逻辑源与 Job 而非物理流 ID，启动时从内部注册表解析受保护输出并获取定向 RTMP 播放凭据，不能自行启动转码。失败不自动回落原流。
 - **独立 Worker**：启用 `worker_enabled: true` 后，NVR 启动一个临时独立的本机 Worker 来运行固定 FFmpeg/GStreamer 管线。一次性 HMAC 控制消息通过私有 stdin 传输；无网络控制端口、不经 shell、不继承 NVR 密码/数据库 DSN；父进程管道断开触发退出与进程回收，原有 Always/OnDemand 管理器负责恢复。现阶段为**同用户身份的进程级隔离**，不等同于 seccomp、容器或专用 OS 用户隔离；高安全等级环境必须补充独立运行账户、沙箱和设备访问控制。
 - **历史录像离线转码**：不在实时 Issue #66 范围，见 [独立后续设计](transcoding-offline-followup.md)。
-
-第六轮隔离证据（2026-10-31）：FFmpeg/GStreamer 原生实际媒体通过；GStreamer 30 轮为 21 次实际媒体通过、9 次负控/状态检查；Chromium 直接 NVR 侧 HA-WHEP H.264 + PCMA/8000 音视频、ICE/DTLS、RTP、视频解码和 Web Audio 非静音采样通过；Go Race、前端 404/404 及 Linux/Windows/macOS 跨平台 CI 通过。真实 Home Assistant 实例仍为 `BLOCKED_ENVIRONMENT`，Docker 全链路、生产源和长期稳定性不由这轮证据覆盖。未拿到证据的场景不应标记验收通过。
