@@ -77,6 +77,33 @@ func TestParseVpsSpsPpsFromSeqHeader(t *testing.T) {
 	assert.Equal(t, goldenPps2, pps)
 }
 
+func TestParseTruncatedHEVCSequenceHeaders(t *testing.T) {
+	legacy, err := hevc.BuildSeqHeaderFromVpsSpsPps(goldenVps2, goldenSps2, goldenPps2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enhanced := append([]byte{0x80, 'h', 'v', 'c', '1'}, legacy[5:]...)
+	for _, tc := range []struct {
+		name   string
+		header []byte
+		parse  func([]byte) ([]byte, []byte, []byte, error)
+	}{
+		{"legacy", legacy, hevc.ParseVpsSpsPpsFromSeqHeader},
+		{"enhanced", enhanced, hevc.ParseVpsSpsPpsFromEnhancedSeqHeader},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for end := 0; end < len(tc.header); end++ {
+				if _, _, _, err := tc.parse(tc.header[:end]); err == nil {
+					t.Fatalf("accepted a truncated sequence header of length %d", end)
+				}
+			}
+			if _, _, _, err := tc.parse(tc.header); err != nil {
+				t.Fatalf("rejected the complete sequence header: %v", err)
+			}
+		})
+	}
+}
+
 func TestVpsSpsPpsSeqHeader2Annexb(t *testing.T) {
 	_, err := hevc.VpsSpsPpsSeqHeader2Annexb(goldenSh2)
 	assert.Equal(t, nil, err)

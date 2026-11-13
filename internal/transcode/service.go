@@ -17,11 +17,12 @@ type Service struct {
 	probes  *ProbeService
 	config  Config
 	retry   map[string]retryState
+	leases  map[string]DemandLease
 }
 
 func NewService(repo Repository, manager *Manager, probes *ProbeService, cfg Config) *Service {
 	cfg.ApplyDefaults()
-	return &Service{repo: repo, manager: manager, probes: probes, config: cfg, retry: map[string]retryState{}}
+	return &Service{repo: repo, manager: manager, probes: probes, config: cfg, retry: map[string]retryState{}, leases: map[string]DemandLease{}}
 }
 func (s *Service) profile(ctx context.Context, j Job) (Profile, error) {
 	profiles, err := s.repo.ListTranscodeProfiles(ctx)
@@ -97,6 +98,9 @@ func (s *Service) Start(ctx context.Context, id string, generation uint64) (Runt
 	if err != nil {
 		return Runtime{}, err
 	}
+	if j.RunPolicy == OnDemand {
+		return Runtime{}, &Error{Code: "demand_lease_required", Message: "on-demand jobs must be started by an active consumer lease"}
+	}
 	p, err := s.profile(ctx, j)
 	if err != nil {
 		return Runtime{}, err
@@ -125,6 +129,21 @@ func (s *Service) Start(ctx context.Context, id string, generation uint64) (Runt
 	}
 	return runtime, err
 }
+// RearmDemand is an explicit administrator action to clear a persisted Stop
+// intent. It does not acquire a process, create a lease, or bypass the probe
+// gate; only the next authorized consumer can start media with AcquireDemand.
+func (s *Service) RearmDemand(ctx context.Context, id string, generation uint64) error {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    j, err := s.job(ctx, id, generation)
+    if err != nil { return err }
+    if j.RunPolicy != OnDemand || !j.Enabled {
+        return &Error{Code: "demand_unavailable", Message: "only enabled on-demand jobs can be rearmed"}
+    }
+    if !j.StoppedByUser { return nil }
+    return s.repo.SetTranscodeJobStopped(ctx, id, generation, false)
+}
+
 func (s *Service) Stop(ctx context.Context, id string, generation uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -134,6 +153,7 @@ func (s *Service) Stop(ctx context.Context, id string, generation uint64) error 
 	if err := s.repo.SetTranscodeJobStopped(ctx, id, generation, true); err != nil {
 		return err
 	}
+	s.invalidateDemandLeasesLocked(id)
 	if s.manager == nil {
 		return nil
 	}
@@ -145,6 +165,7 @@ func (s *Service) Delete(ctx context.Context, id string, generation uint64) erro
 	if _, err := s.job(ctx, id, generation); err != nil {
 		return err
 	}
+	s.invalidateDemandLeasesLocked(id)
 	if s.manager != nil {
 		if err := s.manager.Release(ctx, id, generation); err != nil {
 			return err
@@ -180,6 +201,13 @@ func (s *Service) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			attempt, cancel := context.WithTimeout(ctx, 45*time.Second)
+			s.expireDemandLeases(attempt)
+			for id, err := range s.ReconcileDemand(attempt) {
+				code := "demand_reconcile_failed"
+				var domain *Error
+				if errors.As(err, &domain) { code = domain.Code }
+				slog.Warn("demand transcoding reconciliation deferred", "job_id", id, "code", code)
+			}
 			for id, err := range s.ReconcileAlways(attempt) {
 				code := "reconcile_failed"
 				var domain *Error

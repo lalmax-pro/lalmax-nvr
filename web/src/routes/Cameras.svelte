@@ -3,6 +3,7 @@
   import { listCameras, deleteCamera, permanentlyDeleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, restoreArchiveGroup, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getCameraRecordingStats, pauseRecording, resumeRecording, subscribeNvrEvents } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse, DiscoveredDevice } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { loadGBChannelNames, cameraDisplayName, type ChannelNames } from '$lib/gb-channel-names';
   import { showToast } from '$lib/toast';
   import { formatFileSize, formatDate, formatDuration } from '$lib/format';
   import { AlertCircle, Camera as CameraIcon, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive, Play, Download, ChevronDown, ChevronRight, Video, Settings, RotateCw } from 'lucide-svelte';
@@ -16,6 +17,8 @@
   import Pagination from '../components/Pagination.svelte';
 
   let cameras = $state<Camera[]>([]);
+  let gbNames = $state<ChannelNames>(new Map());
+  const displayCameraName = (camera: Camera) => cameraDisplayName(gbNames, camera);
   let loading = $state(true);
   let error = $state('');
   let activeTab = $state('active');
@@ -290,8 +293,9 @@
     if (!opts?.silent) loading = true;
     error = '';
     try {
-      const all = await listCameras();
+      const [all, names] = await Promise.all([listCameras(), loadGBChannelNames().catch(() => new Map<string, string>())]);
       cameras = all;
+      gbNames = names;
       pausedCameras = new Set(cameras.filter(c => c.recording_paused).map(c => c.id));
       if (!opts?.silent) {
         const tutkCameras = cameras.filter(c => c.error_type === 'tutk_incompatible');
@@ -578,8 +582,8 @@
           <ConfirmDialog
             title={confirmAction.action === 'stop' ? t('cameras.stopTitle') : t('cameras.restartTitle')}
             message={confirmAction.action === 'stop'
-              ? t('cameras.stopMessage', { name: confirmAction.camera.name })
-              : t('cameras.restartMessage', { name: confirmAction.camera.name })}
+              ? t('cameras.stopMessage', { name: displayCameraName(confirmAction.camera) })
+              : t('cameras.restartMessage', { name: displayCameraName(confirmAction.camera) })}
             confirmText={t('common.confirm')}
             onconfirm={executeConfirmAction}
             oncancel={() => confirmAction = null}
@@ -602,6 +606,7 @@
             {#each cameras as camera (camera.id)}
               <CameraCard
                 {camera}
+                displayName={displayCameraName(camera)}
                 {protocolsMap}
                 health={healthData[camera.id]}
                 onedit={openEditForm}
@@ -794,7 +799,7 @@
   <!-- Archive Confirm Dialog -->
   {#if archiveConfirm}
     <ArchiveConfirmDialog
-      cameraName={archiveConfirm.name}
+      cameraName={displayCameraName(archiveConfirm)}
       recordingCount={archiveConfirmCount}
       totalSize={archiveConfirmStatsLoading ? '...' : formatFileSize(archiveConfirmSize)}
       loading={archiveLoading}

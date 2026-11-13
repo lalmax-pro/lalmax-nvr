@@ -5,6 +5,12 @@ import "time"
 // Renegotiation prepares replacement media before touching the established call.
 // Invalid offers and resource exhaustion leave the previous media usable.
 func (s *Server) handleRenegotiation(msg *Message, peer TransportAddr) string {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	return s.handleRenegotiationLocked(msg, peer)
+}
+
+func (s *Server) handleRenegotiationLocked(msg *Message, peer TransportAddr) string {
 	d := s.dialogManager.Get(msg.CallID())
 	if !matchingDialog(msg, d) {
 		return BuildResponse(msg, 481, "Call/Transaction Does Not Exist", "")

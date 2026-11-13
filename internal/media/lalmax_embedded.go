@@ -32,6 +32,7 @@ type EmbeddedLalmaxConfig struct {
 	ConfigPath        string
 	InternalAuthToken string // 仅供 NVR 内部访问 lalmax 控制 API
 	RTMPPort          int
+	RTMPListenAddr    string
 	RTSPPort          int
 	HTTPPort          int
 	RTMPEnabled       bool
@@ -628,11 +629,15 @@ func loadEmbeddedLalmaxConfig(cfg EmbeddedLalmaxConfig) (*lalmaxconfig.Config, e
 			if srtPort == 0 {
 				srtPort = config.DefaultSRTPort
 			}
+			rtmpAddr := fmt.Sprintf(":%d", rtmpPort)
+			if strings.TrimSpace(cfg.RTMPListenAddr) != "" {
+				rtmpAddr = strings.TrimSpace(cfg.RTMPListenAddr)
+			}
 			if err := patchLalmaxConfig(
 				cfg.ConfigPath,
 				cfg.RTMPEnabled,
 				cfg.SRTEnabled,
-				fmt.Sprintf(":%d", rtmpPort),
+				rtmpAddr,
 				fmt.Sprintf(":%d", srtPort),
 				cfg.HTTPTSGOPNum,
 				cfg.RTSPDisableNativeAuth,
@@ -1127,6 +1132,9 @@ func embeddedConfigJSON(cfg EmbeddedLalmaxConfig) ([]byte, error) {
 		}
 	}
 	rtmpAddr := fmt.Sprintf(":%d", cfg.RTMPPort)
+	if strings.TrimSpace(cfg.RTMPListenAddr) != "" {
+		rtmpAddr = strings.TrimSpace(cfg.RTMPListenAddr)
+	}
 	srtAddr := fmt.Sprintf(":%d", cfg.SRTPort)
 
 	// Apply defaults for lalmax HLS settings

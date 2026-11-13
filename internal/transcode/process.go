@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"regexp"
 	"sync"
 	"time"
 )
@@ -20,6 +21,7 @@ type commandProcess struct {
 	owner    *processOwner
 	done     chan struct{}
 	err      error
+	stderr   *boundedOutput
 	stopOnce sync.Once
 }
 
@@ -33,15 +35,16 @@ func startCommand(ctx context.Context, path string, args []string) (Process, err
 	configureProcess(cmd)
 	cmd.Cancel = nil
 	cmd.WaitDelay = 2 * time.Second
-	// Deliberately discard raw stderr until a credential-safe diagnostic sink is
-	// available; exec errors are converted to public domain errors below.
+	// Keep a bounded stderr prefix for post-failure diagnosis. It is exposed
+	// only through Diagnostic and is redacted before entering service logs.
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	stderr := &boundedOutput{limit: 256 * 1024}
+	cmd.Stderr = stderr
 	owner, err := startOwnedProcess(cmd)
 	if err != nil {
 		return nil, &Error{Code: "process_start_failed", Message: "could not start media backend; check executable and permissions"}
 	}
-	p := &commandProcess{cmd: cmd, owner: owner, done: make(chan struct{})}
+	p := &commandProcess{cmd: cmd, owner: owner, done: make(chan struct{}), stderr: stderr}
 	go func() {
 		if err := cmd.Wait(); err != nil {
 			p.err = &Error{Code: "process_failed", Message: "media backend exited unsuccessfully"}
@@ -61,6 +64,19 @@ func startCommand(ctx context.Context, path string, args []string) (Process, err
 	return p, nil
 }
 func (p *commandProcess) Wait() error { <-p.done; return p.err }
+
+func (p *commandProcess) Diagnostic() string {
+	if p.stderr == nil {
+		return ""
+	}
+	return redactMediaDiagnostic(string(p.stderr.Bytes()))
+}
+
+var mediaCredentialPattern = regexp.MustCompile("(?i)(token|password|secret|stream_key)=([^&\\s]+)")
+
+func redactMediaDiagnostic(value string) string {
+	return mediaCredentialPattern.ReplaceAllString(value, "$1=[REDACTED]")
+}
 func (p *commandProcess) Stop(ctx context.Context) error {
 	select {
 	case <-p.done:

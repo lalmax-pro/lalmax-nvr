@@ -63,12 +63,14 @@ func (p Profile) Validate() error {
 			return invalid("video copy cannot apply encoder, resizing, frame rate, bitrate or GOP settings")
 		}
 	case "h264":
-		encoder := "libx264"
-		if p.Backend == "gstreamer" {
-			encoder = "x264enc"
-		}
-		if v.Encoder != encoder {
-			return invalid("unsupported video encoder for selected backend")
+		// Hardware encoding is explicit. There is no automatic fallback from
+		// NVENC to the software encoder; activation requires the real self-test.
+		if p.Backend == "ffmpeg" {
+			if v.Encoder != "libx264" && v.Encoder != "h264_nvenc" {
+				return invalid("unsupported FFmpeg encoder")
+			}
+		} else if v.Encoder != "x264enc" {
+			return invalid("unsupported GStreamer encoder")
 		}
 		if v.MaxWidth < 2 || v.MaxWidth > 3840 || v.MaxWidth%2 != 0 || v.MaxHeight < 2 || v.MaxHeight > 2160 || v.MaxHeight%2 != 0 {
 			return invalid("maximum dimensions must be even and within 3840x2160")
@@ -89,8 +91,12 @@ func (p Profile) Validate() error {
 		if (a.SampleRate != 44100 && a.SampleRate != 48000) || a.Channels < 1 || a.Channels > 2 || a.BitrateKbps < 32 || a.BitrateKbps > 320 {
 			return invalid("unsupported AAC sample rate, channels or bitrate")
 		}
+	case "g711a":
+		if a.SampleRate != 8000 || a.Channels != 1 || a.BitrateKbps != 64 {
+			return invalid("G.711 A-law output requires 8000 Hz mono at 64 kbps")
+		}
 	default:
-		return invalid("audio codec must be aac, copy or none")
+		return invalid("audio codec must be aac, g711a, copy or none")
 	}
 	return nil
 }
@@ -154,6 +160,7 @@ type RunPolicy string
 const (
 	Always RunPolicy = "always"
 	Manual RunPolicy = "manual"
+	OnDemand RunPolicy = "on_demand"
 )
 
 type Job struct {
@@ -174,8 +181,8 @@ func (j Job) Validate() error {
 	if err := j.Source.Validate(); err != nil {
 		return err
 	}
-	if j.RunPolicy != Always && j.RunPolicy != Manual {
-		return invalid("only always and manual policies are supported")
+	if j.RunPolicy != Always && j.RunPolicy != Manual && j.RunPolicy != OnDemand {
+		return invalid("only always, manual and on_demand policies are supported")
 	}
 	if j.ProfileRevision == 0 {
 		return invalid("profile revision is required")
@@ -197,11 +204,27 @@ const (
 	Failed          State = "failed"
 )
 
+// normalizeObservedCodec maps codec names emitted by media engines to the
+// canonical names used by the fixed transcode templates. In particular, lal
+// reports G.711 A-law as PCMA while profiles use g711a.
+func normalizeObservedCodec(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "pcma", "g.711a", "g711-a", "alaw":
+		return "g711a"
+	case "pcmu", "g.711u", "g711-u", "mulaw":
+		return "g711u"
+	case "mpeg4-generic", "aac-lc":
+		return "aac"
+	default:
+		return strings.ToLower(strings.TrimSpace(codec))
+	}
+}
+
 // CheckMedia validates copy modes against observed input codecs. Copy is not a
 // promise that any input is compatible with the fixed H.264/AAC FLV output path.
 func (p Profile) CheckMedia(videoCodec, audioCodec string) error {
-	videoCodec = strings.ToLower(strings.TrimSpace(videoCodec))
-	audioCodec = strings.ToLower(strings.TrimSpace(audioCodec))
+	videoCodec = normalizeObservedCodec(videoCodec)
+	audioCodec = normalizeObservedCodec(audioCodec)
 	if err := p.Validate(); err != nil {
 		return err
 	}
@@ -214,8 +237,11 @@ func (p Profile) CheckMedia(videoCodec, audioCodec string) error {
 	if p.Audio.Codec == "copy" && audioCodec != "" && audioCodec != "aac" {
 		return &Error{Code: "unsupported_input", Message: "audio copy requires AAC for this output"}
 	}
-	if p.Audio.Codec == "aac" && audioCodec != "" && audioCodec != "aac" && audioCodec != "g711a" && audioCodec != "g711u" {
+	if (p.Audio.Codec == "aac" || p.Audio.Codec == "g711a") && audioCodec != "" && audioCodec != "aac" && audioCodec != "g711a" && audioCodec != "g711u" {
 		return &Error{Code: "unsupported_input", Message: "audio codec is not supported by the fixed template"}
+	}
+	if p.Audio.Codec == "g711a" && audioCodec == "" {
+		return &Error{Code: "audio_required", Message: "WebRTC audio profile needs an input audio track"}
 	}
 	return nil
 }

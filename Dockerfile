@@ -29,14 +29,18 @@ COPY onvif/ ./onvif/
 # Copy built frontend into the embed directory
 COPY --from=frontend /build/web/dist ./internal/ui/static/
 
-# Static build — no C dependencies, pure Go binary
-ENV CGO_ENABLED=0
-ARG VERSION=dev
+# Static cross-build: run Go on the builder platform, compile for the target.
+# Buildx supplies TARGETOS / TARGETARCH / TARGETVARIANT automatically.
 ARG TARGETOS
 ARG TARGETARCH
 ARG TARGETVARIANT
-RUN GOOS="$TARGETOS" GOARCH="$TARGETARCH" GOARM="${TARGETVARIANT#v}" \
-    go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /lalmax-nvr ./cmd/lalmax-nvr/
+ENV CGO_ENABLED=0
+ARG VERSION=dev
+RUN set -eu; \
+    if [ "$TARGETARCH" = "arm" ]; then export GOARM="${TARGETVARIANT#v}"; fi; \
+    GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build \
+      -ldflags="-s -w -X main.appVersion=${VERSION}" \
+      -o /lalmax-nvr ./cmd/lalmax-nvr/
 
 # ---- Stage 3: Minimal runtime image ----
 FROM alpine:3.21

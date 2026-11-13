@@ -3,6 +3,7 @@ package transcode
 // Config contains trusted operator-controlled runtime settings, not task input.
 type Config struct {
 	Enabled        bool   `yaml:"enabled" json:"enabled"`
+	WorkerEnabled  bool   `yaml:"worker_enabled" json:"worker_enabled"`
 	MaxConcurrent  int    `yaml:"max_concurrent" json:"max_concurrent"`
 	ThreadsPerJob  int    `yaml:"threads_per_job" json:"threads_per_job"`
 	FFmpegPath     string `yaml:"ffmpeg_path" json:"ffmpeg_path"`

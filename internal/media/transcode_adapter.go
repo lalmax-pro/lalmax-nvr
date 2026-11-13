@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -25,6 +26,7 @@ type TranscodeAdapter struct {
 	Auth           *auth.MediaAuthorizer
 	Config         *config.Config
 	RegisterOutput func(context.Context, string, string) error
+	StopDerivedRecording func(context.Context, string) error
 	mu             sync.RWMutex
 	outputs        map[string]derivedOutput
 }
@@ -121,7 +123,14 @@ func (a *TranscodeAdapter) Observe(ctx context.Context, id string) (transcode.Ou
 	if info == nil {
 		return transcode.OutputObservation{}, nil
 	}
-	return transcode.OutputObservation{Active: info.Active, VideoCodec: strings.ToLower(info.VideoCodec), LastFrame: info.LastFrameTime}, nil
+	var mediaBytes uint64
+	if info.Publisher != nil {
+		mediaBytes = info.Publisher.WroteBytesSum
+		if info.Publisher.ReadBytesSum > mediaBytes {
+			mediaBytes = info.Publisher.ReadBytesSum
+		}
+	}
+	return transcode.OutputObservation{Active: info.Active, VideoCodec: strings.ToLower(info.VideoCodec), LastFrame: info.LastFrameTime, MediaBytes: mediaBytes}, nil
 }
 func (a *TranscodeAdapter) Release(ctx context.Context, id string) error {
 	a.mu.Lock()
@@ -129,22 +138,32 @@ func (a *TranscodeAdapter) Release(ctx context.Context, id string) error {
 	if _, ok := a.outputs[id]; !ok {
 		return nil
 	}
+
+	// Revoke first. The deny-only tombstone must be installed before any
+	// fallible cleanup so a failed recorder stop cannot leave old grants live.
 	a.Auth.RevokeInternalStream(id)
-	// The backend is reaped before release; revoke remaining subscriber sessions.
+	var cleanupErr error
+	if a.StopDerivedRecording != nil {
+		cleanupErr = a.StopDerivedRecording(ctx, id)
+	}
+
+	// Continue best-effort session cleanup even when recording teardown fails;
+	// retain the reservation until every cleanup step succeeds, preventing a
+	// new task from inheriting the old output, publisher, or subscribers.
 	info, err := a.Engine.GetStream(ctx, id)
-	if err == nil && info != nil {
+	if err != nil {
+		cleanupErr = errors.Join(cleanupErr, err)
+	} else if info != nil {
 		for _, subscriber := range info.Subscribers {
-			if kickErr := a.Engine.KickSession(ctx, subscriber.SessionID); kickErr != nil && err == nil {
-				err = kickErr
+			if kickErr := a.Engine.KickSession(ctx, subscriber.SessionID); kickErr != nil {
+				cleanupErr = errors.Join(cleanupErr, kickErr)
 			}
 		}
 	}
-	// Keep failed cleanup reserved and fail closed. A retry may still revoke
-	// existing sessions; a new producer must not inherit those sessions.
-	if err == nil {
+	if cleanupErr == nil {
 		delete(a.outputs, id)
 	}
-	return err
+	return cleanupErr
 }
 
 var _ transcode.MediaAdapter = (*TranscodeAdapter)(nil)

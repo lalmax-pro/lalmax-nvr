@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/lalmax-pro/lalmax-nvr/internal/relay"
 )
 
 // handleListRelayTasks returns all relay push tasks.
@@ -34,6 +35,7 @@ func (h *Handler) handleCreateRelayTask(w http.ResponseWriter, r *http.Request) 
 
 	var req struct {
 		StreamID  string `json:"stream_id"`
+		TranscodeJobID string `json:"transcode_job_id"`
 		TargetURL string `json:"target_url"`
 	}
 
@@ -51,13 +53,19 @@ func (h *Handler) handleCreateRelayTask(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	task, err := h.relayMgr.CreateTask(r.Context(), req.StreamID, req.TargetURL)
+	var task *relay.Task
+	var err error
+	if req.TranscodeJobID != "" {
+		task, err = h.relayMgr.CreateDerivedTask(r.Context(), req.StreamID, req.TranscodeJobID, req.TargetURL)
+	} else {
+		task, err = h.relayMgr.CreateTask(r.Context(), req.StreamID, req.TargetURL)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	h.logSuccess(r, "relay.create", "relay", task.ID, "relay task created", map[string]any{"stream_id": req.StreamID, "target_url": req.TargetURL})
+	h.logSuccess(r, "relay.create", "relay", task.ID, "relay task created", map[string]any{"stream_id": req.StreamID, "derived": req.TranscodeJobID != ""})
 	writeJSON(w, http.StatusCreated, task)
 }
 

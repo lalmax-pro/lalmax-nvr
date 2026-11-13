@@ -12,6 +12,8 @@
   } from '$lib/api';
   import type { RelayTask, RelayTaskStats, StatsHistory, StreamInfo } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { listTranscodeJobs } from '$lib/api/transcoding';
+  import type { TranscodeJob } from '$lib/api/transcoding';
   import { Chart, registerables } from 'chart.js';
 
   Chart.register(...registerables);
@@ -20,11 +22,13 @@
   let error = $state('');
   let tasks = $state<RelayTask[]>([]);
   let streams = $state<StreamInfo[]>([]);
+  let transcodeJobs = $state<TranscodeJob[]>([]);
   let refreshTimer: number | undefined;
 
   // Create task form
   let showCreateDialog = $state(false);
   let newTaskStreamID = $state('');
+  let newTaskTranscodeJobID = $state('');
   let newTaskTargetURL = $state('');
   let creating = $state(false);
 
@@ -55,6 +59,7 @@
       // Relay sources can be managed cameras or external inputs such as IPTV.
       const result = await listStreams({ limit: 100 });
       streams = result.streams;
+      try { transcodeJobs = (await listTranscodeJobs()).jobs ?? []; } catch { transcodeJobs = []; }
     } catch (e) {
       console.error('Failed to load streams:', e);
     }
@@ -209,10 +214,12 @@
     try {
       await createRelayTask({
         stream_id: newTaskStreamID,
+        transcode_job_id: newTaskTranscodeJobID || undefined,
         target_url: newTaskTargetURL,
       });
       showCreateDialog = false;
       newTaskStreamID = '';
+      newTaskTranscodeJobID = '';
       newTaskTargetURL = '';
       await loadTasks();
     } catch (e) {
@@ -335,7 +342,7 @@
                   <span class="badge {task.status === 'running' ? 'badge-success' : task.status === 'error' ? 'badge-error' : 'badge-ghost'}">
                     {task.status}
                   </span>
-                  {task.stream_id}
+                  {task.stream_id}{#if task.transcode_job_id} · {task.transcode_job_id}（派生流）{/if}
                 </h2>
                 <p class="text-sm text-gray-500 mt-1">{t('relay.target')}{task.target_url}</p>
                 {#if task.error_msg}
@@ -492,6 +499,17 @@
             <option value={stream.stream_id}>{streamOptionLabel(stream)}</option>
           {/each}
         </select>
+      </div>
+
+      <div class="mb-4">
+        <label for="relay-transcode" class="input-label">转推来源</label>
+        <select id="relay-transcode" class="input mt-1" bind:value={newTaskTranscodeJobID}>
+          <option value="">原始流</option>
+          {#each transcodeJobs.filter(j => j.source.stream_id === newTaskStreamID && j.enabled) as job}
+            <option value={job.id}>派生流 · {job.id} · {job.profile_id}</option>
+          {/each}
+        </select>
+        <p class="text-xs th-text-secondary mt-1">派生转推引用逻辑转码任务，任务停用时停止转推，不回退原流。</p>
       </div>
 
       <div class="mb-6">

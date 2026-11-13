@@ -186,9 +186,10 @@ func (group *Group) broadcastByRtmpMsg(msg base.RtmpMsg) {
 	}
 
 	if msg.Header.MsgTypeId == base.RtmpTypeIdMetadata {
-		m, err := rtmp.ParseMetadata(msg.Payload)
-		nazalog.Debugf("[%s] metadata. err=%+v, len=%d, value=%s", group.UniqueKey, err, len(m), m.DebugString())
-	}
+        m, err := rtmp.ParseMetadata(msg.Payload)
+        nazalog.Debugf("[%s] metadata. err=%+v, len=%d, value=%s", group.UniqueKey, err, len(m), m.DebugString())
+        if err == nil { group.noteFlvTrackMetadata(m) }
+    }
 
 	var (
 		lazyRtmpChunkDivider remux.LazyRtmpChunkDivider
@@ -203,6 +204,24 @@ func (group *Group) broadcastByRtmpMsg(msg base.RtmpMsg) {
 	if len(msg.Payload) == 0 {
 		Log.Warnf("[%s] msg payload length is 0. %+v", group.UniqueKey, msg.Header)
 		return
+	}
+	if msg.Header.MsgTypeId == base.RtmpTypeIdVideo && !msg.HasCompleteVideoHeader() {
+		return
+	}
+
+	// Validate HEVC parameter sets before remuxing or replacing the cached
+	// sequence header used by new subscribers.
+	var hevcSPS []byte
+	if msg.IsHevcKeySeqHeader() {
+		var err error
+		if msg.IsEnhanced() {
+			_, hevcSPS, _, err = hevc.ParseVpsSpsPpsFromEnhancedSeqHeader(msg.Payload)
+		} else {
+			_, hevcSPS, _, err = hevc.ParseVpsSpsPpsFromSeqHeaderWithoutMalloc(msg.Payload)
+		}
+		if err != nil {
+			return
+		}
 	}
 
 	// TODO(chef): 暂时不打开，因为过滤掉了innertest中rtmp和flv的输出和输入就不完全相同了
@@ -337,6 +356,13 @@ func (group *Group) broadcastByRtmpMsg(msg base.RtmpMsg) {
 
 	// # 广播。遍历所有 httpflv sub session，转发数据
 	for session := range group.httpflvSubSessionSet {
+		if !session.FlvHeaderWritten() {
+			audio, video := group.httpflvTracks(&msg)
+			session.ObserveFlvTracks(audio, video)
+		}
+		// The subscriber queues tags until track discovery completes or
+		// the bounded timer expires, preserving order without blocking the
+		// publisher loop or emitting a speculative single-track header.
 		if session.IsFresh {
 			if group.httpflvGopCache.MetadataEnsureWithoutSetDataFrame != nil {
 				session.Write(group.httpflvGopCache.MetadataEnsureWithoutSetDataFrame)
@@ -419,7 +445,7 @@ func (group *Group) broadcastByRtmpMsg(msg base.RtmpMsg) {
 		if msg.IsAvcKeySeqHeader() {
 			group.stat.VideoCodec = base.VideoCodecAvc
 		}
-		if msg.IsHevcKeySeqHeader() {
+		if hevcSPS != nil {
 			group.stat.VideoCodec = base.VideoCodecHevc
 		}
 	}
@@ -435,26 +461,17 @@ func (group *Group) broadcastByRtmpMsg(msg base.RtmpMsg) {
 				}
 			}
 		}
-		if msg.IsHevcKeySeqHeader() {
-			var sps []byte
-			var err error
-			if msg.IsEnhanced() {
-				_, sps, _, err = hevc.ParseVpsSpsPpsFromEnhancedSeqHeader(msg.Payload)
-			} else {
-				_, sps, _, err = hevc.ParseVpsSpsPpsFromSeqHeader(msg.Payload)
-			}
-
-			if err == nil {
-				var ctx hevc.Context
-				err = hevc.ParseSps(sps, &ctx)
-				if err == nil {
-					group.stat.VideoHeight = int(ctx.PicHeightInLumaSamples)
-					group.stat.VideoWidth = int(ctx.PicWidthInLumaSamples)
-				}
+		if hevcSPS != nil {
+			var ctx hevc.Context
+			if err := hevc.ParseSps(hevcSPS, &ctx); err == nil {
+				group.stat.VideoHeight = int(ctx.PicHeightInLumaSamples)
+				group.stat.VideoWidth = int(ctx.PicWidthInLumaSamples)
 			}
 		}
 	}
-	if msg.Header.MsgTypeId == base.RtmpTypeIdVideo {
+	if isEncodedVideoFrame(msg) {
+		// A sequence header or end-of-sequence command is not a frame:
+		// neither can establish output readiness in the absence of NALUs.
 		group.inVideoFpsRecords.Add(nazalog.Clock.Now().Unix(), 1)
 	}
 }

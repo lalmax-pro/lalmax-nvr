@@ -70,6 +70,12 @@ func (p *traceStoreProcessor) ForceFlush(ctx context.Context) error {
 		p.mu.Unlock()
 		return nil
 	}
+	// A pre-cancelled context must not accidentally report success merely
+	// because the queue and cancellation are both ready in the select below.
+	if err := ctx.Err(); err != nil {
+		p.mu.Unlock()
+		return err
+	}
 	select {
 	case p.queue <- traceWriteItem{barrier: barrier}:
 		p.mu.Unlock()

@@ -140,6 +140,7 @@ func (h *Handler) sampleStreamMetrics(ctx context.Context) {
 	}
 
 	now := time.Now().Unix()
+	h.sampleTrafficHistory(streams, now)
 	for _, s := range streams {
 		isActive := s.Active
 		if !isActive && h.gb28181Svr != nil {

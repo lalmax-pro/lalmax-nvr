@@ -546,7 +546,7 @@ let destroyed = false;
       if (!isCurrent(peerConnection)) return;
       await peerConnection.setRemoteDescription(answer);
     } catch (e) {
-      if (!isCurrent(peerConnection)) return;
+      if (pc && !isCurrent(pc)) return;
       console.warn('WebRTC init failed:', e);
       webrtcState = 'failed';
       scheduleReconnect();

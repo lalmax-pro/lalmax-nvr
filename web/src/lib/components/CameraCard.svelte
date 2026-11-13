@@ -12,6 +12,7 @@
 
   interface Props {
     camera: Camera;
+    displayName?: string;
     protocolsMap: Map<string, ProtocolInfo>;
     health?: CameraHealth;
     ptzCapabilities?: PTZCapabilitiesDetailed;
@@ -29,6 +30,7 @@
 
   let {
     camera,
+    displayName,
     protocolsMap,
     health,
     ptzCapabilities,
@@ -48,6 +50,8 @@
   let editingName = $state(false);
   let nameInput = $state('');
   $effect(() => { nameInput = camera.name; });
+
+  let shownName = $derived(displayName || camera.name);
 
   let isRecordingPaused = $derived(recordingPaused || camera.recording_paused);
   let isPending = $derived(camera.activation_state === 'pending_activation');
@@ -206,7 +210,7 @@
     <div class="snapshot-preview">
       <img
         src="{getSnapshotUrl(camera.id)}&_t={Date.now()}"
-        alt={camera.name}
+        alt={shownName}
         class="snapshot-img"
         loading="lazy"
         onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
@@ -239,7 +243,7 @@
             onclick={startEditName}
             title={t('cameras.editName')}
           >
-            <span class="truncate">{camera.name}</span>
+            <span class="truncate">{shownName}</span>
             <Pencil size={12} class="th-text-tertiary shrink-0" />
           </button>
         {/if}

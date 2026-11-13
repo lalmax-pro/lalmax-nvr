@@ -87,6 +87,16 @@ func TestWorkKey(t *testing.T) {
 	}
 }
 
+func TestObservedCodecAliasesAreCanonicalized(t *testing.T) {
+	p := testProfile(t)
+	p.Audio = AudioSpec{Codec: "g711a", SampleRate: 8000, Channels: 1, BitrateKbps: 64}
+	for _, alias := range []string{"pcma", "g711a", "G.711A", "alaw"} {
+		if err := p.CheckMedia("H264", alias); err != nil {
+			t.Fatalf("codec alias %q rejected: %v", alias, err)
+		}
+	}
+}
+
 func TestCopyMediaConstraints(t *testing.T) {
 	p := testProfile(t)
 	p.Video = VideoSpec{Codec: "copy"}
@@ -129,9 +139,13 @@ func TestJobValidation(t *testing.T) {
 	if err := j.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	j.RunPolicy = "on_demand"
+	j.RunPolicy = OnDemand
+	if err := j.Validate(); err != nil {
+		t.Fatalf("valid on-demand policy rejected: %v", err)
+	}
+	j.RunPolicy = "unrecognized"
 	if j.Validate() == nil {
-		t.Fatal("unimplemented demand policy accepted")
+		t.Fatal("unknown policy accepted")
 	}
 	j.RunPolicy = Manual
 	j.ProfileRevision = 0

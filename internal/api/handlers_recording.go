@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -211,6 +212,21 @@ func (h *Handler) handleGetRecording(w http.ResponseWriter, r *http.Request) {
 	if rec == nil {
 		writeError(w, http.StatusNotFound, "recording not found")
 		return
+	}
+	// Preserve the established recording JSON shape. Add provenance only
+	// for explicitly derived media; original recording responses are unchanged.
+	if rec.StreamID != "" {
+		if provenance, ok := h.db.(interface {
+			GetDerivedRecordingSource(context.Context, string) (storage.DerivedRecordingSource, error)
+		}); ok {
+			if origin, err := provenance.GetDerivedRecordingSource(r.Context(), rec.StreamID); err == nil {
+				writeJSON(w, http.StatusOK, struct {
+					*model.Recording
+					Transcoding *storage.DerivedRecordingSource `json:"transcoding,omitempty"`
+				}{Recording: rec, Transcoding: &origin})
+				return
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, rec)
 }

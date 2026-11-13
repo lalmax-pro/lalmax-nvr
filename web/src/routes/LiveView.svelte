@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream, getONVIFProfiles, ptzMove, buildPTZRelativeMove, streamMediaURL, cameraStreamID } from '$lib/api';
+  import { getCamera, listGB28181Devices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream, getONVIFProfiles, ptzMove, buildPTZRelativeMove, streamMediaURL, cameraStreamID } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff, Info, Settings, Video, Eye } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
@@ -18,12 +18,27 @@
   import TalkButton from '../components/TalkButton.svelte';
   import XiaomiTalkButton from '../components/XiaomiTalkButton.svelte';
   import { t } from '$lib/i18n';
+  import { loadGBChannelNames, gbDisplayName } from '$lib/gb-channel-names';
   import { showToast } from '$lib/toast';
   import { loadZones, saveZones, type AiZone } from '$lib/ai-zones';
 
   let { cameraId = '' }: { cameraId?: string } = $props();
 
   let camera = $state<Camera | null>(null);
+  let catalogChannelName = $state('');
+  let catalogRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  let displayCameraName = $derived(catalogChannelName || camera?.name || camera?.id || '');
+
+  async function refreshCatalogChannelName(cam: Camera) {
+    catalogChannelName = '';
+    if (!isGB28181Camera(cam)) return;
+    try {
+      const names = await loadGBChannelNames();
+      catalogChannelName = gbDisplayName(names, [cam.stream_id, cameraStreamID(cam), cam.id, cameraId], '');
+    } catch (err) {
+      console.warn('GB28181 catalog name lookup failed; using camera name:', err);
+    }
+  }
   let drawingZone = $state(false);
   let zoneDraft = $state<[number, number][]>([]);
   let zones = $state<AiZone[]>([]);
@@ -156,6 +171,7 @@
     error = '';
     try {
       camera = await getCamera(cameraId);
+      void refreshCatalogChannelName(camera);
       zones = loadZones(camera.id);
     } catch (e) {
       // If camera not found and ID looks like GB28181 (contains ':'), try to start play first
@@ -166,6 +182,7 @@
             await playGB28181Stream({ device_id: parts[0], channel_id: parts[1] });
             // Retry loading camera after play starts
             camera = await getCamera(cameraId);
+            void refreshCatalogChannelName(camera);
             return;
           }
         } catch (playErr) {
@@ -180,7 +197,10 @@
   }
 
   function goBack() {
-    window.location.hash = '#/devices';
+    const query = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    const from = query.get('from');
+    const validSources = ['onvif', 'gb28181', 'xiaomi', 'push', 'archives'];
+    window.location.hash = validSources.includes(from || '') ? `#/devices?tab=${from}` : '#/devices';
   }
 
   function toggleFullscreen() {
@@ -281,6 +301,10 @@
     }
 
     loadCamera();
+    // Keep the title in sync when a channel is renamed while live preview stays open.
+    catalogRefreshTimer = window.setInterval(() => {
+      if (camera && !document.hidden) void refreshCatalogChannelName(camera);
+    }, 30000);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     listProtocols().then(list => {
       if (list && list.length > 0) protocolsMap = buildProtocolsMap(list);
@@ -288,6 +312,7 @@
   });
 
   onDestroy(() => {
+    if (catalogRefreshTimer) window.clearInterval(catalogRefreshTimer);
     document.removeEventListener('fullscreenchange', handleFullscreenChange);
   });
 </script>
@@ -322,7 +347,7 @@
           {t('nav.cameras')}
         </button>
         <h2 class="text-xl font-bold th-text-primary truncate">
-          {camera.name || camera.id}
+          {displayCameraName}
         </h2>
         <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
 
@@ -405,7 +430,7 @@
                   {@const WasmPlayer = WasmPlayerComponent}
                   <WasmPlayer
                     cameraId={camera.id}
-                    cameraName={camera.name || camera.id}
+                    cameraName={displayCameraName}
                     expanded={true}
                     onFallbackNeeded={handleWasmFallback}
                   />
@@ -430,7 +455,7 @@
                   {@const FMP4Player = FMP4PlayerComponent}
                   <FMP4Player
                     cameraId={camera.id}
-                    cameraName={camera.name || camera.id}
+                    cameraName={displayCameraName}
                     expanded={true}
                     onFallbackNeeded={() => handleProtocolChange('hls')}
                   />
@@ -453,13 +478,13 @@
               {:else if streamingProtocol === 'webrtc'}
                 <WebRTCPlayer
                   cameraId={camera.id}
-                  cameraName={camera.name || camera.id}
+                  cameraName={displayCameraName}
                   expanded={true}
                 />
               {:else if streamingProtocol === 'flv' || streamingProtocol === 'ws-flv'}
                 <FlvPlayer
                   cameraId={camera.id}
-                  cameraName={camera.name || camera.id}
+                  cameraName={displayCameraName}
                   streamUrl={getStreamPlayURL(streamingProtocol)}
                   protocol={streamingProtocol === 'ws-flv' ? 'ws-flv' : 'flv'}
                   expanded={true}
@@ -467,7 +492,7 @@
               {:else}
                 <VideoPlayer
                   cameraId={camera.id}
-                  cameraName={camera.name || camera.id}
+                  cameraName={displayCameraName}
                   streamUrl={getStreamPlayURL(streamingProtocol)}
                   cameraProtocol={camera.protocol}
                   protocol={streamingProtocol}

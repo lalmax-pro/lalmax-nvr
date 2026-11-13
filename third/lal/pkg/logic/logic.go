@@ -146,6 +146,11 @@ type Option struct {
 	// This interface make authenticate customizable so that we can implement any authenticate strategy like jwt...
 	Authentication IAuthentication
 
+	// OnStreamNotFound is called only for authorized RTMP playback and RTSP
+	// DESCRIBE without published media. It is never called for publishers.
+	// The handler must return immediately (e.g. enqueue an async hook event).
+	OnStreamNotFound func(appName, streamName, schema string)
+
 	// RTSPDigestVerifier delegates RTSP protocol Digest checks to the embedding
 	// application's shared authentication implementation when provided.
 	RTSPDigestNonceIssuer          rtsp.DigestNonceIssuer

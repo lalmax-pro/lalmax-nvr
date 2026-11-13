@@ -126,10 +126,18 @@ func testLocalIPv4(t *testing.T) net.IP {
 		t.Fatal(err)
 	}
 	for _, address := range addresses {
-		if ipNet, ok := address.(*net.IPNet); ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {
-			return ipNet.IP.To4()
+		ipNet, ok := address.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.IsLinkLocalUnicast() || ipNet.IP.To4() == nil {
+			continue
 		}
+		ip := ipNet.IP.To4()
+		conn, bindErr := net.ListenUDP("udp4", &net.UDPAddr{IP: ip})
+		if bindErr != nil {
+			continue // A Windows adapter may report a stale, non-bindable IPv4 address.
+		}
+		_ = conn.Close()
+		return ip
 	}
-	t.Skip("WebRTC integration test requires a non-loopback IPv4 interface")
+	t.Skip("WebRTC integration test requires an available, bindable non-loopback IPv4 interface")
 	return nil
 }

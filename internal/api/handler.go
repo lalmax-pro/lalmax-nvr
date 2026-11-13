@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
+	"github.com/lalmax-pro/lalmax-nvr/internal/ai/webhook"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/emby"
@@ -156,6 +157,7 @@ type Handler struct {
 	isInternalMediaStream func(string) bool
 	transcodePlayback     derivedPlaybackProvider
 	transcodeService      *transcode.Service
+	derivedRecorder       *recorder.TaskManager
 	transcodeProbe        *transcode.ProbeService
 	homeAssistantMu       sync.Mutex
 	homeAssistantWHEPKey  []byte
@@ -190,7 +192,10 @@ type Handler struct {
 	stabilityProvider StabilityProvider
 	cloudProxy        CloudAuthProxy
 	streamRegistry    *StreamRegistry
-	aiManager         *ai.Manager
+	localVideos       localVideoPlayers
+	aiManager              *ai.Manager
+	aiDetectionPublisher    webhook.CallbackFunc
+	aiDetectionPublisherID  string
 	onvifDiscover     func(ctx context.Context, timeout time.Duration) *onvif.DiscoveryResult
 	onvifProbeDevice  func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error)
 	onvifNewClient    func(endpoint, username, password string) onvifDeviceClient
@@ -203,10 +208,14 @@ type Handler struct {
 	relayMgr          *relay.Manager
 	// readyzDiskUsage overrides disk probing for /api/readyz (tests only).
 	readyzDiskUsage func() (total, used int64, err error)
+	// goroutineCount is a test seam for the process-wide health metric.
+	// A nil callback uses runtime.NumGoroutine, preserving production behavior.
+	goroutineCount func() int
 	// sysMetrics holds the in-memory ring buffer of periodic system metric samples.
 	sysMetrics *sysMetricsHistory
 	// streamMetrics holds per-stream ring buffers of periodic live metric samples.
 	streamMetrics *streamMetricsHistory
+	trafficHistory *trafficHistory
 	// apiObserver records low-cardinality API telemetry for OTel and the local dashboard.
 	apiObserver       *observability.HTTPObserver
 	autoDiscoverApply func(config.AutoDiscoverConfig)
@@ -341,11 +350,38 @@ func (h *Handler) SetMultiUserAuthMW(mw func(http.Handler) http.Handler) {
 	h.multiUserMW = mw
 }
 
-// SetAIManager sets the AI Manager on the handler.
+// SetAIDetectionPublisher registers the event-bus publisher across AI manager
+// replacements. Changing the callback first removes the previous registration.
+func (h *Handler) SetAIDetectionPublisher(callback webhook.CallbackFunc) {
+	if h.aiManager != nil && h.aiDetectionPublisherID != "" {
+		h.aiManager.UnregisterCallback(h.aiDetectionPublisherID)
+	}
+	h.aiDetectionPublisher = callback
+	h.aiDetectionPublisherID = ""
+	if h.aiManager != nil && callback != nil {
+		h.aiDetectionPublisherID = h.aiManager.OnDetection(callback)
+	}
+}
+
+// SetAIManager installs the current manager and rebinds its event-bus callback.
+// The old registration is removed so a manager replacement never duplicates
+// event publication; repeated installation of the same manager is a no-op.
 func (h *Handler) SetAIManager(mgr *ai.Manager) {
+	if h.aiManager == mgr {
+		return
+	}
+	if h.aiManager != nil && h.aiDetectionPublisherID != "" {
+		h.aiManager.UnregisterCallback(h.aiDetectionPublisherID)
+	}
 	h.aiManager = mgr
-	if h.aiManager != nil && h.db != nil {
-		h.aiManager.SetStore(h.db)
+	h.aiDetectionPublisherID = ""
+	if mgr != nil {
+		if h.db != nil {
+			mgr.SetStore(h.db)
+		}
+		if h.aiDetectionPublisher != nil {
+			h.aiDetectionPublisherID = mgr.OnDetection(h.aiDetectionPublisher)
+		}
 	}
 }
 
@@ -397,6 +433,10 @@ func (h *Handler) Routes() http.Handler {
 		} else {
 			r.Use(h.authMW)
 		}
+		// Account-level UI preferences are private to the authenticated user.
+		r.Get("/api/users/me/preferences/{namespace}", h.userPreference)
+		r.Put("/api/users/me/preferences/{namespace}", h.userPreference)
+
 		r.Route("/api/sfu/bridges", func(r chi.Router) {
 			r.Use(middleware.RequireOperatePermission())
 			r.Get("/", h.listSFUBridges)
@@ -539,6 +579,7 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Put("/api/recording-plans/{id}", h.handleUpdateRecordingPlan)
 		r.With(middleware.RequireOperatePermission()).Delete("/api/recording-plans/{id}", h.handleDeleteRecordingPlan)
 		r.Get("/api/streams", h.handleListStreams)
+		r.Get("/api/metrics/traffic/history", h.handleTrafficHistory)
 		r.With(middleware.RequireOperatePermission()).Get("/api/transcoding/capabilities", h.handleTranscodeCapabilities)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/capabilities/probe", h.handleTranscodeProbe)
 		r.With(middleware.RequireOperatePermission()).Get("/api/transcoding/profiles", h.handleTranscodeProfiles)
@@ -551,25 +592,32 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Patch("/api/transcoding/jobs/{id}", h.handleSaveTranscodeJob)
 		r.With(middleware.RequireOperatePermission()).Delete("/api/transcoding/jobs/{id}", h.handleDeleteTranscodeJob)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/start", h.handleStartTranscodeJob)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/resume", h.handleRearmTranscodeJob)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/record/start", h.handleStartDerivedRecording)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/record/stop", h.handleStopDerivedRecording)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/leases", h.handleAcquireTranscodeDemandLease)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/leases/renew", h.handleRenewTranscodeDemandLease)
+		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/leases/release", h.handleReleaseTranscodeDemandLease)
 		r.With(middleware.RequireOperatePermission()).Post("/api/transcoding/jobs/{id}/stop", h.handleStopTranscodeJob)
 		r.With(middleware.RequireOperatePermission()).Get("/api/streams/{stream_id}/variants", h.handleTranscodeVariants)
 		r.With(middleware.RequireOperatePermission()).Get("/api/streams/{stream_id}/variants/{job_id}/play", h.handleTranscodePlayURL)
 		r.With(middleware.RequireOperatePermission()).Get("/api/streams/{stream_id}/variants/{job_id}/stream.flv", h.handleTranscodeFLV)
-		r.Get("/api/settings/home-assistant", h.handleGetHomeAssistantSettings)
+		r.With(middleware.RequireOperatePermission()).Get("/api/settings/home-assistant", h.handleGetHomeAssistantSettings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/home-assistant", h.handleUpdateHomeAssistantSettings)
-		r.Get("/api/integrations/home-assistant", h.handleHomeAssistantCatalog)
-		r.Get("/api/integrations/home-assistant/events", h.handleHomeAssistantEvents)
-		r.Post("/api/integrations/home-assistant/streams/{stream_id}/webrtc", h.handleHomeAssistantWHEP)
-		r.Delete("/api/integrations/home-assistant/streams/{stream_id}/webrtc/{session}", h.handleHomeAssistantCloseWHEP)
+		r.With(middleware.RequireReadPermission()).Get("/api/integrations/home-assistant", h.handleHomeAssistantCatalog)
+		r.With(middleware.RequireReadPermission()).Get("/api/integrations/home-assistant/events", h.handleHomeAssistantEvents)
+		r.With(middleware.RequireReadPermission()).Post("/api/integrations/home-assistant/streams/{stream_id}/webrtc", h.handleHomeAssistantWHEP)
+		r.With(middleware.RequireReadPermission()).Delete("/api/integrations/home-assistant/streams/{stream_id}/webrtc/{session}", h.handleHomeAssistantCloseWHEP)
 		r.With(middleware.RequireOperatePermission()).Post("/api/integrations/home-assistant/streams/{stream_id}/ptz", h.handleHomeAssistantPTZ)
-		r.Get("/api/integrations/home-assistant/streams/{stream_id}/ptz/presets", h.handleHomeAssistantPTZPresets)
-		r.Get("/api/integrations/home-assistant/streams/{stream_id}/recordings", h.handleHomeAssistantRecordings)
-		r.Get("/api/integrations/home-assistant/streams/{stream_id}/recordings/{recording_id}", h.handleHomeAssistantRecording)
-		r.Get("/api/integrations/home-assistant/streams/{stream_id}/recordings/{recording_id}/file", h.handleHomeAssistantRecordingFile)
-		r.Head("/api/integrations/home-assistant/streams/{stream_id}/recordings/{recording_id}/file", h.handleHomeAssistantRecordingFile)
+		r.With(middleware.RequireOperatePermission()).Get("/api/integrations/home-assistant/streams/{stream_id}/ptz/presets", h.handleHomeAssistantPTZPresets)
+		r.With(middleware.RequireReadPermission()).Get("/api/integrations/home-assistant/streams/{stream_id}/recordings", h.handleHomeAssistantRecordings)
+		r.With(middleware.RequireReadPermission()).Get("/api/integrations/home-assistant/streams/{stream_id}/recordings/{recording_id}", h.handleHomeAssistantRecording)
+		r.With(middleware.RequireReadPermission()).Get("/api/integrations/home-assistant/streams/{stream_id}/recordings/{recording_id}/file", h.handleHomeAssistantRecordingFile)
+		r.With(middleware.RequireReadPermission()).Head("/api/integrations/home-assistant/streams/{stream_id}/recordings/{recording_id}/file", h.handleHomeAssistantRecordingFile)
 		r.With(middleware.RequireOperatePermission()).Put("/api/integrations/home-assistant/streams/{stream_id}", h.handleHomeAssistantPublication)
-		r.Get("/api/integrations/home-assistant/streams/{stream_id}/snapshot", h.handleHomeAssistantSnapshot)
+		r.With(middleware.RequireReadPermission()).Get("/api/integrations/home-assistant/streams/{stream_id}/snapshot", h.handleHomeAssistantSnapshot)
 		r.With(middleware.RequireOperatePermission()).Post("/api/streams", h.handleCreateStream)
+		r.With(middleware.RequireOperatePermission()).Post("/api/streams/local-video", h.handleCreateLocalVideo)
 		r.Get("/api/streams/{stream_id}", h.handleGetStream)
 		r.With(middleware.RequireOperatePermission()).Put("/api/streams/{stream_id}", h.handleUpdateStream)
 		r.Get("/api/streams/{stream_id}/stream/ws", h.handleStreamWS)

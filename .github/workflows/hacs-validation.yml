@@ -13,6 +13,9 @@ permissions:
 
 jobs:
   hacs:
+    # Repository Issues/Topics validation applies to the published upstream repository.
+    # Forks still run Hassfest and Home Assistant integration code tests.
+    if: github.repository == 'lalmax-pro/lalmax-nvr'
     name: HACS
     runs-on: ubuntu-latest
     steps:

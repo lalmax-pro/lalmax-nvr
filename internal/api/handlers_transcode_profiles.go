@@ -28,14 +28,18 @@ func transcodeAPIError(w http.ResponseWriter, err error) {
 	switch domain.Code {
 	case "revision_conflict", "profile_in_use", "probe_busy", "job_running", "job_stopping":
 		status = 409
-	case "backend_unavailable", "engine_unavailable", "service_stopped":
+	case "backend_unavailable", "engine_unavailable", "service_stopped", "output_unavailable":
 		status = 503
 	case "probe_required", "transcoding_disabled":
 		status = 412
-	case "profile_not_found", "job_not_found":
+	case "profile_not_found", "job_not_found", "lease_not_found":
 		status = 404
+	case "demand_unavailable":
+		status = 412
 	case "capacity_exceeded":
 		status = 429
+	case "output_timeout":
+		status = 504
 	}
 	writeJSON(w, status, map[string]string{"error": domain.Message, "code": domain.Code})
 }

@@ -69,6 +69,7 @@ const (
 type Task struct {
 	ID        string     `json:"id"`
 	StreamID  string     `json:"stream_id"`
+	TranscodeJobID string `json:"transcode_job_id,omitempty"`
 	TargetURL string     `json:"target_url"`
 	Status    TaskStatus `json:"status"`
 	ErrorMsg  string     `json:"error_msg,omitempty"`
@@ -81,6 +82,7 @@ type Task struct {
 type TaskStats struct {
 	TaskID       string        `json:"task_id"`
 	StreamID     string        `json:"stream_id"`
+	TranscodeJobID string      `json:"transcode_job_id,omitempty"`
 	TargetURL    string        `json:"target_url"`
 	Status       TaskStatus    `json:"status"`
 	StartedAt    *time.Time    `json:"started_at,omitempty"`
@@ -89,6 +91,10 @@ type TaskStats struct {
 	VideoBitrate int           `json:"video_bitrate"`
 	AudioFPS     float64       `json:"audio_fps"`
 	AudioBitrate int           `json:"audio_bitrate"`
+	OutputBitrate int          `json:"output_bitrate"`
+	VideoPayloadBitrate int    `json:"video_payload_bitrate"`
+	AudioPayloadBitrate int   `json:"audio_payload_bitrate"`
+	BitrateScope string        `json:"bitrate_scope"`
 	TotalBytes   int64         `json:"total_bytes"`
 	Duration     time.Duration `json:"duration"`
 }
@@ -100,6 +106,10 @@ type StatSample struct {
 	VideoBitrate int       `json:"video_bitrate"`
 	AudioFPS     float64   `json:"audio_fps"`
 	AudioBitrate int       `json:"audio_bitrate"`
+	OutputBitrate int      `json:"output_bitrate"`
+	VideoPayloadBitrate int `json:"video_payload_bitrate"`
+	AudioPayloadBitrate int `json:"audio_payload_bitrate"`
+	BitrateScope string    `json:"bitrate_scope"`
 	TotalBytes   int64     `json:"total_bytes"`
 }
 
@@ -113,6 +123,9 @@ type StatsHistory struct {
 type Manager struct {
 	db     storage.RelayTaskRepository
 	engine media.Engine
+	derivedResolver func(context.Context, string, string) (string, string, error)
+	isInternalStream func(string) bool
+	playbackTokenResolver func(string) string
 
 	mu       sync.RWMutex
 	tasks    map[string]*activeTask
@@ -122,11 +135,28 @@ type Manager struct {
 }
 
 type activeTask struct {
+	physicalStreamID string
 	task        *Task
 	session     *rtmp.PushSession
 	pullSession *rtmp.PullSession
 	cancel      context.CancelFunc
 	done        chan struct{}
+	statsMu     sync.Mutex
+	// The RTMP push session's UpdateStat panics before Push has established
+	// its connection. Both flags are protected by statsMu, including disposal.
+	pushReady   bool
+	disposed    bool
+	videoFrames uint64
+	audioFrames uint64
+	videoBytes  uint64
+	audioBytes uint64
+	lastStatsAt time.Time
+	lastVideoFrames uint64
+	lastAudioFrames uint64
+	lastVideoBytes uint64
+	lastAudioBytes uint64
+	latestStats StatSample
+	hasStats    bool
 }
 
 // NewManager creates a new relay manager.
@@ -175,9 +205,18 @@ func (m *Manager) stopActiveTask(task *activeTask) {
 	if task == nil {
 		return
 	}
+	// Capture the last wire counters before disposing either RTMP session.
+	// The snapshot remains available after an error/stop for API consumers.
+	if task.task != nil {
+		m.collectTaskStats(context.Background(), task.task, task)
+	}
 	if task.cancel != nil {
 		task.cancel()
 	}
+	task.statsMu.Lock()
+	defer task.statsMu.Unlock()
+	task.pushReady = false
+	task.disposed = true
 	if task.pullSession != nil {
 		_ = task.pullSession.Dispose()
 	}
@@ -238,25 +277,64 @@ func (m *Manager) collectAllStats() {
 
 // collectTaskStats collects and stores stats for a single task.
 func (m *Manager) collectTaskStats(ctx context.Context, task *Task, at *activeTask) {
+	if task == nil || at == nil {
+		return
+	}
 	now := time.Now()
 	sample := StatSample{
 		Timestamp: now,
+		BitrateScope: "output_wire;input_media_payload_components",
 	}
 
-	// Get source stream info for FPS
-	streamInfo, err := m.engine.GetStream(ctx, task.StreamID)
-	if err == nil && streamInfo != nil {
-		sample.VideoFPS = streamInfo.InFPS
-		sample.AudioFPS = 0 // lal doesn't separate audio/video FPS
+	// Count media messages actually received by the relay. The embedded
+	// engine's in_frame_per_sec endpoint is not populated for every RTMP
+	// publisher, so it cannot be the sole source of relay frame-rate metrics.
+	at.statsMu.Lock()
+	interval := now.Sub(at.lastStatsAt)
+	if at.lastStatsAt.IsZero() {
+		interval = statsSampleInterval
 	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+	intervalSec := uint64(interval) / uint64(time.Second)
+	if intervalSec == 0 {
+		intervalSec = 1
+	}
+	videoFrames := at.videoFrames - at.lastVideoFrames
+	audioFrames := at.audioFrames - at.lastAudioFrames
+	videoBytes := at.videoBytes - at.lastVideoBytes
+	audioBytes := at.audioBytes - at.lastAudioBytes
+	seconds := interval.Seconds()
+	if seconds <= 0 {
+		seconds = 1
+	}
+	sample.VideoFPS = float64(videoFrames) / seconds
+	sample.AudioFPS = float64(audioFrames) / seconds
+	sample.VideoPayloadBitrate = int(float64(videoBytes*8) / seconds)
+	sample.AudioPayloadBitrate = int(float64(audioBytes*8) / seconds)
+	at.lastVideoFrames = at.videoFrames
+	at.lastAudioFrames = at.audioFrames
+	at.lastVideoBytes = at.videoBytes
+	at.lastAudioBytes = at.audioBytes
+	at.lastStatsAt = now
 
-	// Get push session stats for bitrate and bytes
-	if at.session != nil {
+	// UpdateStat is required by lal before GetStat computes WriteBitrateKbits.
+	// Serialize both calls with API reads because lal's stat object mutates its
+	// cached rate fields and is not safe for concurrent UpdateStat/GetStat.
+	if at.session != nil && at.pushReady {
+		at.session.UpdateStat(uint32(intervalSec))
 		stat := at.session.GetStat()
-		sample.VideoBitrate = stat.WriteBitrateKbits * 1000 // convert to bps
-		sample.AudioBitrate = 0                             // lal doesn't separate audio/video bitrate
+		sample.OutputBitrate = stat.WriteBitrateKbits * 1000
+		// Preserve the existing API field's historical meaning while exposing
+		// explicit output_bitrate and media-payload component rates.
+		sample.VideoBitrate = sample.OutputBitrate
+		sample.AudioBitrate = 0 // separate output audio bitrate is unavailable
 		sample.TotalBytes = int64(stat.WroteBytesSum)
 	}
+	at.latestStats = sample
+	at.hasStats = true
+	at.statsMu.Unlock()
 
 	// Store in memory ring buffer only (no database persistence)
 	m.mu.Lock()
@@ -269,8 +347,88 @@ func (m *Manager) collectTaskStats(ctx context.Context, task *Task, at *activeTa
 	m.mu.Unlock()
 }
 
+// trackRelayMedia records media actually received by the relay.
+func trackRelayMedia(at *activeTask, msg base.RtmpMsg) {
+	if at == nil || len(msg.Payload) == 0 {
+		return
+	}
+	at.statsMu.Lock()
+	defer at.statsMu.Unlock()
+	switch msg.Header.MsgTypeId {
+	case base.RtmpTypeIdVideo:
+		if len(msg.Payload) >= 2 && msg.Payload[1] == base.RtmpAvcPacketTypeSeqHeader {
+			return
+		}
+		at.videoFrames++
+		at.videoBytes += uint64(len(msg.Payload))
+	case base.RtmpTypeIdAudio:
+		if msg.AudioCodecId() == base.RtmpSoundFormatAac && len(msg.Payload) >= 2 && msg.Payload[1] == base.RtmpAacPacketTypeSeqHeader {
+			return
+		}
+		at.audioFrames++
+		at.audioBytes += uint64(len(msg.Payload))
+	}
+}
+
+// SetDerivedResolver installs a trusted source-bound, playback-token-aware
+// resolver. Only the logical source and job ID are persisted.
+func (m *Manager) SetDerivedResolver(
+    resolve func(context.Context, string, string) (string, string, error),
+    isInternal func(string) bool,
+) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+    m.derivedResolver = resolve
+    m.isInternalStream = isInternal
+}
+
+// SetPlaybackTokenResolver installs the trusted source playback-token lookup
+// used by ordinary relay pulls. The token is passed only to the media engine;
+// it is never persisted or logged by the relay manager.
+func (m *Manager) SetPlaybackTokenResolver(resolve func(string) string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.playbackTokenResolver = resolve
+}
+
+type relayPlayURLBuilder interface {
+	BuildPlayURL(context.Context, media.PlayURLRequest) (*media.PlayURL, error)
+}
+
+func buildRelaySourcePlayURL(ctx context.Context, engine relayPlayURLBuilder, streamID, token string) (string, error) {
+	playURL, err := engine.BuildPlayURL(ctx, media.PlayURLRequest{
+		StreamID: streamID,
+		Protocol: "rtmp",
+		Token:    token,
+	})
+	if err != nil || playURL == nil || playURL.URL == "" {
+		return "", fmt.Errorf("build play URL failed")
+	}
+	return playURL.URL, nil
+}
+
+// CreateDerivedTask binds relay to a logical transcode job, not an ephemeral
+// internal stream ID. It never creates a new transcoding encoder.
+func (m *Manager) CreateDerivedTask(ctx context.Context, sourceID, jobID, targetURL string) (*Task,error) {
+    if sourceID == "" || jobID == "" || targetURL == "" { return nil, fmt.Errorf("source, transcode job and target URL are required") }
+    m.mu.RLock()
+    resolver := m.derivedResolver
+    m.mu.RUnlock()
+    if resolver == nil { return nil, fmt.Errorf("derived relay is unavailable") }
+    if _, _, err := resolver(ctx, sourceID, jobID); err != nil { return nil, fmt.Errorf("derived output is not playable") }
+    task := &Task{ID:generateTaskID(),StreamID:sourceID,TranscodeJobID:jobID,TargetURL:targetURL,Status:TaskStatusStopped,CreatedAt:time.Now()}
+    if err:=m.saveTask(task);err!=nil { return nil,fmt.Errorf("save derived relay: %w",err) }
+    return task,nil
+}
+
 // CreateTask creates a new relay push task.
 func (m *Manager) CreateTask(ctx context.Context, streamID, targetURL string) (*Task, error) {
+    m.mu.RLock()
+    internal := m.isInternalStream
+    m.mu.RUnlock()
+    if internal != nil && internal(streamID) {
+        return nil, fmt.Errorf("derived stream requires a source-bound transcode job")
+    }
 	// Validate stream exists
 	streams, err := m.engine.ListStreams(ctx)
 	if err != nil {
@@ -387,22 +545,36 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 		return err
 	}
 
-	// Get stream info
-	streamInfo, err := m.engine.GetStream(ctx, task.StreamID)
+	// Resolve derived outputs at the point of use. Never persist ephemeral
+	// physical stream IDs or scoped playback credentials in relay records.
+	physicalID := task.StreamID
+	var pullAddress string
+	if task.TranscodeJobID != "" {
+		if m.derivedResolver == nil { return fmt.Errorf("derived relay is not configured") }
+		resolved, url, resolveErr := m.derivedResolver(ctx, task.StreamID, task.TranscodeJobID)
+		if resolveErr != nil || resolved == "" || url == "" { return fmt.Errorf("derived output is not ready") }
+		physicalID, pullAddress = resolved, url
+	} else if m.isInternalStream != nil && m.isInternalStream(task.StreamID) {
+		return fmt.Errorf("internal stream requires a source-bound transcode job")
+	}
+	// Check source state before requesting a playback URL. This distinguishes
+	// a missing/offline source from an RTMP URL/token-resolution failure.
+	streamInfo, err := m.engine.GetStream(ctx, physicalID)
 	if err != nil {
 		return fmt.Errorf("get stream: %w", err)
 	}
-	if !streamInfo.Active {
-		return fmt.Errorf("stream %s is not active", task.StreamID)
+	if streamInfo == nil || !streamInfo.Active {
+		return fmt.Errorf("relay source is not active")
 	}
-
-	// Build RTMP pull URL from lalmax
-	pullURL, err := m.engine.BuildPlayURL(ctx, media.PlayURLRequest{
-		StreamID: task.StreamID,
-		Protocol: "rtmp",
-	})
-	if err != nil {
-		return fmt.Errorf("build play URL: %w", err)
+	if task.TranscodeJobID == "" {
+		token := ""
+		if m.playbackTokenResolver != nil {
+			token = m.playbackTokenResolver(task.StreamID)
+		}
+		pullAddress, err = buildRelaySourcePlayURL(ctx, m.engine, task.StreamID, token)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Create context for this task
@@ -416,7 +588,9 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 	pullSession := rtmp.NewPullSession(func(option *rtmp.PullSessionOption) {
 		option.PullTimeoutMs = 5000
 	})
+	var at *activeTask
 	pullSession.WithOnReadRtmpAvMsg(func(msg base.RtmpMsg) {
+		trackRelayMedia(at, msg)
 		if err := pushSession.WriteMsg(msg); err != nil {
 			logger.Error("relay push write error", "task_id", taskID, "error", err)
 		}
@@ -427,7 +601,8 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 	task.Status = TaskStatusRunning
 	now := time.Now()
 	task.StartedAt = &now
-	at := &activeTask{
+	at = &activeTask{
+		physicalStreamID: physicalID,
 		task:        task,
 		session:     pushSession,
 		pullSession: pullSession,
@@ -440,13 +615,18 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 	go func() {
 		defer close(at.done)
 		defer func() {
+			at.statsMu.Lock()
+			at.pushReady = false
+			at.disposed = true
 			_ = pullSession.Dispose()
 			_ = pushSession.Dispose()
+			at.statsMu.Unlock()
 			cancel()
 		}()
 
-		logger.Info("starting relay push", "task_id", taskID, "stream_id", task.StreamID,
-			"source", pullURL.URL, "target", task.TargetURL)
+		// Do not log either URL: both source bearer and destination may
+		// contain credentials.
+		logger.Info("starting relay push", "task_id", taskID, "stream_id", task.StreamID, "derived", task.TranscodeJobID != "")
 		if taskCtx.Err() != nil {
 			m.updateTaskStatus(taskID, TaskStatusStopped, "")
 			stoppedAt := time.Now()
@@ -461,12 +641,19 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 				m.updateTaskStatus(taskID, TaskStatusStopped, "")
 				return
 			}
-			logger.Error("relay push failed to connect", "task_id", taskID, "error", err)
-			m.updateTaskStatus(taskID, TaskStatusError, err.Error())
+			logger.Error("relay push failed to connect", "task_id", taskID, "code", "relay_push_failed")
+			m.updateTaskStatus(taskID, TaskStatusError, "relay target connection failed")
 			stoppedAt := time.Now()
 			m.updateTaskStoppedAt(taskID, &stoppedAt)
 			return
 		}
+		// UpdateStat/GetStat must not touch an unconnected or disposed session.
+		// StopTask may cancel and dispose while Push is completing.
+		at.statsMu.Lock()
+		if !at.disposed && taskCtx.Err() == nil {
+			at.pushReady = true
+		}
+		at.statsMu.Unlock()
 		if taskCtx.Err() != nil {
 			m.updateTaskStatus(taskID, TaskStatusStopped, "")
 			stoppedAt := time.Now()
@@ -475,14 +662,14 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 		}
 
 		// Start pulling
-		err = pullSession.Pull(pullURL.URL)
+		err = pullSession.Pull(pullAddress)
 		if err != nil {
 			if taskCtx.Err() != nil {
 				m.updateTaskStatus(taskID, TaskStatusStopped, "")
 				return
 			}
-			logger.Error("relay pull failed", "task_id", taskID, "error", err)
-			m.updateTaskStatus(taskID, TaskStatusError, err.Error())
+			logger.Error("relay pull failed", "task_id", taskID, "code", "relay_source_failed")
+			m.updateTaskStatus(taskID, TaskStatusError, "relay source pull failed")
 			stoppedAt := time.Now()
 			m.updateTaskStoppedAt(taskID, &stoppedAt)
 			return
@@ -496,8 +683,8 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 		select {
 		case err = <-pullSession.WaitChan():
 			if err != nil {
-				logger.Error("relay pull ended with error", "task_id", taskID, "error", err)
-				m.updateTaskStatus(taskID, TaskStatusError, err.Error())
+				logger.Error("relay pull ended with error", "task_id", taskID, "code", "relay_source_closed")
+				m.updateTaskStatus(taskID, TaskStatusError, "relay source closed unexpectedly")
 			} else {
 				logger.Info("relay pull ended", "task_id", taskID)
 				m.updateTaskStatus(taskID, TaskStatusStopped, "")
@@ -506,8 +693,8 @@ func (m *Manager) StartTask(ctx context.Context, taskID string) error {
 			m.updateTaskStoppedAt(taskID, &now)
 		case err = <-pushSession.WaitChan():
 			if err != nil {
-				logger.Error("relay push ended with error", "task_id", taskID, "error", err)
-				m.updateTaskStatus(taskID, TaskStatusError, err.Error())
+				logger.Error("relay push ended with error", "task_id", taskID, "code", "relay_target_closed")
+				m.updateTaskStatus(taskID, TaskStatusError, "relay target closed unexpectedly")
 			} else {
 				logger.Info("relay push ended", "task_id", taskID)
 				m.updateTaskStatus(taskID, TaskStatusStopped, "")
@@ -554,20 +741,29 @@ func (m *Manager) StopTask(taskID string) error {
 
 // GetTaskStats returns statistics for a relay push task.
 func (m *Manager) GetTaskStats(ctx context.Context, taskID string) (*TaskStats, error) {
-	task, err := m.GetTask(taskID)
-	if err != nil {
-		return nil, err
+	var task Task
+	var at *activeTask
+	m.mu.RLock()
+	if active, ok := m.tasks[taskID]; ok {
+		task = *active.task
+		at = active
+	}
+	m.mu.RUnlock()
+	if at == nil {
+		loaded, err := m.loadTask(taskID)
+		if err != nil {
+			return nil, err
+		}
+		task = *loaded
 	}
 
+	if at != nil && task.Status == TaskStatusRunning {
+		m.collectTaskStats(ctx, &task, at)
+	}
 	stats := &TaskStats{
-		TaskID:    task.ID,
-		StreamID:  task.StreamID,
-		TargetURL: task.TargetURL,
-		Status:    task.Status,
-		StartedAt: task.StartedAt,
-		StoppedAt: task.StoppedAt,
+		TaskID: task.ID, StreamID: task.StreamID, TranscodeJobID: task.TranscodeJobID,
+		TargetURL: task.TargetURL, Status: task.Status, StartedAt: task.StartedAt, StoppedAt: task.StoppedAt,
 	}
-
 	if task.StartedAt != nil {
 		if task.StoppedAt != nil {
 			stats.Duration = task.StoppedAt.Sub(*task.StartedAt)
@@ -575,26 +771,22 @@ func (m *Manager) GetTaskStats(ctx context.Context, taskID string) (*TaskStats, 
 			stats.Duration = time.Since(*task.StartedAt)
 		}
 	}
-
-	// Get real-time stats from push session and stream
-	if task.Status == TaskStatusRunning {
-		// Get source stream info for FPS
-		streamInfo, err := m.engine.GetStream(ctx, task.StreamID)
-		if err == nil && streamInfo != nil {
-			stats.VideoFPS = streamInfo.InFPS
+	if at != nil {
+		at.statsMu.Lock()
+		if at.hasStats {
+			sample := at.latestStats
+			stats.VideoFPS = sample.VideoFPS
+			stats.VideoBitrate = sample.VideoBitrate
+			stats.AudioFPS = sample.AudioFPS
+			stats.AudioBitrate = sample.AudioBitrate
+			stats.OutputBitrate = sample.OutputBitrate
+			stats.VideoPayloadBitrate = sample.VideoPayloadBitrate
+			stats.AudioPayloadBitrate = sample.AudioPayloadBitrate
+			stats.BitrateScope = sample.BitrateScope
+			stats.TotalBytes = sample.TotalBytes
 		}
-
-		// Get push session stats for bitrate and bytes
-		m.mu.RLock()
-		at, ok := m.tasks[taskID]
-		m.mu.RUnlock()
-		if ok && at.session != nil {
-			stat := at.session.GetStat()
-			stats.VideoBitrate = stat.WriteBitrateKbits * 1000
-			stats.TotalBytes = int64(stat.WroteBytesSum)
-		}
+		at.statsMu.Unlock()
 	}
-
 	return stats, nil
 }
 
@@ -637,6 +829,7 @@ func (m *Manager) saveTask(task *Task) error {
 	return m.db.SaveRelayTask(context.Background(), storage.RelayTaskRecord{
 		ID:        task.ID,
 		StreamID:  task.StreamID,
+		TranscodeJobID: task.TranscodeJobID,
 		TargetURL: task.TargetURL,
 		Status:    string(task.Status),
 		ErrorMsg:  task.ErrorMsg,
@@ -674,6 +867,7 @@ func relayTaskFromRecord(record *storage.RelayTaskRecord) *Task {
 	return &Task{
 		ID:        record.ID,
 		StreamID:  record.StreamID,
+		TranscodeJobID: record.TranscodeJobID,
 		TargetURL: record.TargetURL,
 		Status:    TaskStatus(record.Status),
 		ErrorMsg:  record.ErrorMsg,
@@ -697,14 +891,13 @@ func (m *Manager) GetTaskStatsHistory(taskID string, duration time.Duration) (*S
 		Samples: make([]StatSample, 0),
 	}
 
-	// Get from in-memory ring buffer
+	// Get from the in-memory ring buffer while holding its manager lock.
+	// Sampling appends and history reads must not race.
 	m.mu.RLock()
-	ring := m.rings[taskID]
-	m.mu.RUnlock()
-
-	if ring != nil {
+	if ring := m.rings[taskID]; ring != nil {
 		history.Samples = ring.since(since)
 	}
+	m.mu.RUnlock()
 
 	return history, nil
 }

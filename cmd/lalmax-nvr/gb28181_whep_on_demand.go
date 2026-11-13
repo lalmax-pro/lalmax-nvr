@@ -18,9 +18,9 @@ const (
 	gbWHEPOnDemandMaxConcurrent = 4
 )
 
-// gbWHEPOnDemandHook bridges LALMax's missing-WHEP-stream hook to NVR's
-// GB28181 SIP INVITE. Only known, online GB28181 channels may be started.
-// This hook never creates an external RTMP publisher and never sends BYE.
+// gbWHEPOnDemandHook bridges missing WHEP, RTSP and RTMP playback streams
+// to NVR's GB28181 SIP INVITE. Only known, online channels may be started.
+// It never starts an external RTMP publisher and never sends BYE.
 type gbWHEPOnDemandHook struct {
 	enabled atomic.Bool
 	eligible func(deviceID, channelID string) bool
@@ -74,8 +74,13 @@ func (h *gbWHEPOnDemandHook) OnHookEvent(event lalmaxserver.HookEvent) error {
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return fmt.Errorf("decode missing-stream hook: %w", err)
 	}
-	// Do not turn unrelated RTSP, RTMP, ZLM or arbitrary stream requests into SIP commands.
-	if (payload.App != "live" && payload.App != "") || payload.Schema != "whep" {
+	// A native RTSP DESCRIBE or RTMP play can request the same on-demand
+	// GB28181 channel as WHEP. Publishers never emit this missing-play hook.
+	if payload.App != "live" && payload.App != "" { return nil }
+	switch payload.Schema {
+	case "whep", "rtsp", "rtmp":
+		// All protocols share the same per-channel de-duplication and cooldown.
+	default:
 		return nil
 	}
 	deviceID, channelID, ok := splitGBWHEPStreamID(payload.Stream)
@@ -96,7 +101,7 @@ func (h *gbWHEPOnDemandHook) OnHookEvent(event lalmaxserver.HookEvent) error {
 	}
 	if len(h.inFlight) >= gbWHEPOnDemandMaxConcurrent {
 		h.mu.Unlock()
-		slog.Warn("GB28181 WHEP on-demand concurrency limit reached")
+		slog.Warn("GB28181 on-demand concurrency limit reached")
 		return nil
 	}
 	if len(h.recent) > 512 {
@@ -120,10 +125,10 @@ func (h *gbWHEPOnDemandHook) OnHookEvent(event lalmaxserver.HookEvent) error {
 		// offline between the hook and the INVITE cannot be started.
 		if !h.enabled.Load() { return }
 		if err := h.start(deviceID, channelID, payload.Stream); err != nil {
-			slog.Warn("GB28181 WHEP on-demand INVITE failed", "stream_id", payload.Stream, "error", err)
+			slog.Warn("GB28181 on-demand INVITE failed", "schema", payload.Schema, "stream_id", payload.Stream, "error", err)
 			return
 		}
-		slog.Info("GB28181 WHEP on-demand INVITE requested", "stream_id", payload.Stream)
+		slog.Info("GB28181 on-demand INVITE requested", "schema", payload.Schema, "stream_id", payload.Stream)
 	}()
 	return nil
 }

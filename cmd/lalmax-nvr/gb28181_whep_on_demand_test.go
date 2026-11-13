@@ -56,7 +56,7 @@ func TestGBWHEPOnDemandEnabledValidationAndDedupe(t *testing.T) {
 
 	h.SetEnabled(true)
 	for _, ignored := range []lalmaxserver.HookEvent{
-		missingGBWHEPHook("live", "rtsp", stream),
+		missingGBWHEPHook("live", "srt", stream),
 		missingGBWHEPHook("other", "whep", stream),
 		missingGBWHEPHook("live", "whep", "stream102"),
 		missingGBWHEPHook("live", "whep", testGBDeviceID + ":invalid"),
@@ -64,7 +64,7 @@ func TestGBWHEPOnDemandEnabledValidationAndDedupe(t *testing.T) {
 		if err := h.OnHookEvent(ignored); err != nil { t.Fatal(err) }
 	}
 	if calls.Load() != 0 || accepted.Load() != 0 {
-		t.Fatal("unexpected SIP INVITE for RTSP/RTMP/unregistered stream")
+		t.Fatal("unexpected SIP INVITE for unapproved protocol or unregistered stream")
 	}
 
 	if err := h.OnHookEvent(ev); err != nil { t.Fatal(err) }
@@ -116,4 +116,54 @@ func TestGBWHEPOnDemandConcurrencyLimit(t *testing.T) {
 	default:
 	}
 	close(release)
+}
+
+
+// RTSP DESCRIBE and RTMP play must wake only known channels, and requests
+// arriving through different protocols must share one INVITE/cooldown.
+func TestGBOnDemandRTSPRTMPPlaybackAndCrossProtocolDedupe(t *testing.T) {
+	stream := testGBDeviceID + ":" + testGBChannelID
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	h := newGBWHEPOnDemandHook(
+		func(dev, ch string) bool { return dev == testGBDeviceID && ch == testGBChannelID },
+		func(_, _, streamID string) error {
+			calls.Add(1)
+			started <- streamID
+			<-release
+			return nil
+		},
+	)
+	h.SetEnabled(true)
+	for _, schema := range []string{"rtsp", "rtmp", "whep"} {
+		if err := h.OnHookEvent(missingGBWHEPHook("live", schema, stream)); err != nil { t.Fatal(err) }
+	}
+	if got := awaitGBWHEPStart(t, started); got != stream { t.Fatalf("start stream=%s", got) }
+	if got := calls.Load(); got != 1 { t.Fatalf("cross-protocol duplicate INVITE: %d", got) }
+	close(release)
+	// A new channel can still be started by native RTMP even with the same hook.
+	another := testGBDeviceID + ":" + "34020000001320000002"
+	otherStarted := make(chan string, 1)
+	h2 := newGBWHEPOnDemandHook(func(string,string) bool { return true }, func(_,_,streamID string) error { otherStarted <- streamID; return nil })
+	h2.SetEnabled(true)
+	if err := h2.OnHookEvent(missingGBWHEPHook("live", "rtmp", another)); err != nil { t.Fatal(err) }
+	if got := awaitGBWHEPStart(t, otherStarted); got != another { t.Fatalf("rtmp start=%s", got) }
+}
+
+func TestGBOnDemandNativePlaybackRejectsInvalidRequests(t *testing.T) {
+	var calls atomic.Int32
+	h := newGBWHEPOnDemandHook(func(string,string) bool { return true },
+		func(string,string,string) error { calls.Add(1); return nil })
+	h.SetEnabled(true)
+	stream := testGBDeviceID + ":" + testGBChannelID
+	for _, event := range []lalmaxserver.HookEvent{
+		missingGBWHEPHook("other", "rtsp", stream),
+		missingGBWHEPHook("live", "rtsp", "unknown"),
+		missingGBWHEPHook("live", "rtmp", testGBDeviceID + ":not-a-gb-channel"),
+		missingGBWHEPHook("live", "publish", stream),
+	} {
+		if err := h.OnHookEvent(event); err != nil { t.Fatal(err) }
+	}
+	if calls.Load() != 0 { t.Fatal("unknown or publish requests woke GB28181 channel") }
 }

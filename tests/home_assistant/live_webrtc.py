@@ -138,12 +138,17 @@ async def main():
             raise AssertionError("no answer")
         for _ in range(60):
             st = (await asyncio.to_thread(requests.get, P + "/stats", timeout=5)).json()
-            if st["packets"] > 100 and st["state"] == "connected":
+            h265_ready = (
+                args.codec != "h265"
+                or (st.get("vps", 0) > 0 and st.get("sps", 0) > 0 and st.get("pps", 0) > 0
+                    and any(16 <= int(k) <= 23 for k in st.get("nal_types", {})))
+            )
+            if st["packets"] > 0 and st["state"] == "connected" and h265_ready:
                 print(
                     "PASS HA WebRTC -> real "
                     + args.codec.upper()
                     + " RTP, candidate-free offer",
-                    st,
+                    "RTP_RECEIVED=" + str(st["rtp_received"]), st,
                     flush=True,
                 )
                 break
@@ -151,6 +156,7 @@ async def main():
         else:
             raise AssertionError(st)
         assert st["codec"].lower() == "video/" + args.codec
+        assert st.get("rtp_timestamp_regressions", 0) == 0, st
         if args.relay:
             assert st.get("local_candidate_type") == "relay", st
             print(
@@ -167,13 +173,8 @@ async def main():
                 if decoded >= 3:
                     break
             assert decoded >= 3
-        print(
-            "PASS actual received WebRTC video decodes",
-            args.codec,
-            len(video),
-            decoded,
-            flush=True,
-        )
+        print("PASS actual received WebRTC video decodes", args.codec, len(video), decoded, flush=True)
+        print(("HEVC" if args.codec == "h265" else "H264") + "_VIDEO_FRAMES_DECODED=" + str(decoded), flush=True)
         await ws.send_json(
             {
                 "id": 202,

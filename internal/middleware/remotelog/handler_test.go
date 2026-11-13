@@ -155,11 +155,8 @@ func TestHandler_Close_FlushesRemaining(t *testing.T) {
 		_ = h.Handle(nil, r)
 	}
 
-	// Close should flush remaining
+	// Close is a synchronization barrier: no sleep or polling is needed.
 	h.Close()
-
-	// Wait a bit for final flush
-	time.Sleep(200 * time.Millisecond)
 
 	bodies := tc.getBodies()
 	if len(bodies) == 0 {
@@ -173,6 +170,142 @@ func TestHandler_Close_FlushesRemaining(t *testing.T) {
 	}
 	if totalLines < 50 {
 		t.Errorf("expected at least 50 log lines, got %d", totalLines)
+	}
+}
+
+// The final flush must finish before Close returns, even if the remote
+// endpoint accepts the request but delays its response.
+func TestHandler_Close_WaitsForFinalFlush(t *testing.T) {
+	t.Parallel()
+
+	requestReceived := make(chan struct{})
+	allowResponse := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(allowResponse) }) }
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(requestReceived)
+		<-allowResponse
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	defer unblock()
+
+	h := New(srv.URL, "jsonline", slog.LevelInfo, nil)
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "final batch", 0)
+	if err := h.Handle(nil, r); err != nil {
+		t.Fatal(err)
+	}
+
+	closeReturned := make(chan struct{})
+	go func() {
+		h.Close()
+		close(closeReturned)
+	}()
+
+	select {
+	case <-requestReceived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("final flush was not initiated")
+	}
+	select {
+	case <-closeReturned:
+		t.Fatal("Close returned before the HTTP flush completed")
+	default:
+	}
+
+	unblock()
+	select {
+	case <-closeReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not finish after the HTTP response")
+	}
+}
+
+// Cloned handlers share the same buffer and close barrier. Repeated Close
+// calls must all wait for completion, and writes after Close must be rejected.
+func TestHandler_Close_ClonesAndConcurrentCalls(t *testing.T) {
+	t.Parallel()
+
+	srv, tc := startTestServer(0)
+	defer srv.Close()
+	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelInfo, nil)
+	child := h.WithAttrs([]slog.Attr{slog.String("component", "child")}).WithGroup("scope")
+
+	for i := 0; i < 50; i++ {
+		r := slog.NewRecord(time.Now(), slog.LevelInfo, "from child", 0)
+		if err := child.Handle(nil, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				h.Close()
+			} else {
+				child.(*Handler).Close()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	totalLines := 0
+	for _, body := range tc.getBodies() {
+		totalLines += len(splitNDJSON(body))
+	}
+	if totalLines != 50 {
+		t.Fatalf("Close lost buffered entries: got %d, want 50", totalLines)
+	}
+
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "too late", 0)
+	if err := h.Handle(nil, r); err == nil {
+		t.Fatal("root Handle accepted a log after Close")
+	}
+	if err := child.Handle(nil, r); err == nil {
+		t.Fatal("cloned Handle accepted a log after Close")
+	}
+}
+
+// Concurrent Handle and Close must agree on exactly which records were accepted.
+// All successful Handle calls must be represented in the completed final flush.
+func TestHandler_Close_ConcurrentWriters(t *testing.T) {
+	t.Parallel()
+
+	srv, tc := startTestServer(0)
+	defer srv.Close()
+	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelInfo, nil)
+
+	var accepted atomic.Int64
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for writer := 0; writer < 8; writer++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 60; i++ {
+				r := slog.NewRecord(time.Now(), slog.LevelInfo, "concurrent writer", 0)
+				if err := h.Handle(nil, r); err == nil {
+					accepted.Add(1)
+				}
+			}
+		}()
+	}
+	close(start)
+	h.Close()
+	wg.Wait()
+
+	var received int
+	for _, body := range tc.getBodies() {
+		received += len(splitNDJSON(body))
+	}
+	if int64(received) != accepted.Load() {
+		t.Fatalf("accepted %d log entries but flushed %d", accepted.Load(), received)
 	}
 }
 

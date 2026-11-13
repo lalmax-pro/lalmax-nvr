@@ -10,6 +10,7 @@
   } from '$lib/api';
   import type { RecordingPlan, RecordingMode, RecordingScheduleRange, StreamInfo, Camera } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { loadGBChannelNames, cameraDisplayName, gbDisplayName, type ChannelNames } from '$lib/gb-channel-names';
   import { showToast } from '$lib/toast';
   import RecordingScheduleEditor from '$lib/components/RecordingScheduleEditor.svelte';
   import { Plus, Trash2, CalendarClock, Radio, Pause, Play, Pencil, X } from 'lucide-svelte';
@@ -21,6 +22,7 @@
   let plans = $state<RecordingPlan[]>([]);
   let streams = $state<StreamInfo[]>([]);
   let cameras = $state<Camera[]>([]);
+  let gbNames = $state<ChannelNames>(new Map());
   let loading = $state(true);
   let saving = $state(false);
   let error = $state('');
@@ -39,9 +41,9 @@
 
   function streamLabel(streamID: string): string {
     const cam = cameras.find((c) => (c.stream_id || c.id) === streamID);
-    if (cam) return `${cam.name} (${streamID})`;
+    if (cam) return `${cameraDisplayName(gbNames, cam)} (${streamID})`;
     const stream = streams.find((s) => s.stream_id === streamID);
-    if (stream?.camera_name) return `${stream.camera_name} (${streamID})`;
+    if (stream) return `${gbDisplayName(gbNames, [stream.stream_id, stream.camera_id], stream.camera_name || stream.name || streamID)} (${streamID})`;
     return streamID;
   }
 
@@ -49,14 +51,16 @@
     loading = true;
     error = '';
     try {
-      const [planList, streamList, camList] = await Promise.all([
+      const [planList, streamList, camList, names] = await Promise.all([
         listRecordingPlans(),
         listStreams({ limit: 500 }),
         listCameras(),
+        loadGBChannelNames().catch(() => new Map<string, string>()),
       ]);
       plans = planList;
       streams = streamList.streams ?? [];
       cameras = camList;
+      gbNames = names;
     } catch (e) {
       console.warn('Failed to load recording plans:', e);
       error = t('recordingPlans.loadFailed');

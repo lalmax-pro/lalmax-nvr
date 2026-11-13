@@ -11,6 +11,7 @@
   } from '$lib/api';
   import type { AiStatusResponse, AiDetectionEvent, Camera, MultimodalStatus, MultimodalAnalysisEvent } from '$lib/api';
   import { showToast } from '$lib/toast';
+  import { loadGBChannelNames, cameraDisplayName, type ChannelNames } from '$lib/gb-channel-names';
   import {
     Brain, RefreshCw, Activity,
     AlertTriangle, CheckCircle, XCircle, Cpu,
@@ -22,6 +23,7 @@
   let multimodalStatus = $state<MultimodalStatus | null>(null);
   let loading = $state(true);
   let cameras = $state<Camera[]>([]);
+  let gbNames = $state<ChannelNames>(new Map());
   let events = $state<AiDetectionEvent[]>([]);
   let multimodalEvents = $state<MultimodalAnalysisEvent[]>([]);
   let eventCleanup: (() => void) | null = null;
@@ -49,7 +51,9 @@
   // Load cameras
   async function loadCameras() {
     try {
-      cameras = await listCameras() || [];
+      const [list, names] = await Promise.all([listCameras(), loadGBChannelNames().catch(() => new Map<string, string>())]);
+      cameras = list || [];
+      gbNames = names;
     } catch (e) {
       console.warn('Failed to load cameras:', e);
     }
@@ -280,7 +284,7 @@
           {#each cameras as camera}
             <div class="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800">
               <div>
-                <div class="font-medium th-text-primary">{camera.name}</div>
+                <div class="font-medium th-text-primary">{cameraDisplayName(gbNames, camera)}</div>
                 <div class="text-sm th-text-secondary">{camera.id}</div>
               </div>
               <span class="text-xs px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 th-text-secondary">
@@ -400,7 +404,7 @@
         >
           <option value="all">所有摄像头</option>
           {#each cameras as camera}
-            <option value={camera.id}>{camera.name}</option>
+            <option value={camera.id}>{cameraDisplayName(gbNames, camera)}</option>
           {/each}
         </select>
       </div>

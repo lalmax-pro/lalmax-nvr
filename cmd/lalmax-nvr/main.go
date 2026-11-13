@@ -400,6 +400,7 @@ type App struct {
 	sfuRuntime       *nvrSFURuntime
 	transcodeManager *transcode.Manager
 	transcodeService *transcode.Service
+	transcodeAdapter *media.TranscodeAdapter
 	cfg              *config.Config
 	configPath       string
 	watcher          *config.Watcher
@@ -697,6 +698,9 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.camMgr.SetMediaEngine(engine)
 
 	a.relayMgr = relay.NewManager(db, engine)
+	a.relayMgr.SetPlaybackTokenResolver(func(streamID string) string {
+		return cfg.Auth.PlaybackTokens[streamID]
+	})
 	slog.Info("relay manager started")
 
 	// Set kick function on ban manager (deferred to break circular dependency)
@@ -797,11 +801,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 			Filter: lalmaxserver.NewHookEventFilter("", "", "", []string{lalmaxserver.HookEventStreamNotFound}),
 		})
 		if hookErr != nil {
-			slog.Warn("failed to register GB28181 WHEP on-demand hook", "error", hookErr)
+			slog.Warn("failed to register GB28181 on-demand hook", "error", hookErr)
 		} else {
 			a.gbWHEPHook = hook
 			if cfg.GB28181.WHEPOnDemandEnabled {
-				slog.Warn("GB28181 WHEP on-demand enabled: remote WHEP requests may trigger SIP INVITE; restrict public access")
+				slog.Warn("GB28181 on-demand enabled: WHEP/RTSP/RTMP playback may trigger SIP INVITE; restrict media access")
 			}
 		}
 	}
@@ -998,12 +1002,32 @@ func (a *App) buildRouter() http.Handler {
 			a.mediaAuth.RestoreInternalStream(id)
 		}
 	}
-	adapter := &media.TranscodeAdapter{Engine: a.mediaEngine, Auth: a.mediaAuth, Config: &transcodeCfg, RegisterOutput: a.db.RegisterTranscodeOutput}
+	adapter := &media.TranscodeAdapter{
+		Engine: a.mediaEngine, Auth: a.mediaAuth, Config: &transcodeCfg,
+		RegisterOutput: a.db.RegisterTranscodeOutput,
+		StopDerivedRecording: func(ctx context.Context, outputID string) error {
+			if a.recTasks == nil { return nil }
+			return a.recTasks.Stop(ctx, outputID, recorder.ReasonStreamDown)
+		},
+	}
+	a.transcodeAdapter = adapter
 	executor := &transcode.BackendExecutor{Adapter: adapter, Config: cfg.Transcoding}
 	a.transcodeManager = transcode.NewManager(context.Background(), executor, cfg.Transcoding.MaxConcurrent)
 	a.transcodeService = transcode.NewService(a.db, a.transcodeManager, handler.TranscodeProbeService(), cfg.Transcoding)
 	handler.SetTranscodeService(a.transcodeService)
 	handler.SetTranscodePlayback(adapter)
+	handler.SetDerivedRecorder(a.recTasks)
+	if a.relayMgr != nil {
+		a.relayMgr.SetDerivedResolver(func(ctx context.Context, sourceID, jobID string) (string, string, error) {
+			source, physicalID, err := a.transcodeService.PlaybackTarget(ctx, sourceID, jobID)
+			if err != nil { return "", "", err }
+			play, err := adapter.DerivedPlayURL(ctx, source, physicalID, "rtmp")
+			if err != nil || play == nil || play.URL == "" {
+				return "", "", fmt.Errorf("derived RTMP endpoint unavailable")
+			}
+			return physicalID, play.URL, nil
+		}, a.mediaAuth.InternalPlaybackRequired)
+	}
 	if a.mediaAuth != nil {
 		handler.SetInternalMediaStreamCheck(a.mediaAuth.InternalPlaybackRequired)
 	}
@@ -1090,7 +1114,7 @@ func (a *App) buildRouter() http.Handler {
 
 	// Wire AI Manager
 	aiMgr := ai.NewManager(cfg.AI)
-	aiMgr.OnDetection(func(result webhook.DetectionResult) {
+	handler.SetAIDetectionPublisher(func(result webhook.DetectionResult) {
 		detections := make([]event.AIDetectionObject, 0, len(result.Detections))
 		for _, detection := range result.Detections {
 			detections = append(detections, event.AIDetectionObject{
@@ -1310,6 +1334,14 @@ func (a *App) wireRecordTasks() {
 	}
 	tasks := recorder.NewTaskManager(a.mediaEngine, a.store, a.db, a.metrics, a.eventBus, segDur)
 	tasks.SetOwnerFunc(func(streamID string) recorder.StreamOwner {
+		if a.transcodeAdapter != nil {
+			if source, ok := a.transcodeAdapter.RecordingSource(streamID); ok {
+				return recorder.StreamOwner{
+					CameraID: source.StreamID, Name: source.StreamID,
+					Encoding: "h264", AudioEnabled: true,
+				}
+			}
+		}
 		cam := a.camMgr.CameraByStream(streamID)
 		if cam == nil {
 			return recorder.StreamOwner{CameraID: streamID, Name: streamID, AudioEnabled: true}
@@ -1342,6 +1374,10 @@ func (a *App) wireRecordTasks() {
 		return cam.Adaptive.TimelapseIntervalDuration()
 	})
 	tasks.SetSkip(func(streamID string) bool {
+		// Internal derived streams must never start default/event/plan recording.
+		if a.mediaAuth != nil && a.mediaAuth.InternalPlaybackRequired(streamID) {
+			return true
+		}
 		if media.IsSubStreamID(streamID) {
 			return true
 		}
@@ -1547,6 +1583,9 @@ func (a *App) Start() error {
 
 	if a.transcodeService != nil {
 		go a.transcodeService.Run(ctx)
+		if a.apiHandler != nil {
+			go a.apiHandler.RunHAPreload(ctx)
+		}
 	}
 
 	// Start media runtime (optional protocols live behind this boundary)
@@ -1889,6 +1928,12 @@ func newInternalMediaControlAuth(
 // ---------------------------------------------------------------------------
 
 func main() {
+	// A strictly one-shot authenticated worker reads a private pipe and never
+	// loads the NVR configuration or starts HTTP/media management services.
+	if len(os.Args)==2 && os.Args[1]==transcode.IsolatedWorkerArg {
+		if err:=transcode.RunIsolatedWorker(os.Stdin);err!=nil {os.Exit(78)}
+		return
+	}
 	// Dispatch CLI subcommands before flag parsing
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -1992,6 +2037,7 @@ func newMediaEngine(cfg *config.Config, internalToken string, opts ...interface{
 		ConfigPath:            cfg.Media.LalmaxConfigPath,
 		InternalAuthToken:     internalToken,
 		RTMPPort:              cfg.RTMP.Port,
+		RTMPListenAddr:        cfg.Media.RTMPListenAddr,
 		RTSPPort:              cfg.Media.RTSPPort,
 		HTTPPort:              cfg.Media.HTTPPort,
 		RTMPEnabled:           cfg.RTMP.Enabled != nil && *cfg.RTMP.Enabled,

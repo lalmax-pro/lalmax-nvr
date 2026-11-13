@@ -85,6 +85,7 @@ func TestLoadEmbeddedLalmaxConfig_SyncsProtocolSettingsForExistingFile(t *testin
 	_, err = loadEmbeddedLalmaxConfig(EmbeddedLalmaxConfig{
 		ConfigPath:  path,
 		RTMPPort:    1936,
+		RTMPListenAddr: "127.0.0.1:1936",
 		RTMPEnabled: true,
 		SRTPort:     9001,
 		SRTEnabled:  true,
@@ -100,7 +101,7 @@ func TestLoadEmbeddedLalmaxConfig_SyncsProtocolSettingsForExistingFile(t *testin
 	lal := parsed["lal"].(map[string]any)
 	rtmp := lal["rtmp"].(map[string]any)
 	require.True(t, rtmp["enable"].(bool))
-	require.Equal(t, ":1936", rtmp["addr"])
+	require.Equal(t, "127.0.0.1:1936", rtmp["addr"])
 
 	lalmax := parsed["lalmax"].(map[string]any)
 	srt := lalmax["srt_config"].(map[string]any)

@@ -10,6 +10,7 @@ import (
 // HomeAssistantPublication keeps identity and application even while a publisher is offline.
 type HomeAssistantPublication struct {
 	TranscodeJobID string `json:"transcode_job_id,omitempty"`
+	PreloadTranscode bool `json:"preload_transcode,omitempty"`
 	StreamID       string `json:"stream_id"`
 	Name           string `json:"name,omitempty"`
 	AppName        string `json:"app_name"`
@@ -32,15 +33,17 @@ func (d *DB) createHomeAssistantTable(ctx context.Context) error {
 	}
 	_, err = d.execContext(ctx, `INSERT OR IGNORE INTO home_assistant_settings
 		(id, instance_id, enabled, rtsp_base_url, streams) VALUES (?, ?, ?, ?, ?)`,
-		"main", uuid.NewString(), false, "", "[]")
+		"main", uuid.NewString(), boolToDBInt(false), "", "[]")
 	return err
 }
 
 func (d *DB) GetHomeAssistantSettings(ctx context.Context) (HomeAssistantSettings, error) {
 	var cfg HomeAssistantSettings
+	var enabled int
 	var streams string
 	err := d.queryRowContext(ctx, `SELECT instance_id, enabled, rtsp_base_url, streams
-		FROM home_assistant_settings WHERE id = ?`, "main").Scan(&cfg.InstanceID, &cfg.Enabled, &cfg.RTSPBaseURL, &streams)
+		FROM home_assistant_settings WHERE id = ?`, "main").Scan(&cfg.InstanceID, &enabled, &cfg.RTSPBaseURL, &streams)
+	cfg.Enabled = enabled != 0
 	if err != nil {
 		return cfg, err
 	}
@@ -61,6 +64,6 @@ func (d *DB) SaveHomeAssistantSettings(ctx context.Context, cfg HomeAssistantSet
 		return err
 	}
 	_, err = d.execContext(ctx, `UPDATE home_assistant_settings SET enabled = ?, rtsp_base_url = ?, streams = ? WHERE id = ?`,
-		cfg.Enabled, cfg.RTSPBaseURL, string(streams), "main")
+		boolToDBInt(cfg.Enabled), cfg.RTSPBaseURL, string(streams), "main")
 	return err
 }

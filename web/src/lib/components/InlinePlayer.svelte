@@ -117,7 +117,7 @@
   });
 
   $effect(() => {
-    if (videoEl && seekOffsetSec > 0 && Number.isFinite(seekOffsetSec)) {
+    if (videoEl && seekOffsetSec >= 0 && Number.isFinite(seekOffsetSec) && videoEl.readyState >= 1) {
       videoEl.currentTime = seekOffsetSec;
     }
   });
@@ -191,6 +191,7 @@
         preload="metadata"
         class={isAudioFormat ? 'w-full p-4' : embedded ? 'w-full h-full object-contain' : 'w-full max-h-[60vh]'}
         src={videoSrc}
+        onloadedmetadata={() => { if (videoEl && Number.isFinite(seekOffsetSec)) videoEl.currentTime = Math.max(0, seekOffsetSec); }}
         onended={handleVideoEnded}
         onerror={handleVideoError}
         ontimeupdate={() => onTime?.(videoEl?.currentTime || 0)}

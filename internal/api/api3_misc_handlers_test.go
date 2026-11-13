@@ -221,11 +221,11 @@ func TestApi3MergeSettingsEndpoints(t *testing.T) {
 	require.True(t, *cfg.Merge.RollingEnabled)
 	require.Equal(t, "5s", cfg.Merge.RollingDebounce)
 
-	// The save path tolerates an empty config path (logs a warning, still 200).
+	// An empty config path is a persistence error.
 	bare := NewHandler(db, store, noopAuthMW(), cfg, nil, "", nil, nil)
 	api3Status(t, api3Request(t, api3Router(func(r chi.Router) {
 		r.Put("/settings/merge", bare.handleUpdateMergeSettings)
-	}), http.MethodPut, "/settings/merge", `{"enabled":false}`), http.StatusOK)
+	}), http.MethodPut, "/settings/merge", `{"enabled":false}`), http.StatusInternalServerError)
 }
 
 // --- per-camera merge overrides ---
@@ -674,9 +674,12 @@ func TestApi3TranscodeDerivedPlayback(t *testing.T) {
 	// No derived playback provider configured yet.
 	api3Status(t, api3Request(t, router, http.MethodGet, "/streams/cam-1/jobs/job-1/play", ""), http.StatusServiceUnavailable)
 
-	// A disabled job is reported as an unavailable output before any provider call.
+	// A disabled job has no running output. Even with a configured playback
+	// provider, it fails closed as unavailable before returning a media URL.
 	h.SetTranscodePlayback(&api3DerivedPlayback{url: "rtsp://127.0.0.1:15544"})
-	api3Status(t, api3Request(t, router, http.MethodGet, "/streams/cam-1/jobs/job-1/play", ""), http.StatusBadRequest)
+	disabled := api3Request(t, router, http.MethodGet, "/streams/cam-1/jobs/job-1/play", "")
+	api3Status(t, disabled, http.StatusServiceUnavailable)
+	require.Contains(t, disabled.Body.String(), "output_unavailable")
 
 	// Unknown jobs keep their domain status.
 	api3Status(t, api3Request(t, router, http.MethodGet, "/streams/cam-1/jobs/missing/play", ""), http.StatusNotFound)

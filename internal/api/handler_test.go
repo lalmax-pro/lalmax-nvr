@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -836,6 +837,7 @@ func TestUpdateSettings_Success(t *testing.T) {
 		Cameras: []config.CameraConfig{{ID: "cam-1", Name: "Cam1", Protocol: "rtsp_h264", URL: "rtsp://x", Enabled: true}},
 	}
 	h := newHandlerWithConfig(db, store, cfg)
+	h.configPath = filepath.Join(t.TempDir(), "config.yaml")
 
 	body := strings.NewReader(`{"cleanup":{"retention_days":7,"check_interval":"30m","disk_threshold_percent":80}}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", body, "", "")
@@ -866,6 +868,7 @@ func TestUpdateSettings_EmptyBody(t *testing.T) {
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
 	h := newHandlerWithConfig(db, store, cfg)
+	h.configPath = filepath.Join(t.TempDir(), "config.yaml")
 
 	body := strings.NewReader(`{}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", body, "", "")
@@ -1621,6 +1624,15 @@ func newTestCamHandler(t *testing.T) (*Handler, *camera.CameraManager, *config.C
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
+	// Camera endpoints may start real recorder goroutines. Stop them before
+	// setupTestDB closes SQLite and before the next -count run starts.
+	// Without cleanup, reconnect loops survive into unrelated health/readyz
+	// tests and can exceed their process-wide goroutine thresholds.
+	t.Cleanup(func() {
+		if err := camMgr.Stop(); err != nil {
+			t.Errorf("stop test camera manager: %v", err)
+		}
+	})
 	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, "", nil, nil)
 	h.SetMultiUserAuthMW(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1930,14 +1942,35 @@ func TestHealthWithNilDB(t *testing.T) {
 	require.Equal(t, "error", body.Checks["storage"].Status)
 }
 
+// assertReadyzHealthy checks DB and storage readiness without allowing other
+// parallel tests' process-wide goroutines to turn this success-path case into
+// a resource-limit test. The limit itself is tested separately at 4999/5000.
+func assertReadyzHealthy(t *testing.T, h *Handler) *httptest.ResponseRecorder {
+	t.Helper()
+	h.goroutineCount = func() int { return 1 }
+	rr := doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
+	if rr.Code != http.StatusOK {
+		// A readyz 503 response does not say which dependency failed. Preserve
+		// the detail needed to diagnose actual DB/disk problems if they arise.
+		health := doRequest(t, h.Routes(), "GET", "/api/health/details", nil, "", "")
+		diskDetail := "no disk probe"
+		if h.readyzDiskUsage != nil {
+			total, used, err := h.readyzDiskUsage()
+			diskDetail = fmt.Sprintf("total=%d used=%d err=%v", total, used, err)
+		}
+		t.Fatalf("readyz: expected HTTP 200, got %d body=%s; health=%s; disk=%s; actual_process_goroutines=%d",
+			rr.Code, rr.Body.String(), health.Body.String(), diskDetail, runtime.NumGoroutine())
+	}
+	return rr
+}
+
 func TestReadyzReturns200(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
 
-	rr := doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
-	require.Equal(t, http.StatusOK, rr.Code)
+	rr := assertReadyzHealthy(t, h)
 
 	var body map[string]string
 	parseJSON(t, rr, &body)
@@ -2270,6 +2303,7 @@ func TestUpdateMergeSettings_Success(t *testing.T) {
 		Cameras: []config.CameraConfig{},
 	}
 	h := newHandlerWithConfig(db, store, cfg)
+	h.configPath = filepath.Join(t.TempDir(), "config.yaml")
 
 	body := strings.NewReader(`{"enabled":true,"batch_limit":100}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/merge", body, "", "")

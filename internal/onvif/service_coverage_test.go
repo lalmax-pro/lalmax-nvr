@@ -223,7 +223,9 @@ func TestONVIFDiscoveryHelpers(t *testing.T) {
 	require.Equal(t, "discovery was cancelled", categorizeDiscoveryError(cancelled, errors.New("boom")).Message)
 	timed, stop := context.WithTimeout(context.Background(), time.Millisecond)
 	defer stop()
-	time.Sleep(5 * time.Millisecond)
+	// A wall-clock sleep does not guarantee that the timer goroutine has
+	// marked the context expired under contention. Wait for its signal.
+	<-timed.Done()
 	require.Equal(t, "TIMEOUT", categorizeDiscoveryError(timed, errors.New("boom")).Category)
 
 	ctx, cancelDiscover := context.WithTimeout(context.Background(), 40*time.Millisecond)

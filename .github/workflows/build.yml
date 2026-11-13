@@ -149,16 +149,8 @@ jobs:
       - name: Display coverage
         run: go tool cover -func=coverage.out
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7.1.1
-        with:
-          use_oidc: true
-          files: coverage.out
-          disable_search: true
-          flags: go
-          name: go-unit
-          fail_ci_if_error: true
-
+      # The local coverage threshold is mandatory on forks and upstream alike.
+      # Evaluate it before any optional external reporting integration.
       - name: Check coverage threshold
         run: |
           echo "Checking coverage threshold..."
@@ -169,6 +161,20 @@ jobs:
             exit 1
           fi
           echo "Coverage threshold check passed"
+
+      # Codecov recognizes the upstream repository, but not every fork. Do not
+      # turn a missing fork-side Codecov project into a build failure.
+      # Keep strict uploads for the upstream repository.
+      - name: Upload coverage to Codecov
+        if: github.repository == 'lalmax-pro/lalmax-nvr'
+        uses: codecov/codecov-action@v7.1.1
+        with:
+          use_oidc: true
+          files: coverage.out
+          disable_search: true
+          flags: go
+          name: go-unit
+          fail_ci_if_error: true
 
       # All binary matrix jobs run on the same Linux host architecture. Reuse
       # the exact toolchain that passed tests instead of six network downloads.
@@ -183,6 +189,34 @@ jobs:
           retention-days: 1
           overwrite: true
 
+  transcode-media:
+    # Actual encoders are required on each PR, main and release build.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.2.0
+        with:
+          go-version: '1.26.2'
+      - name: Install actual media encoders and plugins
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+          ffmpeg -version | head -n 1
+          gst-inspect-1.0 x264enc
+          gst-inspect-1.0 avenc_aac
+      - name: FFmpeg encode, ffprobe and decode
+        env:
+          NVR_TRANSCODE_MEDIA_TEST: '1'
+        run: go test -count=1 -timeout=5m -v ./internal/transcode -run '^TestFFmpegReal(SelfTest|CopySelfTest|G711ASelfTest)$'
+      - name: GStreamer AAC and video-only real encode and decode
+        env:
+          NVR_GSTREAMER_SELFTEST: '1'
+        run: go test -count=1 -timeout=5m -v ./internal/transcode -run '^Test(GStreamerActualSelfTest|GStreamerRealG711ASelfTest)$'
+      - name: Verify G711 RTMP-to-RTSP SDP clock
+        run: |
+          cd third/lal
+          go test -count=1 -timeout=2m ./pkg/remux -run '^TestG711MetadataDefaultsTo8000$'
   build-frontend:
     runs-on: ubuntu-latest
     needs: plan

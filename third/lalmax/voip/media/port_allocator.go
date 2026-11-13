@@ -73,8 +73,9 @@ func (pa *PortAllocator) Free(port int) {
 }
 
 func (pa *PortAllocator) isPortAvailable(port int) bool {
-	addr := fmt.Sprintf(":%d", port)
-	conn, err := net.ListenPacket("udp", addr)
+	// Match the IPv4 RTP/RTCP listeners. A dual-stack bind can miss an
+	// existing IPv4 wildcard listener on macOS.
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: port})
 	if err != nil {
 		return false
 	}

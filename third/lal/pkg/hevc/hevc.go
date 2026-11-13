@@ -219,6 +219,9 @@ func ParseVpsSpsPpsFromSeqHeader(payload []byte) (vps, sps, pps []byte, err erro
 }
 
 func ParseVpsSpsPpsFromEnhancedSeqHeader(payload []byte) (vps, sps, pps []byte, err error) {
+	if len(payload) < 5 {
+		return nil, nil, nil, nazaerrors.Wrap(base.ErrShortBuffer)
+	}
 	packetType := payload[0] & 0x0f
 
 	if packetType == 0 {
@@ -247,14 +250,14 @@ func ParseVpsSpsPpsFromSeqHeaderWithoutMalloc(payload []byte) (vps, sps, pps []b
 	}
 	//Log.Debugf("%s", hex.Dump(payload))
 
-	if len(payload) < 33 {
-		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
-	}
-
 	return parseVpsSpsPpsFromRecord(payload)
 }
 
 func parseVpsSpsPpsFromRecord(payload []byte) (vps, sps, pps []byte, err error) {
+	// The array count is followed by a five-byte VPS array header.
+	if len(payload) < 33 {
+		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
+	}
 	index := 27
 	if numOfArrays := payload[index]; numOfArrays != 3 && numOfArrays != 4 {
 		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
@@ -270,7 +273,7 @@ func parseVpsSpsPpsFromRecord(payload []byte) (vps, sps, pps []byte, err error) 
 	}
 	vpsLen := int(bele.BeUint16(payload[index+3:]))
 
-	if len(payload) < 33+vpsLen {
+	if vpsLen < 2 || len(payload) < 33+vpsLen {
 		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
 	}
 
@@ -287,7 +290,7 @@ func parseVpsSpsPpsFromRecord(payload []byte) (vps, sps, pps []byte, err error) 
 		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
 	}
 	spsLen := int(bele.BeUint16(payload[index+3:]))
-	if len(payload) < 38+vpsLen+spsLen {
+	if spsLen < 2 || len(payload) < 38+vpsLen+spsLen {
 		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
 	}
 	sps = payload[index+5 : index+5+spsLen]
@@ -303,7 +306,7 @@ func parseVpsSpsPpsFromRecord(payload []byte) (vps, sps, pps []byte, err error) 
 		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
 	}
 	ppsLen := int(bele.BeUint16(payload[index+3:]))
-	if len(payload) < 43+vpsLen+spsLen+ppsLen {
+	if ppsLen < 2 || len(payload) < 43+vpsLen+spsLen+ppsLen {
 		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
 	}
 	pps = payload[index+5 : index+5+ppsLen]

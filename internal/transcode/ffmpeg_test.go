@@ -62,3 +62,23 @@ func TestFFmpegRejectsUnsafeSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestHardwareEncoderNeverSilentlyFallsBack(t *testing.T) {
+    spec := testSpec(t)
+    spec.Profile.Video.Encoder = "h264_nvenc"
+    args, err := FFmpegArgs(spec)
+    if err != nil { t.Fatal(err) }
+    if !slices.Contains(args, "h264_nvenc") || slices.Contains(args, "libx264") {
+        t.Fatalf("hardware profile silently changed encoder: %v", args)
+    }
+    if !slices.Contains(args, "cbr") { t.Fatalf("NVENC CBR missing: %v", args) }
+    spec.Profile.Video.Encoder = "h264_nvenc --evil"
+    if _, err = FFmpegArgs(spec); err == nil {
+        t.Fatal("accepted arbitrary encoder flags")
+    }
+    spec.Profile.Backend = "gstreamer"
+    spec.Profile.Video.Encoder = "h264_nvenc"
+    if err := spec.Profile.Validate(); err == nil {
+        t.Fatal("accepted hardware encoder under unsupported backend")
+    }
+}

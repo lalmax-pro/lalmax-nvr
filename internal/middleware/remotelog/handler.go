@@ -36,9 +36,11 @@ type bufferedEntry struct {
 type sharedBuffer struct {
 	mu       sync.Mutex
 	buf      []bufferedEntry
+	closed   bool
 	flushCh  chan struct{}
 	stopOnce sync.Once
 	stopCh   chan struct{}
+	doneCh   chan struct{}
 }
 
 // Handler implements slog.Handler. It batches log records and periodically
@@ -61,6 +63,7 @@ func New(endpoint, format string, level slog.Level, m *metrics.Metrics) *Handler
 		buf:     make([]bufferedEntry, 0, defaultBufferSize),
 		flushCh: make(chan struct{}, 1),
 		stopCh:  make(chan struct{}),
+		doneCh:  make(chan struct{}),
 	}
 	h := &Handler{
 		endpoint: endpoint,
@@ -84,6 +87,10 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 	entry := h.recordToEntry(r)
 
 	h.shared.mu.Lock()
+	if h.shared.closed {
+		h.shared.mu.Unlock()
+		return fmt.Errorf("remote log handler is closed")
+	}
 	h.shared.buf = append(h.shared.buf, entry)
 	shouldFlush := len(h.shared.buf) >= defaultBufferSize
 	h.shared.mu.Unlock()
@@ -128,11 +135,18 @@ func (h *Handler) WithGroup(name string) slog.Handler {
 	}
 }
 
-// Close flushes remaining buffered logs and stops the background goroutine.
-// Safe to call multiple times.
+// Close stops accepting new records and waits for the background goroutine
+// to finish its final flush. It is safe to call concurrently and from handlers
+// returned by WithAttrs or WithGroup, which all share the same lifecycle.
+// HTTP sends remain bounded by the client's timeout.
 func (h *Handler) Close() {
-	h.shared.stopOnce.Do(func() { close(h.shared.stopCh) })
-	h.signalFlush()
+	h.shared.stopOnce.Do(func() {
+		h.shared.mu.Lock()
+		h.shared.closed = true
+		close(h.shared.stopCh)
+		h.shared.mu.Unlock()
+	})
+	<-h.shared.doneCh
 }
 
 // --- internal ---
@@ -185,6 +199,7 @@ func (h *Handler) signalFlush() {
 func (h *Handler) flushLoop() {
 	ticker := time.NewTicker(defaultFlushInterval)
 	defer ticker.Stop()
+	defer close(h.shared.doneCh)
 	for {
 		select {
 		case <-ticker.C:

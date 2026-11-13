@@ -161,11 +161,11 @@ let originalFeatureFlags = $state<Record<string, boolean>>({});
 // Settings tab state
 let activeSettingsTab = $state('general');
 let settingsTabs = $derived([
-  { id: 'home-assistant', label: 'Home Assistant' },
-  { id: 'transcoding', label: t('transcode.title') },
   { id: 'general', label: t('settings.tabs.general') },
   { id: 'traces', label: t('settings.tabs.traces') },
   { id: 'advanced', label: t('settings.tabs.advanced') },
+  { id: 'transcoding', label: t('transcode.title') },
+  { id: 'home-assistant', label: 'Home Assistant' },
   { id: 'database', label: t('settings.tabs.database') },
   { id: 'security', label: t('settings.tabs.security') },
 ]);
@@ -1089,12 +1089,7 @@ function getAffectedCameraCount(protocol: string): number {
     {:else}
       <Tab tabs={settingsTabs} activeTab={activeSettingsTab} onchange={(id) => activeSettingsTab = id} />
       <div class="space-y-6 mt-6">
-      {#if activeSettingsTab === 'home-assistant'}
-        <HomeAssistantSettings />
-      {:else if activeSettingsTab === 'transcoding'}
-        <TranscodingSettings />
-        <TranscodeJobs />
-      {:else if activeSettingsTab === 'general'}
+      {#if activeSettingsTab === 'general'}
         <!-- Cleanup Policy -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.cleanup')}</h3>
@@ -1303,6 +1298,11 @@ function getAffectedCameraCount(protocol: string): number {
             {/each}
           </div>
         </div>
+      {:else if activeSettingsTab === 'transcoding'}
+        <TranscodingSettings />
+        <TranscodeJobs />
+      {:else if activeSettingsTab === 'home-assistant'}
+        <HomeAssistantSettings />
       {:else if activeSettingsTab === 'traces'}
         <div class="card p-8 border th-border space-y-8">
           <div>

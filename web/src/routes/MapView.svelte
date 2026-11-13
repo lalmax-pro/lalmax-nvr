@@ -4,6 +4,7 @@
   import { getAuthToken } from '$lib/api/client';
   import type { Camera } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { loadGBChannelNames, cameraDisplayName, type ChannelNames } from '$lib/gb-channel-names';
   import { showToast } from '$lib/toast';
 
   const TILE = 256;
@@ -11,6 +12,8 @@
   const MAX_Z = 18;
 
   let cameras = $state<Camera[]>([]);
+  let gbNames = $state<ChannelNames>(new Map());
+  const displayCameraName = (camera: Camera) => cameraDisplayName(gbNames, camera);
   let loadError = $state('');
   let selected = $state<Camera | null>(null);
   let placing = $state(false);
@@ -25,8 +28,9 @@
   const token = getAuthToken() || '';
 
   onMount(() => {
-    void listCameras(undefined, true)
-      .then((list) => {
+    void Promise.all([listCameras(undefined, true), loadGBChannelNames().catch(() => new Map<string, string>())])
+      .then(([list, names]) => {
+        gbNames = names;
         cameras = list || [];
         const placed = cameras.filter((c) => c.latitude && c.longitude);
         if (placed.length === 1) {
@@ -160,7 +164,7 @@
     {/if}
     {#each cameras as cam (cam.id)}
       <button class="cam-row" class:active={selected?.id === cam.id} onclick={() => focusCamera(cam)}>
-        <span>{cam.name}</span>
+        <span>{displayCameraName(cam)}</span>
         <small>{cam.latitude && cam.longitude ? `${cam.latitude.toFixed(4)}, ${cam.longitude.toFixed(4)}` : t('map.unplaced')}</small>
       </button>
     {:else}
@@ -188,7 +192,7 @@
       <img class="tile" src={tile.src} alt="" style="transform: translate({tile.left}px, {tile.top}px);" draggable="false" />
     {/each}
     {#each cameras.filter((c) => c.latitude && c.longitude) as cam (cam.id)}
-      <a class="pin" class:active={selected?.id === cam.id} style={pinStyle(cam)} href="#/live/{cam.id}" title={cam.name}>{cam.name.slice(0, 1)}</a>
+      <a class="pin" class:active={selected?.id === cam.id} style={pinStyle(cam)} href="#/live/{cam.id}" title={displayCameraName(cam)}>{displayCameraName(cam).slice(0, 1)}</a>
     {/each}
     <div class="zoom-ctrl">
       <button type="button" onclick={() => { zoom = Math.min(MAX_Z, zoom + 1); }}>+</button>

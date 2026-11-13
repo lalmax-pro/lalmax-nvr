@@ -14,7 +14,6 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/q191201771/lal/pkg/avc"
 	"github.com/q191201771/lal/pkg/base"
-	"github.com/q191201771/lal/pkg/hevc"
 	"github.com/q191201771/lal/pkg/logic"
 	"github.com/q191201771/naza/pkg/nazalog"
 )
@@ -311,6 +310,9 @@ func (conn *whepSession) playCachedSnapshot(snapshot []base.RtmpMsg) {
 // sendMediaMessage is owned by the viewer's Run goroutine, including codec
 // changes and RTP packetization. It never runs from the publisher's OnMsg.
 func (conn *whepSession) sendMediaMessage(msg base.RtmpMsg, cached bool) {
+	if msg.Header.MsgTypeId == base.RtmpTypeIdVideo && !msg.HasCompleteVideoHeader() {
+		return
+	}
 	if msg.IsVideoKeySeqHeader() {
 		conn.updateVideoCodec(msg)
 		return
@@ -367,6 +369,9 @@ func (conn *whepSession) OnMsg(msg base.RtmpMsg) {
 			conn.enqueue(msg)
 		}
 	case base.RtmpTypeIdVideo:
+		if !msg.HasCompleteVideoHeader() {
+			return
+		}
 		if msg.IsVideoKeySeqHeader() {
 			conn.enqueue(msg)
 			return
@@ -468,7 +473,7 @@ func (conn *whepSession) updateVideoCodec(msg base.RtmpMsg) {
 	}
 
 	if msg.IsHevcKeySeqHeader() {
-		vps, sps, pps, err := hevc.ParseVpsSpsPpsFromSeqHeader(msg.Payload)
+		vps, sps, pps, err := parseHEVCSequenceHeader(msg.Payload)
 		if err != nil {
 			nazalog.Error("ParseVpsSpsPpsFromSeqHeader err:", err)
 			return

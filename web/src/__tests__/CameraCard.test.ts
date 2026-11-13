@@ -62,6 +62,17 @@ describe('CameraCard', () => {
     expect(getByText('Test Camera')).toBeTruthy();
   });
 
+  it('uses the current channel display name without changing the camera identity or saved name', () => {
+    const camera = makeCamera({ id: 'device1:channel1', protocol: 'gb28181', name: 'Stored Camera Name' });
+    const { getByText, queryByText } = render(CameraCard, {
+      props: { ...defaultProps(camera), displayName: 'Current Channel Name' },
+    });
+    expect(getByText('Current Channel Name')).toBeTruthy();
+    expect(queryByText('Stored Camera Name')).toBeNull();
+    expect(camera.id).toBe('device1:channel1');
+    expect(camera.name).toBe('Stored Camera Name');
+  });
+
   it('shows recording badge for active camera with recording status', () => {
     const camera = makeCamera({ status: 'recording' });
     const { getByText } = render(CameraCard, { props: defaultProps(camera) });

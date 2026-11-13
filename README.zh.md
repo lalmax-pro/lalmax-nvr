@@ -185,6 +185,7 @@ media:
 | [API 文档](docs/zh/api-reference.md) | REST API |
 | [GB28181](docs/zh/gb28181-guide.md) | 国标设备、回放、对讲 |
 | [VoIP 呼叫与对讲](docs/zh/voip.md) | SIP 终端、PBX、网页外呼、WebRTC 双向对讲和通话记录 |
+| [实时转码](docs/zh/transcoding-deployment.md) · [转码架构](docs/zh/transcoding-design.md) | FFmpeg / GStreamer、任务启停和派生输出 |
 | [JT1078 / JT808](docs/zh/configuration.md#jt1078-推流配置) | `:1078` 媒体收流，以及可选的 `:808` 信令 |
 | [ONVIF](docs/zh/onvif-guide.md) | 发现、云台 |
 | [摄像头指南](docs/zh/camera-guide.md) | RTSP / HTTP 接入 |

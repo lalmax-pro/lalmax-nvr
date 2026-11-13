@@ -1,12 +1,12 @@
 # 通用实时转码架构设计
 
-- 状态：Proposed（部分功能已在 Draft PR 实现，P0 决策待独立评审和合并）
-- 日期：2026-10-26
+- 初稿：2026-10-26
+- 实现说明更新：2026-11-13
 - 跟踪 Issue：[通用实时转码 #66](https://github.com/lalmax-pro/lalmax-nvr/issues/66)；本地正文备份见 [Issue 草稿](https://github.com/lalmax-pro/lalmax-nvr/blob/849198a0c9d4b5d9c00aef171c8bbf1e55f2d170/docs/zh/transcoding-tracking-issue.md)
 - 背景关联：[Home Assistant 集成 #46](https://github.com/lalmax-pro/lalmax-nvr/issues/46)
 - 范围：通用实时媒体转码，FFmpeg / GStreamer 可替换后端，本地与 Docker 部署。
 
-> 本文保留总体目标和方案。首批具体决策、当前实现、平台验证与未完成边界以 [P0 决策记录](transcoding-p0-decisions.md) 为准；实施与媒体验收见 [验收记录](https://github.com/lalmax-pro/lalmax-nvr/blob/849198a0c9d4b5d9c00aef171c8bbf1e55f2d170/docs/zh/transcoding-testing.md)。
+部署、启停与配置示例见[部署指南](transcoding-deployment.md)，各场景证据见[验收记录](transcoding-testing.md)。第 3 至 5 节描述当前实现，后续章节保留原始设计和阶段目标。
 
 ## 1. 背景与定位
 
@@ -17,8 +17,8 @@
 - [媒体引擎接口](../../internal/media/types.go) 已提供流查询、播放地址、事件订阅和自定义发布能力。
 - [主 Dockerfile](../../Dockerfile) 已安装 FFmpeg；[独立 ARM64 Dockerfile](../../Dockerfile.arm64) 使用 scratch，不含它，需核实该构建入口的保留策略。
 - [快照实现](../../internal/api/handlers_snapshot.go) 通过 PATH 查找 FFmpeg，尚无统一可执行路径配置。
-- [数据库迁移](../../internal/storage/db.go) 标记旧转码功能已移除，不应复用旧迁移版本或假设旧表可用。
-- [HA 目录](../../internal/api/handlers_home_assistant.go) 和 [WHEP API](../../internal/api/handlers_home_assistant_webrtc.go) 当前选择原始流；[HA 实体](../../custom_components/lalmax_nvr/camera.py) 使用稳定源身份。
+- 转码配置意图、派生输出登记与录像来源分别持久化。[转码配置存储](../../internal/storage/db_transcoding.go)、[派生输出存储](../../internal/storage/db_transcode_outputs.go)、[派生录像来源](../../internal/storage/db_transcode_recording_sources.go)。
+- HA 发布可引用源流下的一个派生任务。[HA 目录](../../internal/api/handlers_home_assistant.go)、[WHEP API](../../internal/api/handlers_home_assistant_webrtc.go)和 [HA 实体](../../custom_components/lalmax_nvr/camera.py)使用稳定源身份。
 - [WHEP 音频实现](../../third/lalmax/rtc/whepsession.go) 支持 PCMA、PCMU、Opus；不能将 H.264/AAC 输出等同于 WebRTC 有声兼容。
 
 ## 2. 目标与非目标
@@ -42,49 +42,42 @@
 
 ## 3. 架构与职责
 
-```text
-摄像机 / 国标 / RTMP / RTSP / 其他已接入媒体源
-                         |
-                  lalmax 原始流
-                  /            \
-          原流播放与录像       TranscodeManager
-                              | 策略、配额、租约、重试
-                              +-- FFmpeg Backend
-                              +-- GStreamer Backend
-                                      |
-                              lalmax 派生输出
-                                      |
-                  +----------+--------+--------+----------+
-                  |          |                 |          |
-                NVR UI      HA             外部播放     录像/转推
+```mermaid
+flowchart LR
+  Control["设置 / 转码 API"] --> Service["Service · 模板、任务与租约"]
+  Service --> DB[("数据库 · 配置与输出登记")]
+  Service --> Manager["Manager · 配额、状态与共享"]
+  Manager --> Adapter["BackendExecutor / TranscodeAdapter"]
+  Adapter --> Backend["FFmpeg / GStreamer<br/>可选本机 Worker"]
+  Source["内嵌 lalmax 原始流"] -->|"RTSP 拉取"| Backend
+  Source --> Direct["原流播放与录像"]
+  Backend -->|"鉴权 RTMP 回灌"| Derived["内嵌 lalmax 派生流"]
+  Derived --> Clients["RTSP / 网页预览 / HA / 录像 / 转推"]
 ```
 
-职责边界：
-
-- 媒体引擎：接入、分发、媒体状态与连接事件。
-- 转码管理器：任务协调、后端执行、输出注册、健康检查和资源管理。
-- 播放解析器：根据源、输出选择、协议和权限解析实际播放目标。
-- 消费者：业务身份、业务配置及需求租约；不直接启动编码器。
-- 录像/转推：独立服务，选择并消费输出，不绑定为某个转码后端的职责。
+- `Service` 校验模板修订和任务代次，检查能力检测结果，协调常驻、手动与按需策略。`Manager` 依据生效参数共享工作、分配并发额度、检查首帧和媒体健康。[Service](../../internal/transcode/service.go)、[Manager](../../internal/transcode/manager.go)。
+- 执行器由 `SourceRef` 在内嵌引擎查找源，构造受信 RTSP 输入和受保护的 RTMP 回灌地址。后端运行固定模板，进程启动后仍需等待派生组出帧才进入 `running`。[执行器](../../internal/transcode/executor.go)、[媒体适配器](../../internal/media/transcode_adapter.go)。
+- 派生组 ID 每次新建执行时随机生成。启动前登记身份，停止先撤销凭据再清理媒体组，重启时恢复历史组的拒绝标记。播放解析器用源 ID、任务 ID、运行状态及实际媒体判断是否发放播放地址。[播放解析](../../internal/api/transcode_playback_resolver.go)。
+- 独立 Worker 通过私有 stdin 接收一次性 HMAC 签名的启动参数。Worker 与 NVR 使用同一 OS 用户，父进程管道关闭触发后端回收。[Worker](../../internal/transcode/worker.go)。
 
 ## 4. 数据模型
 
 | 对象 | 关键字段 | 说明 |
 |---|---|---|
-| SourceRef | source_id、engine_id、app_name | 引用已有逻辑源；由服务端解析实际地址，不存摄像机密码副本 |
-| Profile | id、revision、backend、video、audio、backend_options | 描述期望媒体规格；修改生成新修订 |
-| Job | id、source_id、profile_id、profile_revision、enabled、run_policy、generation | 持久化期望状态，不持久化可复用 PID |
-| Variant | id、source_id、job_id、logical_name、actual_media、status | 稳定派生输出身份，与运行时发布 session 分离 |
-| DemandLease | id、variant_id、consumer_type、expires_at | 表达播放/录像需求，支持过期回收 |
-| JobRuntime | state、attempt、last_progress、error_code、effective_backend | 当前运行状态，不作为重启后的进程事实 |
+| SourceRef | stream_id、engine_id、app_name | 引用已有逻辑源，由服务端解析实际地址 |
+| Profile | id、revision、backend、video、audio | 保存目标媒体规格 |
+| Job | id、source、profile_id、profile_revision、enabled、run_policy、generation、stopped_by_user | 保存运行意图与显式停止标志 |
+| Variant | id、source_id、job_id、profile_id、generation、state、error_code、retry_at | 对消费者公开的稳定逻辑输出 |
+| DemandLease | token、job_id、generation、expires_at | 内存中的消费需求，租约默认 90 秒，可续期 |
+| Runtime | key、variant_id、state、error_code | 进程内运行状态，此处的 variant_id 是本次执行的物理流 ID |
 
-去重键建议为 `(engine_id, source_id, effective_profile_hash)`。hash 包含媒体参数、后端及必要传输设置，不包含显示名；同一策略修订只允许一个有效生产者。后续多个派生输出可共享一个执行管线，但不改变外部模型。
+去重键为 `(engine_id, app_name, stream_id, effective_profile_hash)`。有效规格包含后端和音视频参数，模板名和修订号不参与计算。等价任务共享一个进程和物理输出，最后一个运行需求结束后释放资源。不同规格各自运行编码任务。
 
 派生流需登记可信来源映射，不能仅根据字符串前缀判定内部身份。默认禁止派生输出作为转码源，避免递归和环；未来开放处理图时必须检测环。
 
 ### 持久化
 
-首批采用两个独立 v1 表保存配置意图与物理输出身份，不复用历史跳过的转码迁移。升级、旧数据、数据库迁移和回退边界以 [P0 决策记录](transcoding-p0-decisions.md#存储迁移与回退) 为准。被任务引用的模板不能修改或删除。
+数据库保存模板、任务、物理输出身份和派生录像来源。任务引用模板时，修改或删除该模板会返回冲突。升级及回退边界见 [P0 决策记录](transcoding-p0-decisions.md#存储迁移与回退)。
 
 配置更新使用 revision/generation 防止旧进程退出事件覆盖新任务状态。首版模板更新可停止旧任务再启动新任务，明确短暂断流；无缝切换不作为首版承诺。
 
@@ -92,42 +85,24 @@
 
 运行策略：
 
-- `always`：任务启用且源可用时运行。
-- `manual`：管理员显式启动，服务重启后的恢复策略必须明确；首版建议不自动恢复手动运行意图。
-- `on_demand`：存在有效消费者需求时运行，最后一个消费者离开后经过 idle timeout 回收；后续阶段开放。
+- `always` 在任务启用且源可用时由后台启动。重启后重新验证模板，失败按退避间隔重试。显式停止后保留停止标志。
+- `manual` 由操作员显式启停，重启后须再次启动。
+- `on_demand` 通过有效租约启动，最后一个租约释放或过期时回收该任务的运行需求。显式停止会清除该任务的租约。
 
-状态机：
+任务运行状态：
 
 ```text
-Disabled / Stopped
-       | 启用且有运行需求
-       v
-WaitingSource -> PendingCapacity -> Starting -> Running
-       ^                              |           |
-       |                              +--失败-----+
-       |                                    v
-       +------------------------------- Backoff
-
-任意运行状态 --停用/删除/服务退出--> Stopping --> Stopped
-配置或能力不可用 ------------------> Failed（修正配置后重试）
+disabled / stopped --启用且有运行需求--> starting --派生组持续出帧--> running
+starting / running --后端或媒体故障--> failed
+failed --常驻任务或有效租约--> backoff --达到重试时间--> starting
+starting / running --停止、删除或服务退出--> stopping --> stopped
 ```
 
-关键规则：
-
-1. 一次 HTTP 请求取消不终止共享任务；任务绑定服务生命周期。
-2. 任务启动先原子占用配额，超限返回明确状态；排队需有限额和等待期限，禁止无限队列。
-3. `Running` 必须有实际输出媒体进展和目标编码确认，不能只看进程存活。
-4. 源断开进入等待/退避，网络瞬时失败指数退避并加抖动；配置错误不无限重启。
-5. 每个进程都要 Wait；先优雅停止，超时强杀。Unix 进程组和 Windows 进程树清理分别实现/验收。
-6. 服务退出、任务删除、引擎重启时释放发布会话、配额与进程。启动时从期望配置重建，不按历史 PID 杀进程。
-7. 监控长时间无媒体输出的卡死；stderr 使用有界缓冲。
-8. 共享输出仍被其他消费者使用时，取消 HA 发布不得停止它。
+手动启动超出配额时返回 `capacity_exceeded`。后台重试延迟从 5 秒逐步增至 60 秒。进程归属于 NVR 服务生命周期，共享工作持续到最后一个任务释放运行需求。停止时回收后端进程与媒体会话，重启后根据数据库中的配置重新协调。
 
 ### 按需启动的协议边界
 
-NVR API 发放租约不等于 RTSP 客户端已经连接。直接 RTSP/WHEP/HTTP 播放需要媒体层的首次订阅触发、启动等待和断连事件；短请求协议需要租约宽限期。内部转码输入订阅不能算观看者，HA 预加载属于有效需求而不是无人使用。
-
-因此首版交付 `always/manual`；只有完成各协议的实际链路测试后，才逐协议声明 `on_demand` 支持。
+网页派生预览负责获取、续期和释放租约。租约接口可用 `wait_ms` 等待首帧，最长 20 秒。HA 可在发布配置中启用 `preload_transcode`，由 NVR 保持租约。外部播放器、录像和转推消费已经运行的派生流。直接拉取播放地址不会创建租约。
 
 ## 6. 后端接口与媒体链路
 

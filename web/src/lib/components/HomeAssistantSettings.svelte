@@ -19,7 +19,19 @@
   }
   function chooseVariant(id: string, job: string) {
     if (!settings) return;
-    settings.streams = settings.streams.map(p => p.stream_id === id ? { ...p, transcode_job_id: job || undefined } : p);
+    settings.streams = settings.streams.map(p => {
+      if (p.stream_id !== id) return p;
+      // Switching a job revokes any preload lease for the previous output.
+      // An omitted optional field means disabled; do not add false to every
+      // existing publication simply because its playback job was selected.
+      const updated = { ...p, transcode_job_id: job || undefined };
+      delete updated.preload_transcode;
+      return updated;
+    });
+  }
+  function choosePreload(id: string, enabled: boolean) {
+    if (!settings) return;
+    settings.streams = settings.streams.map(p => p.stream_id === id ? { ...p, preload_transcode: enabled } : p);
   }
   let loading = $state(true);
   let saving = $state(false);
@@ -125,7 +137,7 @@
             </label>
             {#if selected.has(stream.stream_id) && variantsLoaded}
               {@const selectedJob = settings.streams.find(p => p.stream_id === stream.stream_id)?.transcode_job_id}
-              <label class="block px-3 pb-3 space-y-1">
+              <div class="block px-3 pb-3 space-y-1">
                 <span class="input-label">{t('ha.outputFor', { name: stream.name || stream.stream_id })}</span>
                 <select aria-label={t('ha.outputFor', { name: stream.name || stream.stream_id })} class="input w-full" value={settings.streams.find(p => p.stream_id === stream.stream_id)?.transcode_job_id || ''} onchange={e => chooseVariant(stream.stream_id, e.currentTarget.value)}>
                   <option value="">{t('ha.originalOutput')}</option>
@@ -136,8 +148,14 @@
                     <option value={job.id}>{job.id} · {job.profile_id}</option>
                   {/each}
                 </select>
+                {#if selectedJob && transcodeJobs.some(j => j.id === selectedJob && j.run_policy === 'on_demand')}
+                  <div class="flex items-center gap-2 text-sm th-text-secondary">
+                    <input type="checkbox" aria-label={`为 ${stream.name || stream.stream_id} 预加载按需转码`} checked={settings.streams.find(p => p.stream_id === stream.stream_id)?.preload_transcode ?? false} onchange={e => choosePreload(stream.stream_id, e.currentTarget.checked)} />
+                    预加载派生视频（HA 发布期间保持一个消费者租约）
+                  </div>
+                {/if}
                 <span class="text-xs th-text-tertiary">{t('ha.transcodeOutputHint')}</span>
-              </label>
+              </div>
             {/if}
           {:else}<p class="p-4 text-sm th-text-secondary">{t('ha.empty')}</p>{/each}
         </div>

@@ -147,7 +147,6 @@
   let timelineEl: HTMLDivElement | undefined = $state();
   let isDragging = $state(false);
   let dragStartX = $state(0);
-  let dragStartScrollLeft = $state(0);
   let dragMoved = $state(false);
 
   function handleWheel(e: WheelEvent) {
@@ -188,34 +187,41 @@
     }
   }
 
+  // Dragging the timeline scrubs playback. Shift+drag pans the zoomed view.
+  let dragStartClientX = 0;
+  let panWithShift = false;
   function handleMouseDown(e: MouseEvent) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !timelineEl) return;
     isDragging = true;
     dragMoved = false;
     dragStartX = e.clientX;
-    if (timelineEl) {
-      dragStartScrollLeft = timelineEl.scrollLeft;
-    }
+    dragStartClientX = e.clientX;
+    panWithShift = e.shiftKey;
   }
 
   function handleMouseMoveGlobal(e: MouseEvent) {
     if (!isDragging || !timelineEl) return;
-    
-    const dx = e.clientX - dragStartX;
-    if (Math.abs(dx) > 3) dragMoved = true;
+    if (Math.abs(e.clientX - dragStartClientX) > 4) dragMoved = true;
+    if (!panWithShift) return;
     const rect = timelineEl.getBoundingClientRect();
+    if (rect.width <= 0) return;
     const range = viewEnd - viewStart;
-    const hourPerPixel = range / rect.width;
-    const hourDelta = -dx * hourPerPixel;
-    
-    const newStart = Math.max(0, Math.min(24 - range, viewStart + hourDelta));
+    const newStart = Math.max(0, Math.min(24 - range,
+      viewStart - (e.clientX - dragStartX) * range / rect.width));
     viewStart = newStart;
     viewEnd = newStart + range;
     dragStartX = e.clientX;
   }
 
-  function handleMouseUp() {
+  function handleMouseUp(e: MouseEvent) {
+    if (!isDragging) return;
+    const seekAfterDrag = dragMoved && !panWithShift;
     isDragging = false;
+    // A drag doesn't emit a click consistently (especially across children).
+    // Seek once when released; don't accidentally treat shift-pan as a seek.
+    if (seekAfterDrag) snapSeekAtHour(hourFromClientX(e.clientX));
+    // A completed drag must not suppress the next legitimate click.
+    window.setTimeout(() => { dragMoved = false; }, 0);
   }
 
   function hourFromClientX(clientX: number): number {
@@ -258,12 +264,13 @@
 
   function handleTimelineClick(e: MouseEvent) {
     if (dragMoved) return;
-    if ((e.target as HTMLElement).closest('button')) return;
     const hour = hourFromClientX(e.clientX);
     if (e.altKey && onMark) {
+      e.preventDefault();
       onMark(hour, e.shiftKey ? 'out' : 'in');
       return;
     }
+    if ((e.target as HTMLElement).closest('button')) return;
     snapSeekAtHour(hour);
   }
 
@@ -358,6 +365,11 @@
         style={getBlockStyle(recording)}
         onclick={(e) => {
           e.stopPropagation();
+          if (e.altKey && onMark) {
+            e.preventDefault();
+            onMark(hourFromClientX(e.clientX), e.shiftKey ? 'out' : 'in');
+            return;
+          }
           if (onSeek) {
             const start = new Date(recording.started_at).getTime();
             const dayStart = new Date(recording.started_at);

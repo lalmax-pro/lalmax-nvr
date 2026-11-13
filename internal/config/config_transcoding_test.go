@@ -27,7 +27,7 @@ func TestTranscodingConfigDefaultsAndValidation(t *testing.T) {
 
 func TestTranscodingYAMLPathsRoundTrip(t *testing.T) {
 	var cfg Config
-	input := []byte("transcoding:\n  enabled: false\n  ffmpeg_path: /opt/media/ffmpeg\n  gst_launch_path: /opt/media/gst-launch-1.0\n  max_concurrent: 3\n")
+	input := []byte("transcoding:\n  enabled: false\n  ffmpeg_path: /opt/media/ffmpeg\n  gst_launch_path: /opt/media/gst-launch-1.0\n  max_concurrent: 3\n  worker_enabled: true\n")
 	if err := yaml.Unmarshal(input, &cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +43,7 @@ func TestTranscodingYAMLPathsRoundTrip(t *testing.T) {
 	if restored.Transcoding != cfg.Transcoding {
 		t.Fatal("transcoding settings lost on save")
 	}
+	if !restored.Transcoding.WorkerEnabled { t.Fatal("worker mode lost during YAML roundtrip") }
 	if restored.Transcoding.Tools().GSTLaunch != "/opt/media/gst-launch-1.0" {
 		t.Fatal("configured path ignored")
 	}

@@ -21,6 +21,16 @@
   let hls: Hls | null = null;
   let error = $state('');
   let lastWall = 0;
+  let pendingSeekMs: number | null = null;
+  let sourceReady = false;
+  function applySeek() {
+    if (!videoEl || !sourceReady || pendingSeekMs === null || videoEl.readyState < 1) return;
+    const seconds = Math.max(0, pendingSeekMs / 1000);
+    try {
+      videoEl.currentTime = Number.isFinite(videoEl.duration) ? Math.min(seconds, videoEl.duration) : seconds;
+      pendingSeekMs = null;
+    } catch (err) { console.warn('VOD seek postponed until media becomes seekable', err); }
+  }
 
   async function load() {
     error = '';
@@ -32,6 +42,8 @@
       return;
     }
     destroyHls();
+    sourceReady = false;
+    pendingSeekMs = Number.isFinite(seekToMs) ? Math.max(0, seekToMs) : 0;
     hls = new HlsCtor({
       ...createHlsConfig('hls'),
       liveDurationInfinity: false,
@@ -40,9 +52,8 @@
     hls.loadSource(url);
     hls.attachMedia(videoEl);
     hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
-      if (seekToMs > 0 && videoEl) {
-        videoEl.currentTime = seekToMs / 1000;
-      }
+      sourceReady = true;
+      applySeek();
       void videoEl?.play().catch(() => {});
     });
     hls.on(HlsCtor.Events.ERROR, (_ev, data) => {
@@ -76,8 +87,9 @@
 
   $effect(() => {
     const ms = seekToMs;
-    if (videoEl && hls && ms >= 0) {
-      videoEl.currentTime = ms / 1000;
+    if (Number.isFinite(ms) && ms >= 0) {
+      pendingSeekMs = ms;
+      applySeek();
     }
   });
 
@@ -89,7 +101,8 @@
 
   export function seekWallClock(offsetMs: number) {
     seekToMs = offsetMs;
-    if (videoEl) videoEl.currentTime = offsetMs / 1000;
+    pendingSeekMs = offsetMs;
+    applySeek();
   }
 </script>
 
@@ -105,6 +118,8 @@
         bind:this={videoEl}
         class={embedded ? 'w-full h-full object-contain bg-black' : 'w-full max-h-[60vh] bg-black'}
         controls
+        onloadedmetadata={applySeek}
+        oncanplay={applySeek}
         ontimeupdate={() => {
           lastWall = (videoEl?.currentTime || 0) * 1000;
           onTime?.(lastWall);

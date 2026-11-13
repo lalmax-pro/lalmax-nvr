@@ -1978,8 +1978,8 @@ paths:
   /api/integrations/home-assistant/streams/{stream_id}/webrtc:
     post:
       tags: [Settings]
-      summary: Negotiate published H.264 WebRTC playback
-      description: Authenticated SDP offer to the configured media engine. Returns a complete ICE answer and signed cleanup Location. Requires active H.264 publication and enabled WebRTC; no transcoding. AAC audio is not supported by the WebRTC path.
+      summary: Negotiate WebRTC playback for a published source or its configured derived output
+      description: An authenticated SDP offer can play H.264 or H.265 when WebRTC is enabled. If the publication selects a transcoding job, its derived output must already be running and the offer must accept its video and audio codecs. A H.264 profile with G.711 A-law requires PCMA/8000 in the offer. AAC is unsupported for WebRTC audio.
       parameters:
         - {name: stream_id, in: path, required: true, schema: {type: string}}
       requestBody:
@@ -1989,7 +1989,7 @@ paths:
             schema: {type: string, maxLength: 1048576}
       responses:
         '201':
-          description: SDP answer and opaque signed session token.
+          description: SDP answer and an opaque authenticated session token.
           headers:
             Location:
               schema: {type: string}
@@ -1999,13 +1999,14 @@ paths:
               schema: {type: string}
         '400': {description: Invalid offer or incompatible codec.}
         '404': {description: Publication withdrawn.}
+        '422': {description: Unsupported codec on the selected derived output.}
         '502': {description: Negotiation failed.}
         '503': {description: Stream offline or WebRTC unavailable.}
   /api/integrations/home-assistant/streams/{stream_id}/webrtc/{session}:
     delete:
       tags: [Settings]
-      summary: Close a signed Home Assistant WebRTC session
-      description: Cleanup remains available after unpublication. Token is scoped to stream, NVR instance and configured media-engine origin, and expires after 24 hours. Invalid after an NVR restart. Does not accept arbitrary upstream URLs.
+      summary: Close a Home Assistant WebRTC session
+      description: Cleanup remains available after unpublication. The encrypted token is scoped to the stream, NVR instance and configured media-engine origin. It expires after 24 hours or on NVR restart.
       parameters:
         - {name: stream_id, in: path, required: true, schema: {type: string}}
         - {name: session, in: path, required: true, schema: {type: string, maxLength: 8192}}

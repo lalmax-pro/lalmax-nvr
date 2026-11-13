@@ -702,7 +702,11 @@ func (h *Handler) buildIngestURLs(ctx context.Context, streamID, appName string)
 		if protocol == "rtmp" {
 			streamKey := ""
 			if h.config != nil {
+				// Token provisioning swaps StreamKeys under authMu; all readers
+				// must use the same mutex, including ingest URL discovery.
+				h.localVideos.authMu.Lock()
 				streamKey = h.config.RTMP.StreamKeys[streamID]
+				h.localVideos.authMu.Unlock()
 			}
 			if streamKey == "" {
 				continue
@@ -805,6 +809,11 @@ func applyCreatedStream(item *streamSummary, created map[string]storage.CreatedS
 	if row.Name != "" {
 		item.Name = row.Name
 	}
+	if row.InputMode == storage.CreatedStreamLocalVideo {
+		item.SourceType = "local_video"
+		item.SourceURL = ""
+		item.IngestURLs = nil
+	}
 	if row.InputMode == storage.CreatedStreamPull {
 		item.SourceType = "relay_pull"
 		item.SourceURL = row.SourceURL
@@ -825,11 +834,17 @@ func (h *Handler) summaryFromCreated(ctx context.Context, created storage.Create
 		SourceType: "push",
 		Active:     false,
 	}
+	if created.InputMode == storage.CreatedStreamLocalVideo {
+		item.SourceType = "local_video"
+	}
 	if created.InputMode == storage.CreatedStreamPull {
 		item.SourceType = "relay_pull"
 		item.SourceURL = created.SourceURL
 	}
 	h.attachStreamURLs(ctx, &item)
+	if created.InputMode == storage.CreatedStreamLocalVideo {
+		item.IngestURLs = nil
+	}
 	if created.InputMode == storage.CreatedStreamPull {
 		item.IngestURLs = nil
 	}
@@ -1386,6 +1401,9 @@ func (h *Handler) handleDeleteStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		logger.Warn("get created stream for delete failed", "stream_id", streamID, "err", err)
 	}
+	if created != nil && created.InputMode == storage.CreatedStreamLocalVideo {
+		h.stopLocalVideo(streamID)
+	}
 	if created != nil && created.InputMode == storage.CreatedStreamPull {
 		if err := h.mediaEngine.StopPull(ctx, streamID); err != nil {
 			logger.Debug("stop created pull failed", "stream_id", streamID, "err", err)
@@ -1404,6 +1422,10 @@ func (h *Handler) handleDeleteStream(w http.ResponseWriter, r *http.Request) {
 	removedCreated, err := h.db.DeleteCreatedStream(ctx, streamID)
 	if err != nil {
 		logger.Warn("failed to delete created stream", "stream_id", streamID, "error", err)
+	}
+	if removedCreated && created != nil && created.InputMode == storage.CreatedStreamLocalVideo {
+		h.removeLocalVideoFile(created.SourceURL)
+		h.revokeLocalVideoPublishKey(streamID)
 	}
 	if info == nil && !removedCreated {
 		ok, err := h.deleteOfflineStream(ctx, streamID)
@@ -1670,6 +1692,10 @@ func (h *Handler) RestoreCreatedPulls(ctx context.Context) {
 		return
 	}
 	for _, row := range rows {
+		if row.InputMode == storage.CreatedStreamLocalVideo {
+			if err := h.startLocalVideo(row); err != nil { logger.Error("restore local video failed", "stream_id", row.StreamID, "err", err) }
+			continue
+		}
 		if row.InputMode != storage.CreatedStreamPull || strings.TrimSpace(row.SourceURL) == "" {
 			continue
 		}

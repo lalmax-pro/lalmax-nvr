@@ -13,6 +13,8 @@ const (
 	CreatedStreamPush = "push"
 	// CreatedStreamPull is pulled into lalmax from SourceURL.
 	CreatedStreamPull = "pull"
+	// CreatedStreamLocalVideo loops an uploaded server-side video through FFmpeg.
+	CreatedStreamLocalVideo = "local_video"
 )
 
 // CreatedStream is a stream created from the stream page.

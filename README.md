@@ -179,6 +179,7 @@ Full catalog: **[docs/en/README.md](docs/en/README.md)**.
 | Document | Description |
 |----------|-------------|
 | [Architecture](docs/en/architecture.md) | Layers, ingest (pull, GB push, JT1078), VOD, ports, modules |
+| [Live transcoding](docs/zh/transcoding-deployment.md) | Setup, job lifecycle, and derived outputs (Chinese) |
 | [Recording plans](docs/en/recording-plans.md) · [Recording flow](docs/en/recording-flow.md) | When a stream is written, and how the group writer subscribes |
 | [Getting Started](docs/en/getting-started.md) | Install, first camera |
 | [Configuration](docs/en/configuration.md) | YAML reference |

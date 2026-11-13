@@ -1,4 +1,4 @@
-import { apiRequest } from './client';
+import { apiRequest, getAuthHeader } from './client';
 
 export interface StreamSessionStatus {
   session_id: string;
@@ -78,6 +78,36 @@ export interface CreateStreamRequest {
 
 export interface UpdateStreamRequest {
   name: string;
+}
+
+export function createLocalVideoStream(
+  data: { stream_id: string; name?: string; video: File },
+  onProgress?: (percent: number) => void,
+): Promise<StreamInfo> {
+  const form = new FormData();
+  form.set('stream_id', data.stream_id);
+  form.set('name', data.name || '');
+  form.set('video', data.video);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/streams/local-video');
+    const auth = getAuthHeader();
+    if (auth) xhr.setRequestHeader('Authorization', auth);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress?.(Math.min(100, Math.round(event.loaded / event.total * 100)));
+      }
+    };
+    xhr.onload = () => {
+      let result: any;
+      try { result = JSON.parse(xhr.responseText); } catch { result = {}; }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(result as StreamInfo);
+      else reject(new Error(result?.error || '本地视频上传失败'));
+    };
+    xhr.onerror = () => reject(new Error('上传连接失败，请检查网络'));
+    xhr.onabort = () => reject(new Error('上传已取消'));
+    xhr.send(form);
+  });
 }
 
 export async function createStream(data: CreateStreamRequest, signal?: AbortSignal): Promise<StreamInfo> {

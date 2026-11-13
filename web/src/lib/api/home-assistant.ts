@@ -5,6 +5,7 @@ export interface HomeAssistantPublication {
   name?: string;
   app_name: string;
   transcode_job_id?: string;
+  preload_transcode?: boolean;
 }
 
 export interface HomeAssistantSettings {

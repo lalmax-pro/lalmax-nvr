@@ -15,8 +15,8 @@ func TestDerivedFLVUsesTrustedQueryAndFilteredHeaders(t *testing.T) {
 		if r.URL.Query().Get("token") != "internal" || len(r.URL.Query()["token"]) != 1 {
 			t.Error("client query overwrote internal token")
 		}
-		if r.Header.Get("Authorization") != "Basic administrator" {
-			t.Error("missing engine account auth")
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("NVR administrator credentials forwarded to media engine: %q", got)
 		}
 		if r.Header.Get("Cookie") != "" {
 			t.Error("browser cookie leaked to engine")

@@ -107,7 +107,7 @@
     if (channel.device_id === channel.channel_id) {
       return channel.device_id;
     }
-    return `${channel.device_id}_${channel.channel_id}`;
+    return `${channel.device_id}:${channel.channel_id}`;
   }
 
   function getPlayURL(stream: StreamInfo, protocol: string): string {

@@ -11,7 +11,7 @@ import (
 // ownership is rechecked against the runtime registry before using credentials.
 func (a *TranscodeAdapter) DerivedPlayURL(ctx context.Context, source transcode.SourceRef, id, protocol string) (*PlayURL, error) {
 	switch protocol {
-	case "rtsp", "webrtc", "hls", "flv":
+	case "rtsp", "webrtc", "hls", "flv", "rtmp":
 	default:
 		return nil, fmt.Errorf("unsupported derived playback protocol")
 	}

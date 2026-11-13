@@ -1,0 +1,48 @@
+name: PR91 nested Go modules full Race
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr91-nested-race-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lal-race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.2.0
+        with:
+          go-version: '1.26.2'
+      - name: Verify third/lal is a separate pinned Go module
+        run: test -f third/lal/go.mod && test -f third/lal/go.sum
+      - name: Full third/lal Go Race suite
+        working-directory: third/lal
+        env:
+          CGO_ENABLED: '1'
+          GOTOOLCHAIN: local
+        run: go test -race -count=1 -timeout=25m ./...
+
+  lalmax-race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.2.0
+        with:
+          go-version: '1.26.2'
+      - name: Verify third/lalmax is a separate pinned Go module
+        run: test -f third/lalmax/go.mod && test -f third/lalmax/go.sum
+      - name: Full third/lalmax Go Race suite
+        working-directory: third/lalmax
+        env:
+          CGO_ENABLED: '1'
+          GOTOOLCHAIN: local
+        run: go test -race -count=1 -timeout=25m ./...

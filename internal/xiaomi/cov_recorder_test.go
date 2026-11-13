@@ -322,7 +322,20 @@ func TestCovXiaomiRecorderConnectAndRecordSuccess(t *testing.T) {
 		ch <- result{err: err, connected: connected}
 	}()
 
-	require.Eventually(t, func() bool { return pub.count() >= 2 }, 5*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool {
+		pub.mu.Lock()
+		defer pub.mu.Unlock()
+		var hasVideo, hasAudio bool
+		for _, p := range pub.packets {
+			switch p.PayloadType {
+			case base.AvPacketPtAvc:
+				hasVideo = true
+			case base.AvPacketPtG711A:
+				hasAudio = true
+			}
+		}
+		return hasVideo && hasAudio
+	}, 5*time.Second, 5*time.Millisecond)
 	cancel()
 
 	select {

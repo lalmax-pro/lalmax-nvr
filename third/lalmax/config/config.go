@@ -78,6 +78,7 @@ type RtcConfig struct {
 	Enable          bool     `json:"enable"`              // rtc服务使能配置
 	ICEHostNATToIPs []string `json:"ice_host_nat_to_ips"` // rtc服务公网IP，未设置使用内网
 	ICEUDPMuxPort   int      `json:"ice_udp_mux_port"`    // rtc udp mux port
+	ICEListenIP     string   `json:"ice_listen_ip"` // rtc mux bind IP; empty preserves wildcard
 	ICETCPMuxPort   int      `json:"ice_tcp_mux_port"`    // rtc tcp mux port
 	WriteChanSize   int      `json:"write_chan_size"`
 }

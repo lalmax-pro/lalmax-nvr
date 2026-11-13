@@ -384,6 +384,9 @@ func TestCovCS2DialTCPSessionControlMessages(t *testing.T) {
 	device.waitHandshake(t)
 
 	// WriteCommand over TCP is fire-and-forget and returns immediately.
+	// The fake camera replies to authentication asynchronously. Consume and
+	// verify that response before injecting an unrelated audio-format frame;
+	// otherwise the order of the two commands depends on goroutine scheduling.
 	require.NoError(t, conn.WriteCommand(missCmdAuthReq, []byte(`{}`)))
 	cmd, data, err := conn.ReadCommand()
 	require.NoError(t, err)

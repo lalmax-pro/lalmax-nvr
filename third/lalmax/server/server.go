@@ -187,6 +187,15 @@ func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxSe
 			option.ConfFilename = conf.LalSvrConfigPath
 		}
 		option.NotifyHandler = notifyHub
+		// Bridge native RTMP/RTSP missing-subscriber events into the same hook
+		// hub used by WHEP. The NVR plugin gates GB28181 auto-INVITE.
+		option.OnStreamNotFound = func(app, stream, schema string) {
+			notifyHub.NotifyStreamNotFound(ZlmOnStreamNotFoundPayload{
+				MediaServerID: conf.ServerId,
+				App: app, Stream: stream, Schema: schema,
+				Vhost: "__defaultVhost__",
+			})
+		}
 		if serverOpts.authentication != nil {
 			option.Authentication = serverOpts.authentication
 		}

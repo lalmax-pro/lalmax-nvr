@@ -60,17 +60,21 @@ func ProbeFFmpeg(ctx context.Context, paths ToolPaths, p Profile, runner ProbeRu
 	} else {
 		args = append(args, "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=15")
 	}
-	if p.Audio.Codec == "aac" && !usesFixture {
+	if (p.Audio.Codec == "aac" || p.Audio.Codec == "g711a") && !usesFixture {
 		args = append(args, "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000")
 	}
 	args = append(args, "-t", "0.5", "-map", "0:v:0")
 	args = append(args, ffmpegVideoArgs(p.Video, "1")...)
-	if p.Audio.Codec == "aac" {
+	if p.Audio.Codec == "aac" || p.Audio.Codec == "g711a" {
 		audioInput := "1:a:0"
 		if usesFixture {
 			audioInput = "0:a:0"
 		}
-		args = append(args, "-map", audioInput, "-c:a", "aac", "-ar", strconv.Itoa(p.Audio.SampleRate), "-ac", strconv.Itoa(p.Audio.Channels), "-b:a", strconv.Itoa(p.Audio.BitrateKbps)+"k")
+		if p.Audio.Codec == "g711a" {
+			args = append(args, "-map", audioInput, "-c:a", "pcm_alaw", "-ar", "8000", "-ac", "1")
+		} else {
+			args = append(args, "-map", audioInput, "-c:a", "aac", "-ar", strconv.Itoa(p.Audio.SampleRate), "-ac", strconv.Itoa(p.Audio.Channels), "-b:a", strconv.Itoa(p.Audio.BitrateKbps)+"k")
+		}
 	} else if p.Audio.Codec == "copy" {
 		args = append(args, "-map", "0:a:0", "-c:a", "copy")
 	} else {
@@ -122,7 +126,9 @@ func validProbeMedia(data []byte, p Profile) bool {
 				video = video && s.Width <= p.Video.MaxWidth && s.Height <= p.Video.MaxHeight
 			}
 		case "audio":
-			if p.Audio.Codec == "copy" {
+			if p.Audio.Codec == "g711a" {
+				audio = s.CodecName == "pcm_alaw" && s.Channels == 1 && s.SampleRate == "8000"
+			} else if p.Audio.Codec == "copy" {
 				audio = s.CodecName == "aac" && s.Channels == 1 && s.SampleRate == "48000"
 			} else {
 				audio = s.CodecName == "aac" && s.Channels == p.Audio.Channels && s.SampleRate == strconv.Itoa(p.Audio.SampleRate)

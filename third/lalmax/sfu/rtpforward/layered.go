@@ -452,11 +452,35 @@ func (s *LayeredSubscriber) run() {
 				if old != nil {
 					old.Close()
 				}
+				if changed {
+					s.dropBufferedPackets()
+				}
 			}
 			request.ack <- err
 			if err == nil && onLayerChange != nil {
 				onLayerChange(request.rid)
 			}
+		}
+	}
+}
+
+// dropBufferedPackets removes RTP queued for the previous RID before a layer
+// switch is acknowledged. The input reader and switch requests share one run
+// goroutine, so no old-RID packet can be enqueued after this drain. Account for
+// the discarded packets when rebasing sequence numbers at the next RID.
+func (s *LayeredSubscriber) dropBufferedPackets() {
+	dropped := 0
+	for {
+		select {
+		case <-s.packets:
+			dropped++
+		default:
+			if dropped > 0 {
+				s.mu.Lock()
+				s.lastSeq -= uint16(dropped)
+				s.mu.Unlock()
+			}
+			return
 		}
 	}
 }

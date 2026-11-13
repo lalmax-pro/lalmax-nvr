@@ -76,9 +76,9 @@ sequenceDiagram
 
 `media_ip` 必须是设备能路由到的地址（不要填 `127.0.0.1`）。`media_port: 0` 为多端口随机分配；大于 0 为单端口模式。
 
-### 直接 WHEP 地址按需点播（可选）
+### WHEP / RTSP / RTMP 按需点播（可选）
 
-NVR Web 页面通过 `/api/gb28181/play` 发送 INVITE。直接访问 LALMax WHEP 地址时不会调用该 API。可以显式开启：
+NVR Web 页面通过 `/api/gb28181/play` 发送 INVITE。直接通过 LALMax 的 WHEP、RTSP 或 RTMP 拉流地址播放时，不会调用该 API；可显式开启自动唤醒：
 
 ```yaml
 gb28181:
@@ -87,16 +87,19 @@ gb28181:
   whep_on_demand_enabled: true
 ```
 
-启用后，已注册通道的播放地址不变，例如：
+启用后，已注册通道的播放地址不变。以下示例使用同一个流名 `<device_id>:<channel_id>`：
 
 ```text
-http://<server>:12090/webrtc/whep?streamid=32010000001327000001:34020000001320000001&app_name=live
+http://<server>:12090/webrtc/whep?streamid=<device_id>:<channel_id>&app_name=live
+rtsp://<server>:15544/live/<device_id>:<channel_id>
+rtmp://<server>:11935/live/<device_id>:<channel_id>
 ```
 
-WHEP POST 发现流不存在后，触发 `on_stream_not_found`，NVR 校验已注册且在线的 GB28181 设备与通道，随后通过 `EnsurePlay` 发送 SIP INVITE，最多等待 12 秒。
-已存在的流直接播放；同一路启动请求去重，重试间隔 15 秒，并发启动最多 4 路。
+WHEP POST / RTSP DESCRIBE / RTMP 播放发现媒体暂不可用时，发出 `on_stream_not_found`，NVR 验证这是已经注册、在线且存在的 GB28181 通道，然后使用 `EnsurePlay` 发送 SIP INVITE。
+WHEP 最长等待约 12 秒获得可解码视频后完成 SDP；RTSP 在 DESCRIBE 时由 lal 保留会话，待媒体引擎提供 SDP 后继续；RTMP 播放者先订阅流组，等待发布者到达。
+同一通道跨协议共享去重与 15 秒冷却，最多允许 4 路并发唤醒。未注册设备、其他应用路径或非 GB28181 流不会唤醒。
 
-**默认关闭**：公网用户可能通过已知通道 ID 触发 INVITE。启用时建议限制 WHEP 入口访问来源，或配置播放 Token。本功能不能启动外部 RTMP 发送端，也不会自动向国标设备发送 BYE；媒体会话释放沿用 NVR 原有机制。
+**默认关闭**：公网用户如果知道设备和通道 ID，可能通过 RTSP/RTMP/WHEP 播放触发 SIP INVITE。启用前需限制播放端访问来源并为协议配置鉴权；RTSP/RTMP 原生端口并不经过 NVR Web 登录认证。本功能不会启动外部 RTMP 推流设备，也不会自动向国标设备发送 BYE。
 
 
 ### 录像回放与下载

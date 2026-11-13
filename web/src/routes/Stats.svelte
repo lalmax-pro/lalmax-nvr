@@ -1,21 +1,22 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import {
-    getStats, listCameras, healthDetails, getSystemStats, getMergeStatus, getMergePending,
+    getStats, listCameras, listStreams, healthDetails, getSystemStats, getMergeStatus, getMergePending,
     getLocalNetworkInterfaces, getStatsTrends,
-    getSystemMetricsHistory, getHourlyStats, getCameraUptimeStats, getAPIObservability, getRecentTraces, getTrace,
+    apiRequest, getSystemMetricsHistory, getHourlyStats, getCameraUptimeStats, getAPIObservability, getRecentTraces, getTrace,
   } from '$lib/api';
   import type {
-    StorageStats, Camera, HealthResponse, SystemStats, MergeStatus, MergePending,
+    StorageStats, Camera, StreamInfo, HealthResponse, SystemStats, MergeStatus, MergePending,
     NetworkInterface, SystemMetricSample, HourlyStats, CameraUptimeStat, APIObservabilityResponse,
     TraceListResponse, TraceDetailResponse,
   } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { loadGBChannelNames, gbDisplayName, cameraDisplayName, type ChannelNames } from '$lib/gb-channel-names';
   import { formatFileSize, formatDate } from '$lib/format';
 
   import {
     HardDrive, BarChart3, Video, CameraIcon, Cpu, MemoryStick, Wifi,
-    ChevronDown, ChevronUp, GitMerge, Activity, Clock, Server, Gauge, ExternalLink, X,
+    ChevronDown, ChevronUp, GitMerge, Activity, Clock, Server, Gauge, ExternalLink, X, Network,
   } from 'lucide-svelte';
   import {
     loadChart, createTrendChart, createCameraChart, aggregateCameraTotals, BAR_COLORS,
@@ -25,8 +26,14 @@
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
 
-  type StatsTab = 'overview' | 'resources' | 'api' | 'recordings' | 'cameras' | 'system';
+  type StatsTab = 'overview' | 'resources' | 'api' | 'recordings' | 'cameras' | 'system' | 'traffic';
+  let { initialTab = 'overview' }: { initialTab?: string } = $props();
+  const validTabs: StatsTab[] = ['overview', 'resources', 'api', 'recordings', 'cameras', 'system', 'traffic'];
   let activeTab = $state<StatsTab>('overview');
+  $effect(() => {
+    const next = validTabs.includes(initialTab as StatsTab) ? initialTab as StatsTab : 'overview';
+    untrack(() => { if (activeTab !== next) switchTab(next); });
+  });
 
   const tabs: { id: StatsTab; labelKey: string; icon: any }[] = [
     { id: 'overview',   labelKey: 'stats.tabOverview',   icon: BarChart3 },
@@ -35,6 +42,7 @@
     { id: 'recordings', labelKey: 'stats.tabRecordings', icon: Video },
     { id: 'cameras',    labelKey: 'stats.tabCameras',    icon: CameraIcon },
     { id: 'system',     labelKey: 'stats.tabSystem',     icon: Server },
+    { id: 'traffic', labelKey: '流量监控', icon: Network },
   ];
 
   // ── Shared state ──────────────────────────────────────────────────────────
@@ -52,6 +60,173 @@
   let memoryPercent = $state<string | null>(null);
   let netRateUp = $state<string | null>(null);
   let netRateDown = $state<string | null>(null);
+
+  // Media egress telemetry: reports ONLY subscriber sessions that supply a
+  // send bitrate. It must not be presented as an OS NIC or wire-byte total.
+  type EgressRow = { stream: string; name: string; protocol: string; remote: string; session: string; kbps: number | null };
+  let egressRows = $state<EgressRow[]>([]);
+  let ingressRows = $state<EgressRow[]>([]);
+  let gbNames = $state<ChannelNames>(new Map());
+  let egressLoading = $state(false);
+  let egressTimer: ReturnType<typeof setInterval> | undefined;
+  let egressError = $state('');
+  let egressFetchedAt = $state('');
+  let egressScanComplete = $state(true);
+  let ingressKnownKbps = $derived(ingressRows.reduce((sum, row) => sum + (row.kbps ?? 0), 0));
+  let ingressUnknown = $derived(ingressRows.filter(row => row.kbps === null).length);
+  let egressKnownKbps = $derived(egressRows.reduce((sum, row) => sum + (row.kbps ?? 0), 0));
+  let egressUnknown = $derived(egressRows.filter(row => row.kbps === null).length);
+  let egressByProtocol = $derived.by(() => {
+    const totals = new Map<string, { kbps: number; count: number; unknown: number }>();
+    for (const row of egressRows) {
+      const key = row.protocol || 'unknown';
+      const item = totals.get(key) || {kbps: 0, count: 0, unknown: 0};
+      item.count++;
+      if (row.kbps === null) item.unknown++;
+      else item.kbps += row.kbps;
+      totals.set(key, item);
+    }
+    return [...totals.entries()].map(([protocol, stats]) => ({ protocol, ...stats })).sort((a, b) => b.kbps - a.kbps);
+  });
+  function formatMbps(kbps: number): string { return (kbps / 1000).toFixed(2) + ' Mbps'; }
+  async function loadEgress() {
+    if (egressLoading) return;
+    egressLoading = true;
+    egressError = '';
+    try {
+      const catalogPromise = loadGBChannelNames().catch(() => new Map<string,string>());
+      const streams: StreamInfo[] = [];
+      const limit = 200;
+      let offset = 0;
+      let complete = true;
+      for (let page = 0; page < 50; page++) {
+        const res = await listStreams({ limit, offset });
+        streams.push(...res.streams);
+        offset += res.streams.length;
+        if (!res.streams.length || offset >= res.total) break;
+        if (page === 49) complete = false;
+      }
+      egressScanComplete = complete;
+      gbNames = await catalogPromise;
+      ingressRows = streams.filter(stream => stream.publisher).map(stream => ({
+        stream: stream.stream_id,
+        name: gbDisplayName(gbNames, [stream.stream_id, stream.camera_id], stream.name || stream.camera_name || stream.stream_id),
+        protocol: stream.publisher!.protocol || 'unknown',
+        remote: stream.publisher!.remote || '未提供',
+        session: stream.publisher!.session_id,
+        kbps: typeof stream.publisher!.read_bitrate_kbits === 'number' && Number.isFinite(stream.publisher!.read_bitrate_kbits)
+          ? Math.max(0, stream.publisher!.read_bitrate_kbits) : null,
+      })).sort((a, b) => (b.kbps ?? -1) - (a.kbps ?? -1));
+      egressRows = streams.flatMap(stream => (stream.subscribers || []).map(sub => ({
+        stream: stream.stream_id,
+        name: gbDisplayName(gbNames, [stream.stream_id, stream.camera_id], stream.name || stream.camera_name || stream.stream_id),
+        protocol: sub.protocol || 'unknown',
+        remote: sub.remote || '未提供',
+        session: sub.session_id,
+        kbps: typeof sub.write_bitrate_kbits === 'number' && Number.isFinite(sub.write_bitrate_kbits)
+          ? Math.max(0, sub.write_bitrate_kbits) : null,
+      }))).sort((a,b) => (b.kbps ?? -1) - (a.kbps ?? -1));
+      egressFetchedAt = new Date().toLocaleTimeString();
+    } catch (e) {
+      egressError = e instanceof Error ? e.message : String(e);
+    } finally { egressLoading = false; }
+  }
+
+  type TrafficPoint = { ts: number; in_kbps: number; out_kbps: number; publishers: number; subscribers: number; unknown_in: number; unknown_out: number };
+  let trafficPeriod = $state<'5m' | '15m' | '30m' | '1h' | '6h' | '24h'>('6h');
+  let trafficSamples = $state<TrafficPoint[]>([]);
+  let trafficHistoryError = $state('');
+  let trafficChart: any = null;
+  let trafficSessionsChart: any = null;
+  let trafficChartCanvas = $state<HTMLCanvasElement>();
+  let trafficSessionsCanvas = $state<HTMLCanvasElement>();
+  let trafficHistoryRequest = 0;
+
+  function destroyTrafficChart() {
+    trafficChart?.destroy();
+    trafficChart = null;
+    trafficSessionsChart?.destroy();
+    trafficSessionsChart = null;
+  }
+
+  async function loadTrafficHistory() {
+    const request = ++trafficHistoryRequest;
+    try {
+      const samples = await apiRequest<TrafficPoint[]>('/metrics/traffic/history?period=' + trafficPeriod);
+      if (request !== trafficHistoryRequest) return;
+      trafficSamples = samples ?? [];
+      trafficHistoryError = '';
+      if (!ChartJs) ChartJs = await loadChart();
+      window.setTimeout(() => { if (request === trafficHistoryRequest && activeTab === 'traffic') buildTrafficChart(); }, 30);
+    } catch (e) {
+      if (request === trafficHistoryRequest) trafficHistoryError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  function buildTrafficChart() {
+    if (!trafficChartCanvas || !ChartJs) return;
+    const labels = trafficSamples.map(p => new Date(p.ts * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}));
+    const values = [
+      trafficSamples.map(p => p.in_kbps / 1000),
+      trafficSamples.map(p => p.out_kbps / 1000),
+    ];
+    if (trafficChart) {
+      trafficChart.data.labels = labels;
+      trafficChart.data.datasets[0].data = values[0];
+      trafficChart.data.datasets[1].data = values[1];
+      trafficChart.update('none');
+    if (trafficSessionsChart) {
+      trafficSessionsChart.data.labels = labels;
+      trafficSessionsChart.data.datasets[0].data = trafficSamples.map(p => p.publishers);
+      trafficSessionsChart.data.datasets[1].data = trafficSamples.map(p => p.subscribers);
+      trafficSessionsChart.update('none');
+    } else if (trafficSessionsCanvas) {
+      trafficSessionsChart = new ChartJs(trafficSessionsCanvas, {
+        type:'line',
+        data:{labels,datasets:[
+          {label:'推流会话', data:trafficSamples.map(p => p.publishers),borderColor:'#10b981',tension:0.15,pointRadius:0},
+          {label:'播放会话', data:trafficSamples.map(p => p.subscribers),borderColor:'#f59e0b',tension:0.15,pointRadius:0},
+        ]},
+        options:{animation:false,responsive:true,maintainAspectRatio:false,
+          interaction:{mode:'index',intersect:false},
+          scales:{y:{beginAtZero:true,title:{display:true,text:'会话数'}},x:{ticks:{maxTicksLimit:9}}},
+          plugins:{legend:{position:'top'}}},
+      });
+    }
+      return;
+    }
+    trafficChart = new ChartJs(trafficChartCanvas, {
+      type: 'line',
+      data: { labels, datasets: [
+        {label:'入口 Mbps', data:values[0], borderColor:'#38bdf8', backgroundColor:'rgba(56,189,248,0.08)', fill:true, tension:0.15, pointRadius:0},
+        {label:'出口 Mbps', data:values[1], borderColor:'#8b5cf6', backgroundColor:'rgba(139,92,246,0.08)', fill:true, tension:0.15, pointRadius:0},
+      ]},
+      options: {
+        animation:false, responsive:true, maintainAspectRatio:false,
+        interaction:{mode:'index', intersect:false},
+        scales: {y:{beginAtZero:true,title:{display:true,text:'Mbps'}},x:{ticks:{maxTicksLimit:9}}},
+        plugins:{legend:{position:'top'}},
+      },
+    });
+    if (trafficSessionsChart) {
+      trafficSessionsChart.data.labels = labels;
+      trafficSessionsChart.data.datasets[0].data = trafficSamples.map(p => p.publishers);
+      trafficSessionsChart.data.datasets[1].data = trafficSamples.map(p => p.subscribers);
+      trafficSessionsChart.update('none');
+    } else if (trafficSessionsCanvas) {
+      trafficSessionsChart = new ChartJs(trafficSessionsCanvas, {
+        type:'line',
+        data:{labels,datasets:[
+          {label:'推流会话', data:trafficSamples.map(p => p.publishers),borderColor:'#10b981',tension:0.15,pointRadius:0},
+          {label:'播放会话', data:trafficSamples.map(p => p.subscribers),borderColor:'#f59e0b',tension:0.15,pointRadius:0},
+        ]},
+        options:{animation:false,responsive:true,maintainAspectRatio:false,
+          interaction:{mode:'index',intersect:false},
+          scales:{y:{beginAtZero:true,title:{display:true,text:'会话数'}},x:{ticks:{maxTicksLimit:9}}},
+          plugins:{legend:{position:'top'}}},
+      });
+    }
+  }
 
   // Auto-refresh
   let refreshInterval: number;
@@ -174,8 +349,14 @@
   }
 
   async function loadCameras() {
-    try { cameras = await listCameras(); }
-    catch (e) { console.error(e); }
+    try {
+      const [cameraRows, channelNames] = await Promise.all([
+        listCameras(),
+        loadGBChannelNames().catch(() => new Map<string, string>()),
+      ]);
+      cameras = cameraRows;
+      gbNames = channelNames;
+    } catch (e) { console.error(e); }
   }
 
   async function loadHealth() {
@@ -426,6 +607,7 @@
   function switchTab(tab: StatsTab) {
     // Destroy charts of the leaving tab so canvas IDs don't conflict on re-mount
     if (activeTab === 'resources')  destroySysCharts();
+    if (activeTab === 'traffic') destroyTrafficChart();
     if (activeTab === 'api') destroyAPICharts();
     if (activeTab === 'recordings') {
       if (trendChart)  { trendChart.destroy();  trendChart  = null; }
@@ -434,6 +616,8 @@
     }
 
     activeTab = tab;
+    const nextHash = tab === 'overview' ? '#/stats' : `#/stats?tab=${tab}`;
+    if (window.location.hash !== nextHash) window.history.replaceState(window.history.state, '', nextHash);
 
     // Lazy-load data for the newly activated tab
     window.setTimeout(() => {
@@ -442,10 +626,16 @@
       if (tab === 'recordings') { loadHourlyStats(); loadTrends(); }
       if (tab === 'cameras')    loadStabilityData();
       if (tab === 'system')     { loadNetworkInterfaces(); loadMergeData(); }
+      if (tab === 'traffic')    { void loadEgress(); void loadTrafficHistory(); }
     }, 30);
   }
 
   // ── Reactive: reload when period selectors change ─────────────────────────
+
+  $effect(() => {
+    const _p = trafficPeriod;
+    if (activeTab === 'traffic') void loadTrafficHistory();
+  });
 
   $effect(() => {
     const _p = sysHistoryPeriod;
@@ -500,11 +690,16 @@
       if (activeTab === 'system')     { loadNetworkInterfaces(); loadMergeData(); }
     }, 30000);
 
+    egressTimer = window.setInterval(() => {
+      if (activeTab === 'traffic' && !document.hidden) { void loadEgress(); void loadTrafficHistory(); }
+    }, 5000);
+
     apiRefreshInterval = window.setInterval(() => {
       if (activeTab === 'api' && !document.hidden && !apiLoading) loadAPIObservability();
     }, 5000);
 
     themeObserver = new MutationObserver(() => {
+      if (activeTab === 'traffic' && trafficSamples.length > 0) { destroyTrafficChart(); window.setTimeout(() => buildTrafficChart(), 50); }
       if (activeTab === 'resources' && sysHistorySamples.length > 0) {
         window.setTimeout(() => buildSysCharts(), 50);
       }
@@ -522,6 +717,7 @@
     return () => {
       clearInterval(refreshInterval);
       clearInterval(apiRefreshInterval);
+      if (egressTimer) clearInterval(egressTimer);
       apiAbortController?.abort();
       themeObserver?.disconnect();
     };
@@ -570,6 +766,71 @@
         </button>
       {/each}
     </div>
+
+    {#if activeTab === 'traffic'}
+      <section class="card p-5 mb-6 space-y-4" aria-label="NVR 媒体出入口监控">
+        <h4 class="font-semibold th-text-primary">媒体出入口历史（最近 24 小时内）</h4>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-sm th-text-secondary">时间范围：</span>
+          {#each (['5m','15m','30m','1h','6h','24h'] as const) as p}
+            <button class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors {trafficPeriod === p ? 'bg-[var(--color-primary)] text-white' : 'card border th-border th-text-secondary hover:th-text-primary'}" onclick={() => { trafficPeriod = p; }}>{p === '5m' ? '5分钟' : p === '15m' ? '15分钟' : p === '30m' ? '30分钟' : p === '1h' ? '1小时' : p === '6h' ? '6小时' : '24小时'}</button>
+          {/each}
+        </div>
+        {#if trafficHistoryError}<p class="th-color-danger">历史读取失败：{trafficHistoryError}</p>{/if}
+        {#if trafficSamples.length === 0}<p class="text-sm th-text-secondary">历史采样尚未积累，服务启动后每 5 秒采集一次。</p>{/if}
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="rounded-lg border th-border p-3"><h5 class="text-sm font-medium mb-2">入口 / 出口码率</h5><div class="h-[270px]"><canvas bind:this={trafficChartCanvas} aria-label="入口和出口历史码率趋势图"></canvas></div></div>
+          <div class="rounded-lg border th-border p-3"><h5 class="text-sm font-medium mb-2">推流 / 播放会话数</h5><div class="h-[270px]"><canvas bind:this={trafficSessionsCanvas} aria-label="发布者和订阅者历史会话数趋势图"></canvas></div></div>
+        </div>
+        <p class="text-xs th-text-secondary">仅统计媒体会话报告的已知码率；不是网卡总流量。未上报码率的会话不计入合计；历史在服务内存保留 24 小时，NVR 重启后重新积累。</p>
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 class="text-lg font-semibold th-text-primary">媒体流量出入口</h3>
+            <p class="text-sm th-text-secondary">入口统计发布者上报的接收码率，出口统计订阅者上报的发送码率；均不等同于网卡总流量。</p>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick={() => void loadEgress()} disabled={egressLoading}>刷新</button>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div class="rounded-lg p-4 th-bg-tertiary"><p class="text-sm th-text-secondary">已知媒体入口合计</p><strong class="text-2xl">{formatMbps(ingressKnownKbps)}</strong></div>
+          <div class="rounded-lg p-4 th-bg-tertiary"><p class="text-sm th-text-secondary">活跃推流会话</p><strong class="text-2xl">{ingressRows.length}</strong></div>
+          <div class="rounded-lg p-4 th-bg-tertiary"><p class="text-sm th-text-secondary">入口码率未知会话</p><strong class="text-2xl">{ingressUnknown}</strong></div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div class="rounded-lg p-4 th-bg-tertiary"><p class="text-sm th-text-secondary">已知媒体出口合计</p><strong class="text-2xl">{formatMbps(egressKnownKbps)}</strong></div>
+          <div class="rounded-lg p-4 th-bg-tertiary"><p class="text-sm th-text-secondary">活跃订阅会话</p><strong class="text-2xl">{egressRows.length}</strong></div>
+          <div class="rounded-lg p-4 th-bg-tertiary"><p class="text-sm th-text-secondary">未报告发送码率</p><strong class="text-2xl">{egressUnknown}</strong></div>
+        </div>
+        {#if egressUnknown > 0 || !egressScanComplete}
+          <p class="text-sm th-text-secondary">注意：部分会话缺少发送码率或列表未完整扫描，合计值不是 NVR 实际总出口。</p>
+        {/if}
+        {#if egressError}<p class="th-color-danger" role="alert">加载失败：{egressError}</p>{/if}
+        <p class="text-xs th-text-secondary">最近更新：{egressFetchedAt || '尚未采集'}（按当前会话快照统计）</p>
+        <h4 class="font-semibold th-text-primary">入口：按流与发布者</h4>
+        <div class="overflow-x-auto max-h-[360px] overflow-y-auto">
+          <table class="w-full text-sm"><thead class="sticky top-0 th-bg-secondary"><tr><th class="p-2 text-left">流名称 / 完整 ID</th><th class="p-2 text-left">协议</th><th class="p-2 text-left">发布者</th><th class="p-2 text-right">接收码率</th></tr></thead><tbody>
+            {#each ingressRows as item (item.stream + ':' + item.session)}
+              <tr class="border-t th-border"><td class="p-2"><div>{item.name}</div><div class="text-xs th-text-secondary">{item.stream}</div></td><td class="p-2">{item.protocol}</td><td class="p-2">{item.remote}</td><td class="p-2 text-right">{item.kbps === null ? '未提供' : formatMbps(item.kbps)}</td></tr>
+            {/each}
+          </tbody></table>
+          {#if !ingressRows.length && !egressLoading}<p class="p-4 th-text-secondary">当前没有检测到发布会话</p>{/if}
+        </div>
+        <h4 class="font-semibold th-text-primary">出口：按协议统计</h4>
+        <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left p-2">协议</th><th class="text-right p-2">会话数</th><th class="text-right p-2">已知出口</th><th class="text-right p-2">未知会话</th></tr></thead><tbody>
+          {#each egressByProtocol as group (group.protocol)}
+            <tr class="border-t th-border"><td class="p-2">{group.protocol}</td><td class="p-2 text-right">{group.count}</td><td class="p-2 text-right">{formatMbps(group.kbps)}</td><td class="p-2 text-right">{group.unknown}</td></tr>
+          {/each}
+        </tbody></table></div>
+        <h4 class="font-semibold th-text-primary">出口：按流与客户端</h4>
+        <div class="overflow-x-auto max-h-[520px] overflow-y-auto">
+          <table class="w-full text-sm"><thead class="sticky top-0 th-bg-secondary"><tr><th class="p-2 text-left">流名称 / ID</th><th class="p-2 text-left">协议</th><th class="p-2 text-left">客户端</th><th class="p-2 text-right">发送码率</th></tr></thead><tbody>
+            {#each egressRows as item (item.stream + ':' + item.session)}
+              <tr class="border-t th-border"><td class="p-2"><div>{item.name}</div><div class="text-xs th-text-secondary">{item.stream}</div></td><td class="p-2">{item.protocol}</td><td class="p-2">{item.remote}</td><td class="p-2 text-right">{item.kbps === null ? '未提供' : formatMbps(item.kbps)}</td></tr>
+            {/each}
+          </tbody></table>
+          {#if !egressRows.length && !egressLoading}<p class="p-4 th-text-secondary">当前没有检测到订阅会话</p>{/if}
+        </div>
+      </section>
+    {/if}
 
     <!-- Loading state (initial) -->
     {#if loading && !stats}
@@ -1228,7 +1489,7 @@
                       <tr class="transition-all duration-200 hover:th-bg-hover">
                         <td class="font-medium th-text-primary">
                           <span class="inline-block w-2 h-2 rounded-full mr-2 {camera.enabled ? 'bg-[var(--color-success)]' : 'bg-[var(--color-danger)]'}"></span>
-                          {camera.name}
+                          {cameraDisplayName(gbNames, camera)}
                         </td>
                         <td class="th-text-muted font-mono text-sm">{camera.id}</td>
                         <td><span class="badge badge-neutral">{camera.protocol}</span></td>

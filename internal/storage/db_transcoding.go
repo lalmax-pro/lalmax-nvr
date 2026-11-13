@@ -26,6 +26,22 @@ func (d *DB) createTranscodeTable(ctx context.Context) error {
 	if _, err = d.execContext(ctx, `CREATE TABLE IF NOT EXISTS transcode_outputs_v1 (id TEXT PRIMARY KEY, source_id TEXT NOT NULL)`); err != nil {
 		return err
 	}
+	if _, err = d.execContext(ctx, `CREATE TABLE IF NOT EXISTS transcode_recording_sources_v1 (
+        physical_stream_id TEXT PRIMARY KEY,
+        source_stream_id TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        generation BIGINT NOT NULL,
+        profile_id TEXT NOT NULL,
+        profile_revision BIGINT NOT NULL,
+        video_codec TEXT NOT NULL,
+        audio_codec TEXT NOT NULL,
+        requested_at TEXT NOT NULL
+    )`); err != nil {
+        return err
+    }
+    if _, err = d.execContext(ctx, `CREATE INDEX IF NOT EXISTS idx_tc_recording_sources_source ON transcode_recording_sources_v1(source_stream_id)`); err != nil {
+        return err
+    }
 	_, err = d.execContext(ctx, `INSERT OR IGNORE INTO transcode_intent_v1 (id, revision, payload) VALUES (?, ?, ?)`, "main", 1, `{"profiles":[],"jobs":[]}`)
 	return err
 }

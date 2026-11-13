@@ -65,7 +65,7 @@ func ProbeGStreamer(ctx context.Context, paths ToolPaths, p Profile, runner Prob
 	}
 	// Decode the audio separately so an unlinked audio track cannot be mistaken
 	// for a verified audio decode merely because the video sink received buffers.
-	if p.Audio.Codec == "aac" {
+	if p.Audio.Codec == "aac" || p.Audio.Codec == "g711a" {
 		if _, err = runner.Run(ctx, paths.GSTLaunch, "-e", "filesrc", gstProperty("location", output), "!", "decodebin", "name=d", "d.", "!", "queue", "!", "audioconvert", "!", "fakesink", "sync=false"); err != nil {
 			result(CheckFailed, "GStreamer audio output failed decoding")
 			return report, nil
@@ -88,9 +88,15 @@ func gstreamerSelfTestArgs(p Profile, output string) ([]string, error) {
 	}
 	v := p.Video
 	args := []string{"-e", "flvmux", "name=mux", "streamable=true", "!", "filesink", gstProperty("location", output), "videotestsrc", "num-buffers=15", "!", fmt.Sprintf("video/x-raw,format=I420,width=%d,height=%d,framerate=%d/1", w, h, v.FPS), "!", "x264enc", "tune=zerolatency", "speed-preset=veryfast", "threads=1", "bitrate=" + strconv.Itoa(v.BitrateKbps), "key-int-max=" + strconv.Itoa(v.GOPFrames), "!", "h264parse", "!", "video/x-h264,stream-format=avc,alignment=au", "!", "queue", "!", "mux.video"}
-	if p.Audio.Codec == "aac" {
+	if p.Audio.Codec == "aac" || p.Audio.Codec == "g711a" {
 		a := p.Audio
-		args = append(args, "audiotestsrc", "num-buffers=24", "!", "audioconvert", "!", "audioresample", "!", fmt.Sprintf("audio/x-raw,rate=%d,channels=%d", a.SampleRate, a.Channels), "!", "avenc_aac", "bitrate="+strconv.Itoa(a.BitrateKbps*1000), "!", "aacparse", "!", "queue", "!", "mux.audio")
+		args = append(args, "audiotestsrc", "num-buffers=24", "!", "audioconvert", "!", "audioresample", "!", fmt.Sprintf("audio/x-raw,rate=%d,channels=%d", a.SampleRate, a.Channels))
+		if a.Codec == "g711a" {
+			args = append(args, "!", "alawenc")
+		} else {
+			args = append(args, "!", "avenc_aac", "bitrate="+strconv.Itoa(a.BitrateKbps*1000), "!", "aacparse")
+		}
+		args = append(args, "!", "queue", "!", "mux.audio")
 	}
 	return args, nil
 }

@@ -221,7 +221,13 @@ func (sm *ServerManager) RunLoop() error {
 	if err := addMux(sm.config.HttptsConfig.CommonHttpServerConfig, sm.httpServerHandler.ServeSubSession, "httpts"); err != nil {
 		return err
 	}
-	if err := addMux(sm.config.HlsConfig.CommonHttpServerConfig, sm.serveHls, "hls"); err != nil {
+	// HLS Enable can be changed at runtime by SetHlsEnabled. Take a
+	// snapshot while holding the same mutex before configuring the listener,
+	// rather than racing a live toggle against the RunLoop read.
+	sm.mutex.Lock()
+	hlsListenConfig := sm.config.HlsConfig.CommonHttpServerConfig
+	sm.mutex.Unlock()
+	if err := addMux(hlsListenConfig, sm.serveHls, "hls"); err != nil {
 		return err
 	}
 
@@ -532,6 +538,12 @@ func (sm *ServerManager) OnNewRtmpSubSession(session *rtmp.ServerSession) error 
 	info.HasOutSession = group.HasOutSession()
 
 	sm.nhOnSubStart(info)
+	// lal can keep an RTMP subscriber connected before a publisher appears.
+	// Emit the event AFTER successful subscriber authentication and admission.
+	// The NVR hook checks whether this is a known GB28181 channel.
+	if !info.HasInSession && sm.option.OnStreamNotFound != nil {
+		sm.option.OnStreamNotFound(session.AppName(), session.StreamName(), "rtmp")
+	}
 	return nil
 }
 
@@ -697,6 +709,11 @@ func (sm *ServerManager) OnNewRtspSubSessionDescribe(session *rtsp.SubSession) (
 	info.HasOutSession = group.HasOutSession()
 
 	sm.nhOnSubStart(info)
+	// A DESCRIBE with no SDP stays pending in lal until a publisher feeds SDP.
+	// Notify only after RTSP authentication, not on ANNOUNCE (publish).
+	if len(sdp) == 0 && sm.option.OnStreamNotFound != nil {
+		sm.option.OnStreamNotFound(session.AppName(), session.StreamName(), "rtsp")
+	}
 	return
 }
 

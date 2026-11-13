@@ -137,19 +137,44 @@ type RtmpMsg struct {
 	Payload []byte // Payload不包含Header内容。如果需要将RtmpMsg序列化成RTMP chunk，可调用 rtmp.ChunkDivider 相关的函数
 }
 
+// HasCompleteVideoHeader checks the framing bytes needed to read a video
+// message before forwarding it. The codec parser validates the data itself.
+func (msg RtmpMsg) HasCompleteVideoHeader() bool {
+	p := msg.Payload
+	if msg.Header.MsgTypeId != RtmpTypeIdVideo || len(p) == 0 {
+		return false
+	}
+	if p[0]&0x80 != 0 {
+		if len(p) < 5 {
+			return false // FourCC
+		}
+		if p[0]&0x0f == RtmpExPacketTypeCodedFrames && string(p[1:5]) == "hvc1" {
+			return len(p) >= 8 // HEVC composition time
+		}
+		return true
+	}
+	switch p[0] & 0x0f {
+	case RtmpCodecIdAvc, RtmpCodecIdHevc:
+		return len(p) >= 5 // packet type and composition time
+	default:
+		return true
+	}
+}
+
 func (msg RtmpMsg) IsAvcKeySeqHeader() bool {
-	return msg.Header.MsgTypeId == RtmpTypeIdVideo && msg.Payload[0] == RtmpAvcKeyFrame && msg.Payload[1] == RtmpAvcPacketTypeSeqHeader
+	return msg.Header.MsgTypeId == RtmpTypeIdVideo && len(msg.Payload) >= 2 &&
+		msg.Payload[0] == RtmpAvcKeyFrame && msg.Payload[1] == RtmpAvcPacketTypeSeqHeader
 }
 
 func (msg RtmpMsg) IsHevcKeySeqHeader() bool {
-	if msg.Header.MsgTypeId != RtmpTypeIdVideo {
+	if msg.Header.MsgTypeId != RtmpTypeIdVideo || len(msg.Payload) < 2 {
 		return false
 	}
 
 	isExtHeader := msg.Payload[0] & 0x80
 	if isExtHeader != 0 {
 		packetType := msg.Payload[0] & 0x0f
-		if msg.Payload[1] == 'h' && msg.Payload[2] == 'v' && msg.Payload[3] == 'c' && msg.Payload[4] == '1' && packetType == RtmpExPacketTypeSequenceStart {
+		if len(msg.Payload) >= 5 && msg.Payload[1] == 'h' && msg.Payload[2] == 'v' && msg.Payload[3] == 'c' && msg.Payload[4] == '1' && packetType == RtmpExPacketTypeSequenceStart {
 			return true
 		}
 	} else {
@@ -173,11 +198,12 @@ func (msg RtmpMsg) IsVideoKeySeqHeader() bool {
 }
 
 func (msg RtmpMsg) IsAvcKeyNalu() bool {
-	return msg.Header.MsgTypeId == RtmpTypeIdVideo && msg.Payload[0] == RtmpAvcKeyFrame && msg.Payload[1] == RtmpAvcPacketTypeNalu
+	return msg.Header.MsgTypeId == RtmpTypeIdVideo && len(msg.Payload) >= 2 &&
+		msg.Payload[0] == RtmpAvcKeyFrame && msg.Payload[1] == RtmpAvcPacketTypeNalu
 }
 
 func (msg RtmpMsg) IsHevcKeyNalu() bool {
-	if msg.Header.MsgTypeId != RtmpTypeIdVideo {
+	if msg.Header.MsgTypeId != RtmpTypeIdVideo || len(msg.Payload) < 2 {
 		return false
 	}
 

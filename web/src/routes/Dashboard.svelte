@@ -16,6 +16,7 @@
   } from '$lib/api';  import type { NvrEvent } from '$lib/api';
   import type { Camera, ProtocolInfo, StreamInfo } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { loadGBChannelNames, gbDisplayName, cameraDisplayName, type ChannelNames } from '$lib/gb-channel-names';
   import { showToast } from '$lib/toast';
   import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, WifiOff, LayoutGrid, Plus, Search, Play } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
@@ -27,6 +28,10 @@
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
   import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
+
+  let gbNames = $state<ChannelNames>(new Map());
+  function cameraTitle(camera: Camera): string { return cameraDisplayName(gbNames, camera); }
+  function streamTitle(stream: StreamInfo): string { return gbDisplayName(gbNames, [stream.stream_id, stream.camera_id], stream.name || stream.camera_name || stream.stream_id); }
 
   type GridLayout = 1 | 4 | 6 | 9 | 16;
   const LAYOUT_OPTIONS: GridLayout[] = [1, 4, 6, 9, 16];
@@ -89,7 +94,7 @@
     }
     const items: WallSource[] = cameras.map((cam) => ({
       id: cam.id,
-      name: cam.name || cam.id,
+      name: cameraTitle(cam),
       kind: 'camera',
       camera: cam,
     }));
@@ -100,7 +105,7 @@
       seen.add(stream.stream_id);
       items.push({
         id: stream.stream_id,
-        name: stream.name || stream.camera_name || stream.stream_id,
+        name: streamTitle(stream),
         kind: 'stream',
         stream,
       });
@@ -319,7 +324,7 @@
   setContext('reconnect-coordinator', reconnectCoordinator);
 
   function normalizeLayout(value: unknown): GridLayout {
-    if (value === 1 || value === 4 || value === 9 || value === 16) return value;
+    if (value === 1 || value === 4 || value === 6 || value === 9 || value === 16) return value;
     return 4;
   }
 
@@ -364,11 +369,46 @@
     return { layout: 4, slots: normalizeSlots(4, []) };
   }
 
+  type SavedLayout = { layout: GridLayout; slots: (string | null)[] };
+
+  async function loadAccountLayout(): Promise<SavedLayout> {
+    const local = loadSavedLayout();
+    try {
+      const remote = await apiRequest<{layout: number; slots: unknown[]} | null>('/users/me/preferences/dashboard');
+      if (remote !== null) {
+        const layout = normalizeLayout(remote.layout);
+        return { layout, slots: normalizeSlots(layout, remote.slots) };
+      }
+      // One-time import for existing installations. Do not upload defaults as preferences.
+      if (localStorage.getItem(STORAGE_KEY) || loadLegacyCameraIds().length > 0) {
+        await apiRequest('/users/me/preferences/dashboard', {
+          method: 'PUT',
+          body: JSON.stringify(local),
+        });
+      }
+    } catch (e) {
+      console.warn('Account dashboard layout unavailable; using local fallback:', e);
+      showToast('大屏云端配置不可用，暂时使用本机配置', 'warning');
+    }
+    return local;
+  }
+
+  async function persistAccountLayout(value: SavedLayout): Promise<void> {
+    // Keep a local fallback, but cloud persistence is the canonical source.
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    try {
+      await apiRequest('/users/me/preferences/dashboard', {
+        method: 'PUT',
+        body: JSON.stringify(value),
+      });
+    } catch (e) {
+      console.error('Failed to save dashboard layout to account:', e);
+      showToast('大屏配置未同步到服务器，请检查连接后重新保存', 'error');
+    }
+  }
+
   function saveLayout() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      layout: gridLayout,
-      slots: slotAssignments,
-    }));
+    void persistAccountLayout({ layout: gridLayout, slots: [...slotAssignments] });
   }
 
   function resizeSlots(slots: (string | null)[], layout: GridLayout): (string | null)[] {
@@ -766,7 +806,8 @@
     let streams: StreamInfo[] = [];
     let cameraErr = '';
     let streamErr = '';
-    const saved = loadSavedLayout();
+    const saved = await loadAccountLayout();
+    void loadGBChannelNames().then(names => { gbNames = names; }).catch(e => console.warn('GB28181 name sync failed:', e));
     const camerasPromise = getDashboardCameras();
     // Protocol URL discovery is non-critical and can be slow for large walls.
     // It must not hold up first render or the camera-scoped WebRTC proxy.
@@ -823,9 +864,13 @@
     pendingSlotAssignments = [...slotAssignments];
     // WS-FLV requires a server-provided play URL. Other modes have stable route fallbacks.
     loading = false;
+    let catalogRefreshTicks = 0;
     streamStatusTimer = window.setInterval(() => {
       void refreshWallStreams();
       retryUnreadyGBPlayers();
+      if (++catalogRefreshTicks % 3 === 0) {
+        void loadGBChannelNames().then(names => { gbNames = names; }).catch(() => {});
+      }
     }, 10000);
     if (dashboardDisposed) window.clearInterval(streamStatusTimer);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -1099,7 +1144,7 @@
               style="min-height: {getCellMinHeight(gridLayout)};"
               role="button"
               tabindex="0"
-              aria-label="{camera.name || camera.id} — {status.text}"
+              aria-label="{cameraTitle(camera)} — {status.text}"
               onclick={() => handleCellClick(camera)}
               onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCellClick(camera); } }}
               ondblclick={() => handleCellDblClick(camera)}
@@ -1124,7 +1169,7 @@
                 <!-- Snapshot image -->
                 <img
                   src={snapshotUrls[camera.id]}
-                  alt={camera.name || camera.id}
+                  alt={cameraTitle(camera)}
                   class="w-full h-full object-contain"
                 />
                 <!-- Transient error overlay (keeps last good image visible) -->
@@ -1151,14 +1196,14 @@
                     <StatusIcon size={10} />
                     {status.text}
                   </span>
-                  <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
+                  <span class="text-white text-sm font-medium truncate">{cameraTitle(camera)}</span>
                 </div>
               </div>
 
             {:else if mode === 'hls'}
               <VideoPlayer
                 cameraId={camera.id}
-                cameraName={camera.name || camera.id}
+                cameraName={cameraTitle(camera)}
                 streamUrl={getStreamUrl(camera.id)}
                 cameraProtocol={camera.protocol}
                 protocol={defaultProtocol}
@@ -1171,7 +1216,7 @@
                    SIP EnsurePlay runs in parallel and never gates the player. -->
               <WebRTCPlayer
                 cameraId={camera.id}
-                cameraName={camera.name || camera.id}
+                cameraName={cameraTitle(camera)}
                 expanded={expandedCameraId === camera.id}
                 {tabVisible}
               />
@@ -1192,7 +1237,7 @@
             {:else if mode === 'flv' || mode === 'ws-flv'}
               <FlvPlayer
                 cameraId={camera.id}
-                cameraName={camera.name || camera.id}
+                cameraName={cameraTitle(camera)}
                 streamUrl={getCameraPlayURL(camera.id, mode, mode === 'flv' ? streamMediaURL(streamIdFor(camera.id), 'flv') : '')}
                 protocol={mode === 'ws-flv' ? 'ws-flv' : 'flv'}
                 expanded={expandedCameraId === camera.id}
@@ -1203,7 +1248,7 @@
                 {@const WasmPlayer = WasmPlayerComponent}
                 <WasmPlayer
                   cameraId={camera.id}
-                  cameraName={camera.name || camera.id}
+                  cameraName={cameraTitle(camera)}
                     wsPath={getCameraPlayURL(camera.id, 'wasm', streamMediaURL(streamIdFor(camera.id), 'ws'))}
                   expanded={expandedCameraId === camera.id}
                   tabVisible={tabVisible}
@@ -1230,7 +1275,7 @@
                 {@const FMP4Player = FMP4PlayerComponent}
                 <FMP4Player
                   cameraId={camera.id}
-                  cameraName={camera.name || camera.id}
+                  cameraName={cameraTitle(camera)}
                   streamUrl={getCameraPlayURL(camera.id, 'fmp4', streamMediaURL(streamIdFor(camera.id), 'fmp4'))}
                   expanded={expandedCameraId === camera.id}
                   tabVisible={tabVisible}
@@ -1268,7 +1313,7 @@
                     <CirclePause size={10} />
                     {t('live.notSupported')}
                   </span>
-                  <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
+                  <span class="text-white text-sm font-medium truncate">{cameraTitle(camera)}</span>
                 </div>
               </div>
             {/if}
@@ -1332,7 +1377,7 @@
             </div>
           {:else if stream}
             {@const mode = videoMode()}
-            {@const title = stream.name || stream.stream_id}
+            {@const title = streamTitle(stream)}
             {@const mediaURL = streamPageURL(stream, mode)}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->

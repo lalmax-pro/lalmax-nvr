@@ -41,6 +41,12 @@ func RequireOperatePermission() func(http.Handler) http.Handler {
 	return RequireRole(model.RoleSuperAdmin)
 }
 
+// RequireReadPermission permits authenticated NVR users to consume published
+// Home Assistant media, without granting publication, settings, or PTZ writes.
+func RequireReadPermission() func(http.Handler) http.Handler {
+	return RequireRole(model.RoleSuperAdmin, model.RoleUser)
+}
+
 func InjectUser(user *model.User) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

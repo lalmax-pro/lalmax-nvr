@@ -84,10 +84,11 @@ func Discover(ctx context.Context, paths ToolPaths, profile Profile, runner Prob
 		out, ok := check("encoders", paths.FFmpeg, "-hide_banner", "-encoders")
 		if ok {
 			for _, encoder := range []string{profile.Video.Encoder, func() string {
-				if profile.Audio.Codec == "aac" {
-					return "aac"
+				switch profile.Audio.Codec {
+				case "aac": return "aac"
+				case "g711a": return "pcm_alaw"
+				default: return ""
 				}
-				return ""
 			}()} {
 				if encoder == "" {
 					continue
@@ -112,8 +113,9 @@ func Discover(ctx context.Context, paths ToolPaths, profile Profile, runner Prob
 		if profile.Audio.Codec != "none" {
 			elements = append(elements, "rtpmp4gdepay", "aacparse")
 		}
-		if profile.Audio.Codec == "aac" {
-			elements = append(elements, "audioconvert", "audioresample", "avenc_aac", "avdec_aac", "rtppcmadepay", "rtppcmudepay", "alawdec", "mulawdec")
+		if profile.Audio.Codec == "aac" || profile.Audio.Codec == "g711a" {
+			elements = append(elements, "audioconvert", "audioresample", "avdec_aac", "rtppcmadepay", "rtppcmudepay", "alawdec", "mulawdec")
+			if profile.Audio.Codec == "aac" { elements = append(elements, "avenc_aac") } else { elements = append(elements, "alawenc") }
 		}
 		for _, element := range elements {
 			check("element:"+element, paths.GSTInspect, element)

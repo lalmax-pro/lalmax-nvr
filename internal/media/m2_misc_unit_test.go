@@ -67,17 +67,17 @@ func TestM2RtmpFramesBranches(t *testing.T) {
 		record = append(record, body...)
 	}
 	add(32, []byte{0xaa, 0xbb})
-	add(33, []byte{0xcc})
+	add(33, []byte{0xcc, 0x01})
 	add(34, []byte{0xdd, 0xee, 0xff})
 	hevcFrames := videoSeqHeaderFrames(base.RtmpMsg{Payload: record}, 7*time.Millisecond)
 	require.Len(t, hevcFrames, 3)
 	require.Equal(t, "h265", hevcFrames[0].Codec)
 	require.Equal(t, []byte{0, 0, 0, 1, 0xaa, 0xbb}, hevcFrames[0].Data)
-	require.Equal(t, []byte{0, 0, 0, 1, 0xcc}, hevcFrames[1].Data)
+	require.Equal(t, []byte{0, 0, 0, 1, 0xcc, 0x01}, hevcFrames[1].Data)
 	require.Equal(t, []byte{0, 0, 0, 1, 0xdd, 0xee, 0xff}, hevcFrames[2].Data)
 
 	// Enhanced HEVC sequence header hits the fourcc parser.
-	enhanced := append([]byte{0x90}, record[1:]...)
+	enhanced := append([]byte{0x90, 'h', 'v', 'c', '1'}, record[5:]...)
 	require.Len(t, videoSeqHeaderFrames(base.RtmpMsg{Payload: enhanced}, 0), 3)
 
 	// Empty parameter sets produce no frames.

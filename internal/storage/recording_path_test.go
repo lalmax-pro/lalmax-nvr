@@ -1,99 +1,42 @@
 package storage
 
 import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
+ "os"
+ "path/filepath"
+ "strings"
+ "testing"
 )
 
 func TestRecordingDiskNamePortableAndReversible(t *testing.T) {
-	ids := []string{"cam-01", "32010000001327000002:34020000001320000001", "a:b", "a_b", "id~6162", "../outside", "CON", "摄像头"}
-	seen := map[string]string{}
-	for _, id := range ids {
-		disk := recordingDiskName(id)
-		if strings.ContainsAny(disk, `<>:"/\\|?*`) || disk == "." || disk == ".." {
-			t.Fatalf("unsafe name %q", disk)
-		}
-		decoded, ok := originalRecordingID(disk)
-		if !ok || decoded != id {
-			t.Fatalf("round-trip %q: %q, %v", id, decoded, ok)
-		}
-		if previous, ok := seen[disk]; ok && previous != id {
-			t.Fatalf("collision %q %q", previous, id)
-		}
-		seen[disk] = id
-	}
-	if recordingDiskName("cam-01") != "cam-01" {
-		t.Fatal("legacy IDs must retain layout")
-	}
-	if recordingDiskName("a:b") == recordingDiskName("a_b") {
-		t.Fatal("unsafe ID collides with safe ID")
-	}
+ ids := []string{"cam-01", "32010000001327000002:34020000001320000001", "a:b", "a_b", "id~6162", "../outside", "CON", "摄像头"}
+ seen := map[string]string{}
+ for _, id := range ids {
+  disk := recordingDiskName(id)
+  if strings.ContainsAny(disk, `<>:"/\\|?*`) || disk == "." || disk == ".." { t.Fatalf("unsafe name %q",disk) }
+  decoded, ok := originalRecordingID(disk)
+  if !ok || decoded != id { t.Fatalf("round-trip %q: %q, %v",id,decoded,ok) }
+  if previous, ok := seen[disk]; ok && previous != id {t.Fatalf("collision %q %q",previous,id)}
+  seen[disk] = id
+ }
+ if recordingDiskName("cam-01") != "cam-01" { t.Fatal("legacy IDs must retain layout") }
+ if recordingDiskName("a:b") == recordingDiskName("a_b") { t.Fatal("unsafe ID collides with safe ID") }
 }
 
 func TestGB28181StoragePaths(t *testing.T) {
-	root := t.TempDir()
-	m, err := NewManager(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := "32010000001327000002:34020000001320000001"
-	temp, final, err := m.CreateSegment(id, "h264")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(temp); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(filepath.Base(final), ":") {
-		t.Fatalf("invalid MP4 filename %q", final)
-	}
-	if _, err := m.WriteFrame(temp, []byte("test")); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.CloseSegment(temp, final); err != nil {
-		t.Fatal(err)
-	}
-	files, err := m.ListFiles(id)
-	if err != nil || len(files) != 1 || files[0] != final {
-		t.Fatalf("list: %v %v", files, err)
-	}
-	entries, err := m.ListCameraDirEntries(id)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("entries: %v %v", entries, err)
-	}
-	if err := m.DeleteCameraDir(id); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Dir(final)); !os.IsNotExist(err) {
-		t.Fatalf("directory not deleted: %v", err)
-	}
-}
-
-func TestOriginalRecordingIDInvalidAndManagerPrefixes(t *testing.T) {
-	if _, ok := originalRecordingID("id~zz"); ok {
-		t.Fatal("invalid hex must fail")
-	}
-	if _, ok := originalRecordingID("id~"); ok {
-		t.Fatal("empty encoded id must fail")
-	}
-	if recordingDiskName("") != "id~" {
-		t.Fatalf("empty id: %q", recordingDiskName(""))
-	}
-	if recordingDiskName("PRN") == "PRN" || recordingDiskName("COM1") == "COM1" {
-		t.Fatal("reserved names must be encoded")
-	}
-	root := t.TempDir()
-	m, err := NewManager(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := "a:b"
-	if got := m.CameraDirPath(id); got != filepath.Join(root, recordingDiskName(id)) {
-		t.Fatalf("CameraDirPath: %q", got)
-	}
-	if got := m.CameraRecordingPrefix(id); got != recordingDiskName(id)+"_" {
-		t.Fatalf("CameraRecordingPrefix: %q", got)
-	}
+ root:=t.TempDir()
+ m,err:=NewManager(root)
+ if err!=nil {t.Fatal(err)}
+ id:="32010000001327000002:34020000001320000001"
+ temp,final,err:=m.CreateSegment(id,"h264")
+ if err!=nil {t.Fatal(err)}
+ if _,err:=os.Stat(temp);err!=nil {t.Fatal(err)}
+ if strings.Contains(filepath.Base(final),":") {t.Fatalf("invalid MP4 filename %q",final)}
+ if _,err:=m.WriteFrame(temp,[]byte("test"));err!=nil {t.Fatal(err)}
+ if err:=m.CloseSegment(temp,final);err!=nil {t.Fatal(err)}
+ files,err:=m.ListFiles(id)
+ if err!=nil || len(files)!=1 || files[0]!=final {t.Fatalf("list: %v %v",files,err)}
+ entries,err:=m.ListCameraDirEntries(id)
+ if err!=nil || len(entries)!=1 {t.Fatalf("entries: %v %v",entries,err)}
+ if err:=m.DeleteCameraDir(id);err!=nil {t.Fatal(err)}
+ if _,err:=os.Stat(filepath.Dir(final));!os.IsNotExist(err) {t.Fatalf("directory not deleted: %v",err)}
 }

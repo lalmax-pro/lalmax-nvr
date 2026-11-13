@@ -316,6 +316,7 @@ export type {
 export {
   listStreams,
   createStream,
+  createLocalVideoStream,
   updateStream,
   getStream,
   bindCamera,

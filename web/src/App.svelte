@@ -122,7 +122,7 @@
     }
 
     if (segments[0] === 'devices') {
-      return { route: 'devices', params: { add: query.get('add') || '' } };
+      return { route: 'devices', params: { add: query.get('add') || '', tab: query.get('tab') || '', subtab: query.get('subtab') || '' } };
     }
 
     if (segments[0] === 'map') {
@@ -150,7 +150,7 @@
       return { route: 'streams', params: { createMode } };
     }
     if (segments[0] === 'stats') {
-      return { route: 'stats', params: {} };
+      return { route: 'stats', params: { tab: query.get('tab') || 'overview' } };
     }
 
     if (segments[0] === 'settings') {
@@ -299,13 +299,13 @@
       {:else if currentRoute === 'live'}
         <LiveView cameraId={params.id} />
       {:else if currentRoute === 'devices'}
-        <Devices initialAdd={params.add === '1'} />
+        <Devices initialAdd={params.add === '1'} initialTab={params.tab} initialSubTab={params.subtab} />
       {:else if currentRoute === 'streams'}
         <Streams initialCreateMode={params.createMode === 'pull' || params.createMode === 'push' ? params.createMode : undefined} />
       {:else if currentRoute === 'stream-detail'}
         <StreamDetail streamId={params.id} />
       {:else if currentRoute === 'stats'}
-        <Stats />
+        <Stats initialTab={params.tab} />
       {:else if currentRoute === 'settings'}
         <Settings />
       {:else if currentRoute === 'voip'}

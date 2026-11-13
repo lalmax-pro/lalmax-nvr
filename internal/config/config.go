@@ -163,6 +163,9 @@ type MediaConfig struct {
 	LalmaxConfigPath    string `yaml:"lalmax_config_path"`
 	// Lal protocol ports (used when mode=http)
 	RTMPPort int `yaml:"rtmp_port,omitempty"`
+	// RTMPListenAddr optionally constrains the embedded RTMP listener host.
+	// Empty preserves the historical all-interface binding.
+	RTMPListenAddr string `yaml:"rtmp_listen_addr,omitempty"`
 	RTSPPort int `yaml:"rtsp_port,omitempty"`
 	HTTPPort int `yaml:"http_port,omitempty"` // HTTP-FLV port
 	// RTSP server authentication

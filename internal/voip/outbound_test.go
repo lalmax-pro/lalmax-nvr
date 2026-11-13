@@ -359,19 +359,22 @@ func TestOutboundRTPSourceUsesNegotiatedMediaAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var terminal *net.UDPConn
 	for _, addr := range interfaces {
 		ip, _, parseErr := net.ParseCIDR(addr.String())
-		if parseErr == nil && ip.To4() != nil && !ip.IsLoopback() {
-			mediaIP = ip.To4()
-			break
+		if parseErr != nil || ip.To4() == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			continue
 		}
+		candidate, bindErr := net.ListenUDP("udp4", &net.UDPAddr{IP: ip.To4()})
+		if bindErr != nil {
+			continue // Windows may enumerate a stale, non-bindable adapter address.
+		}
+		mediaIP = ip.To4()
+		terminal = candidate
+		break
 	}
-	if mediaIP == nil {
-		t.Skip("test requires a non-loopback IPv4 address")
-	}
-	terminal, err := net.ListenUDP("udp4", &net.UDPAddr{IP: mediaIP})
-	if err != nil {
-		t.Fatal(err)
+	if terminal == nil {
+		t.Skip("test requires an available, bindable non-loopback IPv4 interface")
 	}
 	defer terminal.Close()
 	// Windows may expose an IPv4 adapter (for example 198.18.0.1) that

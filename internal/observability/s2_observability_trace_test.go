@@ -193,6 +193,9 @@ func TestS2TraceStoreForceFlushAndShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, p.ForceFlush(ctx), context.Canceled)
+	// The pre-cancelled flush must not publish a barrier to the worker or
+	// make a subsequent live flush fail.
+	require.NoError(t, p.ForceFlush(context.Background()))
 
 	// Flushing a closed processor is a no-op.
 	require.NoError(t, p.Shutdown(context.Background()))

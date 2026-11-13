@@ -2,7 +2,31 @@
 
 关联 [Issue #66](https://github.com/lalmax-pro/lalmax-nvr/issues/66)；设计见 [架构文档](transcoding-design.md)。
 
-> 当前仅为实施中的局部验证，不代表 P1–P3 已完成。未发布、未合并。
+启动、检测与任务配置见[部署指南](transcoding-deployment.md)。以下按日期记录验证所用版本、实际媒体结果与环境边界。
+
+## 2026-11-13：本机完整功能复核
+
+基线为 PR #91 的 `4712e2f`，包含本地 HEVC 与 VoIP 修复。环境为 macOS arm64、Go 1.26.2、FFmpeg 7.0.2 和 GStreamer 1.26.9。测试使用独立 NVR 进程、临时 SQLite 数据库和本机推送的合成流。源为 HEVC 1280×720、25 fps + AAC 44.1 kHz，直拷补测另推一路 H.264/AAC。
+
+| 场景 | 本机结果 |
+| --- | --- |
+| FFmpeg 转码 | RTSP 拉取原流、RTMP 回灌、派生 RTSP 解码 8 秒。输出 H.264 640×360、15 fps + AAC 48 kHz |
+| GStreamer 转码 | 同链路解码 8 秒。输出 H.264 640×360、15 fps + PCMA 8 kHz。两种后端各检查 119 个视频包，PTS、DTS 均无重复或倒退 |
+| 直拷与无音轨 | FFmpeg H.264/AAC 同时直拷、仅直拷视频且移除音轨均回灌并实际解码。HEVC 视频直拷返回 `unsupported_input` |
+| 手动任务与鉴权 | 等价任务共享一个物理输出。停止其中一个后另一个仍可解码。无令牌 RTSP 被关闭，跨源查询返回 404，匿名 HTTP-FLV 返回 401，带鉴权 FLV 解码成功，普通流目录隐藏派生物理组 |
+| 任务门禁与配额 | 模板未检测返回 412，旧代次启动返回 409，达到并发上限返回 429。释放额度后另一规格可启动，已停止任务的旧带令牌 RTSP 地址被拒绝 |
+| 按需任务 | 两个租约共享输出。续期、单个释放后继续播放、最后一个释放后回收均通过。HA 预加载与取消发布触发了对应的启动和回收。显式停止后 `resume` 恢复接受租约 |
+| 常驻任务 | 源断开后退出 `running`，源恢复后产生新物理输出并可解码。NVR 重启后自动复检并恢复，显式停止跨重启保留 |
+| 派生转推 | 转推到单独的 RTMP 接收流，接收端 RTSP 实际解码成功，转推可以停止 |
+| 派生录像 | 启停、来源登记和下载通过。两线程 FFmpeg 输出的三段 H.264/AAC MP4 均报 `corrupt decoded frame`，同一派生流的 RTSP/FLV 可解码。录像器按 NAL 写入 MP4 sample，检查文件可见同一画面被拆成多个 sample。相同模板改用 `threads_per_job: 1` 后，下载的 MP4 可解码 |
+| HA 目录与 RTSP | 发布后保留源流 ID，派生 RTSP 可解码，取消发布后手动转码任务继续运行 |
+| HA WHEP | Chrome 协商 H.264/PCMA、建立连接并解码画面。早期测试能收到音频包但采样为零。将远端轨道挂到播放元素后复测，Web Audio 峰值约 0.126，派生 RTSP 的 PCMA 峰值为 −17.3 dBFS，会话清理返回 204 |
+| 独立 Worker | FFmpeg 与 GStreamer 分别启动并解码实际派生输出，停止任务后回收。FFmpeg 检查了 Worker 与编码子进程 |
+| NVENC 负向验证 | 当前主机的 FFmpeg 不提供 `h264_nvenc`，模板检测拒绝启用 |
+
+后端竞态测试覆盖 `internal/transcode`、`internal/media`、`internal/api`、`internal/config`、`internal/storage`、`internal/relay`、`internal/auth`、`internal/ban`、`internal/recorder`、`internal/muxer` 和 `cmd/lalmax-nvr`，并打开 FFmpeg/GStreamer 实际媒体自检。首轮并发运行时，存储包触及五分钟超时，NVR 包的 Docker 路径测试未在时限内监听。两包随后串行完整复跑通过。前端 42 个测试文件、430 项通过，生产构建通过。
+
+本轮覆盖 NVR 的 HA 兼容接口与 Chrome 客户端。真实 HA 实例、实体摄像机、Docker 完整链路、GPU 编码成功路径和长时间运行需要在对应环境验证。
 
 ## 2026-10-27：分支 API 实际流端到端
 

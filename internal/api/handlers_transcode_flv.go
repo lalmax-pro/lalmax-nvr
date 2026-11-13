@@ -37,7 +37,9 @@ func (h *Handler) proxyDerivedFLV(w http.ResponseWriter, r *http.Request, upstre
 		writeError(w, 502, "preview request failed")
 		return
 	}
-	req.Header.Set("Authorization", r.Header.Get("Authorization"))
+	// The internal media URL carries a narrowly-scoped playback token.
+	// Never forward a browser's administrator Basic credentials to the media
+	// engine, even when it runs on the same host.
 	response, err := client.Do(req)
 	if err != nil {
 		writeError(w, 502, "preview backend unavailable")

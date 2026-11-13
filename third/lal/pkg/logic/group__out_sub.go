@@ -34,13 +34,15 @@ func (group *Group) AddRtmpSubSession(session *rtmp.ServerSession) {
 }
 
 func (group *Group) AddHttpflvSubSession(session *httpflv.SubSession) {
-	Log.Debugf("[%s] [%s] add httpflv SubSession into group.", group.UniqueKey, session.UniqueKey())
-	session.WriteHttpResponseHeader()
-	session.WriteFlvHeader()
-
-	group.mutex.Lock()
-	defer group.mutex.Unlock()
-	group.httpflvSubSessionSet[session] = struct{}{}
+    Log.Debugf("[%s] [%s] add httpflv SubSession into group.", group.UniqueKey, session.UniqueKey())
+    group.mutex.Lock()
+    defer group.mutex.Unlock()
+    session.WriteHttpResponseHeader()
+    // Never advertise phantom audio/video tracks. A session connecting
+    // before codec discovery writes its FLV header on the first media packet.
+    audio, video := group.httpflvTracks(nil)
+    session.ObserveFlvTracks(audio, video)
+    group.httpflvSubSessionSet[session] = struct{}{}
 	// 加入时，如果上行还没有推流过，就不需要等待关键帧了
 	if group.stat.VideoCodec == "" {
 		session.ShouldWaitVideoKeyFrame = false

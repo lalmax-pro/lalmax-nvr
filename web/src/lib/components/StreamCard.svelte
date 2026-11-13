@@ -5,22 +5,20 @@
 
   interface Props {
     stream: StreamInfo;
+    displayTitle?: string;
     managed?: boolean;
     onsaveName?: (stream: StreamInfo, name: string) => void;
     ondelete?: (stream: StreamInfo) => void;
     deleting?: boolean;
-    onpublishHA?: (stream: StreamInfo) => void;
-    publishedHA?: boolean;
-    publishingHA?: boolean;
   }
 
-  let { stream, managed = false, onsaveName, ondelete, deleting = false, onpublishHA, publishedHA = false, publishingHA = false }: Props = $props();
+  let { stream, displayTitle, managed = false, onsaveName, ondelete, deleting = false }: Props = $props();
 
   let editingName = $state(false);
   let nameInput = $state('');
   let nameInputEl: HTMLInputElement | undefined = $state();
 
-  let title = $derived(stream.name || (managed ? (stream.camera_name || stream.stream_id) : stream.stream_id));
+  let title = $derived(displayTitle || stream.name || (managed ? (stream.camera_name || stream.stream_id) : stream.stream_id));
 
   $effect(() => {
     if (editingName && nameInputEl) {
@@ -77,6 +75,8 @@
         return t('streams.sourceSRTPush');
       case 'whip_push':
         return t('streams.sourceWHIPPush');
+      case 'local_video':
+        return '本地视频循环';
       case 'relay_pull':
         return t('streams.sourceRelayPull');
       case 'push':
@@ -103,9 +103,6 @@
   onclick={stopCardNavigation}
 >
   <div class="flex items-start justify-between gap-2 mb-3">
-    {#if onpublishHA}
-      <button type="button" class="btn btn-ghost btn-sm shrink-0" aria-pressed={publishedHA} disabled={publishingHA} title={t('ha.publishHint')} onclick={(e) => { e.preventDefault(); e.stopPropagation(); onpublishHA?.(stream); }}>{publishedHA ? t('ha.unpublish') : t('ha.publish')}</button>
-    {/if}
     <div class="min-w-0 flex-1">
       {#if editingName}
         <input

@@ -4,8 +4,8 @@
   import type { StreamHistorySession, StreamInfo, StreamMetricSample, StreamMetricsPeriod } from '$lib/api';
   import { loadChart, createStreamMetricChart, updateStreamMetricChart } from '$lib/charts';
   import { t } from '$lib/i18n';
+  import { loadGBChannelNames, gbDisplayName, type ChannelNames } from '$lib/gb-channel-names';
   import { showToast } from '$lib/toast';
-  import { copyTextWithFallback } from '$lib/clipboard';
   import {
     ArrowLeft,
     RefreshCw,
@@ -25,7 +25,6 @@
     Trash2,
     UserMinus,
     Copy,
-    ExternalLink,
     Clock,
     Wifi,
     WifiOff,
@@ -34,6 +33,8 @@
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
+  import CopyableStreamURL from '$lib/components/CopyableStreamURL.svelte';
+  import { listStreamTranscodeVariants, listTranscodeJobs, transcodePreviewFLVURL, acquireTranscodeDemandLease, renewTranscodeDemandLease, releaseTranscodeDemandLease, type TranscodeJob, type TranscodeDemandLease, type TranscodeVariant } from '$lib/api/transcoding';
 
   let { streamId = '' }: { streamId?: string } = $props();
 
@@ -66,6 +67,16 @@
   // Default playback protocol from Settings; applied until the user picks one.
   let configuredDefaultProtocol = $state<string>('wasm');
   let userPickedProtocol = $state(false);
+  let selectedVariantJobID = $state(''); // empty = original media stream
+  let transcodeJobs = $state<TranscodeJob[]>([]);
+  let currentDemandLease = $state<TranscodeDemandLease | null>(null);
+  let demandRenewTimer: number | undefined;
+  let demandPollTimer: number | undefined;
+  let outputSelectionSerial = 0;
+  let derivedVariants = $state<TranscodeVariant[]>([]);
+  let derivedVariantsError = $state('');
+  let derivedRequest = 0;
+  let selectedVariant = $derived(derivedVariants.find(v => v.job_id === selectedVariantJobID));
   const webPlayableProtocols = new Set(['hls', 'll-hls', 'flv', 'ws-flv', 'webrtc', 'fmp4', 'wasm']);
 
   // Dialog states
@@ -79,7 +90,8 @@
   let nameInputEl: HTMLInputElement | undefined = $state();
   let savingName = $state(false);
 
-  let displayName = $derived(stream ? (stream.name || stream.camera_name || stream.stream_id) : '');
+  let gbNames = $state<ChannelNames>(new Map());
+  let displayName = $derived(stream ? gbDisplayName(gbNames, [stream.stream_id, stream.camera_id], stream.name || stream.camera_name || stream.stream_id) : '');
 
   // Lazy-loaded players
   let WasmPlayerComponent = $state<any>(null);
@@ -166,6 +178,74 @@
       error = e instanceof Error ? e.message : t('streams.loadFailed');
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadDerivedVariants() {
+    const request = ++derivedRequest;
+    try {
+      const result = await listStreamTranscodeVariants(streamId);
+      if (request !== derivedRequest) return;
+      derivedVariants = result.variants ?? [];
+      derivedVariantsError = '';
+    } catch (e) {
+      if (request !== derivedRequest) return;
+      // A disabled/unavailable transcode service must never block original playback.
+      // If the user already selected a variant, retain selection and fail closed.
+      derivedVariants = [];
+      derivedVariantsError = e instanceof Error ? e.message : '无法读取派生流';
+    }
+  }
+
+  async function loadTranscodeJobs() {
+    try {
+      const result = await listTranscodeJobs();
+      transcodeJobs = result.jobs ?? [];
+    } catch {
+      transcodeJobs = [];
+    }
+  }
+
+  // Consumer leases are only created by explicit user choice. They are never
+  // attached to the original stream and never start on component mount.
+  async function selectPlaybackOutput(jobID: string) {
+    const serial = ++outputSelectionSerial;
+    const oldLease = currentDemandLease;
+    currentDemandLease = null;
+    selectedVariantJobID = jobID;
+    derivedVariantsError = '';
+    if (oldLease) void releaseTranscodeDemandLease(oldLease.token).catch(() => {});
+    if (!jobID) return;
+    if (!transcodeJobs.length) await loadTranscodeJobs();
+    const job = transcodeJobs.find(j => j.id === jobID);
+    if (job?.run_policy === 'on_demand') {
+      try {
+        const result = await acquireTranscodeDemandLease(job.id, job.generation);
+        if (outputSelectionSerial !== serial) {
+          void releaseTranscodeDemandLease(result.lease.token).catch(() => {});
+          return;
+        }
+        currentDemandLease = result.lease;
+      } catch (e) {
+        if (outputSelectionSerial === serial) {
+          derivedVariantsError = e instanceof Error ? e.message : '按需派生流申请失败';
+        }
+      }
+    }
+    if (outputSelectionSerial === serial) void loadDerivedVariants();
+  }
+
+  async function renewSelectedDemandLease() {
+    const lease = currentDemandLease;
+    if (!lease || selectedVariantJobID !== lease.job_id) return;
+    try {
+      const next = await renewTranscodeDemandLease(lease.token);
+      if (currentDemandLease?.token === lease.token) currentDemandLease = next;
+    } catch {
+      if (currentDemandLease?.token === lease.token) {
+        currentDemandLease = null;
+        derivedVariantsError = '按需租约失效，请重新选择派生输出';
+      }
     }
   }
 
@@ -294,16 +374,6 @@
     return backend;
   }
 
-  async function copyIngestURL(url: string) {
-    try {
-      if (await copyTextWithFallback(url)) {
-        showToast(t('streams.copied'), 'success');
-      }
-    } catch {
-      showToast(t('streams.copyFailed'), 'error');
-    }
-  }
-
   function protocolLabel(protocol: string): string {
     switch (protocol) {
       case 'hls': return 'HLS';
@@ -330,6 +400,7 @@
       case 'rtmp_push': return t('streams.sourceRTMPPush');
       case 'srt_push': return t('streams.sourceSRTPush');
       case 'whip_push': return t('streams.sourceWHIPPush');
+      case 'local_video': return '本地视频循环';
       case 'relay_pull': return t('streams.sourceRelayPull');
       case 'push': return t('streams.sourcePush');
       default: return t('streams.sourceStream');
@@ -573,9 +644,8 @@
     console.info('[StreamDetail] player selection', {
       streamId: stream.stream_id,
       selectedProtocol,
-      selectedURL: getPlayerURL(selectedProtocol),
       availableProtocols: available,
-      playURLs: stream.play_urls,
+      // Never print token-bearing media URLs or playback credentials.
     });
   });
 
@@ -585,12 +655,19 @@
   });
 
   onMount(() => {
+    void loadGBChannelNames().then(names => { gbNames = names; }).catch(() => {});
     if (!streamId) {
       error = t('streams.streamIdRequired');
       loading = false;
       return;
     }
     loadStream();
+    void loadDerivedVariants();
+    void loadTranscodeJobs();
+    demandPollTimer = window.setInterval(() => {
+      if (selectedVariantJobID && !document.hidden) void loadDerivedVariants();
+    }, 2000);
+    demandRenewTimer = window.setInterval(() => { void renewSelectedDemandLease(); }, 45000);
     // Resolve the configured default playback protocol (Settings page).
     getStreamingSettings()
       .then(config => {
@@ -599,11 +676,18 @@
       .catch(() => { /* keep fallback default */ });
     stopEvents = subscribeNvrEvents({ camera_id: streamId }, () => { void loadStream(); }, { debounceMs: 400 });
     refreshTimer = window.setInterval(() => {
+      void loadDerivedVariants();
       void loadStream();
+      void loadGBChannelNames().then(names => { gbNames = names; }).catch(() => {});
     }, 15000);
   });
 
   onDestroy(() => {
+    ++outputSelectionSerial;
+    if (demandPollTimer) window.clearInterval(demandPollTimer);
+    if (demandRenewTimer) window.clearInterval(demandRenewTimer);
+    if (currentDemandLease) void releaseTranscodeDemandLease(currentDemandLease.token).catch(() => {});
+    currentDemandLease = null;
     stopEvents?.();
     if (refreshTimer) {
       window.clearInterval(refreshTimer);
@@ -721,7 +805,27 @@
               <Play size={18} />
               {t('streams.player')}
             </h2>
-            {#if stream.play_urls?.length}
+            {#if derivedVariants.length > 0 || selectedVariantJobID}
+              <label class="input-label" for="stream-derived-output">播放输出</label>
+              <select
+                id="stream-derived-output"
+                class="form-input"
+                aria-label="选择原始流或派生流"
+                value={selectedVariantJobID}
+                onchange={e => void selectPlaybackOutput(e.currentTarget.value)}
+              >
+                <option value="">原始流</option>
+                {#each derivedVariants as variant (variant.job_id)}
+                  <option value={variant.job_id}>
+                    派生流 {variant.profile_id} · {variant.job_id} ({variant.state})
+                  </option>
+                {/each}
+                {#if selectedVariantJobID && !selectedVariant}
+                  <option value={selectedVariantJobID}>已选择的派生流（不可用）</option>
+                {/if}
+              </select>
+            {/if}
+            {#if !selectedVariantJobID && stream.play_urls?.length}
               <div class="protocol-selector">
                 {#each getAvailableProtocols() as protocol}
                   <button
@@ -731,7 +835,7 @@
                       console.info('[StreamDetail] protocol click', {
                         streamId: stream.stream_id,
                         protocol,
-                        targetURL: getPlayerURL(protocol),
+                        // No media URL in diagnostics (it can contain bearer credentials).
                       });
                       userPickedProtocol = true;
                       selectedProtocol = protocol;
@@ -744,7 +848,28 @@
             {/if}
           </div>
 
-          {#if canPlay}
+          {#if selectedVariantJobID}
+            <div class="player-container">
+              {#if selectedVariant?.state === 'running' && (!transcodeJobs.some(j => j.id === selectedVariantJobID && j.run_policy === 'on_demand') || currentDemandLease)}
+                {#key stream.stream_id + ':' + selectedVariantJobID}
+                  <FlvPlayer
+                    cameraId={encodedStreamId}
+                    cameraName={displayName + ' · 派生流'}
+                    streamUrl={transcodePreviewFLVURL(stream.stream_id, selectedVariantJobID)}
+                    allowSnapshotFallback={false}
+                    protocol="flv"
+                    expanded={true}
+                  />
+                {/key}
+              {:else}
+                <div class="player-inactive" role="status">
+                  <WifiOff size={40} />
+                  <p>派生输出尚未就绪：{derivedVariantsError || selectedVariant?.error_code || selectedVariant?.state || '不可用'}</p>
+                  <p class="hint">不会自动切回原始流。可在系统设置的转码任务中启动或检查此输出。</p>
+                </div>
+              {/if}
+            </div>
+          {:else if canPlay}
               <div class="player-container">
                 {#if !selectedProtocol}
                   <!-- Resolving the configured default protocol -->
@@ -824,7 +949,7 @@
             {t('streams.tabMetrics')}
           </button>
           <button class="detail-tab" class:active={activeTab === 'urls'} onclick={() => switchTab('urls')}>
-            <ExternalLink size={15} />
+            <Copy size={15} />
             {t('streams.tabUrls')}
           </button>
           <button class="detail-tab" class:active={activeTab === 'actions'} onclick={() => switchTab('actions')}>
@@ -1064,7 +1189,7 @@
         <section class="urls-section glass">
           <div class="section-header">
             <h2>
-              <ExternalLink size={18} />
+              <Copy size={18} />
               {t('streams.playUrls')}
             </h2>
           </div>
@@ -1072,13 +1197,7 @@
           {#if stream.play_urls?.length}
             <div class="urls-list">
               {#each stream.play_urls as play}
-                <a class="url-item" href={play.url} target="_blank" rel="noreferrer">
-                  <div class="url-info">
-                    <span class="url-protocol">{protocolLabel(play.protocol)}</span>
-                    <code>{play.url}</code>
-                  </div>
-                  <ExternalLink size={14} />
-                </a>
+                <CopyableStreamURL protocol={protocolLabel(play.protocol)} url={play.url} />
               {/each}
             </div>
           {:else}
@@ -1090,23 +1209,14 @@
           {#if stream.source_type === 'relay_pull'}
             <div class="section-header" style="margin-top: 1.5rem;">
               <h2>
-                <ExternalLink size={18} />
+                <Copy size={18} />
                 {t('streams.pullSource')}
               </h2>
             </div>
             <p class="th-text-muted text-sm" style="margin: 0 0 0.75rem;">{t('streams.pullSourceHint')}</p>
             {#if stream.source_url}
               <div class="urls-list">
-                <div class="url-item">
-                  <div class="url-info">
-                    <span class="url-protocol">{t('streams.inputPull')}</span>
-                    <code>{stream.source_url}</code>
-                  </div>
-                  <button type="button" class="btn btn-ghost btn-xs" onclick={() => copyIngestURL(stream.source_url || '')}>
-                    <Copy size={14} />
-                    <span>{t('streams.copy')}</span>
-                  </button>
-                </div>
+                <CopyableStreamURL protocol={t('streams.inputPull')} url={stream.source_url} />
               </div>
             {:else}
               <div class="empty-urls">
@@ -1116,7 +1226,7 @@
           {:else}
           <div class="section-header" style="margin-top: 1.5rem;">
             <h2>
-              <ExternalLink size={18} />
+              <Copy size={18} />
               {t('streams.ingestUrls')}
             </h2>
           </div>
@@ -1126,16 +1236,7 @@
           {#if stream.ingest_urls?.length}
             <div class="urls-list">
               {#each stream.ingest_urls as ingest}
-                <div class="url-item">
-                  <div class="url-info">
-                    <span class="url-protocol">{protocolLabel(ingest.protocol)}</span>
-                    <code>{ingest.url}</code>
-                  </div>
-                  <button type="button" class="btn btn-ghost btn-xs" onclick={() => copyIngestURL(ingest.url)}>
-                    <Copy size={14} />
-                    <span>{t('streams.copy')}</span>
-                  </button>
-                </div>
+                <CopyableStreamURL protocol={protocolLabel(ingest.protocol)} url={ingest.url} />
               {/each}
             </div>
           {:else}
@@ -1725,50 +1826,6 @@
     padding: 1rem;
     display: grid;
     gap: 0.5rem;
-  }
-
-  .url-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem;
-    border-radius: var(--radius-md);
-    border: 1px solid var(--border);
-    text-decoration: none;
-    color: inherit;
-    transition: all 0.15s ease;
-  }
-
-  .url-item:hover {
-    border-color: var(--color-primary);
-    transform: translateY(-1px);
-  }
-
-  .url-info {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    min-width: 0;
-  }
-
-  .url-protocol {
-    padding: 0.2rem 0.5rem;
-    border-radius: var(--radius-sm);
-    background: rgba(14, 165, 233, 0.15);
-    color: var(--color-primary);
-    font-size: 0.7rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    white-space: nowrap;
-  }
-
-  .url-info code {
-    font-size: 0.8rem;
-    color: var(--text-secondary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .empty-urls {

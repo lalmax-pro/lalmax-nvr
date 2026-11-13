@@ -171,12 +171,20 @@ func (s *RtcServer) waitStreamReady(appName, streamid, schema string) bool {
 func NewRtcServer(config config.RtcConfig, lal logic.ILalServer) (*RtcServer, error) {
 	var udpMux ice.UDPMux
 	var tcpMux ice.TCPMux
+	listenIP := net.IPv4zero
+	if config.ICEListenIP != "" {
+		parsed := net.ParseIP(config.ICEListenIP)
+		if parsed == nil {
+			return nil, fmt.Errorf("invalid rtc ice_listen_ip %q", config.ICEListenIP)
+		}
+		listenIP = parsed
+	}
 
 	if config.ICEUDPMuxPort != 0 {
 		var udplistener *net.UDPConn
 
 		udplistener, err := net.ListenUDP("udp", &net.UDPAddr{
-			IP:   net.IP{0, 0, 0, 0},
+			IP:   listenIP,
 			Port: config.ICEUDPMuxPort,
 		})
 
@@ -194,7 +202,7 @@ func NewRtcServer(config config.RtcConfig, lal logic.ILalServer) (*RtcServer, er
 		var tcplistener *net.TCPListener
 
 		tcplistener, err := net.ListenTCP("tcp", &net.TCPAddr{
-			IP:   net.IP{0, 0, 0, 0},
+			IP:   listenIP,
 			Port: config.ICETCPMuxPort,
 		})
 
