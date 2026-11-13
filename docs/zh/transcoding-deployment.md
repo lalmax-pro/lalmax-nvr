@@ -64,8 +64,8 @@ docker build --build-arg WITH_GSTREAMER=true -t lalmax-nvr:transcode-gst .
 
 1. 用超级管理员账户打开「设置 → 通用转码能力」，选择 FFmpeg 或 GStreamer 并检测默认模板。
 2. 在同一设置页的「转码模板与任务」创建模板，例如 H.264 720p + AAC。对**已保存的模板**执行检测。默认模板的检测结果不能用于其他媒体规格。检测缓存有效期为 10 分钟，重启后手动任务需要重新检测。
-3. 填入在线源流 ID、实际应用名（示例为 `live`）和模板，先保存禁用的手动任务。启用后点击启动。等任务进入 `running` 再拉流，`starting` 表示尚未取得可播放输出。
-4. 在源流详情选择派生输出预览，或用管理员接口查询 `/api/streams/{stream_id}/variants/{job_id}/play`。接口返回的 `URL` 为带临时令牌的 RTSP 地址，请按凭据处理。
+3. 填入在线源流 ID、实际应用名（示例为 `live`）和模板，选择运行策略并保存禁用草稿。首次试跑可选择手动，启用任务后点击启动。等任务进入 `running` 再拉流，`starting` 表示尚未取得可播放输出。
+4. 在源流详情的「播放输出」切换原始流与派生流。下拉列表显示模板、任务 ID 和状态，模板编辑器显示目标媒体参数。管理员也可查询 `/api/streams/{stream_id}/variants/{job_id}/play`，其 `URL` 为带临时令牌的 RTSP 地址，请按凭据处理。
 5. 可用 `ffprobe -v error -rtsp_transport tcp -show_streams '<带令牌的 RTSP URL>'` 核对编解码和分辨率。测试结束后先停止派生录像、转推等消费者，再停止手动转码任务。
 
 ### API 启动顺序
@@ -78,7 +78,7 @@ docker build --build-arg WITH_GSTREAMER=true -t lalmax-nvr:transcode-gst .
 | 启动手动任务 | `POST /api/transcoding/jobs/{id}/start?generation=N` | `202` 表示已受理。查询 `GET /api/streams/{stream_id}/variants` 等待 `running` |
 | 停止任务 | `POST /api/transcoding/jobs/{id}/stop?generation=N` | `204` 表示已停止该任务的运行需求 |
 
-`manual` 由操作员显式启动。`always` 在源可用时由后台启动并在故障后退避重试。`on_demand` 由消费者获取租约后启动。网页创建的是手动任务，其他策略可通过 API 设置。常驻任务的显式停止会持久化，重启后需要显式启动才能重新运行。按需任务显式停止后可调用 `resume?generation=N` 重新接受租约。
+`manual` 由操作员显式启动。`always` 在源可用时由后台启动并在故障后退避重试。`on_demand` 由消费者获取租约后启动。网页和 API 都可设置运行策略。常驻任务的显式停止会持久化，重启后需要显式启动才能重新运行。按需任务显式停止后可在网页点击「恢复按需播放」，或调用 `resume?generation=N` 重新接受租约。
 
 | 状态或错误码 | 检查项 |
 | --- | --- |
@@ -95,7 +95,7 @@ docker build --build-arg WITH_GSTREAMER=true -t lalmax-nvr:transcode-gst .
 - FFmpeg copy 模式使用内置的合成 H.264/AAC 样本执行直拷、媒体检查与解码自检；真实源仍须符合 H.264/AAC 的 copy 限制，自检不等于实际源或媒体回灌已验证。GStreamer copy 模式自检仍未支持。
 - 管理员 RTSP 派生地址、同源 FLV 接口以及 HA 目录地址均已实际取回解码；第六轮还验证了 NVR 侧 HA-WHEP 的 Chromium H.264 + PCMA/8000 音视频播放、ICE/DTLS、RTP、视频解码和 Web Audio 非静音采样。真实 Home Assistant 客户端/实例仍为 `BLOCKED_ENVIRONMENT`。StreamDetail 派生预览仍走 HTTP-FLV/mpegts.js，不支持 PCMA 音频，不能把该路径当作 WHEP 验收。
 - 检测有效期 10 分钟；已运行任务不会因检测过期被停止，但失败后的重新启动需要新的有效检测。
-- 常驻策略 API 可配置；当前网页创建的是手动任务。持久化的已启用常驻任务在重启或检测过期后，由有界后台协调重新自检再恢复；自检失败遵循退避并记录安全错误码，运行中合成源的常驻任务实际进程重启恢复和解码已通过，实体海康源的视频 copy + 音频转码已有有限实际解码证据；其他实体源场景及长时间运行仍待验证。
+- 已启用的常驻任务在重启或检测过期后，由后台重新自检再恢复。自检失败时按退避策略重试并记录错误码。实体海康源的视频 copy + 音频转码已有实际解码记录，其他实体源场景及长时间运行仍待验证。
 - 不支持自动硬件加速、跨后端回退、任意命令、任意外部输入 URL 或离线录像转码。
 - 独立 [ARM64 scratch Dockerfile](../../Dockerfile.arm64) 不包含后端工具，不应当作转码镜像使用。
 

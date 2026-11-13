@@ -5,7 +5,7 @@
   "ha.loadTranscodeOutputs": "加载转码输出",
   "ha.outputFor": "{name} 的播放输出",
   "ha.originalOutput": "原始流",
-  "ha.transcodeOutputHint": "选中的任务须已运行。派生输出通过 RTSP 进入 HA HLS，暂不提供 WebRTC；此选择不会启动任务。",
+  "ha.transcodeOutputHint": "派生输出需要任务运行后才能播放。HA HLS 通过 RTSP 拉流，WebRTC 有声可使用 H.264 + G.711 A-law。按需任务可开启预加载。",
   "transcode.jobs": "转码模板与任务",
   "transcode.draftHint": "先创建模板并检测，再保存禁用草稿。启用需服务器配置允许；运行中任务请先停止再修改。",
   "transcode.addProfile": "添加 H.264 720p 模板",

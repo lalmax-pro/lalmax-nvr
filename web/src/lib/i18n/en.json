@@ -5,7 +5,7 @@
   "ha.loadTranscodeOutputs": "Load transcoding outputs",
   "ha.outputFor": "Playback output for {name}",
   "ha.originalOutput": "Original stream",
-  "ha.transcodeOutputHint": "Selected jobs must be running. Derived playback uses RTSP to HA HLS; WebRTC is not enabled for this output. This selection does not start a job.",
+  "ha.transcodeOutputHint": "Derived playback requires a running job. HA uses RTSP for HLS. For WebRTC with audio, use H.264 with G.711 A-law. On-demand jobs can be preloaded.",
   "transcode.jobs": "Transcoding profiles and jobs",
   "transcode.draftHint": "Create and check a profile, then save a disabled draft. Enabling requires server configuration. Stop running jobs before editing.",
   "transcode.addProfile": "Add H.264 720p profile",
