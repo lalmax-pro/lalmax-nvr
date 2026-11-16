@@ -112,7 +112,7 @@ G.711 包括 A-law（PCMA）和 µ-law（PCMU）。表中未列出的音频不�
 - **DLNA**：可选的 UPnP MediaServer — 在局域网中发现 NVR，并在电视或其他 DLNA 播放器上浏览实时流和录像；在 `lalmax-nvr.yaml` 中配置 `dlna.enabled` 和独立 HTTP 端口（默认 `8200`）
 - **Web 界面**：深色/浅色主题、响应式、中英文切换、Chart.js 图表
 - **Home Assistant**：选择发布已有流，提供摄像头实体、检测事件与自动化、录像回放、云台及可选 WebRTC，支持通过 HACS 安装 HA 集成（[接入指南](docs/zh/home-assistant.md)）
-- **智能家居与文件访问**：MQTT 触发录像、WebDAV 浏览存储文件；FTP 当前存在[哈希密码认证限制](docs/zh/ftp-integration.md)
+- **智能家居与文件访问**：MQTT 触发录像、WebDAV 浏览存储文件；[FTP 支持全局账号的 bcrypt 哈希认证](docs/zh/ftp-integration.md)，但明文协议和写权限仅限可信网络
 - **健康监控**：多层摄像头健康检测、自动修复、质量评分
 - **单文件部署**：零依赖、内嵌前端、`CGO_ENABLED=0`
 - **小米摄像头**：CS2 P2P 协议、云端认证（社区驱动）
@@ -174,15 +174,16 @@ media:
 
 ## 文档
 
-完整目录：**[docs/zh/README.md](docs/zh/README.md)**。
+完整目录：**[技术规范与知识库](docs/zh/README.md)** · **[GitHub Wiki](https://github.com/lalmax-pro/lalmax-nvr/wiki)**（[建设与发布说明](docs/GITHUB_WIKI.md)）。
 
 | 文档 | 说明 |
 |------|------|
 | [架构](docs/zh/architecture.md) | 分层、接入（拉流、国标推流、JT1078）、VOD、端口、模块 |
 | [录像计划](docs/zh/recording-plans.md) · [录制流程](docs/zh/recording-flow.md) | 一条流何时写盘，以及组写入器如何订阅 |
 | [快速入门](docs/zh/getting-started.md) | 安装、第一个摄像头 |
-| [配置说明](docs/zh/configuration.md) | YAML 参考 |
-| [API 文档](docs/zh/api-reference.md) | REST API |
+| [配置规范](docs/zh/configuration.md) | 加载顺序、默认值、字段约束与敏感信息 |
+| [API 与 OpenAPI](docs/zh/api-reference.md) | 认证、权限、错误与资源导航 |
+| [安全规范](docs/zh/security.md) · [开发与验证](docs/zh/development.md) | 认证边界、最小暴露、代码修改与验收规则 |
 | [GB28181](docs/zh/gb28181-guide.md) | 国标设备、回放、对讲 |
 | [VoIP 呼叫与对讲](docs/zh/voip.md) | SIP 终端、PBX、网页外呼、WebRTC 双向对讲和通话记录 |
 | [实时转码](docs/zh/transcoding-deployment.md) · [转码架构](docs/zh/transcoding-design.md) | FFmpeg / GStreamer、任务启停和派生输出 |

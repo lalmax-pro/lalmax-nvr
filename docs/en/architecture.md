@@ -289,9 +289,9 @@ Map these ports in Docker bridge mode. ONVIF multicast discovery does not work i
 
 ```
 {storage.root_dir}/
-  lalmax-nvr.db          # SQLite: cameras, recording index, events
-  recordings/{camera_id}/  # MP4 segments and merged hour files
-  config/                  # generated lalmax config, etc.
+  lalmax-nvr.db             # SQLite: cameras, recording index, events
+  {encoded-source-id}/      # MP4 segments and merged files, directly under the root
+  config/                   # generated lalmax config, etc.
 ```
 
-The web UI is compiled into the binary (`internal/ui`). `CGO_ENABLED=0`; no external runtime deps.
+The web UI is compiled into the binary (`internal/ui`). Core runtime uses `CGO_ENABLED=0`; optional transcoding, snapshots, and media inspection may require external FFmpeg/GStreamer tools.

@@ -1,502 +1,168 @@
-# lalmax-nvr 部署指南
+# NVR-07 部署与运行规范
 
-本指南涵盖安装、配置和生产维护。分层与默认端口见 [架构](architecture.md)。
+## 1. 部署基线
 
-## 安装方式
+**OPS-001｜先确定媒体拓扑再开放端口。** 部署者必须列出实际使用的接入、播放、信令、文件和观测协议，只映射这些端口。默认端口和启用条件见[系统架构](architecture.md)。
 
-### Docker
+**OPS-002｜数据与配置必须持久化。** 至少需要保护配置文件、应用数据库、录像文件以及配置加密密钥。只备份数据库不能恢复录像媒体。
 
-#### 前置条件
+**OPS-003｜生产使用已验证版本。** 应固定 Release 标签或镜像摘要，完成测试后升级；不应让生产环境无审查地跟随 `latest`。
 
-- Docker Engine 20.10+ 和 Docker Compose v2（或 Podman 等兼容运行时）
-- 检查版本：
-  ```bash
-  docker --version
-  docker compose version
-  ```
+**OPS-004｜核心运行无需 CGO。** Go 构建使用 `CGO_ENABLED=0`，Web 前端编译后嵌入二进制。可选快照、转码、媒体检测可能需要 FFmpeg/FFprobe/GStreamer，不得把“单文件”扩展为所有可选功能都无外部工具依赖。
 
-#### 快速启动
+## 2. Docker 部署
+
+### 2.1 Compose
+
+仓库 [`docker-compose.yml`](../../docker-compose.yml) 提供完整示例：
 
 ```bash
-# 方式 A：直接运行 — 自动初始化（推荐）
-docker run -d \
-  --name lalmax-nvr \
-  --restart unless-stopped \
-  -p 9090:9090 \
-  -v ./data:/data \
-  ghcr.io/lalmax-pro/lalmax-nvr:latest
-
-# 方式 B：带初始密码
-docker run -d \
-  --name lalmax-nvr \
-  --restart unless-stopped \
-  -p 9090:9090 \
-  -e NVR_PASSWORD=你的密码 \
-  -v ./data:/data \
-  ghcr.io/lalmax-pro/lalmax-nvr:latest
-
-# 方式 C：使用 docker-compose.yml
-mkdir -p data
 docker compose up -d
-```
-
-> **首次设置**：在没有配置文件的情况下启动时，lalmax-nvr 会自动生成默认配置并以**设置模式**运行 — 所有 API 端点无需认证即可访问。通过 Web UI 设置页面或 `NVR_PASSWORD` 环境变量设置密码。一旦设置密码，将强制执行身份验证。
-
-#### 配置说明
-
-- **自动初始化**：如果在 `/data/lalmax-nvr.yaml` 不存在配置文件，会自动生成包含合理默认值的配置。无需手动设置。
-- **初始密码**：通过 `NVR_PASSWORD` 环境变量设置。如果未设置，应用将以设置模式启动（无认证） — 通过 Web UI 设置页面设置密码。
-- **数据目录**：通过 `NVR_DATA_DIR` 环境变量，`storage.root_dir` 在 Docker 容器中自动设置为 `/data`。
-
-#### docker-compose.yml 详解
-
-完整的配置文件及各字段说明：
-
-```yaml
-services:
-  lalmax-nvr:
-    # 容器镜像：官方预构建镜像
-    image: ghcr.io/lalmax-pro/lalmax-nvr:latest
-
-    # 容器名称（便于管理和查看日志）
-    container_name: lalmax-nvr
-
-    # 自动重启策略：除非手动停止，否则总是重启
-    restart: unless-stopped
-
-    # 端口映射：主机端口:容器端口
-    ports:
-      - "9090:9090"               # Web 界面和 REST API
-      - "12090:12090"             # lalmax HTTP（WHIP 推流）
-      - "4888:4888/udp"           # WebRTC ICE
-      - "4888:4888/tcp"
-      - "15544:15544"             # lal RTSP 播放
-      - "5060:5060/tcp"           # GB28181 SIP
-      - "5060:5060/udp"
-      - "2121:2121"               # FTP 服务
-      - "2122-2140:2122-2140"     # FTP 被动模式端口范围
-
-    # ONVIF 组播发现需要取消注释 network_mode: host，并删除上面的 ports
-
-    # 数据卷挂载：将主机的 ./data 目录挂载到容器的 /data
-    # 用于持久化存储配置文件、录像数据和数据库
-    volumes:
-      - ./data:/data
-
-    # 环境变量
-    environment:
-      - NVR_DATA_DIR=/data         # 指定数据目录路径
-      - TZ=Asia/Shanghai            # 设置时区
-
-    # 健康检查：每 30 秒检查一次服务状态
-    healthcheck:
-      test: ["CMD", "lalmax-nvr", "health"]  # 健康检查命令
-      interval: 30s                           # 检查间隔
-      timeout: 5s                             # 超时时间
-      start_period: 10s                       # 启动后延迟开始检查
-      retries: 3                              # 重试次数
-```
-
-#### 使用预构建镜像 vs 本地构建
-
-**选项 A：使用预构建镜像（推荐）**
-
-- 镜像地址：`ghcr.io/lalmax-pro/lalmax-nvr:latest`
-- 架构标签：`latest`（多架构：amd64 + arm64）
-
-直接使用 `docker-compose.yml` 中的默认镜像地址即可，无需额外操作。
-
-**选项 B：本地构建**
-
-如果需要自定义构建或使用最新源码：
-
-```bash
-# 多阶段构建（在容器内编译前端和后端，需要网络拉取基础镜像）
-docker build -t lalmax-nvr .
-
-# 交叉编译 ARM64（在主机上交叉编译）
-GOOS=linux GOARCH=arm64 ./scripts/unix/build.sh
-```
-
-本地构建后，将 `docker-compose.yml` 中的 `image:` 替换为本地标签。
-
-#### 常用 Docker 操作
-
-```bash
-# 查看实时日志
-docker compose logs -f lalmax-nvr
-
-# 查看最近 100 行日志
-docker compose logs --tail 100 lalmax-nvr
-
-# 重启服务
-docker compose restart lalmax-nvr
-
-# 停止服务（保留数据）
-docker compose down
-
-# 停止并删除数据卷（警告：删除所有录像数据！）
-docker compose down -v
-
-# 更新到最新镜像
-docker compose pull
-docker compose up -d
-
-# 查看容器状态
 docker compose ps
-
-# 查看资源使用情况
-docker stats lalmax-nvr
-
-# 查看健康检查状态
-docker inspect --format='{{.State.Health.Status}}' lalmax-nvr
+docker compose logs --tail 200 lalmax-nvr
 ```
 
-> **注意**：由于使用 distroless/scratch 基础镜像，无法通过 `docker exec` 进入容器调试。请使用 `docker compose logs` 查看日志。
+默认关键约定：
 
-#### 使用 Docker CLI
+| 项 | 当前值 |
+|----|--------|
+| 镜像 | `ghcr.io/lalmax-pro/lalmax-nvr:latest` |
+| 容器配置 | `/data/lalmax-nvr.yaml` |
+| 数据挂载 | 宿主机 `./data` → 容器 `/data` |
+| 数据环境变量 | `NVR_DATA_DIR=/data` |
+| 运行用户 | 默认 UID/GID `1000:1000`，可通过 `NVR_UID/NVR_GID` 调整 |
+| 健康检查 | 容器内 `lalmax-nvr health`，默认检查本机 `:9090` |
 
-如果不使用 Docker Compose，可以直接用 Docker 命令运行：
+**OPS-101｜挂载路径与变量一致。** 修改容器内挂载点时，必须同时修改 `NVR_DATA_DIR`；仅修改宿主机左侧路径通常不需要改变容器内 `/data`。
+
+**OPS-102｜权限按当前镜像处理。** 入口脚本默认以 root 启动后修正数据目录所有权，再切换到 UID/GID 1000。旧文档中的 UID 65534 不适用于当前镜像。入口中的递归 `chown` 可能在大目录上耗时，应为挂载目录预设置合理所有权。
+
+**OPS-103｜最小端口映射。** 仅本机或网关访问时，可将 `9090` 绑定到指定管理地址。公网/局域网客户端需要直连媒体时才映射 `12090`、`4888`、`15544` 等；FTP、GB28181、JT 等未用端口应从生产 Compose 删除或保持模块关闭。
+
+### 2.2 Host 网络与组播
+
+ONVIF WS-Discovery 使用 UDP 组播，DLNA 使用 SSDP 组播。Docker bridge 下这些发现能力通常不可用。
+
+需要自动发现时，可使用 `network_mode: host` 或经过验证的组播网络方案。使用 host 模式时：
+
+- 删除/忽略 `ports` 映射，因为容器直接共享主机网络栈；
+- 重新审查所有默认开启的 FTP、WebDAV 和媒体监听，host 模式没有端口映射形成的隔离；
+- 不需要组播时，可使用 ONVIF 手动探测或直接填写端点，无需改成 host 模式。
+
+### 2.3 本地镜像
 
 ```bash
-# 1. 登录 GHCR（私有镜像需要）
-echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
-
-# 2. 拉取镜像
-docker pull ghcr.io/lalmax-pro/lalmax-nvr:latest
-
-# 3. 运行容器
-docker run -d \
-  --name lalmax-nvr \
-  --restart unless-stopped \
-  -p 9090:9090 \
-  -p 2121:2121 \
-  -p 2122-2140:2122-2140 \
-  -v ./data:/data \
-  -e NVR_DATA_DIR=/data \
-  -e TZ=Asia/Shanghai \
-  ghcr.io/lalmax-pro/lalmax-nvr:latest
-
-# 4. 查看状态
-docker ps
-docker logs -f lalmax-nvr
-docker inspect --format='{{.State.Health.Status}}' lalmax-nvr
+docker build -t lalmax-nvr:local .
 ```
 
-**运行指定版本：**
+多阶段 Dockerfile 构建前端和 Go 二进制，运行时镜像包含 FFmpeg/FFprobe；GStreamer 需构建参数 `WITH_GSTREAMER=true` 并验证目标架构插件。启用转码前必须使用实际模板探测，不应仅因镜像包含工具就假定所有编码器可用。
+
+## 3. 二进制与源码部署
+
+### 3.1 预构建二进制
 
 ```bash
-docker pull ghcr.io/lalmax-pro/lalmax-nvr:v0.2.0
-docker run -d --name lalmax-nvr ... ghcr.io/lalmax-pro/lalmax-nvr:v0.2.0
-```
-
-**停止和删除：**
-
-```bash
-docker stop lalmax-nvr
-docker rm lalmax-nvr
-```
-
-**更新到最新版：**
-
-```bash
-docker stop lalmax-nvr
-docker rm lalmax-nvr
-docker pull ghcr.io/lalmax-pro/lalmax-nvr:latest
-docker run -d ... ghcr.io/lalmax-pro/lalmax-nvr:latest
-```
-#### 数据备份与恢复
-
-**备份：**
-
-```bash
-# 1. 停止容器
-docker compose stop
-
-# 2. 备份数据目录
-tar czf nvr-backup-$(date +%Y%m%d).tar.gz data/
-
-# 3. 重新启动服务
-docker compose start
-```
-
-**恢复：**
-
-```bash
-# 1. 停止并删除容器
-docker compose down
-
-# 2. 解压备份文件
-tar xzf nvr-backup-20240101.tar.gz
-
-# 3. 重新启动服务
-docker compose up -d
-```
-
-#### 在树莓派上使用 Docker
-
-树莓派需要使用 ARM64 架构镜像：
-
-```yaml
-# docker-compose.yml — 树莓派配置
-services:
-  lalmax-nvr:
-    image: ghcr.io/lalmax-pro/lalmax-nvr:latest
-    deploy:
-      resources:
-        limits:
-          memory: 512m      # 限制内存，防止 OOM
-```
-
-注意事项：
-
-- 片段时长必须保持在 30 秒（`segment_duration: "30s"`）
-- 建议使用外接 USB 硬盘（ext4 格式）存储录像数据
-- 同时录制不超过 2-3 路摄像头，具体取决于分辨率和码率
-
-#### Docker 常见问题
-
-**权限错误**
-
-容器以非 root 用户运行（UID 65534）。如果遇到挂载目录权限问题：
-
-```bash
-chown -R 65534:65534 ./data
-```
-
-**端口冲突**
-
-修改 `docker-compose.yml` 中的端口映射左侧值：
-
-```yaml
-ports:
-  - "8090:9090"   # 将主机端口改为 8090
-```
-
-**容器频繁重启**
-
-通常是配置文件错误导致。检查日志：
-
-```bash
-docker compose logs lalmax-nvr
-```
-
-**FTP 无法连接**
-
-先检查控制端口 `2121` 与被动端口范围 `2122-2140` 是否映射、放行。FTP 使用配置的全局 NVR 账号，支持明文密码或 `password_hash`；FTP 是明文协议，没有 TLS，建议仅向可信网络开放。详见 [FTP 指南](ftp-integration.md)。
-
-**时区不正确**
-
-在 `docker-compose.yml` 中添加 `TZ` 环境变量：
-
-```yaml
-environment:
-  - TZ=Asia/Shanghai
-```
-
-**Docker Compose v1 vs v2**
-
-- 使用 `docker compose`（带空格，v2 版本）
-- 不使用 `docker-compose`（带连字符，v1 版本，已过时）
-
-**ONVIF 设备发现在 Docker 中不工作**
-
-ONVIF 自动发现使用 WS-Discovery 协议（UDP 组播至 `239.255.255.250:3702`）。Docker 默认的 bridge 网络会阻止组播流量，因此自动发现无法找到设备。
-
-解决方案：
-
-1. **Host 网络模式**（推荐用于发现功能）：在 `docker-compose.yml` 中取消 `network_mode: host` 的注释，并删除 `ports` 段。容器将共享宿主机网络栈，从而支持组播。
-
-2. **手动探测**（任何网络模式下均可）：在 Web UI 的摄像头页面中，使用"手动探测"区域直接输入设备 IP 地址。此方式不依赖组播，在任何 Docker 配置下均可使用。
-
-3. **手动添加摄像头**：直接在摄像头表单中指定 ONVIF 端点 URL（如 `http://192.168.1.100/onvif/device_service`）。ONVIF 连接、PTZ 控制和流媒体在 bridge 模式下均正常工作——仅自动发现受影响。
-
-### 手动安装
-
-如果你需要完全控制安装过程且不使用 Docker：
-
-```bash
-# 1. 从 GitHub Releases 下载二进制文件
-#    https://github.com/lalmax-pro/lalmax-nvr/releases
-chmod +x lalmax-nvr
-
-# 2. 创建数据目录
-mkdir -p ./data
-
-# 3. 初始化配置（提示输入管理员密码）
 ./lalmax-nvr init \
-    --password <your-password> \
-    --data-dir ./data \
-    --config ./data/lalmax-nvr.yaml \
-    --listen ":9090"
-
-# 4. 前台启动
-./lalmax-nvr -config ./data/lalmax-nvr.yaml
+  --password 'replace-with-a-private-password' \
+  --data-dir /var/lib/lalmax-nvr \
+  --config config/lalmax-nvr.yaml
+./lalmax-nvr -config config/lalmax-nvr.yaml
 ```
 
-### 从源码编译
+应由服务管理器负责自动重启、日志和信号停止。进程响应 SIGINT/SIGTERM，并使用 30 秒关闭超时；服务管理器超时不应明显短于该值。
+
+### 3.2 源码构建
 
 ```bash
-git clone https://github.com/lalmax-pro/lalmax-nvr.git
-cd lalmax-nvr
-
-# 编译当前架构版本
 ./scripts/unix/build.sh
-
-# 交叉编译 ARM64 版本（如树莓派）
-GOOS=linux GOARCH=arm64 ./scripts/unix/build.sh
-
-# 运行测试
-go test ./...
+./scripts/unix/test.sh
+./scripts/unix/run.sh
 ```
 
-## 反向代理
+脚本会构建当前前端、嵌入静态资源并编译 Go；构建成功不代表测试成功。Windows 使用 `scripts/windows/nvr.ps1` 或批处理入口。完整参数见[`scripts/README.md`](../../scripts/README.md)。
 
-### Caddy
+## 4. 反向代理与 HTTPS
 
-Caddy 提供自动 HTTPS，配置最简洁：
+### 4.1 基本规则
+
+**OPS-201｜HTTPS 终止于受控网关。** 对非可信网络提供 Web/UI/API 时必须使用 HTTPS，并将后端 `9090` 限制到网关可访问范围。
+
+**OPS-202｜长连接必须单独验收。** 代理需支持 WebSocket Upgrade、SSE、FLV/fMP4 长响应和录像 Range 请求；不得因普通 JSON API 可用就推断实时播放可用。应关闭不必要的响应缓冲，并根据长连接设置读写/空闲超时。
+
+**OPS-203｜WebRTC 不是纯 HTTP 反向代理。** WHEP/WHIP 的 HTTP 信令可代理，ICE 仍需客户端访问候选地址及 UDP/TCP 端口。必须验证实际 SDP/ICE 配置和网络路径。
+
+Caddy 最小示例：
 
 ```caddyfile
 nvr.example.com {
-    reverse_proxy localhost:9090
+    reverse_proxy 127.0.0.1:9090
 }
 ```
 
-指定邮箱用于 TLS 证书：
+Nginx 必须包含 Host、转发协议以及 WebSocket 所需 Upgrade/Connection 头；生产还应配置合适的 `proxy_read_timeout`、请求体上限和访问控制。WebDAV 使用额外 HTTP 方法，网关不得只放行 GET/POST。
 
-```caddyfile
-{
-    email admin@example.com
-}
+## 5. 配置变更与重启
 
-nvr.example.com {
-    reverse_proxy localhost:9090
-}
-```
+**OPS-301｜区分保存、重载和重启。** Web 保存设置会更新配置；`/api/config/reload` 只更新当前 API 配置及已接入的特定状态，不保证数据库、媒体监听、FTP、SIP 等全部重建。涉及这些结构的变更应重启并做协议级验收。
 
-### Nginx
+**OPS-302｜外部编辑先检测冲突。** Watcher 通过 mtime/size 识别外部变化，Web 保存可用冲突保护避免静默覆盖。自动化配置管理应串行化写入，不要并发编辑 YAML 和调用设置 API。
 
-```nginx
-server {
-    listen 80;
-    server_name nvr.example.com;
+**OPS-303｜停止是有顺序的操作。** 正常停止会取消后台任务、停止 HTTP/FTP/媒体及录像并关闭数据库。升级和备份应使用正常停止，不应把强制 kill 当作常规维护方式。
 
-    location / {
-        proxy_pass http://localhost:9090;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+## 6. 健康检查与观测
 
-    location /dav/ {
-        proxy_pass http://localhost:9090;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_request_buffering off;
-        proxy_buffering off;
-    }
-}
-```
+| 检查 | 语义 | 用途 |
+|------|------|------|
+| `GET /api/health` | 进程存活及是否需要初始化 | liveness；返回 200 不代表 DB/磁盘就绪 |
+| `GET /api/readyz` | DB 可 ping、磁盘 <95%、goroutines <5000 | readiness；失败为 503 |
+| `GET /api/health/details` | 受保护的组件与摄像头详情 | 运维诊断 |
+| `GET /metrics` | Prometheus 指标 | 全局或独立 Basic Auth |
+| `/api/service-logs` | 受保护的进程日志环形缓冲 | 操作权限；进程重启后内存内容不持久 |
+| 本地 traces / OTLP | 调用链、指标、日志 | 按配置保存或导出 |
 
-## 树莓派 3B 注意事项
+**OPS-401｜监控不能只看进程。** 至少监控 readiness、磁盘使用率、录像写入失败、流离线/重连、队列丢帧和关键协议可达性。`cleanup` 阈值和 readyz 95% 是独立阈值。
 
-树莓派 3B 仅有 905MB 内存。为保证稳定运行：
+日志配置、OTLP 和远程日志见[配置规范](configuration.md)。将日志导出到外部系统前必须落实传输与访问控制。
 
-- **片段时长**：使用 30 秒（`segment_duration: "30s"`）。更长的片段会在内存中缓存更多帧（如 120 秒片段占用 60-80MB）。
-- **内存限制**：如果使用 Docker，设置 `512m` 之类的容器内存限制；否则使用你的进程管理器限制内存。
-- **存储**：使用外接 USB 硬盘（ext4）存储录像。SD 卡在持续写入场景下会快速磨损。
-- **摄像头数量**：建议同时录制不超过 2-3 路 H.264/H.265 流，具体取决于分辨率和码率。
+## 7. 备份与恢复
 
-## 更新
+### 7.1 数据库备份 API
 
-### Docker 更新
+`POST /api/backup` 需要操作权限，在 **配置文件所在目录** 的 `backups/` 下创建 `nvr-backup-YYYYMMDD-HHMMSS.db`；`GET /api/backups` 返回文件名列表。
 
-```bash
-docker compose pull
-docker compose up -d
-```
+- SQLite 使用 `VACUUM INTO`，避免直接复制正在写入的 WAL 数据库造成不一致。
+- PostgreSQL/MySQL 的活动数据也通过当前实现导出为 SQLite 备份文件；这不是原生数据库物理备份的替代品。
+- 备份 API 不包含录像文件、YAML、媒体引擎配置或加密密钥。
 
-### 二进制更新
+### 7.2 完整恢复材料
 
-```bash
-# 停止正在运行的进程，替换二进制文件，然后重新启动
-cp lalmax-nvr /path/to/current/lalmax-nvr
-chmod +x /path/to/current/lalmax-nvr
-/path/to/current/lalmax-nvr -config ./data/lalmax-nvr.yaml
-```
+| 材料 | 位置/方式 | 注意 |
+|------|-----------|------|
+| 主 YAML | 当前 `-config` 路径 | 包含敏感信息，限制访问 |
+| 配置密钥 | 环境密钥、密钥文件或 `<config>.encryption-key` | 与密文分离保管；丢失无法解密 |
+| 数据库 | 默认 `{root_dir}/lalmax-nvr.db`，或外部 DB | 使用一致性备份 |
+| 录像与快照等 | `storage.root_dir` 下实际文件 | 大容量，需独立备份策略 |
+| 生成的媒体配置 | 默认 `{root_dir}/config/lalmax.conf.json` | 可由主配置重新生成，但定制内容需确认 |
 
-更新前务必备份配置：
+完整文件级快照应先正常停止服务，或使用能同时保证数据库与文件一致性的快照机制。恢复演练必须在隔离环境验证配置解密、数据库可读、录像可回放和协议端口，而不只检查压缩包存在。
 
-```bash
-cp ./data/lalmax-nvr.yaml ./data/lalmax-nvr.yaml.backup
-```
+## 8. 升级与回滚
 
-## 监控
+1. 阅读目标版本 Release Notes 和配置变更。
+2. 备份配置、数据库、密钥和关键录像；记录当前版本/镜像摘要。
+3. 在测试环境验证现有配置迁移、设备上线、直播、录像、回放和集成。
+4. 正常停止旧版本，部署固定的新版本，观察启动迁移日志。
+5. 验证 `/api/health`、`/api/readyz` 和实际业务链路。
+6. 回滚前确认新版本是否进行了旧版本无法读取的数据库迁移；必要时使用升级前备份，不得直接假设任意版本可双向回滚。
 
-### 日志
+数据库在线迁移到 PostgreSQL/MySQL 是独立操作，见[数据库迁移](database-migration.md)，不要与版本升级混为一步。
 
-```bash
-docker compose logs --tail 100 lalmax-nvr
-docker compose logs -f lalmax-nvr
-```
+## 9. 上线验收
 
-### 健康检查
-
-```bash
-curl -f http://localhost:9090/api/health
-./lalmax-nvr health
-```
-
-### 磁盘使用
-
-```bash
-df -h ./data
-du -sh ./data/recordings
-```
-
-### Prometheus 指标
-
-指标通过 `/metrics` 端点公开（无需认证）：
-
-```bash
-curl http://localhost:9090/metrics
-```
-
-## 故障排除
-
-### 应用无法启动
-
-```bash
-# 验证配置文件语法
-./lalmax-nvr -config ./data/lalmax-nvr.yaml
-```
-
-### 摄像头连接失败
-
-```bash
-# 测试 RTSP 连接
-ffmpeg -rtsp_transport tcp -i "rtsp://admin:pass@192.168.1.100:554/stream" -t 5 -f null -
-
-# 检查网络
-ping 192.168.1.100
-```
-
-### 端口冲突
-
-```bash
-sudo lsof -i :9090
-sudo lsof -i :2121
-```
-
-### 权限错误
-
-```bash
-ls -la ./data/
-```
-
-### 内存占用过高
-
-将 `segment_duration` 减小到 30 秒。在树莓派 3B 上，建议使用 Docker 或其他进程管理器设置 512MB 内存限制。
+- 进程存活、就绪和详细健康均符合预期。
+- 管理员/普通用户/匿名权限、HTTPS 和 `/metrics` 认证通过。
+- 每种启用来源至少完成一路真实推拉流和目标客户端播放。
+- 创建计划后产生可关闭、可回放、可下载录像；断流恢复和时间轴缺口符合预期。
+- 磁盘阈值、保留、锁定和备份恢复经过验证。
+- 防火墙只开放必要端口，ONVIF/DLNA 组播、GB28181 RTP、VoIP RTP、WebRTC ICE 等按真实网络验证。
+- 日志、指标、追踪和外部集成不包含不应外发的秘密或隐私数据。

@@ -2,7 +2,7 @@
 
 [中文](../zh/README.md) · [Project README](../../README.md)
 
-Find guides by task. For configuration examples, see [`config/config.example.yaml`](../../config/config.example.yaml). A running NVR serves its OpenAPI documentation at `/docs/`.
+Find guides by task. The rewritten, code-reviewed [technical specification is maintained in Chinese](../zh/README.md); the English pages below are task guides and may lag behind that normative edition. For configuration examples, see [`config/config.example.yaml`](../../config/config.example.yaml). A running NVR serves its OpenAPI documentation at `/docs/`. See the [GitHub Wiki publishing guide](../GITHUB_WIKI.md) for the version-controlled knowledge-base workflow.
 
 ## Getting started and operations
 
@@ -40,7 +40,7 @@ Find guides by task. For configuration examples, see [`config/config.example.yam
 | [API reference](api-reference.md) | REST API usage; the OpenAPI spec is [`openapi.yaml`](../../internal/docsportal/openapi.yaml) |
 | [Events](events.md) | Filter, follow, and acknowledge health, recorder, AI, and MQTT events |
 | [MQTT](mqtt-integration.md) | Event-triggered recording |
-| [WebDAV](webdav-integration.md) / [FTP](ftp-integration.md) | Browse stored files; the FTP guide covers the current auth limitation |
+| [WebDAV](webdav-integration.md) / [FTP](ftp-integration.md) | Browse stored files; FTP uses the global account and supports bcrypt hashes |
 | [AI detection](ai-setup-guide.md) | Deploy and configure detection services |
 
 - [Home Assistant: stream publication, live video, snapshots and availability](home-assistant.md)

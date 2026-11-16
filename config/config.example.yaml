@@ -205,9 +205,9 @@ merge:
   rolling_enabled: true            # Merge into the current hour bucket shortly after each segment closes
   rolling_debounce: "5s"           # Wait this long after the last closed segment before merging
 
-# FTP server — plain FTP access to the storage root. Current authentication
-# checks auth.password, while first-run setup clears it after hashing; see
-# docs/en/ftp-integration.md before relying on FTP login.
+# FTP server — plain FTP access to the storage root. Authentication uses the
+# global auth.username and supports auth.password_hash or legacy auth.password.
+# FTP has no TLS and permits file writes/deletes; disable it when unused.
 # Configurable port and passive port range
 ftp:
   enabled: true                    # Enable FTP server (default: true)
@@ -238,7 +238,7 @@ mqtt:
 #   post_roll: 30s
 #   max_duration: 5m
 
-# Health IP self-healing (default on)
+# Health monitoring and optional IP self-healing (health monitoring default off)
 # health:
 #   enabled: false
 #   events_retention: "720h"           # Retain health events for 30 days
@@ -409,25 +409,10 @@ observability:
     # headers:                     # Optional collector authentication headers
     #   Authorization: "Bearer replace-me"
 
-# Transcoding — optional video transcoding via FFmpeg
-# Used to reduce bitrate, change codec format, or adjust quality
-# Requires ffmpeg to be installed on the system
-# transcoding:
-#   enabled: false              # Enable transcoding (default: false)
-#   ffmpeg_path: ""              # Path to ffmpeg binary (empty = auto-detect)
-#   max_workers: 1               # Max concurrent transcoding jobs (range: 1-4, default: 1)
-#   replace_original: false      # Replace original recordings with transcoded versions
-#   download_url: ""             # Auto-populated FFmpeg download URL per platform
-#
-# Per-camera transcoding overrides:
-#   cameras:
-#     - id: "front-door"
-#       ...
-#       transcoding:
-#         enabled: true           # Override global enabled for this camera
-#         target_codec: "h264"    # Target codec: h264, h265 (default: same as source)
-#         preset: "ultrafast"     # FFmpeg preset: ultrafast, faster, medium (default: ultrafast)
-#         bitrate: "2M"           # Target bitrate (e.g. "1M", "2M", "500K")
+# The active transcoding schema is defined once at the top of this file.
+# Legacy fields such as max_workers, replace_original, download_url and
+# per-camera transcoding presets are not part of the current implementation.
+# See docs/zh/transcoding-deployment.md for profiles, jobs and derived outputs.
 
 # SIP inbound calls are published as voip_<caller>_<short-call-id> streams.
 # Requires media.mode: embedded. SIP port 5070 avoids GB28181's 5060.
@@ -465,7 +450,9 @@ voip:
   # sip_tls_cert_file: ""               # TLS PEM certificate path
   # sip_tls_key_file: ""                # Private key PEM path; never commit actual keys
 
-# Optional metrics Basic authentication. Empty config leaves /metrics public.
+# Optional dedicated metrics Basic authentication. When empty, /metrics falls
+# back to the global NVR authentication middleware; it is not publicly exposed
+# by that fallback.
 # metrics_auth:
 #   username: ""                        # Set username and exactly one credential field
 #   password_hash: ""                   # Prefer a supported password hash over plaintext

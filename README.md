@@ -112,7 +112,7 @@ G.711 covers both A-law (PCMA) and µ-law (PCMU). Audio codecs not listed for a 
 - **DLNA**: Optional UPnP MediaServer — discover the NVR on the LAN and browse live streams and recordings on TVs or other DLNA players; configure `dlna.enabled` and the dedicated HTTP port (default `8200`) in `lalmax-nvr.yaml`
 - **Web UI**: Dark/light theme, responsive, i18n (EN/ZH), Chart.js dashboards
 - **Home Assistant**: Camera entities for selected streams, detection events and automations, recording playback, PTZ and optional WebRTC; install the HA integration through HACS ([guide](docs/en/home-assistant.md))
-- **Smart home and file access**: MQTT recording triggers and WebDAV storage browsing; FTP currently has a [hash-password authentication limitation](docs/en/ftp-integration.md)
+- **Smart home and file access**: MQTT recording triggers, WebDAV storage browsing, and [FTP with global-account bcrypt authentication](docs/en/ftp-integration.md)
 - **Health Monitoring**: Multi-layer camera health detection, auto-remediation, connection quality metrics (uptime, MTBF)
 - **Single Binary**: Zero dependencies, embedded SPA, `CGO_ENABLED=0`
 - **Xiaomi Support**: CS2 P2P protocol, cloud auth (community-driven)
@@ -174,7 +174,7 @@ See [Configuration](docs/en/configuration.md) for full reference.
 
 ## Documentation
 
-Full catalog: **[docs/en/README.md](docs/en/README.md)**.
+Full catalog: **[docs/en/README.md](docs/en/README.md)** · **[Technical specification (Chinese)](docs/zh/README.md)** · **[GitHub Wiki](https://github.com/lalmax-pro/lalmax-nvr/wiki)** ([publishing guide](docs/GITHUB_WIKI.md)).
 
 | Document | Description |
 |----------|-------------|

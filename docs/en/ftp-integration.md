@@ -9,7 +9,7 @@ ftp:
   passive_port_range: "2122-2140"
 ```
 
-The implementation uses **plain FTP**, without TLS. Authentication accepts only the configured global `auth.username` and `auth.password`, and rejects anonymous access. Startup normally converts a plaintext password to `password_hash` and clears `auth.password`, while FTP cannot verify the hash yet. As a result, FTP login may fail after normal initialization. A Web UI account or a hash-only configuration does not resolve this current limitation.
+The implementation uses **plain FTP**, without TLS. Authentication accepts only the configured global `auth.username` and NVR password, verifies either `auth.password_hash` (preferred) or legacy plaintext `auth.password`, and rejects anonymous access. Normal initialization therefore works with FTP without retaining a plaintext password. FTP does not use the Web UI's multi-user accounts.
 
 The FTP filesystem supports listing, downloading, writing, and deleting files, so expose it only to a trusted network. To upload a recording over FTP, use `/{camera_id}/{filename}`. The server renames it to `{camera_id}_{timestamp_ms}.{ext}` in that camera's directory and inserts a recording row after transfer completion. Other file operations act directly on the storage root and do not automatically maintain every related database state.
 

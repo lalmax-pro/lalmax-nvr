@@ -2,7 +2,7 @@
 
 The default Web/API address is `http://localhost:9090`; change it with `server.listen`. A running NVR serves browsable [OpenAPI documentation](../../internal/docsportal/openapi.yaml) at `/docs/`. This page lists common endpoints. For the complete route registry, see [`internal/api/handler.go`](../../internal/api/handler.go).
 
-Protected endpoints require credentials; the examples below use HTTP Basic Auth. Mutations and some diagnostic endpoints also require operate permission. `/api/health` and `/api/readyz` are public status-only probes. Detailed health data and per-camera health require authentication.
+Protected endpoints require credentials; the examples below use HTTP Basic Auth. Mutations and some diagnostic endpoints also require operate permission. `/api/health` and `/api/readyz` are public status-only probes. `/api/health/cameras` is currently registered as a public, rate-limited health map; detailed component health at `/api/health/details` requires authentication.
 
 ## Health and logs
 
@@ -11,7 +11,7 @@ Protected endpoints require credentials; the examples below use HTTP Basic Auth.
 | GET | `/api/health` | NVR health |
 | GET | `/api/readyz` | Readiness |
 | GET | `/api/health/details` | Detailed NVR and camera health; authenticated |
-| GET | `/api/health/cameras` | Per-camera health; authenticated |
+| GET | `/api/health/cameras` | Per-camera health map; currently public and rate-limited |
 | GET | `/api/capabilities` | Capabilities |
 | GET | `/api/service-logs` | Service logs; requires operate permission |
 

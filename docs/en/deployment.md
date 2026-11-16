@@ -40,12 +40,12 @@ mkdir -p data
 docker compose up -d
 ```
 
-> **First-time setup**: When started without a config file, lalmax-nvr auto-generates a default configuration and runs in **setup mode** — all API endpoints are accessible without authentication. Set a password via the Web UI Settings page or the `NVR_PASSWORD` environment variable. Once a password is set, authentication is enforced.
+> **First-time setup**: When started without a config file, lalmax-nvr auto-generates defaults and enters setup mode. Protected APIs return `503 SETUP_REQUIRED`; only the initialization and explicitly public routes remain available. Complete the Web setup wizard or set `NVR_PASSWORD` during auto-initialization. Once a password is configured, authentication is enforced.
 
 #### Configuration Notes
 
 - **Auto-initialization**: If no config file exists at `/data/lalmax-nvr.yaml`, one is generated automatically with sensible defaults. No manual setup required.
-- **Initial password**: Set via `NVR_PASSWORD` environment variable. If not set, the app starts in setup mode (no auth) — set a password through the Web UI Settings page.
+- **Initial password**: Set via `NVR_PASSWORD` during auto-initialization. If it is not set, complete the Web setup wizard; protected APIs return `503 SETUP_REQUIRED` until setup completes.
 - **Data directory**: `storage.root_dir` is automatically set to `/data` inside Docker containers via the `NVR_DATA_DIR` environment variable.
 
 #### docker-compose.yml Reference
@@ -258,10 +258,10 @@ Important notes:
 
 **Permission errors**
 
-The container runs as nonroot (UID 65534). Fix mount permission issues:
+The entrypoint switches to UID/GID 1000 by default and attempts to fix data-directory ownership. Set `NVR_UID`/`NVR_GID` to the host directory owner when needed:
 
 ```bash
-chown -R 65534:65534 ./data
+chown -R 1000:1000 ./data
 ```
 
 **Port conflicts**
@@ -283,7 +283,7 @@ docker compose logs lalmax-nvr
 
 **FTP won't connect**
 
-Check that control port `2121` and passive ports `2122-2140` are mapped and allowed. FTP currently checks the plaintext `auth.password`, while first-run setup saves a hash and clears that field, so login may fail even when the ports are reachable. See the [FTP guide](ftp-integration.md).
+Check that control port `2121` and passive ports `2122-2140` are mapped and allowed. FTP uses the global NVR username and supports both `auth.password_hash` and legacy plaintext `auth.password`; it does not use Web UI multi-user accounts. Plain FTP has no TLS and permits writes, so keep it on a trusted network. See the [FTP guide](ftp-integration.md).
 
 **Wrong timezone**
 
@@ -454,15 +454,15 @@ curl -f http://localhost:9090/api/health
 
 ```bash
 df -h ./data
-du -sh ./data/recordings
+du -sh ./data
 ```
 
 ### Prometheus Metrics
 
-Metrics are available at `/metrics` (public, no auth required):
+Metrics are available at `/metrics` with Basic Auth. Dedicated `metrics_auth` credentials take precedence; otherwise the global NVR credentials are required:
 
 ```bash
-curl http://localhost:9090/metrics
+curl -u admin:password http://localhost:9090/metrics
 ```
 
 ## Troubleshooting

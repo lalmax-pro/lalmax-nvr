@@ -39,7 +39,7 @@ Windows build and start scripts are under [`scripts/windows`](../../scripts/wind
 3. If you use Emby, configure the server and add movies or episodes under **Media Sources → Emby Library**. Publish an item as an NVR stream; it goes offline at the end by default, or can loop. See the [Emby Library guide](emby.md).
 4. Create a plan for the desired `stream_id` on the **Recording plans** page. See [Recording plans](recording-plans.md) and the [Media Sources overview](media-sources.md) for source differences and navigation.
 
-A running NVR serves API documentation at `/docs/`. [WebDAV](webdav-integration.md) is read-only by default and uses Web/API authentication. [FTP](ftp-integration.md) is enabled by default, but its plaintext password authentication currently conflicts with the hash saved after initialization; read its guide before relying on it.
+A running NVR serves API documentation at `/docs/`. [WebDAV](webdav-integration.md) is read-only by default and uses Web/API authentication. [FTP](ftp-integration.md) is enabled by default and supports the global account's bcrypt password hash, but plain FTP has no TLS and permits writes; disable it when unused and keep it on trusted networks.
 
 ## Common addresses and ports
 

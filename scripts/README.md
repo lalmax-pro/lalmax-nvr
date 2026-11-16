@@ -54,3 +54,14 @@ Linux: scripts/unix/run.sh, start.sh, stop.sh, restart.sh, status.sh, logs.sh, t
 Runtime output defaults: bin/lalmax-nvr (Windows: .exe), run/lalmax-nvr.pid, logs/lalmax-nvr.log, data/.
 
 Override example: `CONFIG_FILE=./lalmax-nvr.dev.yaml ./scripts/unix/start.sh`.
+
+## Documentation and Wiki utilities
+
+From the repository root, use Python 3 without third-party packages:
+
+```bash
+python3 scripts/check_docs.py                 # check repository-local Markdown links
+python3 scripts/build_wiki.py --output tmp/wiki  # generate GitHub Wiki pages locally
+```
+
+The Wiki builder does not push to GitHub. Initialization, manual publication, and the main-branch Actions workflow are documented in `docs/GITHUB_WIKI.md`.

@@ -292,7 +292,8 @@ paths:
     get:
       tags: [Health]
       summary: 摄像头健康状态 · Camera health
-      description: 需要登录。 / Authenticated endpoint.
+      security: []
+      description: 当前注册为公开、限流的健康映射；详细组件健康使用受保护的 /api/health/details。 / Public rate-limited camera health map; use authenticated /api/health/details for component details.
       operationId: getCameraHealthMap
       responses:
         "200":
@@ -859,7 +860,7 @@ paths:
                 recordings:
                   - id: "1704123456789012345"
                     camera_id: front-door
-                    file_path: /var/lib/lalmax-nvr/front-door/2026-09-11/1704123456789012345.mp4
+                    file_path: /var/lib/lalmax-nvr/front-door/front-door_20260911_080000_1704123456789012345.mp4
                     format: h264
                     started_at: "2026-09-11T08:00:00Z"
                     ended_at: "2026-09-11T08:02:00Z"

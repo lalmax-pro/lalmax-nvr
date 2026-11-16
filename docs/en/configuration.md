@@ -385,7 +385,7 @@ cameras:
 
 ## FTP Configuration
 
-FTP currently checks a plaintext password, so the hash saved by normal initialization cannot authenticate FTP clients. See the [FTP guide](ftp-integration.md) before using it.
+FTP uses the global `auth.username` and supports both bcrypt `auth.password_hash` (preferred) and legacy plaintext `auth.password`. It does not use Web UI multi-user accounts. Plain FTP has no TLS and permits file writes, so disable it when unused and never expose it to untrusted networks. See the [FTP guide](ftp-integration.md).
 
 ### `ftp.enabled`
 - **Type**: boolean
@@ -938,10 +938,9 @@ The configuration is validated on startup with these constraints:
 
 ## File Paths and Locations
 
-- **Default config path**: `./lalmax-nvr.yaml`
+- **Default config path**: `config/lalmax-nvr.yaml` (`init` itself defaults to `./lalmax-nvr.yaml`, so pass `--config` explicitly)
 - **Default storage**: `/var/lib/lalmax-nvr`
-- **Recordings**: `{root_dir}/recordings/{encoding}/{camera_id}/`
-- **Segments**: `{root_dir}/recordings/{encoding}/{camera_id}/`
+- **Recordings and segments**: `{root_dir}/{encoded-source-id}/` (no common `recordings/{encoding}` hierarchy)
 - **Snapshots**: `{root_dir}/snapshots/{camera_id}/`
 - **WebDAV**: `{root_dav}{root_dir}/` (where root_dav is reverse proxy path)
 
