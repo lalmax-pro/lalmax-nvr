@@ -50,6 +50,9 @@ export default function ApiDocsPage() {
         </a>
         <nav className="docs-bar-links">
           <a href={`${basePath}/`}>产品官网</a>
+          <a href="https://github.com/lalmax-pro/lalmax-nvr/wiki" target="_blank" rel="noreferrer">
+            知识库
+          </a>
           <a href="https://github.com/lalmax-pro/lalmax-nvr" target="_blank" rel="noreferrer">
             GitHub
           </a>

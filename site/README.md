@@ -1,98 +1,70 @@
-# vinext-starter
+# lalmax-nvr 产品网站
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+本目录包含 lalmax-nvr 的产品首页和 OpenAPI 文档站点。GitHub Pages 部署地址：
 
-## Prerequisites
+- 产品首页：https://lalmax-pro.github.io/lalmax-nvr/
+- OpenAPI：https://lalmax-pro.github.io/lalmax-nvr/docs/
+- 技术知识库：https://github.com/lalmax-pro/lalmax-nvr/wiki
 
-- Node.js `>=22.13.0`
+## 技术结构
 
-## Quick Start
+- Next.js 16 / React 19，产品页使用静态导出。
+- `app/page.tsx`：首页内容、能力、架构、快速开始和 Wiki 入口。
+- `app/globals.css`：页面样式与响应式布局。
+- `app/docs/`：基于 Scalar 的 OpenAPI 页面。
+- `public/`：本地图片、图标和供页面加载的 OpenAPI 文件。
+- `worker/`、`vite.config.ts`：可选 vinext / Cloudflare 开发和渲染链路。
+
+页面素材必须来自本目录的本地文件或仓库中已有的真实产品截图，不使用占位图片服务。
+
+## 本地开发
+
+要求 Node.js `>=22.13.0` 和 npm。
 
 ```bash
-npm install
+npm ci
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+## 验证
 
-## Included Shape
-
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```bash
+npm run lint
+npm test
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+`npm test` 会构建 vinext 产物并检查服务端渲染、元数据和本地社交图片。
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+按 GitHub Pages 的实际 base path 验证静态导出：
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+```bash
+NEXT_PUBLIC_BASE_PATH=/lalmax-nvr \
+NEXT_PUBLIC_SITE_URL=https://lalmax-pro.github.io/lalmax-nvr \
+npm run build:pages
+```
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+输出目录为 `out/`。
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+## OpenAPI 同步
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+`build`、`build:pages` 和 `dev` 会先执行：
 
-## Useful Commands
+```bash
+npm run sync-openapi
+```
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+该命令把 `../internal/docsportal/openapi.yaml` 复制到 `public/openapi.yaml`。接口契约应在主文档源中修改，不要只改 Pages 的副本。
 
-## Learn More
+## 内容维护
 
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+产品文案描述当前已经实现的能力，不应把实验功能、目标性能或路线图写成确定承诺：
+
+- 不写未经基准验证的延迟、吞吐和兼容性数字。
+- “核心单二进制”不排除可选 FFmpeg / GStreamer 工具。
+- 设备接入应区分拉流、推流、SIP 信令和内容源发布。
+- 添加设备或发布流不等于自动录像；录像计划绑定 `stream_id`。
+- 详细规则链接到 GitHub Wiki 的对应规范，不在产品页复制整份技术文档。
+
+## 发布
+
+`.github/workflows/pages.yml` 在 `main` 分支的 `site/**` 或该工作流变化时构建并部署 Pages，也支持手动运行。构建环境显式设置 `NEXT_PUBLIC_BASE_PATH` 和 `NEXT_PUBLIC_SITE_URL`。

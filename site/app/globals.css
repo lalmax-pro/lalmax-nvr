@@ -29,6 +29,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 a { color: inherit; text-decoration: none; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 img { max-width: 100%; }
 .wrap { width: min(1120px, calc(100% - 48px)); margin: 0 auto; }
 
@@ -121,6 +122,7 @@ img { max-width: 100%; }
   transition: background .15s, border-color .15s, color .15s;
   cursor: pointer;
 }
+.button:active { transform: scale(.98); }
 .button.primary { background: var(--accent); color: #fff; }
 .button.primary:hover { background: var(--accent-hover); }
 .button.quiet {
@@ -503,7 +505,9 @@ img { max-width: 100%; }
   text-align: center;
 }
 .arch-consumer-icon {
-  font-size: 18px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
   margin-bottom: 8px;
   color: var(--accent);
   line-height: 1;
@@ -591,9 +595,25 @@ img { max-width: 100%; }
 .code-block .cmd { color: #93c5fd; }
 .code-block .ok { color: #86efac; }
 .code-block .key { color: #fbbf24; }
+.quickstart-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  margin-top: 26px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.quickstart-links a:hover { color: var(--accent-hover); }
 
 /* ---------- CTA ---------- */
 .start { padding: 88px 0; text-align: center; }
+.start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
 .start .eyebrow { justify-content: center; }
 .start h2 {
   font-size: clamp(30px, 3.2vw, 40px);

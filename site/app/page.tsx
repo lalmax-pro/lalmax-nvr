@@ -3,51 +3,56 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const capabilities = [
   {
     number: "01",
-    title: "一套媒体链路",
-    text: "基于 lalmax 统一拉流、转协议与分发。摄像、录像与播放从同一条稳定链路获得数据，不重复拉流。",
+    title: "统一媒体链路",
+    text: "基于 lal / lalmax 统一接入、转协议与分发。受支持的来源只进入媒体链路一次，直播与录像复用同一路流。",
   },
   {
     number: "02",
-    title: "全协议设备接入",
-    text: "RTSP、ONVIF、GB28181、RTMP / SRT、HTTP JPEG 与小米 P2P 统一纳管，从设备发现到云台控制一气呵成。",
+    title: "多源设备与流接入",
+    text: "支持 RTSP、ONVIF、GB28181、SIP VoIP、RTMP / SRT / WHIP、HTTP JPEG 与小米 P2P，按来源选择拉流、推流或信令桥接。",
   },
   {
     number: "03",
-    title: "毫秒级实时预览",
-    text: "WebCodecs、fMP4、WebRTC、HTTP-FLV、HLS / LL-HLS 六种协议，按场景在延迟与兼容性之间自由取舍。",
+    title: "多协议实时预览",
+    text: "WebCodecs、fMP4、WebRTC、HTTP-FLV、HLS / LL-HLS，按终端编码能力、延迟要求与网络条件选择播放方式。",
   },
   {
     number: "04",
-    title: "GB28181 国标全链路",
-    text: "SIP 设备注册、平台级联、录像回放与语音对讲端到端覆盖，国内安防项目开箱即用。",
+    title: "GB28181 国标能力",
+    text: "覆盖 SIP 设备注册、目录管理、平台级联、录像检索回放、下载与语音对讲，支持实际项目对接验证。",
   },
   {
     number: "05",
-    title: "智能录像与回放",
-    text: "自动 MP4 分段，按摄像头配置连续 / 定时 / 事件录像与独立保留期；时间线缩放、日历定位、批量下载。",
+    title: "计划录像与连续回放",
+    text: "按 stream_id 配置连续 / 定时 / 事件 / 自适应录像；提供 MP4 分段、时间轴、连续 VOD、保留、锁定与合并。",
   },
   {
     number: "06",
-    title: "AI 智能检测分析",
-    text: "对接 YOLO 检测引擎与多模态大模型，检测结果实时推送、落库可追溯，录像检索更聪明。",
+    title: "AI 检测与事件联动",
+    text: "支持浏览器 ONNX、Webhook 检测与可选多模态分析；事件可联动录像、Webhook 和云台预置位。",
   },
   {
     number: "07",
     title: "健康监控与自愈",
-    text: "多层摄像头健康探测、自动恢复与连接质量指标（uptime / MTBF），故障可观测、可定位。",
+    text: "提供多层健康探测、事件记录与可配置的自动修复；结合指标、日志和 OpenTelemetry 定位异常。",
   },
   {
     number: "08",
     title: "跨平台部署",
-    text: "Docker、单文件与源码构建，零依赖、CGO_ENABLED=0，从容落地 Linux、macOS、Windows 与 ARM 环境。",
+    text: "Docker、预构建二进制与源码构建，覆盖 Linux、macOS、Windows 和 ARM；核心服务无需 CGO，可选媒体工具按需安装。",
+  },
+  {
+    number: "09",
+    title: "Home Assistant 与集成",
+    text: "将流发布为 HA 摄像头，支持事件、录像、PTZ 与可选 WebRTC；并提供 MQTT、DLNA、WebDAV / FTP 等集成。",
   },
 ];
 
 const gbItems = [
   {
     tag: "DEVICE MGMT",
-    title: "设备注册与目录同步",
-    text: "国标设备一键注册，通道目录、在线状态与平台信息实时同步。",
+    title: "设备注册与目录管理",
+    text: "设备通过 REGISTER 接入，支持通道目录、在线状态、业务分组与行政区划管理。",
   },
   {
     tag: "CASCADE",
@@ -67,11 +72,13 @@ const gbItems = [
 ];
 
 const specRows = [
-  { k: "运行时", v: "Go 1.26 · 单二进制 · CGO_ENABLED=0" },
-  { k: "存储", v: "SQLite（纯 Go）· MP4 分段录像 · 独立保留期" },
-  { k: "媒体引擎", v: "嵌入式 lal / lalmax · 统一拉流与分发" },
-  { k: "可观测", v: "Prometheus · OpenTelemetry · 健康自愈" },
-  { k: "集成", v: "MQTT · WebDAV · FTP · REST API · SSE 事件" },
+  { k: "运行时", v: "Go 1.26 · 核心单二进制 · CGO_ENABLED=0" },
+  { k: "数据库", v: "SQLite · PostgreSQL · MySQL" },
+  { k: "媒体引擎", v: "嵌入式 lal / lalmax · 统一接入与分发" },
+  { k: "录像", v: "MP4 分段 · 连续 VOD · 保留与锁定" },
+  { k: "内容源", v: "IPTV / M3U · Emby · 本地上传视频" },
+  { k: "可观测", v: "Prometheus · OpenTelemetry · 健康事件" },
+  { k: "集成", v: "Home Assistant · MQTT · DLNA · WebDAV / FTP" },
   { k: "授权", v: "MIT License · 开源可商用" },
 ];
 
@@ -80,9 +87,11 @@ const specChips = [
 ];
 
 const protocols = [
-  "RTSP", "ONVIF", "GB28181", "RTMP", "SRT", "WebRTC",
-  "HLS", "HTTP-FLV", "fMP4", "WebCodecs", "小米 P2P",
+  "RTSP", "ONVIF", "GB28181", "SIP VoIP", "RTMP", "SRT", "WHIP / WHEP",
+  "WebRTC", "HLS", "HTTP-FLV", "fMP4", "WebCodecs", "IPTV", "小米 P2P",
 ];
+
+const wikiUrl = "https://github.com/lalmax-pro/lalmax-nvr/wiki";
 
 export default function Home() {
   return (
@@ -103,6 +112,7 @@ export default function Home() {
           <a href="#features">能力</a>
           <a href="#gb">国标</a>
           <a href="#architecture">架构</a>
+          <a href={wikiUrl} target="_blank" rel="noreferrer">知识库</a>
           <a href="#quickstart">快速开始</a>
           <a href={`${basePath}/docs/`}>API</a>
         </div>
@@ -128,7 +138,7 @@ export default function Home() {
             都成为<span>可靠的实时数据。</span>
           </h1>
           <p className="hero-lede">
-            lalmax-nvr 是面向跨平台部署的网络视频录像机。一个 Go 二进制连接摄像头、直播、录像、国标平台与智能事件，单机部署即可组成一套完整的视频基础设施。
+            lalmax-nvr 是开源、跨平台的网络视频录像机。一个 Go 核心二进制连接摄像头、编码器与内容源，统一管理实时播放、计划录像、国标平台、智能事件和第三方集成。
           </p>
           <div className="hero-actions">
             <a className="button primary" href="#quickstart">
@@ -146,11 +156,11 @@ export default function Home() {
           <div className="hero-proof">
             <div>
               <b>单二进制</b>
-              <span>CGO_ENABLED=0 · 零运行时依赖</span>
+              <span>核心服务 · CGO_ENABLED=0</span>
             </div>
             <div>
-              <b>&lt;100ms</b>
-              <span>WebCodecs 低延迟预览</span>
+              <b>多协议</b>
+              <span>WebRTC · WebCodecs · HLS / FLV</span>
             </div>
             <div>
               <b>MIT</b>
@@ -189,7 +199,7 @@ export default function Home() {
           </p>
           <h2>从设备接入到智能回放，一套系统覆盖。</h2>
           <p>
-            把复杂的视频工程收敛成清晰的产品界面——设备发现、实时预览、录像归档、智能检测与故障自愈，全部内置，无需拼凑中间件。
+            把设备、流、录像与事件收敛到统一的产品模型；按需启用外部检测、实时转码和第三方集成，而不是把每种来源都当作同一种协议。
           </p>
         </div>
         <div className="capability-grid">
@@ -210,9 +220,9 @@ export default function Home() {
             <p className="eyebrow">
               <span /> GB28181 · 国标能力
             </p>
-            <h2>国标全链路，开箱即用。</h2>
+            <h2>覆盖国标接入、级联与回放。</h2>
             <p>
-              完整实现 GB/T 28181 的 SIP 设备管理、平台级联、录像回放与报警上送。无论是接入国标设备，还是向上级平台级联，都在同一套界面里完成。
+              提供 GB/T 28181 的 SIP 设备管理、平台级联、录像检索回放与报警事件能力。无论是设备注册接入，还是向上级平台级联，都在同一套界面里完成；具体兼容性以实际设备对接为准。
             </p>
           </div>
           <div className="gb-grid">
@@ -229,7 +239,7 @@ export default function Home() {
             <div>
               <h3>技术规格</h3>
               <p className="specs-desc">
-                全部 Go 实现，编译期禁用 CGO。媒体引擎、录像、国标信令、AI 事件与 Web 控制台打包在同一个可执行文件里，连数据库都是纯 Go 的——没有运行时依赖，没有安装步骤。
+                核心服务由 Go 实现并禁用 CGO，媒体引擎与 Web 控制台随同一个可执行文件分发。默认使用纯 Go SQLite，也可连接 PostgreSQL / MySQL；可选转码、快照与媒体检测按需使用 FFmpeg / GStreamer。
               </p>
               <div className="spec-chips">
                 {specChips.map((c) => (
@@ -256,17 +266,17 @@ export default function Home() {
             <p className="eyebrow">
               <span /> 统一媒体引擎
             </p>
-            <h2>不重复拉流，每一帧都走在正确的路径上。</h2>
+            <h2>统一接入，直播与录像各取所需。</h2>
             <p>
-              lalmax 负责媒体中继、协议转换与流分发；NVR 层专注设备生命周期、录像、存储和 Web 控制台。职责分层，链路更短，每路媒体流只进入引擎一次。
+              lal / lalmax 负责媒体接入、协议转换与流分发；NVR 层专注设备生命周期、录像计划、存储和 Web 控制台。职责分层，受支持的来源进入统一媒体组，直播与录像复用同一路流。
             </p>
             <a
               className="button quiet"
-              href="https://github.com/lalmax-pro/lalmax-nvr#architecture"
+              href={`${wikiUrl}/Architecture`}
               target="_blank"
               rel="noreferrer"
             >
-              了解媒体架构 →
+              阅读系统架构规范 →
             </a>
           </div>
           <div className="arch-diagram">
@@ -274,7 +284,7 @@ export default function Home() {
             <div className="arch-inputs">
               <div className="arch-layer-tag">设备接入</div>
               <div className="arch-input-grid">
-                {["RTSP", "ONVIF", "GB28181", "RTMP / SRT"].map((p) => (
+                {["RTSP / ONVIF", "GB28181", "SIP VoIP", "RTMP / SRT / WHIP"].map((p) => (
                   <div className="arch-input-chip" key={p}>{p}</div>
                 ))}
               </div>
@@ -284,9 +294,9 @@ export default function Home() {
 
             {/* lalmax 引擎层 */}
             <div className="arch-engine">
-              <div className="arch-engine-title">lalmax 媒体引擎</div>
-              <div className="arch-engine-desc">统一拉流 · 转协议 · 流分发</div>
-              <div className="arch-engine-badge">每路媒体流只接入一次</div>
+              <div className="arch-engine-title">lal / lalmax 媒体引擎</div>
+              <div className="arch-engine-desc">媒体接入 · 转协议 · 流分发</div>
+              <div className="arch-engine-badge">同一路流复用分发与录像</div>
             </div>
 
             <div className="arch-split" />
@@ -294,17 +304,17 @@ export default function Home() {
             {/* 消费者层 */}
             <div className="arch-consumers">
               <div className="arch-consumer">
-                <div className="arch-consumer-icon">⏺</div>
+                <div className="arch-consumer-icon">REC</div>
                 <b>录像存储</b>
                 <small>MP4 分段 · 时间线 · 独立保留期</small>
               </div>
               <div className="arch-consumer">
-                <div className="arch-consumer-icon">▶</div>
+                <div className="arch-consumer-icon">LIVE</div>
                 <b>实时预览</b>
                 <small>WebRTC · HLS · WebCodecs · fMP4</small>
               </div>
               <div className="arch-consumer">
-                <div className="arch-consumer-icon">◎</div>
+                <div className="arch-consumer-icon">AI</div>
                 <b>智能分析</b>
                 <small>YOLO 检测 · 多模态 · 事件推送</small>
               </div>
@@ -315,7 +325,7 @@ export default function Home() {
             {/* 输出层 */}
             <div className="arch-output">
               <b>Web 控制台</b>
-              <small>设备管理 · 回放检索 · 健康监控 · 国标级联 · API 集成</small>
+              <small>设备与流管理 · 录像计划 · 健康事件 · 国标级联 · OpenAPI 集成</small>
             </div>
           </div>
         </div>
@@ -328,9 +338,9 @@ export default function Home() {
             <p className="eyebrow">
               <span /> 快速开始
             </p>
-            <h2>两分钟跑起来。</h2>
+            <h2>从启动到第一路流。</h2>
             <p>
-              Docker 一键启动，或下载单文件直接运行。默认监听 9090 端口，浏览器打开即可完成初始配置。
+              使用 Docker 或预构建二进制启动，默认监听 9090。完成管理员初始化后接入设备或推流；需要录像时，再为对应的 stream_id 创建录像计划。
             </p>
           </div>
           <div className="qs-grid">
@@ -339,17 +349,23 @@ export default function Home() {
               {"\n"}
               <span className="cmd">$</span> docker compose up -d
               {"\n"}
-              <span className="ok">✓</span> lalmax-nvr ready at http://localhost:9090
+              <span className="comment"># 浏览器打开 http://localhost:9090 完成初始化</span>
             </div>
             <div className="code-block">
-              <span className="comment"># 单文件 / 源码方式</span>
+              <span className="comment"># 预构建二进制：初始化后启动</span>
               {"\n"}
-              <span className="cmd">$</span> ./lalmax-nvr -c config.yaml
+              <span className="cmd">$</span> ./lalmax-nvr init --data-dir ./data --config config/lalmax-nvr.yaml
               {"\n"}
-              <span className="comment"># 或从源码构建</span>
+              <span className="cmd">$</span> ./lalmax-nvr -config config/lalmax-nvr.yaml
+              {"\n"}
+              <span className="comment"># 或从源码构建并启动</span>
               {"\n"}
               <span className="cmd">$</span> ./scripts/unix/build.sh &amp;&amp; ./scripts/unix/start.sh
             </div>
+          </div>
+          <div className="quickstart-links">
+            <a href={`${wikiUrl}/Getting-Started`} target="_blank" rel="noreferrer">完整安装与首路流验收 →</a>
+            <a href={`${basePath}/docs/`}>浏览 OpenAPI 文档 →</a>
           </div>
         </div>
       </section>
@@ -360,14 +376,19 @@ export default function Home() {
           <span /> 开源可用
         </p>
         <h2>把视频能力，变成你的产品优势。</h2>
-        <a
-          className="button primary"
-          href="https://github.com/lalmax-pro/lalmax-nvr"
-          target="_blank"
-          rel="noreferrer"
-        >
-          前往 GitHub ↗
-        </a>
+        <div className="start-actions">
+          <a
+            className="button primary"
+            href="https://github.com/lalmax-pro/lalmax-nvr"
+            target="_blank"
+            rel="noreferrer"
+          >
+            前往 GitHub ↗
+          </a>
+          <a className="button quiet" href={wikiUrl} target="_blank" rel="noreferrer">
+            打开技术知识库 →
+          </a>
+        </div>
         <p>MIT License · 社区共建 · 欢迎 Star 和 Issue</p>
       </section>
 
@@ -383,8 +404,9 @@ export default function Home() {
             lalmax<span className="brand-accent">-nvr</span>
           </span>
         </a>
+        <a href={wikiUrl} target="_blank" rel="noreferrer">技术知识库</a>
         <a href={`${basePath}/docs/`}>API 文档</a>
-        <span>Built on the lalmax media engine</span>
+        <span>Built on the lal / lalmax media stack</span>
         <span>© {new Date().getFullYear()} lalmax-nvr</span>
       </footer>
     </main>

@@ -9,7 +9,7 @@
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
 
-基于 [lalmax](https://github.com/q191201771/lal) 媒体引擎构建的轻量级网络视频录像机。单文件部署，零依赖。
+基于 [lal](https://github.com/q191201771/lal) / [lalmax](https://github.com/q191201771/lalmax) 媒体引擎构建的轻量级网络视频录像机。核心服务支持单文件部署、无需 CGO；可选转码与媒体处理可按需使用 FFmpeg / GStreamer。
 
 这个项目最初受到 MiBeeNVR 的启发，后续已经演进为一个面向 `lal` / `lalmax` 媒体体系的专属 NVR 项目。
 
@@ -42,7 +42,7 @@ H.264/H.265 播放取决于终端编码支持；H.265 WebRTC 需要 V1.0.2 之�
 
 ## 架构
 
-lalmax-nvr 是叠在内嵌 [lalmax](https://github.com/q191201771/lal) 引擎上的业务 NVR。每路摄像头只收 **一次**。
+lalmax-nvr 是叠在内嵌 [lalmax](https://github.com/q191201771/lalmax) 引擎上的业务 NVR。受支持的媒体来源在统一链路中接入 **一次**，直播与录像复用该链路。
 
 ```mermaid
 flowchart LR
@@ -108,13 +108,13 @@ G.711 包括 A-law（PCMA）和 µ-law（PCMU）。表中未列出的音频不�
 - **片段合并**：周期补齐，加上 **滚动合并** 写入当前 UTC 小时文件
 - **ONVIF**：WS-Discovery / Hello、云台、成像、流地址、编码检测、IP 自愈、可选子码流
 - **流管理**：运行时流清单、摄像头绑定、可选 **登记为设备**（不会开始录像）
-- **媒体接入**：统一配置摄像头、直播地址、IPTV、Emby 和编码器推流，并查看来源概况；Jellyfin、Plex 和本地文件暂未支持（[总览](docs/zh/media-sources.md) · [IPTV 指南](docs/zh/iptv.md) · [Emby 指南](docs/zh/emby.md)）
+- **媒体接入**：统一配置摄像头、直播地址、IPTV、Emby 和编码器推流，并查看来源概况；流管理另提供独立的本地上传视频（`local_video`）路径。Jellyfin、Plex 和通用 NAS 媒体库暂未支持（[总览](docs/zh/media-sources.md) · [IPTV 指南](docs/zh/iptv.md) · [Emby 指南](docs/zh/emby.md)）
 - **DLNA**：可选的 UPnP MediaServer — 在局域网中发现 NVR，并在电视或其他 DLNA 播放器上浏览实时流和录像；在 `lalmax-nvr.yaml` 中配置 `dlna.enabled` 和独立 HTTP 端口（默认 `8200`）
 - **Web 界面**：深色/浅色主题、响应式、中英文切换、Chart.js 图表
 - **Home Assistant**：选择发布已有流，提供摄像头实体、检测事件与自动化、录像回放、云台及可选 WebRTC，支持通过 HACS 安装 HA 集成（[接入指南](docs/zh/home-assistant.md)）
 - **智能家居与文件访问**：MQTT 触发录像、WebDAV 浏览存储文件；[FTP 支持全局账号的 bcrypt 哈希认证](docs/zh/ftp-integration.md)，但明文协议和写权限仅限可信网络
 - **健康监控**：多层摄像头健康检测、自动修复、质量评分
-- **单文件部署**：零依赖、内嵌前端、`CGO_ENABLED=0`
+- **核心服务单文件部署**：内嵌前端、`CGO_ENABLED=0`；可选转码、快照与媒体检测可使用 FFmpeg / GStreamer 工具
 - **小米摄像头**：CS2 P2P 协议、云端认证（社区驱动）
 
 ## 快速开始
@@ -179,6 +179,7 @@ media:
 | 文档 | 说明 |
 |------|------|
 | [架构](docs/zh/architecture.md) | 分层、接入（拉流、国标推流、JT1078）、VOD、端口、模块 |
+| [媒体与流规范](docs/zh/media-sources.md) | 来源模型、流标识、推拉流与播放契约 |
 | [录像计划](docs/zh/recording-plans.md) · [录制流程](docs/zh/recording-flow.md) | 一条流何时写盘，以及组写入器如何订阅 |
 | [快速入门](docs/zh/getting-started.md) | 安装、第一个摄像头 |
 | [配置规范](docs/zh/configuration.md) | 加载顺序、默认值、字段约束与敏感信息 |
@@ -187,7 +188,7 @@ media:
 | [GB28181](docs/zh/gb28181-guide.md) | 国标设备、回放、对讲 |
 | [VoIP 呼叫与对讲](docs/zh/voip.md) | SIP 终端、PBX、网页外呼、WebRTC 双向对讲和通话记录 |
 | [实时转码](docs/zh/transcoding-deployment.md) · [转码架构](docs/zh/transcoding-design.md) | FFmpeg / GStreamer、任务启停和派生输出 |
-| [JT1078 / JT808](docs/zh/configuration.md#jt1078-推流配置) | `:1078` 媒体收流，以及可选的 `:808` 信令 |
+| [JT1078 / JT808](docs/zh/configuration.md#jt1078--jt808实验性) | `:1078` 媒体收流，以及可选的 `:808` 信令 |
 | [ONVIF](docs/zh/onvif-guide.md) | 发现、云台 |
 | [摄像头指南](docs/zh/camera-guide.md) | RTSP / HTTP 接入 |
 | [Home Assistant / HACS](docs/zh/home-assistant.md) | 安装、流发布、事件、录像、云台与 WebRTC |
@@ -251,7 +252,7 @@ config/                # config.example.yaml（复制为 lalmax-nvr.yaml）
 scripts/               # 构建和管理脚本
 docker/                # Docker 构建资源
 tests/                 # 集成测试
-docs/                  # 文档（中文/英文）
+docs/                  # 技术规范、专题指南与 GitHub Wiki 源文件（中文/英文）
 ```
 
 > HLS、LL-HLS、HTTP-FLV、WS-FLV、WebRTC、fMP4、RTSP、RTMP 等播放协议，以及 RTMP/SRT/WHIP 接入，均由内嵌的 lalmax 引擎提供，不单独存在于 `internal/` 包中。JT1078 媒体在 `third/lalmax/jt1078`，JT808 信令在 `internal/jt808`。WebCodecs 在 `internal/wsstream`。
@@ -259,8 +260,9 @@ docs/                  # 文档（中文/英文）
 ## 贡献
 
 1. 提交前运行 `go vet ./...`
-2. 新功能附带测试
-3. 清晰的提交信息
+2. 文档变更运行 `python3 scripts/check_docs.py`
+3. 新功能附带测试
+4. 清晰的提交信息
 
 ## 许可证
 

@@ -9,7 +9,7 @@
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
 
-A lightweight Network Video Recorder built on [lalmax](https://github.com/q191201771/lal) media engine. Single binary, zero dependencies.
+A lightweight Network Video Recorder built on the [lal](https://github.com/q191201771/lal) / [lalmax](https://github.com/q191201771/lalmax) media stack. The core service ships as a single binary without CGO; optional transcoding and media tooling can use FFmpeg / GStreamer.
 
 This project was inspired by MiBeeNVR, and has since been developed into a dedicated NVR focused on the `lal` / `lalmax` media stack.
 
@@ -42,7 +42,7 @@ H.264/H.265 playback depends on client codec support; HEVC WebRTC requires an NV
 
 ## Architecture
 
-lalmax-nvr is a business NVR on top of an embedded [lalmax](https://github.com/q191201771/lal) engine. Each camera is ingested **once**.
+lalmax-nvr is a business NVR on top of an embedded [lalmax](https://github.com/q191201771/lalmax) engine. Supported sources enter a shared media pipeline **once**, where live playback and recording reuse the same stream.
 
 ```mermaid
 flowchart LR
@@ -108,13 +108,13 @@ G.711 covers both A-law (PCMA) and µ-law (PCMU). Audio codecs not listed for a 
 - **Segment Merge**: Periodic backfill plus **rolling merge** into the current UTC hour file
 - **ONVIF**: WS-Discovery / Hello, PTZ, imaging, stream URI, encoding detect, IP self-heal, optional sub-stream
 - **Stream Management**: Runtime stream inventory, camera binding, optional **register as device** (does not start recording)
-- **Media Inputs**: Configure cameras, live URLs, IPTV, Emby, and encoder push from one place, with a source overview. Jellyfin, Plex, and local files are not supported yet ([overview](docs/en/media-sources.md) · [IPTV guide](docs/en/iptv.md) · [Emby guide](docs/en/emby.md))
+- **Media Inputs**: Configure cameras, live URLs, IPTV, Emby, and encoder push from one place, with a source overview. Stream management also provides a separate uploaded-video (`local_video`) path; Jellyfin, Plex, and general NAS media libraries are not supported yet ([overview](docs/en/media-sources.md) · [IPTV guide](docs/en/iptv.md) · [Emby guide](docs/en/emby.md))
 - **DLNA**: Optional UPnP MediaServer — discover the NVR on the LAN and browse live streams and recordings on TVs or other DLNA players; configure `dlna.enabled` and the dedicated HTTP port (default `8200`) in `lalmax-nvr.yaml`
 - **Web UI**: Dark/light theme, responsive, i18n (EN/ZH), Chart.js dashboards
 - **Home Assistant**: Camera entities for selected streams, detection events and automations, recording playback, PTZ and optional WebRTC; install the HA integration through HACS ([guide](docs/en/home-assistant.md))
 - **Smart home and file access**: MQTT recording triggers, WebDAV storage browsing, and [FTP with global-account bcrypt authentication](docs/en/ftp-integration.md)
 - **Health Monitoring**: Multi-layer camera health detection, auto-remediation, connection quality metrics (uptime, MTBF)
-- **Single Binary**: Zero dependencies, embedded SPA, `CGO_ENABLED=0`
+- **Single-Binary Core**: Embedded SPA and `CGO_ENABLED=0`; optional transcoding, snapshots, and media inspection can use FFmpeg / GStreamer tools
 - **Xiaomi Support**: CS2 P2P protocol, cloud auth (community-driven)
 
 ## Quick Start
@@ -179,6 +179,8 @@ Full catalog: **[docs/en/README.md](docs/en/README.md)** · **[Technical specifi
 | Document | Description |
 |----------|-------------|
 | [Architecture](docs/en/architecture.md) | Layers, ingest (pull, GB push, JT1078), VOD, ports, modules |
+| [Media and stream specification](docs/zh/media-sources.md) | Source model, stream IDs, ingest and playback contracts (Chinese) |
+| [Security](docs/zh/security.md) · [Development](docs/zh/development.md) | Access boundaries, code-change rules, and verification (Chinese) |
 | [Live transcoding](docs/zh/transcoding-deployment.md) | Setup, job lifecycle, and derived outputs (Chinese) |
 | [Recording plans](docs/en/recording-plans.md) · [Recording flow](docs/en/recording-flow.md) | When a stream is written, and how the group writer subscribes |
 | [Getting Started](docs/en/getting-started.md) | Install, first camera |
@@ -250,7 +252,7 @@ config/                # config.example.yaml (copy to lalmax-nvr.yaml)
 scripts/               # Build and management scripts
 docker/                # Docker build assets
 tests/                 # Integration tests
-docs/                  # Documentation (EN/ZH)
+docs/                  # Technical specs, task guides, and GitHub Wiki sources (EN/ZH)
 ```
 
 > Playback (HLS, LL-HLS, HTTP-FLV, WS-FLV, WebRTC, fMP4, RTSP, RTMP) and
@@ -261,8 +263,9 @@ docs/                  # Documentation (EN/ZH)
 ## Contributing
 
 1. Run `go vet ./...` before submitting
-2. Add tests for new features
-3. Write clear commit messages
+2. Run `python3 scripts/check_docs.py` for documentation changes
+3. Add tests for new features
+4. Write clear commit messages
 
 ## License
 

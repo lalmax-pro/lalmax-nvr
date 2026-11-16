@@ -18,11 +18,15 @@ test("server-renders the lalmax-nvr product site", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>lalmax-nvr · 跨平台网络视频录像机<\/title>/i);
+  assert.match(html, /<title>lalmax-nvr · 开源跨平台网络视频录像机（NVR）<\/title>/i);
   assert.match(html, /让每一路视频/);
   assert.match(html, /统一媒体链路/);
+  assert.match(html, /Home Assistant 与集成/);
   assert.match(html, /docker compose up -d/);
+  assert.match(html, /\.\/lalmax-nvr -config config\/lalmax-nvr\.yaml/);
+  assert.match(html, /https:\/\/github\.com\/lalmax-pro\/lalmax-nvr\/wiki/);
   assert.match(html, /src="\/og\.png"/);
+  assert.doesNotMatch(html, /&lt;100ms|零依赖|全协议设备接入|\.\/lalmax-nvr -c config\.yaml/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|Building your site/i);
 });
 
