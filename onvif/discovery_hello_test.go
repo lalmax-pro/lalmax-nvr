@@ -17,10 +17,7 @@ func TestParseHelloXML(t *testing.T) {
     </d:Hello>
   </s:Body>
 </s:Envelope>`
-	dev, err := parseProbeMatchResponse([]byte(xml), "192.168.8.20:3702")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dev := parseDiscoveryHello([]byte(xml), "192.168.8.20:3702")
 	if dev == nil {
 		t.Fatal("expected device from Hello")
 	}

@@ -111,12 +111,13 @@ func (c *Client) GetProfiles(ctx context.Context) ([]DeviceProfile, error) {
 	result := make([]DeviceProfile, 0, len(profiles))
 	for _, p := range profiles {
 		result = append(result, DeviceProfile{
-			Token:       p.Token,
-			Name:        p.Name,
-			Encoding:    p.Encoding,
-			Width:       p.Resolution.Width,
-			Height:      p.Resolution.Height,
-			VideoSource: p.VideoSource,
+			Token:            p.Token,
+			Name:             p.Name,
+			Encoding:         p.Encoding,
+			Width:            p.Resolution.Width,
+			Height:           p.Resolution.Height,
+			VideoSource:      p.VideoSource,
+			VideoSourceToken: p.VideoSourceToken,
 		})
 	}
 	return result, nil
@@ -124,11 +125,26 @@ func (c *Client) GetProfiles(ctx context.Context) ([]DeviceProfile, error) {
 
 // GetStreamURI returns the RTSP stream URI for a profile.
 func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*StreamInfo, error) {
+	return c.GetStreamURIWithTransport(ctx, profileToken, "")
+}
+
+// GetStreamURIWithTransport obtains a URI for the recorder's RTSP transport.
+func (c *Client) GetStreamURIWithTransport(ctx context.Context, profileToken, transport string) (*StreamInfo, error) {
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
 
-	uri, err := c.client.MediaService().GetStreamURI(ctx, profileToken)
+	service := c.client.MediaService()
+	var uri string
+	var err error
+	switch transport {
+	case "tcp":
+		uri, err = service.GetStreamURIForTransport(ctx, profileToken, onviflib.StreamOverTCP)
+	case "udp":
+		uri, err = service.GetStreamURIForTransport(ctx, profileToken, onviflib.StreamOverUDP)
+	default:
+		uri, err = service.GetStreamURI(ctx, profileToken)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get stream URI: %w", err)
 	}
@@ -140,20 +156,43 @@ func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*Stream
 	}, nil
 }
 
+func (c *Client) deviceCapabilities(ctx context.Context) (*onviflib.Capabilities, error) {
+	caps, err := c.client.GetCapabilities(ctx)
+	if err == nil {
+		return caps, nil
+	}
+	// Media2 devices can advertise all supported services through GetServices.
+	endpoints := c.client.Endpoints()
+	if endpoints.Media2 == nil || endpoints.Media != nil || ctx.Err() != nil {
+		return nil, fmt.Errorf("get capabilities: %w", err)
+	}
+	caps = &onviflib.Capabilities{Device: &onviflib.DeviceCapabilities{}, Media2: &onviflib.MediaCapabilities{}}
+	if endpoints.PTZ != nil {
+		caps.PTZ = &onviflib.PTZCapabilities{}
+	}
+	if endpoints.Imaging != nil {
+		caps.Imaging = &onviflib.ImagingCapabilities{}
+	}
+	if endpoints.Events != nil {
+		caps.Events = &onviflib.EventsCapabilities{}
+	}
+	return caps, nil
+}
+
 // GetCapabilities retrieves device capabilities (PTZ, streaming, etc.).
 func (c *Client) GetCapabilities(ctx context.Context) (*DeviceCapabilities, error) {
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
 
-	caps, err := c.client.GetCapabilities(ctx)
+	caps, err := c.deviceCapabilities(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("get capabilities: %w", err)
+		return nil, err
 	}
 
 	return &DeviceCapabilities{
 		PTZ:       caps.PTZ != nil,
-		Streaming: caps.Media != nil,
+		Streaming: caps.Media != nil || c.client.Endpoints().Media2 != nil,
 	}, nil
 }
 
@@ -163,17 +202,17 @@ func (c *Client) GetCapabilitiesDetailed(ctx context.Context) (*DeviceCapabiliti
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
 
-	caps, err := c.client.GetCapabilities(ctx)
+	caps, err := c.deviceCapabilities(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("get capabilities: %w", err)
+		return nil, err
 	}
 
 	result := &DeviceCapabilitiesDetailed{
 		PTZ:       caps.PTZ != nil,
 		Imaging:   caps.Imaging != nil,
 		Events:    caps.Events != nil,
-		Snapshot:  caps.Media != nil,
-		Streaming: caps.Media != nil,
+		Snapshot:  caps.Media != nil || c.client.Endpoints().Media2 != nil,
+		Streaming: caps.Media != nil || c.client.Endpoints().Media2 != nil,
 		Device:    caps.Device != nil,
 	}
 
@@ -198,7 +237,7 @@ func (c *Client) GetCapabilitiesDetailed(ctx context.Context) (*DeviceCapabiliti
 			// Try to get imaging settings with first profile to test if service works
 			profiles, _ := c.GetProfiles(ctx)
 			if len(profiles) > 0 {
-				_, testErr := imaging.GetImagingSettings(ctx, profiles[0].Token)
+				_, testErr := imaging.GetImagingSettings(ctx, c.ResolveVideoSourceToken(ctx, profiles[0]))
 				if testErr != nil {
 					// Imaging service declared but not functional
 					result.Imaging = false
@@ -270,6 +309,25 @@ func (c *Client) NewPTZController(profileToken string) PTZController {
 		return nil
 	}
 	return newSerializedPTZController(&c.soapMu, c.client, profileToken)
+}
+
+// ResolveVideoSourceToken resolves the physical video source for Imaging.
+func (c *Client) ResolveVideoSourceToken(ctx context.Context, profile DeviceProfile) string {
+	if profile.VideoSourceToken != "" {
+		return profile.VideoSourceToken
+	}
+	if profile.VideoSource != "" {
+		configs, err := c.client.MediaService().GetVideoSourceConfigurations(ctx)
+		if err == nil {
+			for _, config := range configs {
+				if config.Token == profile.VideoSource && config.SourceToken != "" {
+					return config.SourceToken
+				}
+			}
+		}
+		return profile.VideoSource // Legacy devices can use the same token for both.
+	}
+	return profile.Token // Older devices can omit the video source configuration.
 }
 
 // NewImagingController creates an ImagingController backed by this client.

@@ -2,16 +2,15 @@
 
 本指南介绍 lalmax-nvr 与 ONVIF（开放网络视频接口论坛）的集成，包括摄像头发现、管理、PTZ 控制和故障排除。
 
-## 什么是 ONVIF 和 Profile S 概述
+## ONVIF 客户端兼容性
 
-ONVIF 是网络视频产品的开放行业标准，使不同制造商的 IP 摄像头能够协同工作。lalmax-nvr 主要实现 ONVIF Profile S，专注于核心视频流功能：
+lalmax-nvr 通过 ONVIF 发现摄像头、枚举媒体配置、获取取流地址和控制 PTZ。媒体接口优先使用 Media2，兼容只提供 Media1 的设备。本项目以 ONVIF 26.06 接口规范为参考实现相关功能。
 
-- **Profile S**：视频流、PTZ 控制、设备管理
-- **Profile T**：安全增强功能（访问控制事件）
-- **Profile G**：分析和元数据
-- **Profile Q**：高级 PTZ 控制
+- Profile S 定义基础视频流。ONVIF 的新合规申报截止于 2027 年 3 月 31 日。
+- Profile T 定义高级视频流，覆盖 H.264、H.265、图像设置和事件等功能。
+- Profile G 定义边缘存储和录像检索，Profile M 定义分析元数据和事件。
 
-lalmax-nvr 主要支持 Profile S 功能，设备管理和事件监控取决于摄像头固件。
+[ONVIF 26.06](https://www.onvif.org/profiles/specifications/specification-history/june-2026/) · [ONVIF Profiles](https://www.onvif.org/profiles/)
 
 ## 架构与流程
 
@@ -638,11 +637,10 @@ services:
 - **OV5647 测试摄像头**：有限的设备管理功能
 - **网络更改**：可能需要摄像头重启
 
-### ONVIF Profile 兼容性
-- **Profile S**：完全支持（视频流、PTZ）
-- **Profile T**：部分支持（安全事件）
-- **Profile G**：有限支持（分析）
-- **Profile Q**：基本支持（高级 PTZ）
+### 鉴权与录像兼容性
+
+- 旧设备仍可使用 Media1、HTTP Digest MD5 和 WS-Security PasswordDigest。使用 PasswordText 的设备需要与配置地址建立通过证书校验的 HTTPS 连接。
+- 支持 `ListRecordedSegments` 的设备可返回实际分片。仅提供标准录像搜索的设备返回其报告的起止边界，并标记 `recording_bounds`，区间内可能存在间断。只能列出录像目录的设备通过 `recordings` 字段返回目录。
 
 ### Docker 限制
 - **多播阻塞**：WS-Discovery 在默认 Docker 网络中无法工作

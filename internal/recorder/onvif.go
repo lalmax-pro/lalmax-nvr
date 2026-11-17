@@ -111,7 +111,7 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 	}
 
 	// 3. Get stream URI
-	streamInfo, err := r.onvifClient.GetStreamURI(ctx, profileToken)
+	streamInfo, err := r.streamURI(ctx, profileToken)
 	if err != nil {
 		return fmt.Errorf("onvif get stream URI: %w", err)
 	}
@@ -127,6 +127,15 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 	// 4. Start delegate
 	r.status = model.StatusRecording
 	return r.delegate.Start(ctx)
+}
+
+func (r *ONVIFRecorder) streamURI(ctx context.Context, profileToken string) (*onvif.StreamInfo, error) {
+	if client, ok := r.onvifClient.(interface {
+		GetStreamURIWithTransport(context.Context, string, string) (*onvif.StreamInfo, error)
+	}); ok {
+		return client.GetStreamURIWithTransport(ctx, profileToken, r.cfg.RTSPTransport)
+	}
+	return r.onvifClient.GetStreamURI(ctx, profileToken)
 }
 
 // Pause delegates to the internal recorder when it supports pausing.

@@ -66,7 +66,7 @@ export async function loadUnifiedTimeline(camera: Camera, start: string, end: st
             ended_at: seg.end_time,
             duration: Number.isFinite(ended - started) ? (ended - started) / 1000 : 0,
             source: 'onvif',
-            token: seg.token || seg.recording_token,
+            token: seg.recording_token || seg.token,
           });
       }
     } catch {

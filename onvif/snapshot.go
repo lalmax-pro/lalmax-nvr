@@ -37,10 +37,11 @@ func (s *MediaService) GetSnapshotUri(ctx context.Context, profileToken string) 
 func (s *MediaService) getMedia2SnapshotURI(ctx context.Context, profileToken string) (string, error) {
 	body := fmt.Sprintf(`<GetSnapshotUri xmlns="http://www.onvif.org/ver20/media/wsdl">
   <ProfileToken>%s</ProfileToken>
-</GetSnapshotUri>`, profileToken)
+</GetSnapshotUri>`, escapeXML(profileToken))
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Media2.String(),
+		Action:     media2Namespace + "/GetSnapshotUri",
 		Body:       body,
 	})
 	if err != nil {
@@ -63,10 +64,11 @@ func (s *MediaService) getMedia2SnapshotURI(ctx context.Context, profileToken st
 func (s *MediaService) getMedia1SnapshotURI(ctx context.Context, profileToken string) (string, error) {
 	body := fmt.Sprintf(`<GetSnapshotUri xmlns="http://www.onvif.org/ver10/media/wsdl">
   <ProfileToken>%s</ProfileToken>
-</GetSnapshotUri>`, profileToken)
+</GetSnapshotUri>`, escapeXML(profileToken))
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Media.String(),
+		Action:     media1Namespace + "/GetSnapshotUri",
 		Body:       body,
 	})
 	if err != nil {

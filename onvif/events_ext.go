@@ -16,8 +16,10 @@ func (e *EventsService) GetEventProperties(ctx context.Context) (map[string]inte
 
 	body := `<GetEventProperties xmlns="http://www.onvif.org/ver10/events/wsdl"/>`
 
-	resp, err := e.client.soap.Send(&SOAPRequest{
+	resp, err := e.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: e.client.endpoints.Events.String(),
+		Action:     eventNamespace + "/EventPortType/GetEventPropertiesRequest",
+		addressing: true,
 		Body:       body,
 	})
 	if err != nil {
@@ -25,7 +27,7 @@ func (e *EventsService) GetEventProperties(ctx context.Context) (map[string]inte
 	}
 
 	var result struct {
-		XMLName xml.Name `xml:"GetEventPropertiesResponse"`
+		XMLName  xml.Name `xml:"GetEventPropertiesResponse"`
 		TopicSet struct {
 			Topics []struct {
 				Name string `xml:"name,attr"`
@@ -56,8 +58,10 @@ func (e *EventsService) GetEventServiceCapabilities(ctx context.Context) (map[st
 
 	body := `<GetServiceCapabilities xmlns="http://www.onvif.org/ver10/events/wsdl"/>`
 
-	resp, err := e.client.soap.Send(&SOAPRequest{
+	resp, err := e.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: e.client.endpoints.Events.String(),
+		Action:     eventNamespace + "/EventPortType/GetServiceCapabilitiesRequest",
+		addressing: true,
 		Body:       body,
 	})
 	if err != nil {
@@ -67,12 +71,12 @@ func (e *EventsService) GetEventServiceCapabilities(ctx context.Context) (map[st
 	var result struct {
 		XMLName xml.Name `xml:"GetServiceCapabilitiesResponse"`
 		Caps    struct {
-			WSSubscriptionPolicySupport                    bool `xml:"WSSubscriptionPolicySupport,attr"`
-			WSPullPointSupport                             bool `xml:"WSPullPointSupport,attr"`
-			WSPausableSubscriptionManagerInterfaceSupport  bool `xml:"WSPausableSubscriptionManagerInterfaceSupport,attr"`
-			MaxNotificationProducers                       int  `xml:"MaxNotificationProducers,attr"`
-			MaxPullPoints                                  int  `xml:"MaxPullPoints,attr"`
-			PersistentNotificationStorage                  bool `xml:"PersistentNotificationStorage,attr"`
+			WSSubscriptionPolicySupport                   bool `xml:"WSSubscriptionPolicySupport,attr"`
+			WSPullPointSupport                            bool `xml:"WSPullPointSupport,attr"`
+			WSPausableSubscriptionManagerInterfaceSupport bool `xml:"WSPausableSubscriptionManagerInterfaceSupport,attr"`
+			MaxNotificationProducers                      int  `xml:"MaxNotificationProducers,attr"`
+			MaxPullPoints                                 int  `xml:"MaxPullPoints,attr"`
+			PersistentNotificationStorage                 bool `xml:"PersistentNotificationStorage,attr"`
 		} `xml:"Capabilities"`
 	}
 	if err := ParseResponseBody(resp.Body, &result); err != nil {
@@ -80,9 +84,9 @@ func (e *EventsService) GetEventServiceCapabilities(ctx context.Context) (map[st
 	}
 
 	return map[string]bool{
-		"ws_subscription_policy":           result.Caps.WSSubscriptionPolicySupport,
-		"ws_pull_point_support":            result.Caps.WSPullPointSupport,
-		"ws_pausable_subscription":         result.Caps.WSPausableSubscriptionManagerInterfaceSupport,
-		"persistent_notification_storage":  result.Caps.PersistentNotificationStorage,
+		"ws_subscription_policy":          result.Caps.WSSubscriptionPolicySupport,
+		"ws_pull_point_support":           result.Caps.WSPullPointSupport,
+		"ws_pausable_subscription":        result.Caps.WSPausableSubscriptionManagerInterfaceSupport,
+		"persistent_notification_storage": result.Caps.PersistentNotificationStorage,
 	}, nil
 }

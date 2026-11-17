@@ -93,8 +93,8 @@ func TestGetSetVideoEncoderConfigurations(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ve0", cfgs[0].Token)
 	require.Equal(t, "H264", cfgs[0].Encoding)
-	require.Equal(t, 5, cfgs[0].Quality)
-	require.Equal(t, 25, cfgs[0].FramerateLimit)
+	require.Equal(t, 5.0, cfgs[0].Quality)
+	require.Equal(t, 25.0, cfgs[0].FramerateLimit)
 	require.Equal(t, 50, cfgs[0].GovLength)
 	require.Equal(t, "High", cfgs[0].Profile)
 

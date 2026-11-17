@@ -26,7 +26,7 @@ func (s *PTZService) GetStatus(ctx context.Context, profileToken string) (*PTZSt
   <ProfileToken>%s</ProfileToken>
 </GetStatus>`, profileToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -89,7 +89,7 @@ func (s *PTZService) ContinuousMove(ctx context.Context, profileToken string, ve
   </Velocity>
 </ContinuousMove>`, profileToken, velocity.PanTilt.X, velocity.PanTilt.Y, velocity.Zoom.X)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -112,7 +112,7 @@ func (s *PTZService) Stop(ctx context.Context, profileToken string, stopPanTilt,
   <Zoom>%t</Zoom>
 </Stop>`, profileToken, stopPanTilt, stopZoom)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -137,7 +137,7 @@ func (s *PTZService) AbsoluteMove(ctx context.Context, profileToken string, posi
   </Position>
 </AbsoluteMove>`, profileToken, position.PanTilt.X, position.PanTilt.Y, position.Zoom.X)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -162,7 +162,7 @@ func (s *PTZService) RelativeMove(ctx context.Context, profileToken string, disp
   </Translation>
 </RelativeMove>`, profileToken, displacement.PanTilt.X, displacement.PanTilt.Y, displacement.Zoom.X)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -183,7 +183,7 @@ func (s *PTZService) GetPresets(ctx context.Context, profileToken string) ([]PTZ
   <ProfileToken>%s</ProfileToken>
 </GetPresets>`, profileToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -243,7 +243,7 @@ func (s *PTZService) GotoPreset(ctx context.Context, profileToken, presetToken s
   <PresetToken>%s</PresetToken>
 </GotoPreset>`, profileToken, presetToken)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -265,7 +265,7 @@ func (s *PTZService) SetPreset(ctx context.Context, profileToken, presetName str
   <PresetName>%s</PresetName>
 </SetPreset>`, profileToken, presetName)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -296,7 +296,7 @@ func (s *PTZService) RemovePreset(ctx context.Context, profileToken, presetToken
   <PresetToken>%s</PresetToken>
 </RemovePreset>`, profileToken, presetToken)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -317,7 +317,7 @@ func (s *PTZService) GotoHomePosition(ctx context.Context, profileToken string) 
   <ProfileToken>%s</ProfileToken>
 </GotoHomePosition>`, profileToken)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -338,7 +338,7 @@ func (s *PTZService) SetHomePosition(ctx context.Context, profileToken string) e
   <ProfileToken>%s</ProfileToken>
 </SetHomePosition>`, profileToken)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})

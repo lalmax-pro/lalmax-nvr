@@ -2594,7 +2594,7 @@ func (cm *CameraManager) resolveONVIFStreamURL(ctx context.Context, cam config.C
 		}
 		profileToken = profiles[0].Token
 	}
-	streamInfo, err := client.GetStreamURI(ctx, profileToken)
+	streamInfo, err := client.GetStreamURIWithTransport(ctx, profileToken, cameraRTSPTransport(cam))
 	if err != nil {
 		return "", fmt.Errorf("onvif get stream URI: %w", err)
 	}
@@ -2726,11 +2726,16 @@ func (cm *CameraManager) GetImagingController(ctx context.Context, cameraID stri
 	if len(profiles) == 0 {
 		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
 	}
-	// Use VideoSource token (not Profile token) for Imaging service
-	videoSourceToken := profiles[0].VideoSource
-	if videoSourceToken == "" {
-		videoSourceToken = profiles[0].Token // Fallback to profile token
+	profile := profiles[0]
+	if cam := cm.GetCameraConfig(cameraID); cam != nil && cam.ProfileToken != "" {
+		for _, candidate := range profiles {
+			if candidate.Token == cam.ProfileToken {
+				profile = candidate
+				break
+			}
+		}
 	}
+	videoSourceToken := client.ResolveVideoSourceToken(ctx, profile)
 	ctrl := client.NewImagingController(videoSourceToken)
 	if ctrl == nil {
 		return nil, fmt.Errorf("failed to create imaging controller for camera %q", cameraID)

@@ -71,7 +71,7 @@ func (s *PTZService) GetPTZNodes(ctx context.Context) ([]PTZNode, error) {
 
 	body := `<GetNodes xmlns="http://www.onvif.org/ver20/ptz/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -116,7 +116,7 @@ func (s *PTZService) GetPTZConfigurations(ctx context.Context) ([]PTZConfigurati
 
 	body := `<GetConfigurations xmlns="http://www.onvif.org/ver20/ptz/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -169,7 +169,7 @@ func (s *PTZService) GetPTZConfigurationOptions(ctx context.Context, configToken
   <ConfigurationToken>%s</ConfigurationToken>
 </GetConfigurationOptions>`, configToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})
@@ -271,7 +271,7 @@ func (s *PTZService) PTZSendAuxiliaryCommand(ctx context.Context, profileToken, 
   <AuxiliaryData>%s</AuxiliaryData>
 </PTZSendAuxiliaryCommand>`, profileToken, auxiliaryData)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.PTZ.String(),
 		Body:       body,
 	})

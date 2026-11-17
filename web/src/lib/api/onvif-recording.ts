@@ -38,6 +38,7 @@ export interface ONVIFRecordingSegment {
   file_path: string;
   duration: number;
   size: number;
+  recording_bounds?: boolean;
 }
 
 export interface ONVIFRecordingsResponse {
@@ -47,6 +48,7 @@ export interface ONVIFRecordingsResponse {
 export interface ONVIFRecordingSegmentsResponse {
   segments: ONVIFRecordingSegment[];
   fallback?: boolean;
+  recordings?: ONVIFRecording[];
 }
 
 export interface ONVIFReplayResponse {

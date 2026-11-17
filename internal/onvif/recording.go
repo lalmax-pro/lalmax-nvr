@@ -29,13 +29,14 @@ type RecordingSource struct {
 
 // RecordingSegment represents a segment of a recording.
 type RecordingSegment struct {
-	Token          string    `json:"token"`
-	RecordingToken string    `json:"recording_token"`
-	StartTime      time.Time `json:"start_time"`
-	EndTime        time.Time `json:"end_time"`
-	FilePath       string    `json:"file_path"`
-	Duration       int64     `json:"duration"`
-	Size           int64     `json:"size"`
+	Token           string    `json:"token"`
+	RecordingToken  string    `json:"recording_token"`
+	StartTime       time.Time `json:"start_time"`
+	EndTime         time.Time `json:"end_time"`
+	FilePath        string    `json:"file_path"`
+	Duration        int64     `json:"duration"`
+	Size            int64     `json:"size"`
+	RecordingBounds bool      `json:"recording_bounds,omitempty"`
 }
 
 // SearchRequest represents a search request for recordings.
@@ -70,7 +71,9 @@ func (c *Client) GetRecordings(ctx context.Context) ([]Recording, error) {
 				Location:    rec.Source.Location,
 				Description: rec.Source.Description,
 			},
-			Status: rec.Status,
+			StartTime: rec.StartTime,
+			EndTime:   rec.EndTime,
+			Status:    rec.Status,
 		})
 	}
 
@@ -83,34 +86,90 @@ func (c *Client) SearchRecordings(ctx context.Context, req SearchRequest) ([]Rec
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
 
-	recSvc := c.client.RecordingService()
-	searchResult, err := recSvc.SearchRecordings(ctx, onviflib.SearchFilter{
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	maxResults := req.MaxResults
+	if maxResults <= 0 {
+		maxResults = 100
+	}
+
+	service := c.client.RecordingService()
+	filter := onviflib.SearchFilter{
 		RecordingToken: req.RecordingToken,
 		StartTime:      req.StartTime,
 		EndTime:        req.EndTime,
-		MaxResults:     req.MaxResults,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("search recordings: %w", err)
+		MaxResults:     maxResults,
 	}
+	segments := make([]RecordingSegment, 0)
+	defer func() {
+		if filter.SearchToken != "" {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+			defer cancel()
+			_ = service.EndSearch(cleanupCtx, filter.SearchToken)
+		}
+	}()
 
-	result := make([]RecordingSegment, 0, len(searchResult.Segments))
-	for _, seg := range searchResult.Segments {
-		result = append(result, RecordingSegment{
-			Token:          seg.Token,
-			RecordingToken: seg.RecordingToken,
-			StartTime:      seg.StartTime,
-			EndTime:        seg.EndTime,
-			FilePath:       seg.FilePath,
-			Size:           seg.Size,
-		})
+	for {
+		filter.MaxResults = maxResults - len(segments)
+		page, err := service.SearchRecordings(ctx, filter)
+		if err != nil {
+			return nil, fmt.Errorf("search recordings: %w", err)
+		}
+		filter.SearchToken = page.SearchToken
+		for _, segment := range page.Segments {
+			segments = append(segments, RecordingSegment(segment))
+			if len(segments) == maxResults {
+				return listRecordedSegments(ctx, service, segments, req, maxResults)
+			}
+		}
+		if !page.HasMore || filter.SearchToken == "" {
+			return listRecordedSegments(ctx, service, segments, req, maxResults)
+		}
+		if len(page.Segments) == 0 {
+			// A device may return a page before the search finds a match.
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
 	}
+}
 
-	// End search session if complete
-	if !searchResult.HasMore && searchResult.SearchToken != "" {
-		_ = recSvc.EndSearch(ctx, searchResult.SearchToken)
+func listRecordedSegments(ctx context.Context, service *onviflib.RecordingService, matches []RecordingSegment, request SearchRequest, limit int) ([]RecordingSegment, error) {
+	result := make([]RecordingSegment, 0, len(matches))
+	var checked, supported bool
+	for _, match := range matches {
+		if match.RecordingBounds && !checked {
+			capabilities, err := service.GetRecordingServiceCapabilities(ctx)
+			supported = err == nil && capabilities["segment_export"]
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			checked = true
+		}
+		if !match.RecordingBounds || !supported {
+			result = append(result, match)
+		} else {
+			from, until := match.StartTime, match.EndTime
+			if request.StartTime.After(from) {
+				from = request.StartTime
+			}
+			if !request.EndTime.IsZero() && request.EndTime.Before(until) {
+				until = request.EndTime
+			}
+			segments, err := service.ListRecordedSegments(ctx, match.RecordingToken, from, until, limit-len(result))
+			if err != nil {
+				return nil, err
+			}
+			for _, segment := range segments {
+				result = append(result, RecordingSegment(segment))
+			}
+		}
+		if len(result) >= limit {
+			break
+		}
 	}
-
 	return result, nil
 }
 

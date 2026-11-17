@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,10 +17,7 @@ import (
 const defaultDiscoveryTimeout = 5 * time.Second
 
 // WS-Discovery multicast address and port
-const (
-	wsDiscoveryAddr = "239.255.255.250:3702"
-	wsDiscoveryPort = 3702
-)
+const wsDiscoveryAddr = "239.255.255.250:3702"
 
 // DiscoveredDevice represents an ONVIF device found via WS-Discovery.
 type DiscoveredDevice struct {
@@ -46,6 +45,11 @@ const wsDiscoveryProbe = `<?xml version="1.0" encoding="UTF-8"?>
 </s:Envelope>`
 
 type probeMatchEnvelope struct {
+	XMLName xml.Name `xml:"Envelope"`
+	Header  struct {
+		RelatesTo string `xml:"RelatesTo"`
+		Action    string `xml:"Action"`
+	} `xml:"Header"`
 	Body struct {
 		ProbeMatches struct {
 			ProbeMatch []probeMatchEntry `xml:"ProbeMatch"`
@@ -84,16 +88,15 @@ func DiscoverDevices(ctx context.Context, timeout time.Duration) ([]*DiscoveredD
 		return nil, fmt.Errorf("resolve multicast address: %w", err)
 	}
 
-	// Create UDP connection
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: wsDiscoveryPort})
+	// Each probe gets its own socket so old devices without RelatesTo still
+	// have an isolated reply destination.
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
-		// If port 3702 is busy, try any port
-		conn, err = net.ListenUDP("udp4", &net.UDPAddr{Port: 0})
-		if err != nil {
-			return nil, fmt.Errorf("create UDP connection: %w", err)
-		}
+		return nil, fmt.Errorf("create UDP connection: %w", err)
 	}
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 
 	// Set deadline
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
@@ -117,38 +120,25 @@ func DiscoverDevices(ctx context.Context, timeout time.Duration) ([]*DiscoveredD
 	for {
 		n, remoteAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
-			// Timeout or connection closed
+			if ctx.Err() != nil {
+				return devices, ctx.Err()
+			}
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				break
 			}
-			if err == io.EOF {
-				break
+			return devices, fmt.Errorf("receive probe match: %w", err)
+		}
+
+		for _, device := range parseDiscoveryMatches(buf[:n], remoteAddr.String(), "uuid:"+messageID) {
+			key := device.UUID
+			if key == "" {
+				key = device.Endpoint
 			}
-			// Ignore other errors and continue
-			continue
+			if !seen[key] {
+				seen[key] = true
+				devices = append(devices, device)
+			}
 		}
-
-		if n == 0 {
-			continue
-		}
-
-		device, err := parseProbeMatchResponse(buf[:n], remoteAddr.String())
-		if err != nil || device == nil {
-			continue
-		}
-
-		// Deduplicate by UUID
-		if seen[device.UUID] {
-			continue
-		}
-		seen[device.UUID] = true
-
-		// Use first XAddr as endpoint if available
-		if len(device.XAddrs) > 0 {
-			device.Endpoint = device.XAddrs[0]
-		}
-
-		devices = append(devices, device)
 	}
 
 	return devices, nil
@@ -161,7 +151,7 @@ func ProbeDevice(ctx context.Context, host string, port int, timeout time.Durati
 		timeout = defaultDiscoveryTimeout
 	}
 
-	endpoint := fmt.Sprintf("http://%s:%d/onvif/device_service", host, port)
+	endpoint := (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(port)), Path: "/onvif/device_service"}).String()
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -190,25 +180,39 @@ func ProbeDevice(ctx context.Context, host string, port int, timeout time.Durati
 		return nil, fmt.Errorf("read probe response: %w", err)
 	}
 
-	return parseProbeMatchResponse(body, endpoint)
+	matches := parseDiscoveryMatches(body, endpoint, "uuid:"+messageID)
+	if len(matches) == 0 {
+		// Some older devices answer a directed HTTP probe with a Hello.
+		return parseDiscoveryHello(body, endpoint), nil
+	}
+	return matches[0], nil
 }
 
-func parseProbeMatchResponse(data []byte, endpoint string) (*DiscoveredDevice, error) {
+func parseDiscoveryMatches(data []byte, endpoint, requestID string) []*DiscoveredDevice {
 	var envelope probeMatchEnvelope
 	if err := xml.Unmarshal(data, &envelope); err != nil {
-		return nil, nil
+		return nil
 	}
-
-	if envelope.Body.Hello != nil {
-		return deviceFromHello(*envelope.Body.Hello, endpoint), nil
+	relatesTo := strings.TrimSpace(envelope.Header.RelatesTo)
+	if relatesTo != "" && !strings.EqualFold(strings.TrimPrefix(relatesTo, "urn:"), strings.TrimPrefix(requestID, "urn:")) {
+		return nil
 	}
-
-	if len(envelope.Body.ProbeMatches.ProbeMatch) == 0 {
-		return nil, nil
+	if action := strings.TrimSpace(envelope.Header.Action); action != "" && !strings.HasSuffix(action, "/ProbeMatches") {
+		return nil
 	}
+	var devices []*DiscoveredDevice
+	for _, match := range envelope.Body.ProbeMatches.ProbeMatch {
+		devices = append(devices, deviceFromMatch(match.EndpointRef.Address, match.Scopes, match.XAddrs, endpoint))
+	}
+	return devices
+}
 
-	pm := envelope.Body.ProbeMatches.ProbeMatch[0]
-	return deviceFromMatch(pm.EndpointRef.Address, pm.Scopes, pm.XAddrs, endpoint), nil
+func parseDiscoveryHello(data []byte, endpoint string) *DiscoveredDevice {
+	var envelope probeMatchEnvelope
+	if err := xml.Unmarshal(data, &envelope); err != nil || envelope.Body.Hello == nil {
+		return nil
+	}
+	return deviceFromHello(*envelope.Body.Hello, endpoint)
 }
 
 func deviceFromHello(h helloEntry, fallback string) *DiscoveredDevice {
@@ -253,67 +257,39 @@ func ListenHello(ctx context.Context, networkInterface string, handler func(*Dis
 	if handler == nil {
 		return fmt.Errorf("hello handler is required")
 	}
-	var listenAddr *net.UDPAddr
-	if strings.TrimSpace(networkInterface) != "" {
-		ifi, err := net.InterfaceByName(networkInterface)
+	var ifi *net.Interface
+	if name := strings.TrimSpace(networkInterface); name != "" {
+		var err error
+		ifi, err = net.InterfaceByName(name)
 		if err != nil {
-			return fmt.Errorf("lookup interface %q: %w", networkInterface, err)
+			return fmt.Errorf("lookup interface %q: %w", name, err)
 		}
-		addrs, err := ifi.Addrs()
-		if err != nil {
-			return fmt.Errorf("interface addrs: %w", err)
-		}
-		var ip net.IP
-		for _, a := range addrs {
-			if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil {
-				ip = n.IP.To4()
-				break
-			}
-		}
-		if ip == nil {
-			return fmt.Errorf("interface %q has no IPv4 address", networkInterface)
-		}
-		listenAddr = &net.UDPAddr{IP: ip, Port: wsDiscoveryPort}
-	} else {
-		listenAddr = &net.UDPAddr{Port: wsDiscoveryPort}
 	}
-
-	conn, err := net.ListenUDP("udp4", listenAddr)
+	multicast, err := net.ResolveUDPAddr("udp4", wsDiscoveryAddr)
+	if err != nil {
+		return fmt.Errorf("resolve multicast address: %w", err)
+	}
+	conn, err := net.ListenMulticastUDP("udp4", ifi, multicast)
 	if err != nil {
 		return fmt.Errorf("listen hello on :3702: %w", err)
 	}
 
 	go func() {
 		defer conn.Close()
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		defer stop()
 		buf := make([]byte, 65535)
 		for {
-			select {
-			case <-ctx.Done():
-				_ = conn.SetDeadline(time.Now())
-				return
-			default:
-			}
-			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 			n, remote, err := conn.ReadFromUDP(buf)
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				continue
+			if err != nil || ctx.Err() != nil {
+				return
 			}
-			if n == 0 {
-				continue
+			if device := parseDiscoveryHello(buf[:n], remote.String()); device != nil {
+				handler(device)
 			}
-			device, err := parseProbeMatchResponse(buf[:n], remote.String())
-			if err != nil || device == nil {
-				continue
-			}
-			if len(device.XAddrs) > 0 {
-				device.Endpoint = device.XAddrs[0]
-			}
-			handler(device)
 		}
 	}()
+
 	return nil
 }
 

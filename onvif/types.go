@@ -75,16 +75,17 @@ type DeviceInfo struct {
 
 // MediaProfile represents a media profile.
 type MediaProfile struct {
-	Token        string     `json:"token"`
-	Name         string     `json:"name"`
-	VideoSource  string     `json:"video_source"`
-	VideoEncoder string     `json:"video_encoder"`
-	AudioSource  string     `json:"audio_source"`
-	AudioEncoder string     `json:"audio_encoder"`
-	Resolution   Resolution `json:"resolution"`
-	Encoding     string     `json:"encoding"`
-	Framerate    int        `json:"framerate"`
-	Bitrate      int        `json:"bitrate"`
+	Token            string     `json:"token"`
+	Name             string     `json:"name"`
+	VideoSource      string     `json:"video_source"` // Video source configuration token.
+	VideoSourceToken string     `json:"video_source_token,omitempty"`
+	VideoEncoder     string     `json:"video_encoder"`
+	AudioSource      string     `json:"audio_source"`
+	AudioEncoder     string     `json:"audio_encoder"`
+	Resolution       Resolution `json:"resolution"`
+	Encoding         string     `json:"encoding"`
+	Framerate        float64    `json:"framerate"`
+	Bitrate          int        `json:"bitrate"`
 }
 
 // Resolution represents video resolution.
@@ -137,13 +138,14 @@ type Track struct {
 
 // RecordingSegment represents a segment of a recording.
 type RecordingSegment struct {
-	Token          string    `json:"token"`
-	RecordingToken string    `json:"recording_token"`
-	StartTime      time.Time `json:"start_time"`
-	EndTime        time.Time `json:"end_time"`
-	FilePath       string    `json:"file_path"`
-	Duration       int64     `json:"duration"` // seconds
-	Size           int64     `json:"size"`     // bytes
+	Token           string    `json:"token"`
+	RecordingToken  string    `json:"recording_token"`
+	StartTime       time.Time `json:"start_time"`
+	EndTime         time.Time `json:"end_time"`
+	FilePath        string    `json:"file_path"`
+	Duration        int64     `json:"duration"`                   // seconds
+	Size            int64     `json:"size"`                       // bytes
+	RecordingBounds bool      `json:"recording_bounds,omitempty"` // The overall recording bounds may contain gaps.
 }
 
 // SearchFilter represents search criteria for recordings.

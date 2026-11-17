@@ -10,7 +10,7 @@ A pure Go implementation of the ONVIF protocol for IP camera communication. No e
 | **Media** | 35+ operations | ✅ Complete |
 | **PTZ** | 15 operations | ✅ Complete |
 | **Imaging** | 10 operations | ✅ Complete |
-| **Events** | 8 operations | ✅ Complete |
+| **Events** | PullPoint and service capabilities | |
 | **Recording** | 15+ operations | ✅ Complete |
 | **Replay** | 1 operation | ✅ Complete |
 | **Discovery** | HTTP Probe | ✅ Complete |
@@ -202,13 +202,12 @@ caps, err := imaging.GetImagingServiceCapabilities(ctx)
 ```go
 events := client.EventsService()
 
-// PullPoint Subscription
+// The subscription carries the device's complete endpoint reference.
 sub, err := events.CreatePullPointSubscription(ctx)
-err := events.Renew(ctx, subRef, duration)
-err := events.Unsubscribe(ctx, subRef)
-
-// Polling
-messages, err := events.PullMessages(ctx, subRef, timeout, limit)
+err = sub.SetSynchronizationPoint(ctx)
+messages, err := sub.PullMessages(ctx, timeout, limit)
+err = sub.Renew(ctx, duration)
+err = sub.Unsubscribe(ctx)
 
 // Event Properties
 props, err := events.GetEventProperties(ctx)
@@ -224,18 +223,17 @@ rec := client.RecordingService()
 recordings, err := rec.GetRecordings(ctx)
 
 // Search (with pagination)
-result, err := rec.SearchRecordings(ctx, onvif.SearchFilter{
+filter := onvif.SearchFilter{
     StartTime:  startTime,
     EndTime:    endTime,
     MaxResults: 100,
-})
+}
+result, err := rec.SearchRecordings(ctx, filter)
 
-// Continue pagination
-if result.HasMore {
-    nextResult, err := rec.SearchRecordings(ctx, onvif.SearchFilter{
-        SearchToken: result.SearchToken,
-        MaxResults:  100,
-    })
+// Keep the same filters when continuing the search.
+if err == nil && result.HasMore {
+    filter.SearchToken = result.SearchToken
+    nextResult, err := rec.SearchRecordings(ctx, filter)
 }
 
 err := rec.EndSearch(ctx, searchToken)
@@ -306,12 +304,9 @@ onvif/
 
 ## Authentication
 
-The library supports two authentication methods:
+The client supports WS-Security PasswordDigest and HTTP Digest with SHA-256 or MD5. Digest challenges select the algorithm and quality of protection, including legacy challenges without a qop.
 
-1. **WS-Security UsernameToken** - Default ONVIF authentication
-2. **HTTP Digest Authentication** - Fallback for devices that reject WS-Security
-
-Authentication is handled automatically. When a device returns HTTP 401, the library retries with HTTP Digest Auth.
+The PasswordText fallback requires certificate-verified HTTPS at the configured camera authority. Service URLs may derive from the configured camera address and may use a different port for Digest or PasswordDigest. SOAP requests stay on the configured camera host and preserve HTTPS when the camera is configured with HTTPS.
 
 ## Device Compatibility
 

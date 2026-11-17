@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,7 +23,7 @@ func NewRecordingService(client *Client) *RecordingService {
 func (s *RecordingService) GetRecordings(ctx context.Context) ([]Recording, error) {
 	body := `<GetRecordings xmlns="http://www.onvif.org/ver10/recording/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Recording.String(),
 		Body:       body,
 	})
@@ -30,7 +32,7 @@ func (s *RecordingService) GetRecordings(ctx context.Context) ([]Recording, erro
 	}
 
 	var result struct {
-		XMLName xml.Name `xml:"GetRecordingsResponse"`
+		XMLName       xml.Name `xml:"GetRecordingsResponse"`
 		RecordingItem []struct {
 			RecordingToken string `xml:"RecordingToken"`
 			Configuration  struct {
@@ -47,7 +49,7 @@ func (s *RecordingService) GetRecordings(ctx context.Context) ([]Recording, erro
 			} `xml:"Configuration"`
 			Tracks struct {
 				Track []struct {
-					TrackToken string `xml:"TrackToken"`
+					TrackToken    string `xml:"TrackToken"`
 					Configuration struct {
 						TrackType   string `xml:"TrackType"`
 						Description string `xml:"Description"`
@@ -101,7 +103,7 @@ func (s *RecordingService) GetRecordingDetails(ctx context.Context, recordingTok
   <RecordingToken>%s</RecordingToken>
 </GetRecordingInformation>`, recordingToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Recording.String(),
 		Body:       body,
 	})
@@ -110,7 +112,7 @@ func (s *RecordingService) GetRecordingDetails(ctx context.Context, recordingTok
 	}
 
 	var result struct {
-		XMLName xml.Name `xml:"GetRecordingInformationResponse"`
+		XMLName              xml.Name `xml:"GetRecordingInformationResponse"`
 		RecordingInformation struct {
 			RecordingToken string `xml:"RecordingToken"`
 			Source         struct {
@@ -124,7 +126,7 @@ func (s *RecordingService) GetRecordingDetails(ctx context.Context, recordingTok
 			} `xml:"Content"`
 			Tracks struct {
 				Track []struct {
-					TrackToken string `xml:"TrackToken"`
+					TrackToken    string `xml:"TrackToken"`
 					Configuration struct {
 						TrackType   string `xml:"TrackType"`
 						Description string `xml:"Description"`
@@ -194,167 +196,228 @@ func (s *RecordingService) GetRecordingDetails(ctx context.Context, recordingTok
 	return rec, nil
 }
 
-// SearchRecordings searches for recording segments with pagination support.
+const searchNamespace = "http://www.onvif.org/ver10/search/wsdl"
+
+// SearchRecordings starts or continues a recording search. Pass the same time
+// and recording filters with the search token when requesting subsequent pages.
 func (s *RecordingService) SearchRecordings(ctx context.Context, filter SearchFilter) (*SearchResult, error) {
-	maxResults := filter.MaxResults
-	if maxResults <= 0 {
-		maxResults = 100
+	if s.client.endpoints.Search == nil {
+		return nil, fmt.Errorf("onvif: Search service not available")
 	}
-
-	// If we have a search token, continue the search
+	if filter.MaxResults <= 0 {
+		filter.MaxResults = 100
+	}
+	if !filter.StartTime.IsZero() && !filter.EndTime.IsZero() && filter.EndTime.Before(filter.StartTime) {
+		return nil, fmt.Errorf("onvif: recording search end time precedes start time")
+	}
 	if filter.SearchToken != "" {
-		return s.getSearchResults(ctx, filter.SearchToken, maxResults)
+		return s.getSearchResults(ctx, filter)
 	}
-
-	// Start a new search
-	searchToken, err := s.findRecordings(ctx, filter, maxResults)
+	token, err := s.findRecordings(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
-
-	if searchToken == "" {
-		return &SearchResult{
-			Segments: []RecordingSegment{},
-		}, nil
+	if token == "" {
+		return &SearchResult{Segments: []RecordingSegment{}}, nil
 	}
-
-	// Get results
-	return s.getSearchResults(ctx, searchToken, maxResults)
+	filter.SearchToken = token
+	result, err := s.getSearchResults(ctx, filter)
+	if err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		_ = s.EndSearch(cleanupCtx, token)
+	}
+	return result, err
 }
 
-// findRecordings starts a recording search and returns a search token.
-func (s *RecordingService) findRecordings(ctx context.Context, filter SearchFilter, maxResults int) (string, error) {
-	// Build scope based on filter
-	scope := `<tt:IncludedSources>
-          <tt:Type>http://www.onvif.org/ver10/schema/RecordingJob</tt:Type>
-        </tt:IncludedSources>`
-
-	// Add time range filter if specified
-	if !filter.StartTime.IsZero() || !filter.EndTime.IsZero() {
-		timeFilter := `<tt:IncludedTimes>`
-		if !filter.StartTime.IsZero() {
-			timeFilter += fmt.Sprintf(`<tt:From>%s</tt:From>`, filter.StartTime.Format(time.RFC3339))
-		}
-		if !filter.EndTime.IsZero() {
-			timeFilter += fmt.Sprintf(`<tt:Until>%s</tt:Until>`, filter.EndTime.Format(time.RFC3339))
-		}
-		timeFilter += `</tt:IncludedTimes>`
-		scope += timeFilter
+func (s *RecordingService) findRecordings(ctx context.Context, filter SearchFilter) (string, error) {
+	var scope, maxMatches string
+	if filter.RecordingToken != "" {
+		scope = "<tt:IncludedRecordings>" + escapeXML(filter.RecordingToken) + "</tt:IncludedRecordings>"
 	}
-
-	body := fmt.Sprintf(`<FindRecordings xmlns="http://www.onvif.org/ver10/recording/wsdl">
-  <Scope>%s</Scope>
-  <MaxResults>%d</MaxResults>
-  <KeepAliveTime>PT60S</KeepAliveTime>
-</FindRecordings>`, scope, maxResults)
-
-	resp, err := s.client.soap.Send(&SOAPRequest{
-		ServiceURL: s.client.endpoints.Search.String(),
-		Body:       body,
-	})
+	// FindRecordings does not take a time range. Filter the device's reported
+	// bounds locally, so a match limit must not truncate that search prematurely.
+	if filter.StartTime.IsZero() && filter.EndTime.IsZero() {
+		maxMatches = "<MaxMatches>" + strconv.Itoa(filter.MaxResults) + "</MaxMatches>"
+	}
+	body := fmt.Sprintf(`<FindRecordings xmlns="%s" xmlns:tt="%s">
+      <Scope>%s</Scope>%s<KeepAliveTime>PT10S</KeepAliveTime>
+    </FindRecordings>`, searchNamespace, schemaNamespace, scope, maxMatches)
+	resp, err := s.sendSearch(ctx, "FindRecordings", body)
 	if err != nil {
-		return "", fmt.Errorf("onvif: FindRecordings failed: %w", err)
+		return "", err
 	}
-
 	var result struct {
-		XMLName xml.Name `xml:"FindRecordingsResponse"`
-		SearchToken string `xml:"SearchToken"`
+		XMLName     xml.Name `xml:"FindRecordingsResponse"`
+		SearchToken string   `xml:"SearchToken"`
 	}
-
 	if err := ParseResponseBody(resp.Body, &result); err != nil {
 		return "", err
 	}
-
-	return result.SearchToken, nil
+	return strings.TrimSpace(result.SearchToken), nil
 }
 
-// getSearchResults retrieves search results using a search token.
-func (s *RecordingService) getSearchResults(ctx context.Context, searchToken string, maxResults int) (*SearchResult, error) {
-	body := fmt.Sprintf(`<GetRecordingSearchResults xmlns="http://www.onvif.org/ver10/search/wsdl">
-  <SearchToken>%s</SearchToken>
-  <WaitTime>PT5S</WaitTime>
-  <MinResults>1</MinResults>
-  <MaxResults>%d</MaxResults>
-</GetRecordingSearchResults>`, searchToken, maxResults)
-
-	resp, err := s.client.soap.Send(&SOAPRequest{
-		ServiceURL: s.client.endpoints.Search.String(),
-		Body:       body,
-	})
+func (s *RecordingService) getSearchResults(ctx context.Context, filter SearchFilter) (*SearchResult, error) {
+	body := fmt.Sprintf(`<GetRecordingSearchResults xmlns="%s">
+      <SearchToken>%s</SearchToken><MinResults>1</MinResults><MaxResults>%d</MaxResults><WaitTime>PT5S</WaitTime>
+    </GetRecordingSearchResults>`, searchNamespace, escapeXML(filter.SearchToken), filter.MaxResults)
+	resp, err := s.sendSearch(ctx, "GetRecordingSearchResults", body)
 	if err != nil {
-		return nil, fmt.Errorf("onvif: GetRecordingSearchResults failed: %w", err)
-	}
-
-	var result struct {
-		XMLName xml.Name `xml:"GetRecordingSearchResultsResponse"`
-		ResultList struct {
-			SearchState string `xml:"SearchState"`
-			Recording   []struct {
-				RecordingToken string `xml:"RecordingToken"`
-				Track          []struct {
-					TrackToken string `xml:"TrackToken"`
-					Segment    []struct {
-						SegmentToken string `xml:"SegmentToken"`
-						Start        string `xml:"Start"`
-						End          string `xml:"End"`
-						FileURL      string `xml:"FileURL"`
-						Duration     string `xml:"Duration"`
-						Size         int64  `xml:"Size"`
-					} `xml:"Segment"`
-				} `xml:"Track"`
-			} `xml:"Recording"`
-		} `xml:"ResultList"`
-	}
-
-	if err := ParseResponseBody(resp.Body, &result); err != nil {
 		return nil, err
 	}
 
-	searchResult := &SearchResult{
-		SearchToken: searchToken,
-		SearchState: result.ResultList.SearchState,
-		HasMore:     result.ResultList.SearchState == "MoreResults",
+	var result struct {
+		XMLName    xml.Name `xml:"GetRecordingSearchResultsResponse"`
+		ResultList *struct {
+			SearchState string `xml:"SearchState"`
+			Recordings  []struct {
+				Token    string `xml:"RecordingToken"`
+				Earliest string `xml:"EarliestRecording"`
+				Latest   string `xml:"LatestRecording"`
+			} `xml:"RecordingInformation"`
+			LegacyRecordings []struct {
+				Token    string `xml:"RecordingToken"`
+				Segments []struct {
+					Token   string `xml:"SegmentToken"`
+					Start   string `xml:"Start"`
+					End     string `xml:"End"`
+					FileURL string `xml:"FileURL"`
+					Size    int64  `xml:"Size"`
+				} `xml:"Track>Segment"`
+			} `xml:"Recording"`
+		} `xml:"ResultList"`
+	}
+	if err := ParseResponseBody(resp.Body, &result); err != nil {
+		return nil, err
+	}
+	if result.ResultList == nil {
+		return nil, fmt.Errorf("onvif: GetRecordingSearchResults response missing ResultList")
 	}
 
-	// Parse segments
-	for _, rec := range result.ResultList.Recording {
-		for _, track := range rec.Track {
-			for _, seg := range track.Segment {
-				segment := RecordingSegment{
-					Token:          seg.SegmentToken,
-					RecordingToken: rec.RecordingToken,
-					FilePath:       seg.FileURL,
-					Size:           seg.Size,
-				}
-
-				if t, err := time.Parse(time.RFC3339, seg.Start); err == nil {
-					segment.StartTime = t
-				}
-				if t, err := time.Parse(time.RFC3339, seg.End); err == nil {
-					segment.EndTime = t
-				}
-
-				searchResult.Segments = append(searchResult.Segments, segment)
-			}
+	state := strings.TrimSpace(result.ResultList.SearchState)
+	page := &SearchResult{
+		SearchToken: filter.SearchToken,
+		SearchState: state,
+		HasMore:     state == "Searching" || state == "Queued" || state == "MoreResults",
+		Segments:    make([]RecordingSegment, 0),
+	}
+	add := func(segment RecordingSegment, start, end string) {
+		if filter.RecordingToken != "" && filter.RecordingToken != segment.RecordingToken {
+			return
+		}
+		segment.StartTime, _ = time.Parse(time.RFC3339Nano, start)
+		segment.EndTime, _ = time.Parse(time.RFC3339Nano, end)
+		if segment.StartTime.IsZero() || segment.EndTime.IsZero() || segment.EndTime.Before(segment.StartTime) {
+			return
+		}
+		if (!filter.StartTime.IsZero() && segment.EndTime.Before(filter.StartTime)) ||
+			(!filter.EndTime.IsZero() && segment.StartTime.After(filter.EndTime)) {
+			return
+		}
+		segment.Duration = int64(segment.EndTime.Sub(segment.StartTime) / time.Second)
+		page.Segments = append(page.Segments, segment)
+	}
+	for _, recording := range result.ResultList.Recordings {
+		if recording.Token != "" {
+			add(RecordingSegment{
+				Token: recording.Token, RecordingToken: recording.Token, RecordingBounds: true,
+			}, recording.Earliest, recording.Latest)
 		}
 	}
-
-	return searchResult, nil
+	// Some older devices return individual file segments as a vendor extension.
+	for _, recording := range result.ResultList.LegacyRecordings {
+		for _, segment := range recording.Segments {
+			add(RecordingSegment{
+				Token: segment.Token, RecordingToken: recording.Token, FilePath: segment.FileURL, Size: segment.Size,
+			}, segment.Start, segment.End)
+		}
+	}
+	return page, nil
 }
 
 // EndSearch ends a search session.
 func (s *RecordingService) EndSearch(ctx context.Context, searchToken string) error {
-	body := fmt.Sprintf(`<EndSearch xmlns="http://www.onvif.org/ver10/search/wsdl">
-  <SearchToken>%s</SearchToken>
-</EndSearch>`, searchToken)
+	body := fmt.Sprintf(`<EndSearch xmlns="%s"><SearchToken>%s</SearchToken></EndSearch>`,
+		searchNamespace, escapeXML(searchToken))
+	_, err := s.sendSearch(ctx, "EndSearch", body)
+	return err
+}
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+func (s *RecordingService) sendSearch(ctx context.Context, operation, body string) (*SOAPResponse, error) {
+	if s.client.endpoints.Search == nil {
+		return nil, fmt.Errorf("onvif: Search service not available")
+	}
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Search.String(),
+		Action:     searchNamespace + "/" + operation,
 		Body:       body,
 	})
 	if err != nil {
-		return fmt.Errorf("onvif: EndSearch failed: %w", err)
+		return nil, fmt.Errorf("onvif: %s failed: %w", operation, err)
 	}
+	return resp, nil
+}
 
-	return nil
+// ListRecordedSegments retrieves the recorded segments when the device
+// advertises the Recording Control SegmentExport capability.
+func (s *RecordingService) ListRecordedSegments(ctx context.Context, token string, from, until time.Time, limit int) ([]RecordingSegment, error) {
+	const namespace = "http://www.onvif.org/ver10/recording/wsdl"
+	if s.client.endpoints.Recording == nil {
+		return nil, fmt.Errorf("onvif: Recording service not available")
+	}
+	if token == "" || from.IsZero() || until.IsZero() || until.Before(from) {
+		return nil, fmt.Errorf("onvif: invalid recording token or segment time range")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	segments := make([]RecordingSegment, 0)
+	for {
+		body := fmt.Sprintf(`<ListRecordedSegments xmlns="%s" xmlns:tt="%s">
+			<Time><tt:From>%s</tt:From><tt:Until>%s</tt:Until></Time>
+			<RecordingToken>%s</RecordingToken><MaxResults>%d</MaxResults>
+		</ListRecordedSegments>`, namespace, schemaNamespace, from.UTC().Format(time.RFC3339Nano),
+			until.UTC().Format(time.RFC3339Nano), escapeXML(token), limit-len(segments))
+		response, err := s.client.soap.SendContext(ctx, &SOAPRequest{
+			ServiceURL: s.client.endpoints.Recording.String(),
+			Action:     namespace + "/ListRecordedSegments",
+			Body:       body,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("onvif: ListRecordedSegments failed: %w", err)
+		}
+		var page struct {
+			XMLName  xml.Name `xml:"ListRecordedSegmentsResponse"`
+			Segments []struct {
+				Start time.Time `xml:"StartTime"`
+				End   time.Time `xml:"EndTime"`
+			} `xml:"Segment"`
+			HasMore bool `xml:"HasMoreResults"`
+		}
+		if err := ParseResponseBody(response.Body, &page); err != nil {
+			return nil, err
+		}
+		cursor := from
+		for _, segment := range page.Segments {
+			if segment.Start.IsZero() || !segment.End.After(segment.Start) || !segment.End.After(cursor) || segment.Start.After(until) {
+				continue
+			}
+			segments = append(segments, RecordingSegment{
+				Token:          token + "@" + segment.Start.UTC().Format(time.RFC3339Nano),
+				RecordingToken: token, StartTime: segment.Start, EndTime: segment.End,
+				Duration: int64(segment.End.Sub(segment.Start) / time.Second),
+			})
+			cursor = segment.End
+			if len(segments) == limit {
+				return segments, nil
+			}
+		}
+		if !page.HasMore || !cursor.Before(until) {
+			return segments, nil
+		}
+		if !cursor.After(from) {
+			return nil, fmt.Errorf("onvif: recorded segment pagination did not advance")
+		}
+		from = cursor
+	}
 }

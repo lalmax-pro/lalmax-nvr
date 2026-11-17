@@ -24,9 +24,9 @@ func (s *ImagingService) GetImagingSettings(ctx context.Context, videoSourceToke
 
 	body := fmt.Sprintf(`<GetImagingSettings xmlns="http://www.onvif.org/ver20/imaging/wsdl">
   <VideoSourceToken>%s</VideoSourceToken>
-</GetImagingSettings>`, videoSourceToken)
+</GetImagingSettings>`, escapeXML(videoSourceToken))
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})
@@ -93,7 +93,7 @@ func (s *ImagingService) SetImagingSettings(ctx context.Context, videoSourceToke
       <Mode>%s</Mode>
     </Exposure>
   </ImagingSettings>
-</SetImagingSettings>`, videoSourceToken,
+</SetImagingSettings>`, escapeXML(videoSourceToken),
 		settings.Brightness,
 		settings.Contrast,
 		settings.ColorSaturation,
@@ -103,7 +103,7 @@ func (s *ImagingService) SetImagingSettings(ctx context.Context, videoSourceToke
 		settings.ExposureMode,
 	)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})
@@ -122,9 +122,9 @@ func (s *ImagingService) GetOptions(ctx context.Context, videoSourceToken string
 
 	body := fmt.Sprintf(`<GetOptions xmlns="http://www.onvif.org/ver20/imaging/wsdl">
   <VideoSourceToken>%s</VideoSourceToken>
-</GetOptions>`, videoSourceToken)
+</GetOptions>`, escapeXML(videoSourceToken))
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})
@@ -190,7 +190,7 @@ func (s *ImagingService) GetMoveOptions(ctx context.Context, videoSourceToken st
   <VideoSourceToken>%s</VideoSourceToken>
 </GetMoveOptions>`, videoSourceToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})
@@ -270,7 +270,7 @@ func (s *ImagingService) Move(ctx context.Context, videoSourceToken string, focu
   </Focus>
 </Move>`, videoSourceToken, focus)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})
@@ -291,7 +291,7 @@ func (s *ImagingService) Stop(ctx context.Context, videoSourceToken string) erro
   <VideoSourceToken>%s</VideoSourceToken>
 </Stop>`, videoSourceToken)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})

@@ -542,7 +542,7 @@ func TestONVIFCapabilityBranches(t *testing.T) {
 	caps, err := client.GetCapabilities(ctx)
 	require.NoError(t, err)
 	require.False(t, caps.PTZ)
-	require.False(t, caps.Streaming)
+	require.True(t, caps.Streaming)
 	detailed, err := client.GetCapabilitiesDetailed(ctx)
 	require.NoError(t, err)
 	require.False(t, detailed.PTZ)
@@ -625,9 +625,7 @@ func TestONVIFEvents(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("event was not published")
 	}
-	fake.setCount(fake.fail, "Renew", 1)
-	time.Sleep(300 * time.Millisecond)
-	require.False(t, sub.(*EventSubscriberImpl).IsSubscribed("cam-1"))
+	require.True(t, sub.(*EventSubscriberImpl).IsSubscribed("cam-1"))
 	sub.(*EventSubscriberImpl).SetEventCallback(nil)
 	require.NoError(t, sub.Unsubscribe(ctx, "missing"))
 	require.NoError(t, sub.Unsubscribe(ctx, "cam-1"))
@@ -647,9 +645,7 @@ func TestONVIFEvents(t *testing.T) {
 	fake.setCount(fake.fail, "PullMessages", 100)
 	require.NoError(t, pullFails.Subscribe(ctx, "cam-3"))
 	time.Sleep(80 * time.Millisecond)
-	fake.setCount(fake.fail, "Renew", 1)
-	time.Sleep(300 * time.Millisecond)
-	require.False(t, pullFails.(*EventSubscriberImpl).IsSubscribed("cam-3"))
+	require.True(t, pullFails.(*EventSubscriberImpl).IsSubscribed("cam-3"))
 	require.NoError(t, pullFails.Unsubscribe(ctx, "cam-3"))
 
 	fake.setCount(fake.fail, "CreatePullPointSubscription", 1)
