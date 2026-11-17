@@ -23,6 +23,7 @@ permissions:
   contents: read
 
 env:
+  GOTOOLCHAIN: local
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
@@ -80,6 +81,32 @@ jobs:
     if: needs.plan.outputs.build == 'true' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V'))
     uses: ./.github/workflows/home-assistant.yml
 
+  go-build-compatibility:
+    name: Go build (${{ matrix.toolchain }})
+    needs: plan
+    if: needs.plan.outputs.build == 'true' && !startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: '0'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - toolchain: go.mod
+            go-version-file: go.mod
+          - toolchain: stable
+            go-version: stable
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.2.0
+        with:
+          go-version-file: ${{ matrix.go-version-file }}
+          go-version: ${{ matrix.go-version }}
+      - name: Build NVR
+        run: |
+          go version
+          go build -o "$RUNNER_TEMP/lalmax-nvr" ./cmd/lalmax-nvr/
+
   test:
     needs: plan
     if: needs.plan.outputs.build == 'true'
@@ -106,7 +133,7 @@ jobs:
 
       - uses: actions/setup-go@v5.2.0
         with:
-          go-version: '1.26.2'
+          go-version-file: go.mod
 
       - name: Cache Go modules
         uses: actions/cache@v4.2.0
@@ -197,7 +224,7 @@ jobs:
       - uses: actions/checkout@v4.2.2
       - uses: actions/setup-go@v5.2.0
         with:
-          go-version: '1.26.2'
+          go-version-file: go.mod
       - name: Install actual media encoders and plugins
         run: |
           sudo apt-get update -qq
