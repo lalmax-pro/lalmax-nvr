@@ -44,18 +44,21 @@ func New(cfg config.AutoDiscoverConfig, enroller AdderEnroller, db storage.Camer
 }
 
 func (s *Service) Start(ctx context.Context) error {
-	if s == nil || !s.cfg.IsEnabled() {
+	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
-	if s.started {
-		s.mu.Unlock()
+	defer s.mu.Unlock()
+	return s.startLocked(ctx)
+}
+
+func (s *Service) startLocked(ctx context.Context) error {
+	if s.started || !s.cfg.IsEnabled() {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	s.started = true
-	s.mu.Unlock()
 
 	if s.cfg.HelloListenEnabled() {
 		if err := onvif.ListenHello(ctx, s.cfg.NetworkInterface, func(d onvif.DiscoveredDevice) {
@@ -67,14 +70,19 @@ func (s *Service) Start(ctx context.Context) error {
 		}
 	}
 
-	go s.scanLoop(ctx)
-	logger.Info("auto-discover started", "scan_interval", s.cfg.ScanIntervalDuration())
+	interval := s.cfg.ScanIntervalDuration()
+	go s.scanLoop(ctx, interval)
+	logger.Info("auto-discover started", "scan_interval", interval)
 	return nil
 }
 
 func (s *Service) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.stopLocked()
+}
+
+func (s *Service) stopLocked() {
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
@@ -87,19 +95,19 @@ func (s *Service) Apply(ctx context.Context, cfg config.AutoDiscoverConfig) {
 	if s == nil {
 		return
 	}
-	s.Stop()
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopLocked()
 	s.cfg = cfg
 	if s.adder != nil {
-		s.adder.cfg = cfg
+		s.adder.setConfig(cfg)
 	}
-	s.mu.Unlock()
-	_ = s.Start(ctx)
+	_ = s.startLocked(ctx)
 }
 
-func (s *Service) scanLoop(ctx context.Context) {
+func (s *Service) scanLoop(ctx context.Context, interval time.Duration) {
 	s.scanOnce(ctx)
-	ticker := time.NewTicker(s.cfg.ScanIntervalDuration())
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
