@@ -2,14 +2,16 @@ package onvif
 
 import (
 	"bytes"
-	"crypto/md5"
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,22 +19,49 @@ import (
 	"time"
 )
 
+const (
+	soapNamespace       = "http://www.w3.org/2003/05/soap-envelope"
+	addressingNamespace = "http://www.w3.org/2005/08/addressing"
+	maxSOAPResponse     = 16 << 20
+)
+
 // SOAPClient handles SOAP communication with ONVIF devices.
 type SOAPClient struct {
 	httpClient *http.Client
+	pollClient *http.Client
+	origin     *url.URL
 	username   string
 	password   string
-	timeShift  time.Duration
 
-	mu sync.Mutex
+	mu          sync.Mutex
+	timeShift   time.Duration
+	digestNonce string
+	digestCount uint32
+	requestGate chan struct{}
 }
 
 // NewSOAPClient creates a new SOAP client.
 func NewSOAPClient(httpClient *http.Client, username, password string) *SOAPClient {
+	client := *httpClient
+	// A redirect can replay the XML body and its credentials at another address.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	pollClient := client
+	pollClient.Timeout = 0 // Long polls have an operation-specific context deadline.
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	if tr, ok := transport.(*http.Transport); ok {
+		pollTransport := tr.Clone()
+		pollTransport.ResponseHeaderTimeout = 0
+		pollClient.Transport = pollTransport
+	}
 	return &SOAPClient{
-		httpClient: httpClient,
-		username:   username,
-		password:   password,
+		httpClient:  &client,
+		pollClient:  &pollClient,
+		username:    username,
+		password:    password,
+		requestGate: make(chan struct{}, 1),
 	}
 }
 
@@ -45,11 +74,14 @@ func (s *SOAPClient) SetTimeShift(shift time.Duration) {
 
 // SOAPRequest represents a SOAP request.
 type SOAPRequest struct {
-	ServiceURL string
-	Action     string
-	Body       string
-	Namespace  string
-	NoAuth     bool // If true, don't add WS-Security header
+	ServiceURL          string
+	Action              string
+	Body                string
+	Namespace           string
+	NoAuth              bool // Omit the initial WS-Security header.
+	addressing          bool
+	referenceParameters string
+	pollTimeout         time.Duration
 }
 
 // SOAPResponse represents a SOAP response.
@@ -62,310 +94,229 @@ type SOAPResponse struct {
 
 // SOAPFault represents a SOAP fault.
 type SOAPFault struct {
-	Code   string
-	Reason string
-	Detail string
+	Code     string
+	Subcodes []string
+	Reason   string
+	Detail   string
 }
 
 func (f *SOAPFault) Error() string {
-	return fmt.Sprintf("SOAP Fault: %s - %s", f.Code, f.Reason)
+	code := strings.Join(append([]string{f.Code}, f.Subcodes...), "/")
+	return fmt.Sprintf("SOAP Fault: %s - %s", code, f.Reason)
+}
+
+func (f *SOAPFault) hasSubcode(name string) bool {
+	for _, code := range f.Subcodes {
+		if code == name || strings.HasSuffix(code, ":"+name) {
+			return true
+		}
+	}
+	return false
+}
+
+type soapHTTPError struct {
+	status int
+}
+
+func (e *soapHTTPError) Error() string {
+	if e.status == http.StatusUnauthorized {
+		return "onvif: authentication failed (401)"
+	}
+	return fmt.Sprintf("onvif: HTTP error %d", e.status)
+}
+
+func operationUnsupported(err error) bool {
+	var fault *SOAPFault
+	var status *soapHTTPError
+	return (errors.As(err, &fault) && (fault.hasSubcode("ActionNotSupported") || fault.hasSubcode("OptionalActionNotImplemented"))) ||
+		(errors.As(err, &status) && (status.status == http.StatusNotFound || status.status == http.StatusNotImplemented))
 }
 
 // Send sends a SOAP request and returns the response.
 func (s *SOAPClient) Send(req *SOAPRequest) (*SOAPResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.sendInternal(req)
+	return s.SendContext(context.Background(), req)
 }
 
-// sendInternal sends a SOAP request (caller must hold lock).
-func (s *SOAPClient) sendInternal(req *SOAPRequest) (*SOAPResponse, error) {
-	// Build SOAP envelope
-	envelope := s.buildEnvelope(req.Body, req.Action, req.NoAuth)
-
-	// Create HTTP request
-	httpReq, err := http.NewRequest("POST", req.ServiceURL, bytes.NewBufferString(envelope))
+// SendContext sends a SOAP request using the caller's deadline and cancellation.
+func (s *SOAPClient) SendContext(ctx context.Context, req *SOAPRequest) (*SOAPResponse, error) {
+	endpoint, err := resolveONVIFEndpoint(s.origin, req.ServiceURL)
 	if err != nil {
 		return nil, fmt.Errorf("onvif: create request failed: %w", err)
 	}
-
-	// Set headers
-	httpReq.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
-	if req.Action != "" {
-		httpReq.Header.Set("SOAPAction", req.Action)
+	client := s.httpClient
+	if req.pollTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, req.pollTimeout+10*time.Second)
+		defer cancel()
+		client = s.pollClient
+	} else {
+		// Many embedded cameras expect control requests to be serialized.
+		select {
+		case s.requestGate <- struct{}{}:
+			defer func() { <-s.requestGate }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
-	// Send request
-	httpResp, err := s.httpClient.Do(httpReq)
+	security := ""
+	if s.username != "" && !req.NoAuth {
+		security = "PasswordDigest"
+	}
+	resp, transportResp, err := s.exchange(ctx, client, req, endpoint, security, digestChallenge{})
+	if resp != nil && resp.Fault != nil && strings.HasSuffix(resp.Fault.Code, ":MustUnderstand") && security != "" {
+		resp, transportResp, err = s.exchange(ctx, client, req, endpoint, "", digestChallenge{})
+	}
+	if transportResp == nil || transportResp.StatusCode != http.StatusUnauthorized || s.username == "" {
+		return resp, err
+	}
+
+	if challenge, ok := preferredDigestChallenge(transportResp.Header.Values("WWW-Authenticate")); ok {
+		resp, transportResp, err = s.exchange(ctx, client, req, endpoint, "", challenge)
+		if transportResp == nil || transportResp.StatusCode != http.StatusUnauthorized {
+			return resp, err
+		}
+		if next, ok := preferredDigestChallenge(transportResp.Header.Values("WWW-Authenticate")); ok &&
+			next.params["stale"] == "true" && next.params["nonce"] != challenge.params["nonce"] {
+			resp, _, err := s.exchange(ctx, client, req, endpoint, "", next)
+			return resp, err
+		}
+	}
+	// Legacy cameras may require PasswordText. Release it only over authenticated TLS.
+	if endpoint.Scheme == "https" && (s.origin == nil || sameAuthority(s.origin, endpoint)) &&
+		transportResp.TLS != nil && len(transportResp.TLS.VerifiedChains) > 0 &&
+		len(transportResp.TLS.PeerCertificates) > 0 &&
+		transportResp.TLS.PeerCertificates[0].VerifyHostname(endpoint.Hostname()) == nil {
+		resp, _, err = s.exchange(ctx, client, req, endpoint, "PasswordText", digestChallenge{})
+	}
+	return resp, err
+}
+
+func (s *SOAPClient) exchange(ctx context.Context, client *http.Client, req *SOAPRequest, endpoint *url.URL, security string, challenge digestChallenge) (*SOAPResponse, *http.Response, error) {
+	envelope := s.buildEnvelope(req, endpoint, security)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(envelope))
 	if err != nil {
-		return nil, fmt.Errorf("onvif: send request failed: %w", err)
+		return nil, nil, fmt.Errorf("onvif: create request failed: %w", err)
+	}
+	contentType := "application/soap+xml; charset=utf-8"
+	if req.Action != "" {
+		contentType = mime.FormatMediaType("application/soap+xml", map[string]string{"charset": "utf-8", "action": req.Action})
+		httpReq.Header.Set("SOAPAction", req.Action) // Older cameras dispatch using this header.
+	}
+	httpReq.Header.Set("Content-Type", contentType)
+	if challenge.params != nil {
+		httpReq.Header.Set("Authorization", s.digestAuthorization(httpReq, envelope, challenge))
+	}
+	httpResp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, nil, fmt.Errorf("onvif: send request failed: %w", err)
 	}
 	defer httpResp.Body.Close()
 
-	// Read response
-	body, err := io.ReadAll(httpResp.Body)
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, maxSOAPResponse+1))
 	if err != nil {
-		return nil, fmt.Errorf("onvif: read response failed: %w", err)
+		return nil, nil, fmt.Errorf("onvif: read response failed: %w", err)
 	}
-
+	if len(body) > maxSOAPResponse {
+		return nil, nil, errors.New("onvif: SOAP response exceeds size limit")
+	}
 	resp := &SOAPResponse{
 		Body:     body,
 		Header:   []byte(httpResp.Header.Get("WWW-Authenticate")),
 		HTTPCode: httpResp.StatusCode,
+		Fault:    parseSOAPFault(body),
 	}
-
-	// Handle 401: try HTTP Digest first (preserving the nonce), then WS-Security PasswordText
-	if httpResp.StatusCode == http.StatusUnauthorized {
-		wwwAuth := httpResp.Header.Get("WWW-Authenticate")
-		if wwwAuth != "" && s.username != "" {
-			resp, err := s.sendWithDigestAuth(req, wwwAuth)
-			if err == nil {
-				return resp, nil
-			}
-		}
-		// Digest failed or not offered; try WS-Security PasswordText (plain text password)
-		// Many cameras (especially Chinese brands) only support PasswordText, not PasswordDigest
-		if s.username != "" {
-			return s.sendWithPasswordText(req)
-		}
-		return nil, fmt.Errorf("onvif: authentication failed (401)")
-	}
-
-	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("onvif: HTTP error %d", httpResp.StatusCode)
-	}
-
-	// Parse SOAP fault
-	fault, err := s.parseFault(body)
-	if err == nil && fault != nil {
-		resp.Fault = fault
-		return resp, fault
-	}
-
-	return resp, nil
-}
-
-// sendWithDigestAuth retries a request with HTTP Digest Authentication.
-func (s *SOAPClient) sendWithDigestAuth(req *SOAPRequest, wwwAuth string) (*SOAPResponse, error) {
-	// Parse digest challenge
-	realm, nonce, qop, opaque, algorithm := parseDigestChallenge(wwwAuth)
-	if realm == "" {
-		return nil, fmt.Errorf("onvif: invalid digest challenge")
-	}
-
-	// Build SOAP envelope (no WS-Security for digest auth)
-	envelope := s.buildEnvelope(req.Body, req.Action, true)
-
-	uri, err := url.Parse(req.ServiceURL)
-	if err != nil {
-		return nil, fmt.Errorf("onvif: invalid URL: %w", err)
-	}
-	uriPath := uri.Path
-
-	// Calculate digest
-	nc := "00000001"
-	cnonce := randomHex(8)
-	ha1 := md5Sum(s.username + ":" + realm + ":" + s.password)
-	ha2 := md5Sum("POST:" + uriPath)
-
-	var response string
-	if qop == "auth" || qop == "auth-int" {
-		response = md5Sum(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2)
-	} else {
-		response = md5Sum(ha1 + ":" + nonce + ":" + ha2)
-	}
-
-	// Build Authorization header
-	authHeader := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="%s"`,
-		s.username, realm, nonce, uriPath, response)
-	if qop != "" {
-		authHeader += fmt.Sprintf(", qop=%s, nc=%s, cnonce=%s", qop, nc, cnonce)
-	}
-	if opaque != "" {
-		authHeader += fmt.Sprintf(`, opaque="%s"`, opaque)
-	}
-	if algorithm != "" {
-		authHeader += fmt.Sprintf(`, algorithm=%s`, algorithm)
-	}
-
-	// Create HTTP request
-	httpReq, err := http.NewRequest("POST", req.ServiceURL, bytes.NewBufferString(envelope))
-	if err != nil {
-		return nil, fmt.Errorf("onvif: create request failed: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
-	httpReq.Header.Set("Authorization", authHeader)
-	if req.Action != "" {
-		httpReq.Header.Set("SOAPAction", req.Action)
-	}
-
-	// Send request
-	httpResp, err := s.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("onvif: send request failed: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	body, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("onvif: read response failed: %w", err)
-	}
-
-	resp := &SOAPResponse{
-		Body:     body,
-		HTTPCode: httpResp.StatusCode,
-	}
-
-	if httpResp.StatusCode == http.StatusUnauthorized {
-		// Log the response body to help diagnose auth failures (passwords may be wrong or device uses PasswordText)
-		preview := string(body)
-		if len(preview) > 256 {
-			preview = preview[:256]
-		}
-		return nil, fmt.Errorf("onvif: digest auth failed (401), response: %s", preview)
-	}
-
-	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("onvif: HTTP error %d", httpResp.StatusCode)
-	}
-
-	// Parse SOAP fault
-	fault, err := s.parseFault(body)
-	if err == nil && fault != nil {
-		resp.Fault = fault
-		return resp, fault
-	}
-
-	return resp, nil
-}
-
-// sendWithPasswordText retries a request using WS-Security PasswordText (plain text).
-// Many cameras only support PasswordText and reject PasswordDigest.
-func (s *SOAPClient) sendWithPasswordText(req *SOAPRequest) (*SOAPResponse, error) {
-	envelope := s.buildEnvelopePasswordText(req.Body, req.Action)
-
-	httpReq, err := http.NewRequest("POST", req.ServiceURL, bytes.NewBufferString(envelope))
-	if err != nil {
-		return nil, fmt.Errorf("onvif: create request failed: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
-	if req.Action != "" {
-		httpReq.Header.Set("SOAPAction", req.Action)
-	}
-
-	httpResp, err := s.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("onvif: send request failed: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	body, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("onvif: read response failed: %w", err)
-	}
-
-	if httpResp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("onvif: password text auth failed (401)")
+	if resp.Fault != nil {
+		return resp, httpResp, resp.Fault
 	}
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("onvif: HTTP error %d", httpResp.StatusCode)
+		return resp, httpResp, &soapHTTPError{status: httpResp.StatusCode}
 	}
-
-	resp := &SOAPResponse{Body: body, HTTPCode: httpResp.StatusCode}
-	fault, err := s.parseFault(body)
-	if err == nil && fault != nil {
-		resp.Fault = fault
-		return resp, fault
-	}
-	return resp, nil
+	return resp, httpResp, nil
 }
 
-// buildEnvelopePasswordText builds a SOAP envelope with WS-Security PasswordText (plain text).
-func (s *SOAPClient) buildEnvelopePasswordText(body, action string) string {
-	var buf bytes.Buffer
+func resolveONVIFEndpoint(origin *url.URL, address string) (*url.URL, error) {
+	endpoint, err := url.Parse(strings.TrimSpace(address))
+	if err != nil || strings.TrimSpace(address) == "" {
+		return nil, errors.New("invalid ONVIF service URL")
+	}
+	if origin != nil {
+		endpoint = origin.ResolveReference(endpoint)
+	}
+	if (endpoint.Scheme != "https" && endpoint.Scheme != "http") || endpoint.Hostname() == "" ||
+		endpoint.User != nil || endpoint.Fragment != "" {
+		return nil, errors.New("invalid ONVIF HTTP(S) service URL")
+	}
+	if origin != nil && (!strings.EqualFold(endpoint.Hostname(), origin.Hostname()) ||
+		(origin.Scheme == "https" && endpoint.Scheme != "https")) {
+		return nil, errors.New("ONVIF service URL changed device host or downgraded HTTPS")
+	}
+	return endpoint, nil
+}
+
+func sameAuthority(a, b *url.URL) bool {
+	port := func(u *url.URL) string {
+		if u.Port() != "" {
+			return u.Port()
+		}
+		if u.Scheme == "https" {
+			return "443"
+		}
+		return "80"
+	}
+	return strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
+}
+
+func (s *SOAPClient) buildEnvelope(req *SOAPRequest, endpoint *url.URL, security string) string {
+	var buf strings.Builder
 	buf.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://www.w3.org/2005/08/addressing">
 <s:Header>`)
-
-	if s.username != "" {
-		_, timestamp := s.generateWSSE()
-		buf.WriteString(fmt.Sprintf(`
-<Security s:mustUnderstand="1" xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
-<UsernameToken>
-<Username>%s</Username>
-<Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">%s</Password>
-<Created xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">%s</Created>
-</UsernameToken>
-</Security>`,
-			s.username, s.password, timestamp,
-		))
+	if req.addressing {
+		buf.WriteString("<a:Action>" + escapeXML(req.Action) + "</a:Action>")
+		buf.WriteString("<a:To>" + escapeXML(endpoint.String()) + "</a:To>")
+		buf.WriteString(req.referenceParameters)
 	}
-
-	buf.WriteString(`
-</s:Header>
-<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">`)
-	buf.WriteString(body)
-	buf.WriteString(`
-</s:Body>
-</s:Envelope>`)
-	return buf.String()
-}
-
-// buildEnvelope builds a complete SOAP envelope with WS-Security.
-func (s *SOAPClient) buildEnvelope(body, action string, noAuth bool) string {
-	var buf bytes.Buffer
-
-	// Envelope header
-	buf.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://www.w3.org/2005/08/addressing">
-<s:Header>`)
-
-	// Add WS-Security header
-	if !noAuth && s.username != "" {
+	if security != "" {
 		nonce, timestamp := s.generateWSSE()
-		buf.WriteString(fmt.Sprintf(`
-<Security s:mustUnderstand="1" xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
-<UsernameToken>
-<Username>%s</Username>
-<Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">%s</Password>
-<Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">%s</Nonce>
-<Created xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">%s</Created>
-</UsernameToken>
-</Security>`,
-			s.username,
-			s.passwordDigest(nonce, timestamp),
-			base64.StdEncoding.EncodeToString(nonce),
-			timestamp,
-		))
+		password := s.password
+		if security == "PasswordDigest" {
+			password = s.passwordDigest(nonce, timestamp)
+		}
+		buf.WriteString(`<Security s:mustUnderstand="1" xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"><UsernameToken><Username>`)
+		buf.WriteString(escapeXML(s.username))
+		buf.WriteString(`</Username><Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#` + security + `">`)
+		buf.WriteString(escapeXML(password))
+		buf.WriteString("</Password>")
+		if security == "PasswordDigest" {
+			buf.WriteString(`<Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">` + base64.StdEncoding.EncodeToString(nonce) + "</Nonce>")
+		}
+		buf.WriteString(`<Created xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">` + timestamp + "</Created></UsernameToken></Security>")
 	}
-
-	// Close header and start body
-	buf.WriteString(`
-</s:Header>
-<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">`)
-
-	buf.WriteString(body)
-	buf.WriteString(`
-</s:Body>
-</s:Envelope>`)
-
+	buf.WriteString(`</s:Header><s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">`)
+	buf.WriteString(req.Body)
+	buf.WriteString("</s:Body></s:Envelope>")
 	return buf.String()
 }
 
-// generateWSSE generates WS-Security nonce and timestamp.
+func escapeXML(value string) string {
+	var buf strings.Builder
+	_ = xml.EscapeText(&buf, []byte(value))
+	return buf.String()
+}
+
 func (s *SOAPClient) generateWSSE() ([]byte, string) {
 	nonce := make([]byte, 16)
 	rand.Read(nonce)
-
-	now := time.Now().UTC().Add(s.timeShift)
-	timestamp := now.Format("2006-01-02T15:04:05.000Z")
-
-	return nonce, timestamp
+	s.mu.Lock()
+	shift := s.timeShift
+	s.mu.Unlock()
+	return nonce, time.Now().UTC().Add(shift).Format("2006-01-02T15:04:05.000Z")
 }
 
-// passwordDigest calculates WS-Security password digest.
 func (s *SOAPClient) passwordDigest(nonce []byte, timestamp string) string {
 	h := sha1.New()
 	h.Write(nonce)
@@ -374,101 +325,73 @@ func (s *SOAPClient) passwordDigest(nonce []byte, timestamp string) string {
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-// parseFault parses a SOAP fault from response body.
-func (s *SOAPClient) parseFault(body []byte) (*SOAPFault, error) {
-	var envelope struct {
-		XMLName xml.Name `xml:"Envelope"`
-		Body    struct {
-			Fault struct {
-				Code struct {
-					Value string `xml:"Value"`
-				} `xml:"Code"`
-				Reason struct {
-					Text string `xml:"Text"`
-				} `xml:"Reason"`
-				Detail struct {
-					Text string `xml:",chardata"`
-				} `xml:"Detail"`
-			} `xml:"Fault"`
-		} `xml:"Body"`
-	}
-
-	if err := xml.Unmarshal(body, &envelope); err != nil {
-		return nil, err
-	}
-
-	if envelope.Body.Fault.Code.Value == "" {
-		return nil, nil
-	}
-
-	return &SOAPFault{
-		Code:   envelope.Body.Fault.Code.Value,
-		Reason: envelope.Body.Fault.Reason.Text,
-		Detail: envelope.Body.Fault.Detail.Text,
-	}, nil
+type soapFaultCode struct {
+	Value   string         `xml:"Value"`
+	Subcode *soapFaultCode `xml:"Subcode"`
 }
 
-// ParseResponseBody parses the SOAP body into the given struct.
-func ParseResponseBody(body []byte, v interface{}) error {
-	// Extract body content
-	var envelope struct {
-		XMLName xml.Name `xml:"Envelope"`
-		Body    struct {
-			Content []byte `xml:",innerxml"`
-		} `xml:"Body"`
+func parseSOAPFault(body []byte) *SOAPFault {
+	var fault struct {
+		XMLName   xml.Name      `xml:"Fault"`
+		Code      soapFaultCode `xml:"Code"`
+		Reason    string        `xml:"Reason>Text"`
+		DetailXML struct {
+			XML string `xml:",innerxml"`
+		} `xml:"Detail"`
 	}
-
-	if err := xml.Unmarshal(body, &envelope); err != nil {
-		return fmt.Errorf("onvif: parse envelope failed: %w", err)
+	if err := ParseResponseBody(body, &fault); err != nil || fault.Code.Value == "" {
+		return nil
 	}
-
-	if err := xml.Unmarshal(envelope.Body.Content, v); err != nil {
-		return fmt.Errorf("onvif: parse body failed: %w", err)
+	result := &SOAPFault{Code: fault.Code.Value, Reason: fault.Reason, Detail: fault.DetailXML.XML}
+	for subcode := fault.Code.Subcode; subcode != nil; subcode = subcode.Subcode {
+		result.Subcodes = append(result.Subcodes, subcode.Value)
 	}
-
-	return nil
+	return result
 }
 
-// parseDigestChallenge parses the WWW-Authenticate Digest header.
-func parseDigestChallenge(header string) (realm, nonce, qop, opaque, algorithm string) {
-	// Remove "Digest " prefix
-	header = strings.TrimPrefix(header, "Digest ")
-
-	// Split by comma
-	parts := strings.Split(header, ",")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		kv := strings.SplitN(part, "=", 2)
-		if len(kv) != 2 {
+// ParseResponseBody decodes the first element in the SOAP body with its namespace context.
+func ParseResponseBody(body []byte, v any) error {
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	inEnvelope := false
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return fmt.Errorf("onvif: parse envelope failed: %w", err)
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok {
 			continue
 		}
-		key := strings.TrimSpace(kv[0])
-		value := strings.Trim(strings.TrimSpace(kv[1]), `"`)
-
-		switch key {
-		case "realm":
-			realm = value
-		case "nonce":
-			nonce = value
-		case "qop":
-			qop = value
-		case "opaque":
-			opaque = value
-		case "algorithm":
-			algorithm = value
+		if !inEnvelope {
+			if start.Name.Local != "Envelope" || (start.Name.Space != soapNamespace && start.Name.Space != "http://schemas.xmlsoap.org/soap/envelope/" && start.Name.Space != "") {
+				return errors.New("onvif: parse envelope failed: expected Envelope")
+			}
+			inEnvelope = true
+			continue
+		}
+		if start.Name.Local == "Body" {
+			for {
+				token, err := decoder.Token()
+				if err != nil {
+					return fmt.Errorf("onvif: parse body failed: %w", err)
+				}
+				switch token := token.(type) {
+				case xml.StartElement:
+					if err := decoder.DecodeElement(v, &token); err != nil {
+						return fmt.Errorf("onvif: parse body failed: %w", err)
+					}
+					return nil
+				case xml.EndElement:
+					return errors.New("onvif: parse body failed: empty body")
+				}
+			}
+		}
+		if err := decoder.Skip(); err != nil {
+			return fmt.Errorf("onvif: parse envelope failed: %w", err)
 		}
 	}
-	return
 }
 
-// md5Sum calculates MD5 hash of a string and returns hex.
-func md5Sum(s string) string {
-	h := md5.New()
-	h.Write([]byte(s))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// randomHex generates a random hex string of n bytes.
 func randomHex(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)

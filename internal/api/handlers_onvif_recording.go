@@ -33,8 +33,9 @@ type ONVIFRecordingResponse struct {
 
 // ONVIFRecordingSegmentResponse represents the response for ONVIF recording segments.
 type ONVIFRecordingSegmentResponse struct {
-	Segments []onvif.RecordingSegment `json:"segments"`
-	Fallback bool                     `json:"fallback,omitempty"`
+	Segments   []onvif.RecordingSegment `json:"segments"`
+	Fallback   bool                     `json:"fallback,omitempty"`
+	Recordings []onvif.Recording        `json:"recordings,omitempty"`
 }
 
 // ONVIFReplayResponse represents the response for ONVIF replay URI.
@@ -274,20 +275,12 @@ func (h *Handler) handleSearchONVIFRecordings(w http.ResponseWriter, r *http.Req
 			return
 		}
 
-		// Convert recordings to segments format
-		fallbackSegments := make([]onvif.RecordingSegment, 0, len(recordings))
-		for _, rec := range recordings {
-			fallbackSegments = append(fallbackSegments, onvif.RecordingSegment{
-				Token:          rec.Token,
-				RecordingToken: rec.Token,
-				StartTime:      startTime,
-				EndTime:        endTime,
-			})
-		}
-
+		// Recording Control can list recording identifiers without supplying
+		// time bounds. Return that inventory separately from timeline coverage.
 		writeJSON(w, http.StatusOK, ONVIFRecordingSegmentResponse{
-			Segments: fallbackSegments,
-			Fallback: true,
+			Segments:   []onvif.RecordingSegment{},
+			Fallback:   true,
+			Recordings: recordings,
 		})
 		return
 	}

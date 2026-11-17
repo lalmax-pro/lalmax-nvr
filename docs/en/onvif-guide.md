@@ -2,16 +2,15 @@
 
 This guide covers ONVIF (Open Network Video Interface Forum) integration with lalmax-nvr, including camera discovery, management, PTZ control, and troubleshooting.
 
-## What is ONVIF and Profile S Overview
+## ONVIF client compatibility
 
-ONVIF is an open industry standard for network video products, enabling different manufacturers' IP cameras to work together. lalmax-nvr implements ONVIF Profile S, which focuses on core video streaming functionality:
+lalmax-nvr uses ONVIF for camera discovery, media profile enumeration, stream URI retrieval, and PTZ. The client prefers Media2 and supports cameras that expose Media1. The implementation uses the ONVIF 26.06 interfaces for the features it supports.
 
-- **Profile S**: Video streaming, PTZ control, device management
-- **Profile T**: Security enhancements (access control events)
-- **Profile G**: Analytics and metadata
-- **Profile Q**: Advanced PTZ control
+- Profile S defines basic streaming. The last date for new conformance submissions is March 31, 2027.
+- Profile T defines advanced streaming, including H.264, H.265, imaging, and events.
+- Profile G defines edge storage and recording retrieval. Profile M defines analytics metadata and events.
 
-lalmax-nvr primarily supports Profile S capabilities with optional support for device management and event monitoring depending on camera firmware.
+[ONVIF 26.06](https://www.onvif.org/profiles/specifications/specification-history/june-2026/) · [ONVIF profiles](https://www.onvif.org/profiles/)
 
 ## Architecture and flows
 
@@ -638,11 +637,10 @@ services:
 - **OV5647 Test Camera**: Limited device management capabilities
 - **Network Changes**: May require camera reboot
 
-### ONVIF Profile Compatibility
-- **Profile S**: Fully supported (video streaming, PTZ)
-- **Profile T**: Partially supported (security events)
-- **Profile G**: Limited support (analytics)
-- **Profile Q**: Basic support (advanced PTZ)
+### Authentication and recording compatibility
+
+- Older devices can use Media1, HTTP Digest MD5, and WS-Security PasswordDigest. PasswordText requires a certificate-verified HTTPS connection to the configured camera address.
+- Devices that support `ListRecordedSegments` return actual segments. Standard search results provide recording bounds marked with `recording_bounds`, which can contain gaps. Devices that only list recordings return that inventory in the `recordings` field.
 
 ### Docker Limitations
 - **Multicast Blocked**: WS-Discovery doesn't work in default Docker network

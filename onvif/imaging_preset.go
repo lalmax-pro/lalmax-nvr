@@ -25,7 +25,7 @@ func (s *ImagingService) GetCurrentImagingPreset(ctx context.Context, videoSourc
   <VideoSourceToken>%s</VideoSourceToken>
 </GetCurrentPreset>`, videoSourceToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})
@@ -63,7 +63,7 @@ func (s *ImagingService) SetCurrentImagingPreset(ctx context.Context, videoSourc
   <PresetToken>%s</PresetToken>
 </SetCurrentPreset>`, videoSourceToken, presetToken)
 
-	_, err := s.client.soap.Send(&SOAPRequest{
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})
@@ -83,7 +83,7 @@ func (s *ImagingService) GetImagingPresets(ctx context.Context, videoSourceToken
   <VideoSourceToken>%s</VideoSourceToken>
 </GetPresets>`, videoSourceToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})
@@ -124,7 +124,7 @@ func (s *ImagingService) GetImagingStatus(ctx context.Context, videoSourceToken 
   <VideoSourceToken>%s</VideoSourceToken>
 </GetStatus>`, videoSourceToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})
@@ -161,7 +161,7 @@ func (s *ImagingService) GetImagingServiceCapabilities(ctx context.Context) (map
 
 	body := `<GetServiceCapabilities xmlns="http://www.onvif.org/ver20/imaging/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Imaging.String(),
 		Body:       body,
 	})

@@ -28,9 +28,9 @@ func soapFaultXML(code, reason string) string {
 	return soapOK(`<s:Fault><s:Code><s:Value>` + code + `</s:Value></s:Code><s:Reason><s:Text>` + reason + `</s:Text></s:Reason></s:Fault>`)
 }
 
-func TestSOAPClientDigestThenPasswordText(t *testing.T) {
+func TestSOAPClientLegacyPasswordTextOverVerifiedTLS(t *testing.T) {
 	var digestHits, textHits atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		auth := r.Header.Get("Authorization")
 		switch {
@@ -99,14 +99,15 @@ func TestSOAPClientFaultAndHTTPErrors(t *testing.T) {
 }
 
 func TestParseDigestChallengeAndPasswordDigest(t *testing.T) {
-	realm, nonce, qop, opaque, algorithm := parseDigestChallenge(`Digest realm="office", nonce="n1", qop="auth", opaque="o1", algorithm="MD5", extra`)
-	require.Equal(t, "office", realm)
-	require.Equal(t, "n1", nonce)
-	require.Equal(t, "auth", qop)
-	require.Equal(t, "o1", opaque)
-	require.Equal(t, "MD5", algorithm)
-	realm, _, _, _, _ = parseDigestChallenge("Basic abc")
-	require.Empty(t, realm)
+	challenge, ok := preferredDigestChallenge([]string{`Digest realm="office, west", nonce="n1", qop="auth-int, auth", opaque="o1", algorithm=MD5`})
+	require.True(t, ok)
+	require.Equal(t, "office, west", challenge.params["realm"])
+	require.Equal(t, "n1", challenge.params["nonce"])
+	require.Equal(t, "auth", challenge.qop)
+	require.Equal(t, "o1", challenge.params["opaque"])
+	require.Equal(t, "MD5", challenge.algorithm)
+	_, ok = preferredDigestChallenge([]string{"Basic abc"})
+	require.False(t, ok)
 
 	client := NewSOAPClient(http.DefaultClient, "user", "pass")
 	digest := client.passwordDigest([]byte("nonce"), "2026-01-02T03:04:05.000Z")
@@ -116,7 +117,6 @@ func TestParseDigestChallengeAndPasswordDigest(t *testing.T) {
 	h.Write([]byte("pass"))
 	require.Equal(t, base64.StdEncoding.EncodeToString(h.Sum(nil)), digest)
 	require.Len(t, randomHex(8), 16)
-	require.Equal(t, "900150983cd24fb0d6963f7d28e17f72", md5Sum("abc"))
 }
 
 func TestParseResponseBodyAndFormatPrefixMask(t *testing.T) {

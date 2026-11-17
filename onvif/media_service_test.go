@@ -106,7 +106,7 @@ func TestGetProfilesMedia2(t *testing.T) {
 	require.Equal(t, "H265", profiles[0].Encoding)
 	require.Equal(t, 3840, profiles[0].Resolution.Width)
 	require.Equal(t, 2160, profiles[0].Resolution.Height)
-	require.Equal(t, 30, profiles[0].Framerate)
+	require.Equal(t, 30.0, profiles[0].Framerate)
 	require.Equal(t, 8192, profiles[0].Bitrate)
 }
 
@@ -130,7 +130,7 @@ func TestGetProfilesMedia1Only(t *testing.T) {
 	require.Equal(t, "H264", profiles[0].Encoding)
 	require.Equal(t, 1920, profiles[0].Resolution.Width)
 	require.Equal(t, 1080, profiles[0].Resolution.Height)
-	require.Equal(t, 25, profiles[0].Framerate)
+	require.Equal(t, 25.0, profiles[0].Framerate)
 	require.Equal(t, 4096, profiles[0].Bitrate)
 }
 
@@ -174,7 +174,7 @@ func TestGetProfilesMedia2FailNoMedia1(t *testing.T) {
 	})
 	client := serviceClient(t, server, false, true, false, false)
 	_, err := NewMediaService(client).GetProfiles(context.Background())
-	require.ErrorContains(t, err, "no media service available")
+	require.ErrorContains(t, err, "nope")
 }
 
 func TestGetProfilesMedia1SOAPError(t *testing.T) {
@@ -251,7 +251,7 @@ func TestGetStreamURIMedia2FailNoMedia1(t *testing.T) {
 	})
 	client := serviceClient(t, server, false, true, false, false)
 	_, err := NewMediaService(client).GetStreamURI(context.Background(), "p")
-	require.ErrorContains(t, err, "no media service available")
+	require.ErrorContains(t, err, "down")
 }
 
 func TestGetStreamURIMedia1SOAPAndParseError(t *testing.T) {

@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseProbeMatchUsesFirstMatchAndFallback(t *testing.T) {
+func TestParseProbeMatchesReturnsEachMatchAndFallback(t *testing.T) {
 	xml := `<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">
   <s:Body>
@@ -32,13 +32,13 @@ func TestParseProbeMatchUsesFirstMatchAndFallback(t *testing.T) {
     </d:ProbeMatches>
   </s:Body>
 </s:Envelope>`
-	dev, err := parseProbeMatchResponse([]byte(xml), "192.168.1.1:3702")
-	require.NoError(t, err)
-	require.NotNil(t, dev)
-	require.Equal(t, "urn:uuid:first", dev.UUID)
-	require.Empty(t, dev.Name)
-	require.Empty(t, dev.Hardware)
-	require.Equal(t, "192.168.1.1:3702", dev.Endpoint)
+	matches := parseDiscoveryMatches([]byte(xml), "192.168.1.1:3702", "uuid:query")
+	require.Len(t, matches, 2)
+	require.Equal(t, "urn:uuid:first", matches[0].UUID)
+	require.Empty(t, matches[0].Name)
+	require.Empty(t, matches[0].Hardware)
+	require.Equal(t, "192.168.1.1:3702", matches[0].Endpoint)
+	require.Equal(t, "urn:uuid:second", matches[1].UUID)
 }
 
 func TestDeviceFromHelloWithoutXAddrs(t *testing.T) {
@@ -80,14 +80,9 @@ func TestListenHelloCancelLocal(t *testing.T) {
 }
 
 func TestParseProbeMatchEmptyAndInvalid(t *testing.T) {
-	dev, err := parseProbeMatchResponse([]byte("not xml"), "ep")
-	require.NoError(t, err)
-	require.Nil(t, dev)
-
+	require.Empty(t, parseDiscoveryMatches([]byte("not xml"), "ep", "uuid:query"))
 	empty := `<?xml version="1.0"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body></s:Body></s:Envelope>`
-	dev, err = parseProbeMatchResponse([]byte(empty), "ep")
-	require.NoError(t, err)
-	require.Nil(t, dev)
+	require.Empty(t, parseDiscoveryMatches([]byte(empty), "ep", "uuid:query"))
 }
 
 func TestGenerateProbeUUID(t *testing.T) {

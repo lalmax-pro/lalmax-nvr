@@ -21,7 +21,7 @@ func NewDeviceManager(client *Client) *DeviceManager {
 func (d *DeviceManager) SystemReboot(ctx context.Context) (string, error) {
 	body := `<SystemReboot xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := d.client.soap.Send(&SOAPRequest{
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: d.client.endpoint,
 		Body:       body,
 	})
@@ -69,7 +69,7 @@ type NetworkIPv6 struct {
 func (d *DeviceManager) GetNetworkInterfaces(ctx context.Context) ([]NetworkInterface, error) {
 	body := `<GetNetworkInterfaces xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := d.client.soap.Send(&SOAPRequest{
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: d.client.endpoint,
 		Body:       body,
 	})
@@ -142,7 +142,7 @@ type User struct {
 func (d *DeviceManager) GetUsers(ctx context.Context) ([]User, error) {
 	body := `<GetUsers xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := d.client.soap.Send(&SOAPRequest{
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: d.client.endpoint,
 		Body:       body,
 	})
@@ -186,7 +186,7 @@ func (d *DeviceManager) CreateUsers(ctx context.Context, users []User) error {
 
 	body := fmt.Sprintf(`<CreateUsers xmlns="http://www.onvif.org/ver10/device/wsdl">%s</CreateUsers>`, usersXML)
 
-	_, err := d.client.soap.Send(&SOAPRequest{
+	_, err := d.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: d.client.endpoint,
 		Body:       body,
 	})
@@ -206,7 +206,7 @@ func (d *DeviceManager) DeleteUsers(ctx context.Context, usernames []string) err
 
 	body := fmt.Sprintf(`<DeleteUsers xmlns="http://www.onvif.org/ver10/device/wsdl">%s</DeleteUsers>`, usersXML)
 
-	_, err := d.client.soap.Send(&SOAPRequest{
+	_, err := d.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: d.client.endpoint,
 		Body:       body,
 	})
@@ -226,7 +226,7 @@ func (d *DeviceManager) SetUser(ctx context.Context, username, password string) 
 </User>
 </SetUser>`, username, password)
 
-	_, err := d.client.soap.Send(&SOAPRequest{
+	_, err := d.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: d.client.endpoint,
 		Body:       body,
 	})

@@ -3,7 +3,11 @@ package onvif
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
 )
 
 // --- Video Source Configuration ---
@@ -30,7 +34,7 @@ func (s *MediaService) GetVideoSources(ctx context.Context) ([]VideoSource, erro
 	endpoint := s.mediaEndpoint()
 	body := `<GetVideoSources xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetVideoSources failed: %w", err)
 	}
@@ -70,10 +74,7 @@ type VideoSource struct {
 
 // GetVideoSourceConfigurations retrieves video source configurations.
 func (s *MediaService) GetVideoSourceConfigurations(ctx context.Context) ([]VideoSourceConfiguration, error) {
-	endpoint := s.mediaEndpoint()
-	body := `<GetVideoSourceConfigurations xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
-
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, _, err := s.readMediaConfiguration(ctx, "GetVideoSourceConfigurations", "")
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetVideoSourceConfigurations failed: %w", err)
 	}
@@ -81,11 +82,11 @@ func (s *MediaService) GetVideoSourceConfigurations(ctx context.Context) ([]Vide
 	var result struct {
 		XMLName xml.Name `xml:"GetVideoSourceConfigurationsResponse"`
 		Configs []struct {
-			Token    string `xml:"token,attr"`
-			Name     string `xml:"Name"`
-			UseCount int    `xml:"UseCount"`
+			Token       string `xml:"token,attr"`
+			Name        string `xml:"Name"`
+			UseCount    int    `xml:"UseCount"`
 			SourceToken string `xml:"SourceToken"`
-			Bounds   struct {
+			Bounds      struct {
 				X      int `xml:"x,attr"`
 				Y      int `xml:"y,attr"`
 				Width  int `xml:"width,attr"`
@@ -114,24 +115,21 @@ func (s *MediaService) GetVideoSourceConfigurations(ctx context.Context) ([]Vide
 
 // VideoEncoderConfiguration represents a video encoder configuration.
 type VideoEncoderConfiguration struct {
-	Token        string     `json:"token"`
-	Name         string     `json:"name"`
-	UseCount     int        `json:"use_count"`
-	Encoding     string     `json:"encoding"`
-	Resolution   Resolution `json:"resolution"`
-	Quality      int        `json:"quality"`
-	FramerateLimit int      `json:"framerate_limit"`
-	BitrateLimit int        `json:"bitrate_limit"`
-	GovLength    int        `json:"gov_length"`
-	Profile      string     `json:"profile"`
+	Token          string     `json:"token"`
+	Name           string     `json:"name"`
+	UseCount       int        `json:"use_count"`
+	Encoding       string     `json:"encoding"`
+	Resolution     Resolution `json:"resolution"`
+	Quality        float64    `json:"quality"`
+	FramerateLimit float64    `json:"framerate_limit"`
+	BitrateLimit   int        `json:"bitrate_limit"`
+	GovLength      int        `json:"gov_length"`
+	Profile        string     `json:"profile"`
 }
 
 // GetVideoEncoderConfigurations retrieves video encoder configurations.
 func (s *MediaService) GetVideoEncoderConfigurations(ctx context.Context) ([]VideoEncoderConfiguration, error) {
-	endpoint := s.mediaEndpoint()
-	body := `<GetVideoEncoderConfigurations xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
-
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, _, err := s.readMediaConfiguration(ctx, "GetVideoEncoderConfigurations", "")
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetVideoEncoderConfigurations failed: %w", err)
 	}
@@ -139,20 +137,22 @@ func (s *MediaService) GetVideoEncoderConfigurations(ctx context.Context) ([]Vid
 	var result struct {
 		XMLName xml.Name `xml:"GetVideoEncoderConfigurationsResponse"`
 		Configs []struct {
-			Token    string `xml:"token,attr"`
-			Name     string `xml:"Name"`
-			UseCount int    `xml:"UseCount"`
-			Encoding string `xml:"Encoding"`
+			Token      string `xml:"token,attr"`
+			Name       string `xml:"Name"`
+			UseCount   int    `xml:"UseCount"`
+			Encoding   string `xml:"Encoding"`
 			Resolution struct {
 				Width  int `xml:"Width"`
 				Height int `xml:"Height"`
 			} `xml:"Resolution"`
-			Quality      float64 `xml:"Quality"`
-			RateControl  struct {
-				FrameRateLimit int `xml:"FrameRateLimit"`
-				BitrateLimit   int `xml:"BitrateLimit"`
+			Quality     float64 `xml:"Quality"`
+			RateControl struct {
+				FrameRateLimit float64 `xml:"FrameRateLimit"`
+				BitrateLimit   int     `xml:"BitrateLimit"`
 			} `xml:"RateControl"`
-			H264 struct {
+			GovLength int    `xml:"GovLength,attr"`
+			Profile   string `xml:"Profile,attr"`
+			H264      struct {
 				GovLength int    `xml:"GovLength"`
 				Profile   string `xml:"H264Profile"`
 			} `xml:"H264"`
@@ -164,17 +164,23 @@ func (s *MediaService) GetVideoEncoderConfigurations(ctx context.Context) ([]Vid
 
 	configs := make([]VideoEncoderConfiguration, 0, len(result.Configs))
 	for _, c := range result.Configs {
+		if c.GovLength == 0 {
+			c.GovLength = c.H264.GovLength
+		}
+		if c.Profile == "" {
+			c.Profile = c.H264.Profile
+		}
 		configs = append(configs, VideoEncoderConfiguration{
 			Token:          c.Token,
 			Name:           c.Name,
 			UseCount:       c.UseCount,
 			Encoding:       c.Encoding,
 			Resolution:     Resolution{Width: c.Resolution.Width, Height: c.Resolution.Height},
-			Quality:        int(c.Quality),
+			Quality:        c.Quality,
 			FramerateLimit: c.RateControl.FrameRateLimit,
 			BitrateLimit:   c.RateControl.BitrateLimit,
-			GovLength:      c.H264.GovLength,
-			Profile:        c.H264.Profile,
+			GovLength:      c.GovLength,
+			Profile:        c.Profile,
 		})
 	}
 	return configs, nil
@@ -182,18 +188,16 @@ func (s *MediaService) GetVideoEncoderConfigurations(ctx context.Context) ([]Vid
 
 // GetVideoEncoderConfigurationOptions retrieves options for video encoder configuration.
 func (s *MediaService) GetVideoEncoderConfigurationOptions(ctx context.Context, profileToken string) (map[string]interface{}, error) {
-	endpoint := s.mediaEndpoint()
-	body := `<GetVideoEncoderConfigurationOptions xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
-
+	var token string
 	if profileToken != "" {
-		body = fmt.Sprintf(`<GetVideoEncoderConfigurationOptions xmlns="http://www.onvif.org/ver10/media/wsdl">
-  <ProfileToken>%s</ProfileToken>
-</GetVideoEncoderConfigurationOptions>`, profileToken)
+		token = "<ProfileToken>" + escapeXML(profileToken) + "</ProfileToken>"
 	}
-
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, namespace, err := s.readMediaConfiguration(ctx, "GetVideoEncoderConfigurationOptions", token)
 	if err != nil {
-		return nil, fmt.Errorf("onvif: GetVideoEncoderConfigurationOptions failed: %w", err)
+		return nil, err
+	}
+	if namespace == media2Namespace {
+		return parseMedia2EncoderOptions(resp.Body)
 	}
 
 	var result struct {
@@ -227,15 +231,21 @@ func (s *MediaService) GetVideoEncoderConfigurationOptions(ctx context.Context, 
 	}
 
 	return map[string]interface{}{
-		"quality_range":      Range{Min: float64(result.Options.QualityRange.Min), Max: float64(result.Options.QualityRange.Max)},
-		"resolutions":        resolutions,
-		"framerate_range":    Range{Min: float64(result.Options.FrameRateRange.Min), Max: float64(result.Options.FrameRateRange.Max)},
-		"encoding_interval":  Range{Min: float64(result.Options.EncodingIntervalRange.Min), Max: float64(result.Options.EncodingIntervalRange.Max)},
+		"quality_range":     Range{Min: float64(result.Options.QualityRange.Min), Max: float64(result.Options.QualityRange.Max)},
+		"resolutions":       resolutions,
+		"framerate_range":   Range{Min: float64(result.Options.FrameRateRange.Min), Max: float64(result.Options.FrameRateRange.Max)},
+		"encoding_interval": Range{Min: float64(result.Options.EncodingIntervalRange.Min), Max: float64(result.Options.EncodingIntervalRange.Max)},
 	}, nil
 }
 
 // SetVideoEncoderConfiguration updates a video encoder configuration.
 func (s *MediaService) SetVideoEncoderConfiguration(ctx context.Context, config VideoEncoderConfiguration) error {
+	if endpoint := s.client.endpoints.Media2; endpoint != nil {
+		err := s.setMedia2EncoderConfiguration(ctx, endpoint, config)
+		if err == nil || s.client.endpoints.Media == nil || !operationUnsupported(err) {
+			return err
+		}
+	}
 	endpoint := s.mediaEndpoint()
 	body := fmt.Sprintf(`<SetVideoEncoderConfiguration xmlns="http://www.onvif.org/ver10/media/wsdl">
   <Configuration token="%s">
@@ -246,7 +256,7 @@ func (s *MediaService) SetVideoEncoderConfiguration(ctx context.Context, config 
       <Width>%d</Width>
       <Height>%d</Height>
     </Resolution>
-    <Quality>%d</Quality>
+    <Quality>%g</Quality>
     <RateControl>
       <FrameRateLimit>%d</FrameRateLimit>
       <BitrateLimit>%d</BitrateLimit>
@@ -254,11 +264,11 @@ func (s *MediaService) SetVideoEncoderConfiguration(ctx context.Context, config 
   </Configuration>
   <ForcePersistence>true</ForcePersistence>
 </SetVideoEncoderConfiguration>`,
-		config.Token, config.Name, config.UseCount, config.Encoding,
+		escapeXML(config.Token), escapeXML(config.Name), config.UseCount, escapeXML(config.Encoding),
 		config.Resolution.Width, config.Resolution.Height, config.Quality,
-		config.FramerateLimit, config.BitrateLimit)
+		int(config.FramerateLimit), config.BitrateLimit)
 
-	_, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: SetVideoEncoderConfiguration failed: %w", err)
 	}
@@ -280,7 +290,7 @@ func (s *MediaService) GetAudioSources(ctx context.Context) ([]AudioSource, erro
 	endpoint := s.mediaEndpoint()
 	body := `<GetAudioSources xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetAudioSources failed: %w", err)
 	}
@@ -312,7 +322,7 @@ func (s *MediaService) GetAudioSourceConfigurations(ctx context.Context) ([]Audi
 	endpoint := s.mediaEndpoint()
 	body := `<GetAudioSourceConfigurations xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetAudioSourceConfigurations failed: %w", err)
 	}
@@ -356,7 +366,7 @@ func (s *MediaService) GetAudioEncoderConfigurations(ctx context.Context) ([]Aud
 	endpoint := s.mediaEndpoint()
 	body := `<GetAudioEncoderConfigurations xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetAudioEncoderConfigurations failed: %w", err)
 	}
@@ -391,7 +401,7 @@ func (s *MediaService) GetAudioEncoderConfigurationOptions(ctx context.Context) 
 	endpoint := s.mediaEndpoint()
 	body := `<GetAudioEncoderConfigurationOptions xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetAudioEncoderConfigurationOptions failed: %w", err)
 	}
@@ -430,7 +440,7 @@ func (s *MediaService) GetAudioOutputs(ctx context.Context) ([]AudioOutput, erro
 	endpoint := s.mediaEndpoint()
 	body := `<GetAudioOutputs xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetAudioOutputs failed: %w", err)
 	}
@@ -462,7 +472,7 @@ func (s *MediaService) GetAudioOutputConfigurations(ctx context.Context) ([]Audi
 	endpoint := s.mediaEndpoint()
 	body := `<GetAudioOutputConfigurations xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetAudioOutputConfigurations failed: %w", err)
 	}
@@ -498,7 +508,7 @@ func (s *MediaService) CreateProfile(ctx context.Context, name string) (*MediaPr
   <Name>%s</Name>
 </CreateProfile>`, name)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: CreateProfile failed: %w", err)
 	}
@@ -524,7 +534,7 @@ func (s *MediaService) DeleteProfile(ctx context.Context, profileToken string) e
   <ProfileToken>%s</ProfileToken>
 </DeleteProfile>`, profileToken)
 
-	_, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: DeleteProfile failed: %w", err)
 	}
@@ -580,7 +590,7 @@ func (s *MediaService) addConfigToProfile(ctx context.Context, profileToken, con
   <ConfigurationToken>%s</ConfigurationToken>
 </%s>`, operation, profileToken, configToken, operation)
 
-	_, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	return err
 }
 
@@ -591,7 +601,7 @@ func (s *MediaService) removeConfigFromProfile(ctx context.Context, profileToken
   <ConfigurationToken>%s</ConfigurationToken>
 </%s>`, operation, profileToken, configToken, operation)
 
-	_, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	return err
 }
 
@@ -604,7 +614,7 @@ func (s *MediaService) SetSynchronizationPoint(ctx context.Context, profileToken
   <ProfileToken>%s</ProfileToken>
 </SetSynchronizationPoint>`, profileToken)
 
-	_, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	return err
 }
 
@@ -612,10 +622,7 @@ func (s *MediaService) SetSynchronizationPoint(ctx context.Context, profileToken
 
 // GetMediaServiceCapabilities retrieves media service capabilities.
 func (s *MediaService) GetMediaServiceCapabilities(ctx context.Context) (map[string]bool, error) {
-	endpoint := s.mediaEndpoint()
-	body := `<GetServiceCapabilities xmlns="http://www.onvif.org/ver10/media/wsdl"/>`
-
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, _, err := s.readMediaConfiguration(ctx, "GetServiceCapabilities", "")
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetMediaServiceCapabilities failed: %w", err)
 	}
@@ -623,12 +630,12 @@ func (s *MediaService) GetMediaServiceCapabilities(ctx context.Context) (map[str
 	var result struct {
 		XMLName xml.Name `xml:"GetServiceCapabilitiesResponse"`
 		Caps    struct {
-			SnapshotUri           bool `xml:"SnapshotUri,attr"`
-			Rotation              bool `xml:"Rotation,attr"`
-			VideoSourceMode       bool `xml:"VideoSourceMode,attr"`
-			OSD                   bool `xml:"OSD,attr"`
-			TemporaryOSDText      bool `xml:"TemporaryOSDText,attr"`
-			EXICompression        bool `xml:"EXICompression,attr"`
+			SnapshotUri      bool `xml:"SnapshotUri,attr"`
+			Rotation         bool `xml:"Rotation,attr"`
+			VideoSourceMode  bool `xml:"VideoSourceMode,attr"`
+			OSD              bool `xml:"OSD,attr"`
+			TemporaryOSDText bool `xml:"TemporaryOSDText,attr"`
+			EXICompression   bool `xml:"EXICompression,attr"`
 		} `xml:"Capabilities"`
 	}
 	if err := ParseResponseBody(resp.Body, &result); err != nil {
@@ -643,6 +650,108 @@ func (s *MediaService) GetMediaServiceCapabilities(ctx context.Context) (map[str
 		"temporary_osd_text": result.Caps.TemporaryOSDText,
 		"exi_compression":    result.Caps.EXICompression,
 	}, nil
+}
+
+func (s *MediaService) readMediaConfiguration(ctx context.Context, operation, params string) (*SOAPResponse, string, error) {
+	var media2Err error
+	if endpoint := s.client.endpoints.Media2; endpoint != nil {
+		response, err := s.sendMediaConfiguration(ctx, endpoint.String(), media2Namespace, operation, params)
+		if err == nil {
+			return response, media2Namespace, nil
+		}
+		media2Err = err
+		if s.client.endpoints.Media == nil || ctx.Err() != nil {
+			return nil, "", err
+		}
+	}
+	response, err := s.sendMediaConfiguration(ctx, s.mediaEndpoint(), media1Namespace, operation, params)
+	if err != nil {
+		return nil, "", errors.Join(media2Err, err)
+	}
+	return response, media1Namespace, nil
+}
+
+func (s *MediaService) sendMediaConfiguration(ctx context.Context, endpoint, namespace, operation, params string) (*SOAPResponse, error) {
+	body := fmt.Sprintf(`<%s xmlns="%s">%s</%s>`, operation, namespace, params, operation)
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
+		ServiceURL: endpoint, Action: namespace + "/" + operation, Body: body,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("onvif: %s failed: %w", operation, err)
+	}
+	return resp, nil
+}
+
+func (s *MediaService) setMedia2EncoderConfiguration(ctx context.Context, endpoint *url.URL, config VideoEncoderConfiguration) error {
+	var attributes, rateControl string
+	if config.GovLength > 0 {
+		attributes += fmt.Sprintf(` GovLength="%d"`, config.GovLength)
+	}
+	if config.Profile != "" {
+		attributes += ` Profile="` + escapeXML(config.Profile) + `"`
+	}
+	if config.FramerateLimit > 0 || config.BitrateLimit > 0 {
+		rateControl = fmt.Sprintf(`<tt:RateControl><tt:FrameRateLimit>%g</tt:FrameRateLimit><tt:BitrateLimit>%d</tt:BitrateLimit></tt:RateControl>`,
+			config.FramerateLimit, config.BitrateLimit)
+	}
+	params := fmt.Sprintf(`<Configuration xmlns:tt="%s" token="%s"%s>
+      <tt:Name>%s</tt:Name><tt:UseCount>%d</tt:UseCount><tt:Encoding>%s</tt:Encoding>
+      <tt:Resolution><tt:Width>%d</tt:Width><tt:Height>%d</tt:Height></tt:Resolution>
+      %s<tt:Quality>%g</tt:Quality>
+    </Configuration>`, schemaNamespace, escapeXML(config.Token), attributes, escapeXML(config.Name), config.UseCount,
+		escapeXML(config.Encoding), config.Resolution.Width, config.Resolution.Height, rateControl, config.Quality)
+	resp, err := s.sendMediaConfiguration(ctx, endpoint.String(), media2Namespace, "SetVideoEncoderConfiguration", params)
+	if err != nil {
+		return err
+	}
+	var result struct {
+		XMLName xml.Name `xml:"SetVideoEncoderConfigurationResponse"`
+	}
+	return ParseResponseBody(resp.Body, &result)
+}
+
+func parseMedia2EncoderOptions(body []byte) (map[string]interface{}, error) {
+	var result struct {
+		XMLName xml.Name `xml:"GetVideoEncoderConfigurationOptionsResponse"`
+		Options []struct {
+			Encoding    string       `xml:"Encoding"`
+			Quality     Range        `xml:"QualityRange"`
+			Resolutions []Resolution `xml:"ResolutionsAvailable"`
+			Bitrate     Range        `xml:"BitrateRange"`
+			FrameRates  string       `xml:"FrameRatesSupported,attr"`
+		} `xml:"Options"`
+	}
+	if err := ParseResponseBody(body, &result); err != nil {
+		return nil, err
+	}
+	options := make([]map[string]interface{}, 0, len(result.Options))
+	for _, value := range result.Options {
+		var frames []float64
+		for _, token := range strings.Fields(value.FrameRates) {
+			if rate, err := strconv.ParseFloat(token, 64); err == nil {
+				frames = append(frames, rate)
+			}
+		}
+		item := map[string]interface{}{
+			"encoding": value.Encoding, "quality_range": value.Quality,
+			"resolutions": value.Resolutions, "bitrate_range": value.Bitrate, "frame_rates": frames,
+		}
+		if len(frames) > 0 {
+			rateRange := Range{Min: frames[0], Max: frames[0]}
+			for _, rate := range frames[1:] {
+				rateRange.Min, rateRange.Max = min(rateRange.Min, rate), max(rateRange.Max, rate)
+			}
+			item["framerate_range"] = rateRange
+		}
+		options = append(options, item)
+	}
+	output := map[string]interface{}{"options": options}
+	if len(options) == 1 {
+		for key, value := range options[0] {
+			output[key] = value
+		}
+	}
+	return output, nil
 }
 
 func (s *MediaService) mediaEndpoint() string {

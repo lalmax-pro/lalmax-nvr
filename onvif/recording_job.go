@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"strings"
 )
 
 // Recording Job Management operations.
@@ -35,7 +36,7 @@ func (s *RecordingService) GetRecordingJobs(ctx context.Context) ([]RecordingJob
 	endpoint := s.client.endpoints.Search.String()
 	body := `<GetRecordingJobs xmlns="http://www.onvif.org/ver10/recording/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetRecordingJobs failed: %w", err)
 	}
@@ -78,7 +79,7 @@ func (s *RecordingService) CreateRecordingJob(ctx context.Context, recordingToke
   </JobConfiguration>
 </CreateRecordingJob>`, recordingToken, mode, priority)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: CreateRecordingJob failed: %w", err)
 	}
@@ -111,7 +112,7 @@ func (s *RecordingService) DeleteRecordingJob(ctx context.Context, jobToken stri
   <JobToken>%s</JobToken>
 </DeleteRecordingJob>`, jobToken)
 
-	_, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: DeleteRecordingJob failed: %w", err)
 	}
@@ -125,7 +126,7 @@ func (s *RecordingService) GetRecordingJobState(ctx context.Context, jobToken st
   <JobToken>%s</JobToken>
 </GetRecordingJobState>`, jobToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetRecordingJobState failed: %w", err)
 	}
@@ -157,7 +158,7 @@ func (s *RecordingService) SetRecordingJobMode(ctx context.Context, jobToken, mo
   <Mode>%s</Mode>
 </SetRecordingJobMode>`, jobToken, mode)
 
-	_, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: SetRecordingJobMode failed: %w", err)
 	}
@@ -171,7 +172,7 @@ func (s *RecordingService) GetRecordingJobConfiguration(ctx context.Context, job
   <JobToken>%s</JobToken>
 </GetRecordingJobConfiguration>`, jobToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetRecordingJobConfiguration failed: %w", err)
 	}
@@ -204,7 +205,7 @@ func (s *RecordingService) GetRecordingOptions(ctx context.Context, recordingTok
   <RecordingToken>%s</RecordingToken>
 </GetRecordingOptions>`, recordingToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetRecordingOptions failed: %w", err)
 	}
@@ -237,10 +238,13 @@ func (s *RecordingService) GetRecordingOptions(ctx context.Context, recordingTok
 
 // GetRecordingServiceCapabilities retrieves recording service capabilities.
 func (s *RecordingService) GetRecordingServiceCapabilities(ctx context.Context) (map[string]bool, error) {
-	endpoint := s.client.endpoints.Search.String()
+	if s.client.endpoints.Recording == nil {
+		return nil, fmt.Errorf("onvif: Recording service not available")
+	}
+	endpoint := s.client.endpoints.Recording.String()
 	body := `<GetServiceCapabilities xmlns="http://www.onvif.org/ver10/recording/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetRecordingServiceCapabilities failed: %w", err)
 	}
@@ -248,12 +252,10 @@ func (s *RecordingService) GetRecordingServiceCapabilities(ctx context.Context) 
 	var result struct {
 		XMLName xml.Name `xml:"GetServiceCapabilitiesResponse"`
 		Caps    struct {
-			DynamicRecordings   bool `xml:"DynamicRecordings,attr"`
-			DynamicTracks       bool `xml:"DynamicTracks,attr"`
-			Encoding            bool `xml:"Encoding,attr"`
-			MaxRate             int  `xml:"MaxRate,attr"`
-			MaxTotalRate        int  `xml:"MaxTotalRate,attr"`
-			MaxRecording        int  `xml:"MaxRecording,attr"`
+			DynamicRecordings bool   `xml:"DynamicRecordings,attr"`
+			DynamicTracks     bool   `xml:"DynamicTracks,attr"`
+			Encoding          string `xml:"Encoding,attr"`
+			SegmentExport     bool   `xml:"SegmentExport,attr"`
 		} `xml:"Capabilities"`
 	}
 	if err := ParseResponseBody(resp.Body, &result); err != nil {
@@ -263,7 +265,8 @@ func (s *RecordingService) GetRecordingServiceCapabilities(ctx context.Context) 
 	return map[string]bool{
 		"dynamic_recordings": result.Caps.DynamicRecordings,
 		"dynamic_tracks":     result.Caps.DynamicTracks,
-		"encoding":           result.Caps.Encoding,
+		"encoding":           strings.TrimSpace(result.Caps.Encoding) != "" && result.Caps.Encoding != "false",
+		"segment_export":     result.Caps.SegmentExport,
 	}, nil
 }
 
@@ -274,7 +277,7 @@ func (s *RecordingService) GetSearchServiceCapabilities(ctx context.Context) (ma
 	endpoint := s.client.endpoints.Search.String()
 	body := `<GetServiceCapabilities xmlns="http://www.onvif.org/ver10/search/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetSearchServiceCapabilities failed: %w", err)
 	}
@@ -299,7 +302,7 @@ func (s *RecordingService) GetRecordingSummary(ctx context.Context) (map[string]
 	endpoint := s.client.endpoints.Search.String()
 	body := `<GetRecordingSummary xmlns="http://www.onvif.org/ver10/search/wsdl"/>`
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetRecordingSummary failed: %w", err)
 	}
@@ -330,7 +333,7 @@ func (s *RecordingService) GetRecordingInformation(ctx context.Context, recordin
   <RecordingToken>%s</RecordingToken>
 </GetRecordingInformation>`, recordingToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetRecordingInformation failed: %w", err)
 	}

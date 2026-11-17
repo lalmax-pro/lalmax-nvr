@@ -64,7 +64,7 @@ func TestSOAPClientDigest401LongBody(t *testing.T) {
 }
 
 func TestSOAPClientPasswordTextHTTPErrorAndFault(t *testing.T) {
-	badGateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	badGateway := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if strings.Contains(string(body), "PasswordText") {
 			http.Error(w, "boom", http.StatusBadGateway)
@@ -77,7 +77,7 @@ func TestSOAPClientPasswordTextHTTPErrorAndFault(t *testing.T) {
 	_, err := client.Send(&SOAPRequest{ServiceURL: badGateway.URL, Body: `<Get/>`})
 	require.ErrorContains(t, err, "HTTP error 502")
 
-	fault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fault := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if strings.Contains(string(body), "PasswordText") {
 			w.Header().Set("Content-Type", "application/soap+xml")
@@ -93,17 +93,17 @@ func TestSOAPClientPasswordTextHTTPErrorAndFault(t *testing.T) {
 }
 
 func TestSOAPClientPasswordTextUnauthorized(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusUnauthorized)
 	}))
 	t.Cleanup(server.Close)
 	client := NewSOAPClient(server.Client(), "admin", "secret")
 	_, err := client.Send(&SOAPRequest{ServiceURL: server.URL, Body: `<Get/>`})
-	require.ErrorContains(t, err, "password text auth failed (401)")
+	require.ErrorContains(t, err, "authentication failed (401)")
 }
 
 func TestSOAPClientInvalidDigestFallsBackToPasswordText(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if strings.Contains(string(body), "PasswordText") {
 			w.Header().Set("Content-Type", "application/soap+xml")

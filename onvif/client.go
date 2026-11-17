@@ -3,6 +3,7 @@ package onvif
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -56,13 +57,13 @@ type Client struct {
 
 // NewClient creates a new ONVIF client.
 func NewClient(endpoint, username, password string, opts ...ClientOption) (*Client, error) {
-	u, err := url.Parse(endpoint)
+	u, err := resolveONVIFEndpoint(nil, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("onvif: invalid endpoint: %w", err)
 	}
 
 	c := &Client{
-		endpoint: endpoint,
+		endpoint: u.String(),
 		username: username,
 		password: password,
 		hostname: u.Hostname(),
@@ -88,6 +89,7 @@ func NewClient(endpoint, username, password string, opts ...ClientOption) (*Clie
 	}
 
 	c.soap = NewSOAPClient(c.httpClient, c.username, c.password)
+	c.soap.origin = u
 
 	return c, nil
 }
@@ -105,7 +107,9 @@ func WithHTTPClient(hc *http.Client) ClientOption {
 // WithTimeout sets the HTTP timeout.
 func WithTimeout(d time.Duration) ClientOption {
 	return func(c *Client) {
-		c.httpClient.Timeout = d
+		client := *c.httpClient
+		client.Timeout = d
+		c.httpClient = &client
 	}
 }
 
@@ -337,7 +341,7 @@ func (c *Client) baseURL() *url.URL {
 	}
 	return &url.URL{
 		Scheme: scheme,
-		Host:   fmt.Sprintf("%s:%d", c.hostname, c.port),
+		Host:   net.JoinHostPort(c.hostname, fmt.Sprint(c.port)),
 		Path:   "/onvif/device_service",
 	}
 }

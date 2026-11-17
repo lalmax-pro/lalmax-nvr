@@ -129,9 +129,10 @@ func TestSearchRecordingsFindAndResults(t *testing.T) {
 		switch {
 		case strings.Contains(body, "FindRecordings"):
 			seenFind = true
-			require.Contains(t, body, "<tt:From>2024-06-15T00:00:00Z</tt:From>")
-			require.Contains(t, body, "<tt:Until>2024-06-15T23:59:59Z</tt:Until>")
-			require.Contains(t, body, "<MaxResults>10</MaxResults>")
+			require.Contains(t, body, `xmlns="http://www.onvif.org/ver10/search/wsdl"`)
+			require.Contains(t, body, "<tt:IncludedRecordings>rec-1</tt:IncludedRecordings>")
+			require.NotContains(t, body, "IncludedTimes")
+			require.NotContains(t, body, "MaxMatches")
 			return soapOK(`<FindRecordingsResponse><SearchToken>st-1</SearchToken></FindRecordingsResponse>`)
 		case strings.Contains(body, "GetRecordingSearchResults"):
 			seenResults = true
@@ -165,9 +166,10 @@ func TestSearchRecordingsFindAndResults(t *testing.T) {
 		}
 	})
 	result, err := NewRecordingService(leftoverRecordingClient(t, server)).SearchRecordings(context.Background(), SearchFilter{
-		StartTime:  time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC),
-		EndTime:    time.Date(2024, 6, 15, 23, 59, 59, 0, time.UTC),
-		MaxResults: 10,
+		RecordingToken: "rec-1",
+		StartTime:      time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC),
+		EndTime:        time.Date(2024, 6, 15, 23, 59, 59, 0, time.UTC),
+		MaxResults:     10,
 	})
 	require.NoError(t, err)
 	require.True(t, seenFind)
@@ -175,10 +177,9 @@ func TestSearchRecordingsFindAndResults(t *testing.T) {
 	require.Equal(t, "st-1", result.SearchToken)
 	require.Equal(t, "MoreResults", result.SearchState)
 	require.True(t, result.HasMore)
-	require.Len(t, result.Segments, 2)
+	require.Len(t, result.Segments, 1)
 	require.Equal(t, "seg-1", result.Segments[0].Token)
 	require.Equal(t, "/files/seg-1.mp4", result.Segments[0].FilePath)
-	require.True(t, result.Segments[1].StartTime.IsZero())
 }
 
 func TestSearchRecordingsContinueTokenAndEmptyFind(t *testing.T) {

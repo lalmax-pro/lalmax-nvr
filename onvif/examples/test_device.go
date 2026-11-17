@@ -126,7 +126,7 @@ func main() {
 			fmt.Printf("      Token: %s\n", p.Token)
 			fmt.Printf("      Encoding: %s\n", p.Encoding)
 			fmt.Printf("      Resolution: %dx%d\n", p.Resolution.Width, p.Resolution.Height)
-			fmt.Printf("      Framerate: %d fps\n", p.Framerate)
+			fmt.Printf("      Framerate: %g fps\n", p.Framerate)
 			fmt.Printf("      Bitrate: %d kbps\n", p.Bitrate)
 		}
 	}

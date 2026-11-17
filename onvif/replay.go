@@ -28,7 +28,7 @@ func (s *ReplayService) GetReplayURI(ctx context.Context, recordingToken string)
   <RecordingToken>%s</RecordingToken>
 </GetReplayUri>`, recordingToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: s.client.endpoints.Replay.String(),
 		Body:       body,
 	})

@@ -28,12 +28,13 @@ type DiscoveryResult struct {
 
 // DeviceProfile represents a media profile from an ONVIF device.
 type DeviceProfile struct {
-	Token       string `json:"token"`
-	Name        string `json:"name"`
-	Encoding    string `json:"encoding"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
-	VideoSource string `json:"video_source,omitempty"` // VideoSourceConfiguration token for Imaging service
+	Token            string `json:"token"`
+	Name             string `json:"name"`
+	Encoding         string `json:"encoding"`
+	Width            int    `json:"width"`
+	Height           int    `json:"height"`
+	VideoSource      string `json:"video_source,omitempty"` // Video source configuration token.
+	VideoSourceToken string `json:"video_source_token,omitempty"`
 }
 
 // DeviceInfo holds basic device information.

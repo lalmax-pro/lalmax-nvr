@@ -11,7 +11,7 @@ import (
 func (c *Client) GetSystemDateAndTime(ctx context.Context) (time.Time, error) {
 	body := `<GetSystemDateAndTime xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := c.soap.Send(&SOAPRequest{
+	resp, err := c.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: c.endpoint,
 		Body:       body,
 		NoAuth:     true, // GetSystemDateAndTime doesn't require authentication
@@ -23,7 +23,7 @@ func (c *Client) GetSystemDateAndTime(ctx context.Context) (time.Time, error) {
 	var result struct {
 		XMLName xml.Name `xml:"GetSystemDateAndTimeResponse"`
 		SystemDateAndTime struct {
-			UTCDateTime struct {
+			UTCDateTime *struct {
 				Time struct {
 					Hour   int `xml:"Hour"`
 					Minute int `xml:"Minute"`
@@ -41,6 +41,10 @@ func (c *Client) GetSystemDateAndTime(ctx context.Context) (time.Time, error) {
 	if err := ParseResponseBody(resp.Body, &result); err != nil {
 		return time.Time{}, err
 	}
+
+    if result.SystemDateAndTime.UTCDateTime == nil {
+        return time.Time{}, fmt.Errorf("onvif: GetSystemDateAndTime response did not contain UTC time")
+    }
 
 	t := time.Date(
 		result.SystemDateAndTime.UTCDateTime.Date.Year,
@@ -61,7 +65,7 @@ func (c *Client) GetServices(ctx context.Context) ([]Service, error) {
   <IncludeCapability>false</IncludeCapability>
 </GetServices>`
 
-	resp, err := c.soap.Send(&SOAPRequest{
+	resp, err := c.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: c.endpoint,
 		Body:       body,
 	})
@@ -103,7 +107,7 @@ func (c *Client) GetCapabilities(ctx context.Context) (*Capabilities, error) {
   <Category>All</Category>
 </GetCapabilities>`
 
-	resp, err := c.soap.Send(&SOAPRequest{
+	resp, err := c.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: c.endpoint,
 		Body:       body,
 	})
@@ -191,7 +195,7 @@ func (c *Client) GetDeviceInformation(ctx context.Context) (*DeviceInfo, error) 
 
 	body := `<GetDeviceInformation xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := c.soap.Send(&SOAPRequest{
+	resp, err := c.soap.SendContext(ctx, &SOAPRequest{
 		ServiceURL: c.endpoint,
 		Body:       body,
 	})

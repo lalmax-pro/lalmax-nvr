@@ -48,7 +48,7 @@ func (s *MediaService) GetOSDs(ctx context.Context, videoSourceToken string) ([]
   <VideoSourceToken>%s</VideoSourceToken>
 </GetOSDs>`, videoSourceToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetOSDs failed: %w", err)
 	}
@@ -121,7 +121,7 @@ func (s *MediaService) GetOSDOptions(ctx context.Context, videoSourceToken strin
   <VideoSourceToken>%s</VideoSourceToken>
 </GetOSDOptions>`, videoSourceToken)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetOSDOptions failed: %w", err)
 	}
@@ -200,7 +200,7 @@ func (s *MediaService) CreateOSD(ctx context.Context, videoSourceToken string, o
   </OSD>
 </CreateOSD>`, videoSourceToken, osd.Type, osd.Position.Type, textXML)
 
-	resp, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	resp, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: CreateOSD failed: %w", err)
 	}
@@ -240,7 +240,7 @@ func (s *MediaService) SetOSD(ctx context.Context, osd OSDConfiguration) error {
   </OSD>
 </SetOSD>`, osd.Token, osd.Type, osd.Position.Type, textXML)
 
-	_, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: SetOSD failed: %w", err)
 	}
@@ -254,7 +254,7 @@ func (s *MediaService) DeleteOSD(ctx context.Context, osdToken string) error {
   <OSDToken>%s</OSDToken>
 </DeleteOSD>`, osdToken)
 
-	_, err := s.client.soap.Send(&SOAPRequest{ServiceURL: endpoint, Body: body})
+	_, err := s.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: DeleteOSD failed: %w", err)
 	}

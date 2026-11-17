@@ -22,7 +22,7 @@ type NTPServer struct {
 func (d *DeviceManager) GetNTP(ctx context.Context) (map[string]interface{}, error) {
 	body := `<GetNTP xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetNTP failed: %w", err)
 	}
@@ -73,7 +73,7 @@ func (d *DeviceManager) SetNTP(ctx context.Context, fromDHCP bool, servers []NTP
   %s
 </SetNTP>`, fromDHCP, serversXML)
 
-	_, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	_, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: SetNTP failed: %w", err)
 	}
@@ -99,7 +99,7 @@ type DNSServer struct {
 func (d *DeviceManager) GetDNS(ctx context.Context) (*DNSInfo, error) {
 	body := `<GetDNS xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetDNS failed: %w", err)
 	}
@@ -150,7 +150,7 @@ func (d *DeviceManager) SetDNS(ctx context.Context, fromDHCP bool, servers []DNS
   %s
 </SetDNS>`, fromDHCP, serversXML, domainsXML)
 
-	_, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	_, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: SetDNS failed: %w", err)
 	}
@@ -169,7 +169,7 @@ type HostnameInfo struct {
 func (d *DeviceManager) GetHostname(ctx context.Context) (*HostnameInfo, error) {
 	body := `<GetHostname xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetHostname failed: %w", err)
 	}
@@ -197,7 +197,7 @@ func (d *DeviceManager) SetHostname(ctx context.Context, name string) error {
   <Name>%s</Name>
 </SetHostname>`, name)
 
-	_, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	_, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: SetHostname failed: %w", err)
 	}
@@ -216,7 +216,7 @@ type Scope struct {
 func (d *DeviceManager) GetScopes(ctx context.Context) ([]Scope, error) {
 	body := `<GetScopes xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetScopes failed: %w", err)
 	}
@@ -248,7 +248,7 @@ func (d *DeviceManager) SetScopes(ctx context.Context, scopeItems []string) erro
 
 	body := fmt.Sprintf(`<SetScopes xmlns="http://www.onvif.org/ver10/device/wsdl">%s</SetScopes>`, itemsXML)
 
-	_, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	_, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: SetScopes failed: %w", err)
 	}
@@ -268,7 +268,7 @@ type NetworkProtocol struct {
 func (d *DeviceManager) GetNetworkProtocols(ctx context.Context) ([]NetworkProtocol, error) {
 	body := `<GetNetworkProtocols xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetNetworkProtocols failed: %w", err)
 	}
@@ -321,7 +321,7 @@ func (d *DeviceManager) SetSystemDateAndTime(ctx context.Context, dateTimeType s
   </UTCDateTime>
 </SetSystemDateAndTime>`, dateTimeType, hour, minute, second, year, month, day)
 
-	_, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	_, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: SetSystemDateAndTime failed: %w", err)
 	}
@@ -341,7 +341,7 @@ func (d *DeviceManager) SetSystemFactoryDefault(ctx context.Context, hardReset b
   <FactoryDefault>%s</FactoryDefault>
 </SetSystemFactoryDefault>`, factoryDefault)
 
-	_, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	_, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: SetSystemFactoryDefault failed: %w", err)
 	}
@@ -359,7 +359,7 @@ type NetworkGateway struct {
 func (d *DeviceManager) GetNetworkDefaultGateway(ctx context.Context) (*NetworkGateway, error) {
 	body := `<GetNetworkDefaultGateway xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetNetworkDefaultGateway failed: %w", err)
 	}
@@ -389,7 +389,7 @@ func (d *DeviceManager) SetNetworkDefaultGateway(ctx context.Context, gateway st
   </NetworkGateway>
 </SetNetworkDefaultGateway>`, gateway)
 
-	_, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	_, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return fmt.Errorf("onvif: SetNetworkDefaultGateway failed: %w", err)
 	}
@@ -435,7 +435,7 @@ func (d *DeviceManager) SetNetworkInterfaces(ctx context.Context, iface SetNetwo
   %s
 </SetNetworkInterfaces>`, iface.Token, ipv4XML)
 
-	resp, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return false, fmt.Errorf("onvif: SetNetworkInterfaces failed: %w", err)
 	}
@@ -457,7 +457,7 @@ func (d *DeviceManager) SetNetworkInterfaces(ctx context.Context, iface SetNetwo
 func (d *DeviceManager) GetServiceCapabilities(ctx context.Context) (map[string]bool, error) {
 	body := `<GetServiceCapabilities xmlns="http://www.onvif.org/ver10/device/wsdl"/>`
 
-	resp, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return nil, fmt.Errorf("onvif: GetServiceCapabilities failed: %w", err)
 	}
@@ -543,7 +543,7 @@ func (d *DeviceManager) SendAuxiliaryCommand(ctx context.Context, auxiliaryData 
   <AuxiliaryData>%s</AuxiliaryData>
 </SendAuxiliaryCommand>`, auxiliaryData)
 
-	resp, err := d.client.soap.Send(&SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
+	resp, err := d.client.soap.SendContext(ctx, &SOAPRequest{ServiceURL: d.client.endpoint, Body: body})
 	if err != nil {
 		return "", fmt.Errorf("onvif: SendAuxiliaryCommand failed: %w", err)
 	}

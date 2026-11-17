@@ -902,17 +902,12 @@ func TestApi2IOONVIFRecordingFailures(t *testing.T) {
 	api2ioSeedCamera(t, db3, "onvif-cam", "onvif", fallbackEndpoint, fallbackEndpoint)
 	rr = api2ioDo(t, h3, http.MethodGet, "/api/cameras/onvif-cam/onvif/recordings/search?start_time=2020-01-01T00:00:00Z&end_time=2035-01-01T00:00:00Z", "")
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-	var fallback struct {
-		Segments []struct {
-			Token          string `json:"token"`
-			RecordingToken string `json:"recording_token"`
-		} `json:"segments"`
-		Fallback bool `json:"fallback"`
-	}
+	var fallback ONVIFRecordingSegmentResponse
 	parseJSON(t, rr, &fallback)
 	require.True(t, fallback.Fallback)
-	require.Len(t, fallback.Segments, 1)
-	require.Equal(t, "rec1", fallback.Segments[0].RecordingToken)
+	require.Empty(t, fallback.Segments)
+	require.Len(t, fallback.Recordings, 1)
+	require.Equal(t, "rec1", fallback.Recordings[0].Token)
 
 	// HTTP replay URI maps to the http protocol.
 	_, httpSrv := api2ioNewFakeONVIF(t, api2ioFakeONVIFOptions{ReplayURI: "http://192.0.2.10/replay/stream"})

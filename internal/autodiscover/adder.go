@@ -40,6 +40,12 @@ func NewAdder(cfg config.AutoDiscoverConfig, enroller AdderEnroller, db storage.
 	}
 }
 
+func (a *Adder) setConfig(cfg config.AutoDiscoverConfig) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cfg = cfg
+}
+
 func defaultDeviceInfo(ctx context.Context, endpoint, username, password string) (*onvif.DeviceInfo, error) {
 	client := onvif.NewClient(endpoint, username, password)
 	if err := client.Connect(ctx); err != nil {
@@ -61,9 +67,10 @@ func (a *Adder) HandleDiscovered(ctx context.Context, d onvif.DiscoveredDevice) 
 		return
 	}
 	a.seen[key] = now
+	cfg := a.cfg
 	a.mu.Unlock()
 
-	info, profilesOK := a.enrich(ctx, endpoint)
+	info, profilesOK := a.enrich(ctx, endpoint, cfg)
 	serial := ""
 	brand, model := "", ""
 	if info != nil {
@@ -98,8 +105,8 @@ func (a *Adder) HandleDiscovered(ctx context.Context, d onvif.DiscoveredDevice) 
 		URL:             endpoint,
 		ONVIFEndpoint:   endpoint,
 		Enabled:         true,
-		Username:        a.cfg.DefaultUsername,
-		Password:        a.cfg.DefaultPassword,
+		Username:        cfg.DefaultUsername,
+		Password:        cfg.DefaultPassword,
 		ActivationState: config.ActivationActive,
 		StableID:        serial,
 	}
@@ -155,14 +162,14 @@ func (a *Adder) handleExisting(ctx context.Context, existing *storage.CameraRow,
 	logger.Info("updated onvif camera endpoint after roam", "camera_id", existing.ID, "endpoint", endpoint)
 }
 
-func (a *Adder) enrich(ctx context.Context, endpoint string) (*onvif.DeviceInfo, bool) {
+func (a *Adder) enrich(ctx context.Context, endpoint string, cfg config.AutoDiscoverConfig) (*onvif.DeviceInfo, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	info, err := a.infoFn(ctx, endpoint, a.cfg.DefaultUsername, a.cfg.DefaultPassword)
+	info, err := a.infoFn(ctx, endpoint, cfg.DefaultUsername, cfg.DefaultPassword)
 	if err == nil && info != nil {
-		return info, a.cfg.DefaultUsername == "" || a.canGetProfiles(ctx, endpoint)
+		return info, cfg.DefaultUsername == "" || canGetProfiles(ctx, endpoint, cfg.DefaultUsername, cfg.DefaultPassword)
 	}
-	if a.cfg.DefaultUsername == "" && a.cfg.DefaultPassword == "" {
+	if cfg.DefaultUsername == "" && cfg.DefaultPassword == "" {
 		info, err = a.infoFn(ctx, endpoint, "", "")
 		if err == nil && info != nil {
 			return info, true
@@ -171,8 +178,8 @@ func (a *Adder) enrich(ctx context.Context, endpoint string) (*onvif.DeviceInfo,
 	return info, false
 }
 
-func (a *Adder) canGetProfiles(ctx context.Context, endpoint string) bool {
-	client := onvif.NewClient(endpoint, a.cfg.DefaultUsername, a.cfg.DefaultPassword)
+func canGetProfiles(ctx context.Context, endpoint, username, password string) bool {
+	client := onvif.NewClient(endpoint, username, password)
 	if err := client.Connect(ctx); err != nil {
 		return false
 	}
